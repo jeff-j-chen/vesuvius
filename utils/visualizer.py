@@ -5,9 +5,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-from dataclasses import dataclass
 from .config import Config
-from typing import Optional, Dict, Any, Tuple, List
 
 class TensorboardVisualizer:
     def __init__(self, config: Config):
@@ -24,18 +22,8 @@ class TensorboardVisualizer:
         print(f"TensorBoard logs will be saved to: {self.log_path}")
         print(f"To view, run: tensorboard --logdir={config.training.log_dir}")
     
-    def log_epoch_metrics(self, epoch, train_acc, val_acc, train_loss, val_loss, learning_rate):
-        """
-        Log all metrics for a single epoch
-        
-        Args:
-            epoch: Current epoch number
-            train_acc: Training accuracy
-            val_acc: Validation accuracy  
-            train_loss: Training loss
-            val_loss: Validation loss
-            learning_rate: Current learning rate
-        """
+    def log_epoch_metrics(self, epoch, model, train_acc, val_acc, train_loss, val_loss, learning_rate, time_elapsed, train_volume, train_labels, valid_volume, valid_labels, params):
+        print(f"Logging metrics for epoch: {epoch}")
         # Log accuracies
         self.writer.add_scalar('Accuracy/Train', train_acc, epoch)
         self.writer.add_scalar('Accuracy/Validation', val_acc, epoch)
@@ -46,18 +34,48 @@ class TensorboardVisualizer:
         
         # Log learning rate
         self.writer.add_scalar('Learning_Rate', learning_rate, epoch)
+
+        # Time elapsed
+        self.writer.add_scalar('Time_Elapsed', time_elapsed, epoch)
         
-        # Log combined accuracy plot
-        self.writer.add_scalars('Accuracy_Comparison', {
-            'Train': train_acc,
-            'Validation': val_acc
-        }, epoch)
+        # # Log combined accuracy plot
+        # self.writer.add_scalars('Accuracy_Comparison', {
+        #     'Train': train_acc,
+        #     'Validation': val_acc
+        # }, epoch)
         
-        # Log combined loss plot
-        self.writer.add_scalars('Loss_Comparison', {
-            'Train': train_loss,
-            'Validation': val_loss
-        }, epoch)
+        # # Log combined loss plot
+        # self.writer.add_scalars('Loss_Comparison', {
+        #     'Train': train_loss,
+        #     'Validation': val_loss
+        # }, epoch)
+
+        # Log weight histograms
+        # self.log_weight_histograms(model, epoch)
+
+        # # Log activation maps if available
+        # if hasattr(model, "activations"):
+        #     self.log_activation_maps(model.activations, epoch)
+
+        # # Log confusion matrix if available
+        # if hasattr(model, "confusion_matrix"):
+        #     confusion_matrix = model.confusion_matrix.cpu().numpy()
+        #     class_names = ["0", "1"]
+        #     self.log_confusion_matrix(confusion_matrix, class_names, epoch)
+
+        # Log model graph once at the beginning
+        if epoch == 0:
+            print("loggin hparams")
+            example_input = torch.randn(1, 1, self.config.data.depth, self.config.data.tile_size, self.config.data.tile_size).to(self.config.device)
+            self.log_model_graph(model, example_input)
+            self.log_hyperparameters(params)
+
+        if epoch % self.config.training.evaluation_interval == 0:
+            print(f"Running full evaluation on epoch {epoch} due to evaluation interval {self.config.training.evaluation_interval}")
+            self.log_evaluation_results(epoch, model, train_volume, train_labels, valid_volume, valid_labels)
+        
+        self.writer.flush()
+        
     
     def _process_volume_depth_block(self, model, volume, volume_name, depth_start, depth_end):
         """Helper function to process a single volume at a specific depth range"""
@@ -91,26 +109,26 @@ class TensorboardVisualizer:
         prediction_map = np.divide(prediction_map, count_map, where=count_map>0)
         return prediction_map
     
-    def _create_validation_figure(self, full_volume_slice, full_labels, full_predictions, train_predictions, block_idx, depth_start, depth_end, middle_slice_idx):
+    def _create_evaluation_figure(self, full_volume_slice, full_labels, full_predictions, train_predictions, block_idx, depth_start, depth_end, middle_slice_idx):
         """Create a single validation figure for one depth block"""
-        fig = plt.figure(figsize=(24, 6))
+        fig = plt.figure(figsize=(12, 12))
         
         # Original slice
-        plt.subplot(1, 4, 1)
+        plt.subplot(2, 2, 1)
         plt.imshow(full_volume_slice, cmap='gray')
         plt.title(f'Full Volume (Slice {middle_slice_idx})\nDepth Block {block_idx + 1} ({depth_start}-{depth_end-1})\nTrain | Valid')
         plt.axvline(x=train_predictions.shape[1]-0.5, color='red', linestyle='--', linewidth=2, alpha=0.7)
         plt.axis('off')
         
         # Ground truth
-        plt.subplot(1, 4, 2)
+        plt.subplot(2, 2, 2)
         plt.imshow(full_labels, cmap='binary')
         plt.title(f'Ground Truth Labels\nDepth Block {block_idx + 1}\nTrain | Valid')
         plt.axvline(x=train_predictions.shape[1]-0.5, color='red', linestyle='--', linewidth=2, alpha=0.7)
         plt.axis('off')
         
         # Predictions
-        plt.subplot(1, 4, 3)
+        plt.subplot(2, 2, 3)
         img = plt.imshow(full_predictions, cmap='inferno', vmin=0, vmax=1)
         plt.colorbar(img, fraction=0.046, pad=0.04)
         plt.title(f'Model Predictions\nDepth Block {block_idx + 1}\nTrain | Valid')
@@ -118,7 +136,7 @@ class TensorboardVisualizer:
         plt.axis('off')
         
         # Overlay
-        plt.subplot(1, 4, 4)
+        plt.subplot(2, 2, 4)
         plt.imshow(full_predictions, cmap='inferno', vmin=0, vmax=1)
         
         # Create overlay for ground truth
@@ -133,7 +151,7 @@ class TensorboardVisualizer:
         plt.tight_layout()
         return fig
     
-    def log_validation_results(self, epoch: int, model, train_volume, train_labels, valid_volume, valid_labels):
+    def log_evaluation_results(self, epoch, model, train_volume, train_labels, valid_volume, valid_labels):
         """
         Run full validation and log all visualization figures to TensorBoard
         
@@ -147,12 +165,17 @@ class TensorboardVisualizer:
         """
         # Calculate number of depth blocks to match dataset creation logic
         D = train_volume.shape[0]
-        num_depth_blocks = (D - self.config.data.depth + 1) // self.config.data.depth
+        num_depth_blocks = (D - self.config.data.depth + 1) // int(self.config.data.depth // 2)
         
         # Process each depth block
         for block_idx in range(num_depth_blocks):
-            depth_start = block_idx * self.config.data.depth
-            depth_end = depth_start + self.config.data.depth
+            print(f"Processing depth block {block_idx + 1}/{num_depth_blocks} for evaluation...")
+            depth_start = block_idx * int(self.config.data.depth // 2)
+            depth_end = min(depth_start + self.config.data.depth, D)  # Ensure depth_end does not exceed D
+            
+            if depth_start >= D or depth_end > D:  # Check if depth_start or depth_end is out of bounds
+                print(f"Skipping depth block {block_idx + 1} due to out-of-bounds indices.")
+                continue
             
             # Process both volumes for this depth block
             train_predictions = self._process_volume_depth_block(
@@ -165,31 +188,61 @@ class TensorboardVisualizer:
             # Stitch everything back together horizontally
             # Use the middle slice of the current depth block for visualization
             middle_slice_idx = depth_start + self.config.data.depth // 2
+            if middle_slice_idx >= D:  # Ensure middle_slice_idx is within bounds
+                print(f"Skipping visualization for depth block {block_idx + 1} due to out-of-bounds middle slice index.")
+                continue
+            
             full_volume_slice = np.concatenate([train_volume[middle_slice_idx], valid_volume[middle_slice_idx]], axis=1)
             full_labels = np.concatenate([train_labels, valid_labels], axis=1)
             full_predictions = np.concatenate([train_predictions, valid_predictions], axis=1)
             
-            
-            # Log some metrics for this depth block
-            ink_pixels = (full_labels > 0.5).sum()
-            predicted_ink_pixels = (full_predictions > 0.5).sum()
-            
-            self.writer.add_scalar(f'Validation_Metrics/Ink_Pixels_Block_{block_idx + 1}', ink_pixels, epoch)
-            self.writer.add_scalar(f'Validation_Metrics/Predicted_Ink_Pixels_Block_{block_idx + 1}', predicted_ink_pixels, epoch)
-            
             # Create and log the validation figure
-            fig = self._create_validation_figure(
+            fig = self._create_evaluation_figure(
                 full_volume_slice, full_labels, full_predictions, train_predictions,
                 block_idx, depth_start, depth_end, middle_slice_idx
             )
             # Log figure to TensorBoard
-            self.writer.add_figure(f'Validation/Depth_Block_{block_idx + 1}', fig, epoch)
+            self.writer.add_figure(f'Evaluation/Depth_Block_{block_idx + 1}', fig, epoch)
             
             # Close the figure to free memory
             plt.close(fig)
     
-    def should_run_validation(self, epoch):
-        return epoch % self.config.training.validation_interval == 0
+    def log_model_graph(self, model, example_input):
+        self.writer.add_graph(model, example_input)
+    
+    def log_activation_maps(self, activations, epoch):
+        for layer_name, activation_map in activations.items():
+            self.writer.add_images(f"Activations/{layer_name}", activation_map, epoch, dataformats="NCHW")
+    
+    def log_confusion_matrix(self, confusion_matrix, class_names, epoch):
+        fig, ax = plt.subplots(figsize=(8, 8))
+        ax.imshow(confusion_matrix, cmap="Blues")
+        ax.set_xticks(np.arange(len(class_names)))
+        ax.set_yticks(np.arange(len(class_names)))
+        ax.set_xticklabels(class_names)
+        ax.set_yticklabels(class_names)
+        plt.xlabel("Predicted")
+        plt.ylabel("True")
+        plt.title("Confusion Matrix")
+        plt.colorbar()
+        self.writer.add_figure("Confusion_Matrix", fig, epoch)
+        plt.close(fig)
+
+    # Log constants to TensorBoard
+    def log_hyperparameters(self, params):
+        self.writer.add_text("Hyperparameters/Tile Size", str(self.config.data.tile_size))
+        self.writer.add_text("Hyperparameters/Depth", str(self.config.data.depth))
+        self.writer.add_text("Hyperparameters/Batch Size", str(self.config.dataloader.batch_size))
+        self.writer.add_text("Hyperparameters/Num Workers", str(self.config.dataloader.num_workers))
+        self.writer.add_text("Hyperparameters/Num Epochs", str(self.config.training.num_epochs))
+        self.writer.add_text("Hyperparameters/Learning Rate", str(self.config.training.learning_rate))
+        self.writer.add_text("Hyperparameters/Weight Decay", str(self.config.training.weight_decay))
+        self.writer.add_text("Hyperparameters/Max Grad Norm", str(self.config.training.max_grad_norm))
+        self.writer.add_text("Hyperparameters/Patience", str(self.config.training.patience))
+        self.writer.add_text("Hyperparameters/LR Scheduler Factor", str(self.config.training.lr_scheduler_factor))
+        self.writer.add_text("Hyperparameters/Save Every N Epochs", str(self.config.training.save_every_n_epochs))
+        self.writer.add_text("Hyperparameters/Evaluation Interval", str(self.config.training.evaluation_interval))
+        self.writer.add_text("Hyperparameters/Model Complexity", str(params))
     
     def close(self):
         self.writer.close()

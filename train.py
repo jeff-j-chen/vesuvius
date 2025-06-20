@@ -11,13 +11,17 @@ from utils.training_utils import (
 )
 from utils.visualizer import TensorboardVisualizer
 import time
+import random
 
 def train_epoch(model, train_loader, criterion, optimizer, config: Config):
-    """Train for one epoch"""
+    """Train for one epoch with 90% of the data ignored"""
     model.train()
     train_loss, train_correct, train_total = 0.0, 0, 0
-    
+    i = 0
     for batch_images, batch_labels in tqdm(train_loader, desc="Training"):
+        # i += 1
+        # if i % 100 != 1:
+        #     continue
         batch_images = batch_images.to(config.device)
         batch_labels = batch_labels.to(config.device).view(-1, 1)
         
@@ -40,12 +44,16 @@ def train_epoch(model, train_loader, criterion, optimizer, config: Config):
     return train_loss / len(train_loader), train_correct / train_total
 
 def validate_epoch(model, valid_loader, criterion, config: Config):
-    """Validate for one epoch"""
+    """Validate for one epoch (unchanged)"""
     model.eval()
     val_loss, val_correct, val_total = 0.0, 0, 0
     
     with torch.no_grad():
+        i = 0
         for images, labels in valid_loader:
+            # i += 1
+            # if i % 100 != 1:
+            #     continue
             images = images.to(config.device)
             labels = labels.to(config.device).view(-1, 1)
             outputs = model(images)
@@ -80,7 +88,7 @@ def main():
     # Create model
     print("Creating model and loss...", end="")
     start_time = time.time()
-    model = create_model(config)
+    model, params = create_model(config)
     optimizer, scheduler = create_optimizer_and_scheduler(model, config)
     criterion = create_loss_function(pos_weight, config)
     print(f" done in {time.time() - start_time:.2f}s")
@@ -92,6 +100,7 @@ def main():
     best_val_loss = float('inf')
     
     for epoch in range(config.training.num_epochs):
+        start_time = time.time()
         # Train
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, config)
         
@@ -120,11 +129,8 @@ def main():
         if (epoch + 1) % config.training.save_every_n_epochs == 0:
             save_model(model, f'{config.model_dir}/model_epoch_{epoch+1}.pth')
 
-            vis.log_epoch_metrics(epoch, train_acc, val_acc, train_loss, val_loss, current_lr)
-    
-        # Run validation visualization if needed
-        if vis.should_run_validation(epoch):
-            vis.log_validation_results(epoch, model, train_volume, train_labels, valid_volume, valid_labels)
+        time_elapsed = time.time() - start_time
+        vis.log_epoch_metrics(epoch, model, train_acc, val_acc, train_loss, val_loss, current_lr, time_elapsed, train_volume, train_labels, valid_volume, valid_labels, params)
     
     vis.close()
     print("Training completed...")

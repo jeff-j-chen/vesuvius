@@ -6,28 +6,27 @@ import torch
 class DataConfig:
     segment_id: int = 20230827161847
     tile_size: int = 32
-    depth: int = 16
-    train_split_ratio: float = 0.75
+    depth: int = 8
     normalize: bool = True
 
 @dataclass
 class DataloaderConfig:
-    batch_size: int = 8
+    batch_size: int = 16
     num_workers: int = 4
     shuffle_train: bool = True
     shuffle_valid: bool = False
 
 @dataclass
 class TrainingConfig:
-    num_epochs: int = 20
+    num_epochs: int = 30
     learning_rate: float = 3e-4
     weight_decay: float = 1e-7
     max_grad_norm: float = 1.0
     patience: int = 5
-    lr_scheduler_factor: float = 0.5
-    save_every_n_epochs: int = 4
+    lr_scheduler_factor: float = 0.3
+    save_every_n_epochs: int = 5
     log_dir: str = './runs'
-    validation_interval: int = 10
+    evaluation_interval: int = 5
 
 
 @dataclass

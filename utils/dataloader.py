@@ -60,7 +60,7 @@ def load_data(config: Config):
 
 def create_datasets(volume, labels, config: Config):
     """Split data and create train/validation datasets"""
-    split_x = int(volume.shape[2] * config.data.train_split_ratio)
+    split_x = int(volume.shape[2] * 0.75)
     
     train_volume = volume[:, :, :split_x]
     train_labels = labels[:, :split_x]
