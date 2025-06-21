@@ -12,6 +12,7 @@ from utils.training_utils import (
 from utils.visualizer import TensorboardVisualizer
 import time
 import random
+import argparse
 
 def train_epoch(model, train_loader, criterion, optimizer, config: Config):
     """Train for one epoch with 90% of the data ignored"""
@@ -66,9 +67,14 @@ def validate_epoch(model, valid_loader, criterion, config: Config):
     return val_loss / len(valid_loader), val_correct / val_total
 
 def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
+    parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
+    args = parser.parse_args()
+
     # Load configuration
     config = Config()
-    config.experiment_name = "HELLO_WORLD"
+    config.experiment_name = args.experiment_name
 
     # Load and prepare data
     print("Loading data...", end="")

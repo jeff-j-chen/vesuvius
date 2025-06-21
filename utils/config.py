@@ -18,12 +18,12 @@ class DataloaderConfig:
 
 @dataclass
 class TrainingConfig:
-    num_epochs: int = 30
-    learning_rate: float = 3e-4
-    weight_decay: float = 1e-7
+    num_epochs: int = 100
+    learning_rate: float = 1e-3
+    weight_decay: float = 1e-6
     max_grad_norm: float = 1.0
-    patience: int = 5
-    lr_scheduler_factor: float = 0.3
+    patience: int = 10
+    lr_scheduler_factor: float = 0.5
     save_every_n_epochs: int = 5
     log_dir: str = './runs'
     evaluation_interval: int = 5

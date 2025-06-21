@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
 from .config import Config
 
 class TensorboardVisualizer:
@@ -25,58 +27,41 @@ class TensorboardVisualizer:
     def log_epoch_metrics(self, epoch, model, train_acc, val_acc, train_loss, val_loss, learning_rate, time_elapsed, train_volume, train_labels, valid_volume, valid_labels, params):
         print(f"Logging metrics for epoch: {epoch}")
         # Log accuracies
-        self.writer.add_scalar('Accuracy/Train', train_acc, epoch)
-        self.writer.add_scalar('Accuracy/Validation', val_acc, epoch)
+        self.writer.add_scalar('Metrics/Train_Acc', train_acc, epoch)
+        self.writer.add_scalar('Metrics/Validation_Acc', val_acc, epoch)
         
         # Log losses
-        self.writer.add_scalar('Loss/Train', train_loss, epoch)
-        self.writer.add_scalar('Loss/Validation', val_loss, epoch)
+        self.writer.add_scalar('Metrics/Train_Loss', train_loss, epoch)
+        self.writer.add_scalar('Metrics/Validation_Loss', val_loss, epoch)
         
         # Log learning rate
-        self.writer.add_scalar('Learning_Rate', learning_rate, epoch)
+        self.writer.add_scalar('Metrics/Learning_Rate', learning_rate, epoch)
 
         # Time elapsed
         self.writer.add_scalar('Time_Elapsed', time_elapsed, epoch)
-        
-        # # Log combined accuracy plot
-        # self.writer.add_scalars('Accuracy_Comparison', {
-        #     'Train': train_acc,
-        #     'Validation': val_acc
-        # }, epoch)
-        
-        # # Log combined loss plot
-        # self.writer.add_scalars('Loss_Comparison', {
-        #     'Train': train_loss,
-        #     'Validation': val_loss
-        # }, epoch)
 
         # Log weight histograms
-        # self.log_weight_histograms(model, epoch)
+        self.log_weight_histograms(model, epoch)
 
         # # Log activation maps if available
         # if hasattr(model, "activations"):
         #     self.log_activation_maps(model.activations, epoch)
 
-        # # Log confusion matrix if available
-        # if hasattr(model, "confusion_matrix"):
-        #     confusion_matrix = model.confusion_matrix.cpu().numpy()
-        #     class_names = ["0", "1"]
-        #     self.log_confusion_matrix(confusion_matrix, class_names, epoch)
-
         # Log model graph once at the beginning
         if epoch == 0:
-            print("loggin hparams")
-            example_input = torch.randn(1, 1, self.config.data.depth, self.config.data.tile_size, self.config.data.tile_size).to(self.config.device)
+            print("Logging hyperparameters and model graph")
+            example_input = torch.randn(1, self.config.data.depth, self.config.data.tile_size, self.config.data.tile_size).to(self.config.device)
+            example_input = example_input.unsqueeze(0)
             self.log_model_graph(model, example_input)
             self.log_hyperparameters(params)
 
         if epoch % self.config.training.evaluation_interval == 0:
             print(f"Running full evaluation on epoch {epoch} due to evaluation interval {self.config.training.evaluation_interval}")
-            self.log_evaluation_results(epoch, model, train_volume, train_labels, valid_volume, valid_labels)
+            self.add_evaluation_figures(epoch, model, train_volume, train_labels, valid_volume, valid_labels)
         
         self.writer.flush()
-        
     
+
     def _process_volume_depth_block(self, model, volume, volume_name, depth_start, depth_end):
         """Helper function to process a single volume at a specific depth range"""
         model.eval()
@@ -108,27 +93,13 @@ class TensorboardVisualizer:
         # Normalize predictions
         prediction_map = np.divide(prediction_map, count_map, where=count_map>0)
         return prediction_map
-    
-    def _create_evaluation_figure(self, full_volume_slice, full_labels, full_predictions, train_predictions, block_idx, depth_start, depth_end, middle_slice_idx):
-        """Create a single validation figure for one depth block"""
-        fig = plt.figure(figsize=(12, 12))
-        
-        # Original slice
-        plt.subplot(2, 2, 1)
-        plt.imshow(full_volume_slice, cmap='gray')
-        plt.title(f'Full Volume (Slice {middle_slice_idx})\nDepth Block {block_idx + 1} ({depth_start}-{depth_end-1})\nTrain | Valid')
-        plt.axvline(x=train_predictions.shape[1]-0.5, color='red', linestyle='--', linewidth=2, alpha=0.7)
-        plt.axis('off')
-        
-        # Ground truth
-        plt.subplot(2, 2, 2)
-        plt.imshow(full_labels, cmap='binary')
-        plt.title(f'Ground Truth Labels\nDepth Block {block_idx + 1}\nTrain | Valid')
-        plt.axvline(x=train_predictions.shape[1]-0.5, color='red', linestyle='--', linewidth=2, alpha=0.7)
-        plt.axis('off')
+
+    def _create_evaluation_figure(self, full_labels, full_predictions, train_predictions, block_idx, depth_start, depth_end, middle_slice_idx):
+        """Create a single validation figure for one depth block with confusion matrix"""
+        fig = plt.figure(figsize=(15, 4))  # Increased width for 3 subplots
         
         # Predictions
-        plt.subplot(2, 2, 3)
+        plt.subplot(1, 3, 1)
         img = plt.imshow(full_predictions, cmap='inferno', vmin=0, vmax=1)
         plt.colorbar(img, fraction=0.046, pad=0.04)
         plt.title(f'Model Predictions\nDepth Block {block_idx + 1}\nTrain | Valid')
@@ -136,7 +107,7 @@ class TensorboardVisualizer:
         plt.axis('off')
         
         # Overlay
-        plt.subplot(2, 2, 4)
+        plt.subplot(1, 3, 2)
         plt.imshow(full_predictions, cmap='inferno', vmin=0, vmax=1)
         
         # Create overlay for ground truth
@@ -148,10 +119,45 @@ class TensorboardVisualizer:
         plt.axvline(x=train_predictions.shape[1]-0.5, color='red', linestyle='--', linewidth=2, alpha=0.7)
         plt.axis('off')
         
+        # Confusion Matrix
+        plt.subplot(1, 3, 3)
+        
+        # Convert continuous predictions to binary using 0.5 threshold
+        binary_predictions = (full_predictions > 0.5).astype(int)
+        binary_labels = (full_labels > 0.5).astype(int)
+        
+        # Flatten arrays for confusion matrix calculation
+        y_true_flat = binary_labels.flatten()
+        y_pred_flat = binary_predictions.flatten()
+        
+        # Calculate confusion matrix
+        cm = confusion_matrix(y_true_flat, y_pred_flat, labels=[0, 1])
+        
+        # Create heatmap
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                    xticklabels=['No Ink (0)', 'Ink (1)'], 
+                    yticklabels=['No Ink (0)', 'Ink (1)'],
+                    cbar_kws={'shrink': 0.8})
+        
+        plt.title(f'Confusion Matrix\nDepth Block {block_idx + 1}')
+        plt.xlabel('Predicted')
+        plt.ylabel('Actual')
+        
+        # Calculate and add metrics as text
+        tn, fp, fn, tp = cm.ravel()
+        accuracy = (tp + tn) / (tp + tn + fp + fn)
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+        
+        # Add metrics text below the confusion matrix
+        metrics_text = f'Acc: {accuracy:.3f} | Prec: {precision:.3f} | Rec: {recall:.3f} | F1: {f1:.3f}'
+        plt.figtext(0.85, 0.02, metrics_text, fontsize=10, ha='center')
+        
         plt.tight_layout()
         return fig
-    
-    def log_evaluation_results(self, epoch, model, train_volume, train_labels, valid_volume, valid_labels):
+
+    def add_evaluation_figures(self, epoch, model, train_volume, train_labels, valid_volume, valid_labels):
         """
         Run full validation and log all visualization figures to TensorBoard
         
@@ -165,12 +171,12 @@ class TensorboardVisualizer:
         """
         # Calculate number of depth blocks to match dataset creation logic
         D = train_volume.shape[0]
-        num_depth_blocks = (D - self.config.data.depth + 1) // int(self.config.data.depth // 2)
+        num_depth_blocks = (D - self.config.data.depth) // self.config.data.depth + 1
         
         # Process each depth block
         for block_idx in range(num_depth_blocks):
             print(f"Processing depth block {block_idx + 1}/{num_depth_blocks} for evaluation...")
-            depth_start = block_idx * int(self.config.data.depth // 2)
+            depth_start = block_idx * self.config.data.depth
             depth_end = min(depth_start + self.config.data.depth, D)  # Ensure depth_end does not exceed D
             
             if depth_start >= D or depth_end > D:  # Check if depth_start or depth_end is out of bounds
@@ -198,11 +204,11 @@ class TensorboardVisualizer:
             
             # Create and log the validation figure
             fig = self._create_evaluation_figure(
-                full_volume_slice, full_labels, full_predictions, train_predictions,
+                full_labels, full_predictions, train_predictions,
                 block_idx, depth_start, depth_end, middle_slice_idx
             )
             # Log figure to TensorBoard
-            self.writer.add_figure(f'Evaluation/Depth_Block_{block_idx + 1}', fig, epoch)
+            self.writer.add_figure(f'Evaluation/Depth_Block_{depth_start}-{depth_end}', fig, epoch)
             
             # Close the figure to free memory
             plt.close(fig)
@@ -211,22 +217,24 @@ class TensorboardVisualizer:
         self.writer.add_graph(model, example_input)
     
     def log_activation_maps(self, activations, epoch):
-        for layer_name, activation_map in activations.items():
-            self.writer.add_images(f"Activations/{layer_name}", activation_map, epoch, dataformats="NCHW")
+        for layer, activation_map in activations.items():
+            if activation_map.dim() == 5:  # Shape: (B, C, D, H, W)
+                # Collapse depth dimension (D) using mean
+                activation_map_4d = activation_map.mean(dim=2)  # Shape: (B, C, H, W)
+                self.writer.add_images(f"Activations/{layer.__class__.__name__}", activation_map_4d, epoch, dataformats="NCHW")
+            elif activation_map.dim() == 2:  # Shape: (B, N)
+                # Reshape to (B, 1, N, 1) for compatibility
+                activation_map_reshaped = activation_map.unsqueeze(1).unsqueeze(-1)  # Shape: (B, 1, N, 1)
+                self.writer.add_images(f"Activations/{layer.__class__.__name__}", activation_map_reshaped, epoch, dataformats="NCHW")
+            else:
+                raise ValueError(f"Unexpected activation map dimensions: {activation_map.shape}")
     
-    def log_confusion_matrix(self, confusion_matrix, class_names, epoch):
-        fig, ax = plt.subplots(figsize=(8, 8))
-        ax.imshow(confusion_matrix, cmap="Blues")
-        ax.set_xticks(np.arange(len(class_names)))
-        ax.set_yticks(np.arange(len(class_names)))
-        ax.set_xticklabels(class_names)
-        ax.set_yticklabels(class_names)
-        plt.xlabel("Predicted")
-        plt.ylabel("True")
-        plt.title("Confusion Matrix")
-        plt.colorbar()
-        self.writer.add_figure("Confusion_Matrix", fig, epoch)
-        plt.close(fig)
+    def log_weight_histograms(self, model, epoch):
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.writer.add_histogram(f"Weights/{name}", param.data.cpu().numpy(), epoch)
+                if param.grad is not None:
+                    self.writer.add_histogram(f"Gradients/{name}", param.grad.cpu().numpy(), epoch)
 
     # Log constants to TensorBoard
     def log_hyperparameters(self, params):

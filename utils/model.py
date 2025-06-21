@@ -7,47 +7,67 @@ class InkDetector(nn.Module):
         super(InkDetector, self).__init__()
         
         self.features = nn.Sequential(
-            nn.Conv3d(1, 64, kernel_size=3, padding=1),
-            nn.BatchNorm3d(64),
+            # Input: (B, 1, 8, 32, 32)
+            nn.Conv3d(1, 48, kernel_size=(1, 4, 4), padding=1), # (B, 48, 8, 32, 32)
+            nn.BatchNorm3d(48),
             nn.ReLU(inplace=True),
             
-            nn.Conv3d(64, 196, kernel_size=3, padding=1),
-            nn.BatchNorm3d(196),
+            nn.Conv3d(48, 96, kernel_size=(2, 3, 3), padding=1), # (B, 96, 7, 32, 32)
+            nn.BatchNorm3d(96),
             nn.ReLU(inplace=True),
-            nn.MaxPool3d(kernel_size=2),
-            nn.AdaptiveAvgPool3d(1)
+            
+            nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 96, 7, 16, 16)
+            
+            nn.Conv3d(96, 128, kernel_size=(2, 3, 3), padding=1), # (B, 128, 6, 16, 16)
+            nn.BatchNorm3d(128),
+            nn.ReLU(inplace=True),
+            
+            nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 128, 6, 8, 8)
+            
+            nn.Conv3d(128, 256, kernel_size=(2, 3, 3), padding=1), # (B, 256, 5, 8, 8)
+            nn.BatchNorm3d(256),
+            nn.ReLU(inplace=True),
+            
+            nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 256, 5, 4, 4)
+            
+            nn.AdaptiveAvgPool3d(1) # (B, 256, 1, 1, 1)
         )
 
         self.classifier = nn.Sequential(
             nn.Flatten(),
-
-            nn.Linear(196, 128),
+            
+            nn.Linear(256, 256),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.2),
+            nn.Dropout(0.25),
+
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.20),
 
             nn.Linear(128, 64),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.2),
-
-            nn.Linear(64, 64),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.2),
+            nn.Dropout(0.15),
 
             nn.Linear(64, 1)
         )
 
         self.activations = {}
 
+        # Register hooks to capture activations
+        self._register_hooks()
+
+    def _register_hooks(self):
+        def hook(module, input, output):
+            self.activations[module] = output.detach()
+
+        for layer in self.features:
+            layer.register_forward_hook(hook)
+        for layer in self.classifier:
+            layer.register_forward_hook(hook)
+
     def forward(self, x):
-        for idx, layer in enumerate(self.features):
-            x = layer(x)
-            self.activations[f'features_{idx}'] = x.detach()
-        
-        x = self.classifier[0](x)
-        for idx, layer in enumerate(self.classifier[1:], start=1):
-            x = layer(x)
-            self.activations[f'classifier_{idx}'] = x.detach()
-        
+        x = self.features(x)
+        x = self.classifier(x)
         return x
         
 
