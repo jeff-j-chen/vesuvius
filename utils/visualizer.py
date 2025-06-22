@@ -171,14 +171,11 @@ class TensorboardVisualizer:
         """
         # Calculate number of depth blocks to match dataset creation logic
         D = train_volume.shape[0]
-        num_depth_blocks = (D - self.config.data.depth) // self.config.data.depth + 1
-        
-        # Process each depth block
+        num_depth_blocks = (D - self.config.data.depth + 1) // int(self.config.data.depth // 2)
         for block_idx in range(num_depth_blocks):
             print(f"Processing depth block {block_idx + 1}/{num_depth_blocks} for evaluation...")
-            depth_start = block_idx * self.config.data.depth
+            depth_start = block_idx * int(self.config.data.depth // 2)
             depth_end = min(depth_start + self.config.data.depth, D)  # Ensure depth_end does not exceed D
-            
             if depth_start >= D or depth_end > D:  # Check if depth_start or depth_end is out of bounds
                 print(f"Skipping depth block {block_idx + 1} due to out-of-bounds indices.")
                 continue
@@ -236,21 +233,20 @@ class TensorboardVisualizer:
                 if param.grad is not None:
                     self.writer.add_histogram(f"Gradients/{name}", param.grad.cpu().numpy(), epoch)
 
-    # Log constants to TensorBoard
     def log_hyperparameters(self, params):
-        self.writer.add_text("Hyperparameters/Tile Size", str(self.config.data.tile_size))
-        self.writer.add_text("Hyperparameters/Depth", str(self.config.data.depth))
-        self.writer.add_text("Hyperparameters/Batch Size", str(self.config.dataloader.batch_size))
-        self.writer.add_text("Hyperparameters/Num Workers", str(self.config.dataloader.num_workers))
-        self.writer.add_text("Hyperparameters/Num Epochs", str(self.config.training.num_epochs))
-        self.writer.add_text("Hyperparameters/Learning Rate", str(self.config.training.learning_rate))
-        self.writer.add_text("Hyperparameters/Weight Decay", str(self.config.training.weight_decay))
-        self.writer.add_text("Hyperparameters/Max Grad Norm", str(self.config.training.max_grad_norm))
-        self.writer.add_text("Hyperparameters/Patience", str(self.config.training.patience))
-        self.writer.add_text("Hyperparameters/LR Scheduler Factor", str(self.config.training.lr_scheduler_factor))
-        self.writer.add_text("Hyperparameters/Save Every N Epochs", str(self.config.training.save_every_n_epochs))
-        self.writer.add_text("Hyperparameters/Evaluation Interval", str(self.config.training.evaluation_interval))
-        self.writer.add_text("Hyperparameters/Model Complexity", str(params))
+        self.writer.add_scalar("Hyperparameters/Tile Size", self.config.data.tile_size)
+        self.writer.add_scalar("Hyperparameters/Depth", self.config.data.depth)
+        self.writer.add_scalar("Hyperparameters/Batch Size", self.config.dataloader.batch_size)
+        self.writer.add_scalar("Hyperparameters/Num Workers", self.config.dataloader.num_workers)
+        self.writer.add_scalar("Hyperparameters/Num Epochs", self.config.training.num_epochs)
+        self.writer.add_scalar("Hyperparameters/Learning Rate", self.config.training.learning_rate)
+        self.writer.add_scalar("Hyperparameters/Weight Decay", self.config.training.weight_decay)
+        self.writer.add_scalar("Hyperparameters/Max Grad Norm", self.config.training.max_grad_norm)
+        self.writer.add_scalar("Hyperparameters/Patience", self.config.training.patience)
+        self.writer.add_scalar("Hyperparameters/LR Scheduler Factor", self.config.training.lr_scheduler_factor)
+        self.writer.add_scalar("Hyperparameters/Save Every N Epochs", self.config.training.save_every_n_epochs)
+        self.writer.add_scalar("Hyperparameters/Evaluation Interval", self.config.training.evaluation_interval)
+        self.writer.add_scalar("Hyperparameters/Model Complexity", params)
     
     def close(self):
         self.writer.close()
