@@ -16,7 +16,7 @@ class TensorboardVisualizer:
         if config.experiment_name is None:
             experiment_name = f"ink_detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         else:
-            experiment_name = config.experiment_name + f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            experiment_name = config.experiment_name
         
         self.log_path = os.path.join(config.training.log_dir, experiment_name)
         self.writer = SummaryWriter(self.log_path)
@@ -171,7 +171,7 @@ class TensorboardVisualizer:
         """
         # Calculate number of depth blocks to match dataset creation logic
         D = train_volume.shape[0]
-        num_depth_blocks = (D - self.config.data.depth + 1) // int(self.config.data.depth // 2)
+        num_depth_blocks = (D - self.config.data.depth) // int(self.config.data.depth // 2) + 1
         for block_idx in range(num_depth_blocks):
             print(f"Processing depth block {block_idx + 1}/{num_depth_blocks} for evaluation...")
             depth_start = block_idx * int(self.config.data.depth // 2)
@@ -244,8 +244,6 @@ class TensorboardVisualizer:
         self.writer.add_scalar("Hyperparameters/Max Grad Norm", self.config.training.max_grad_norm)
         self.writer.add_scalar("Hyperparameters/Patience", self.config.training.patience)
         self.writer.add_scalar("Hyperparameters/LR Scheduler Factor", self.config.training.lr_scheduler_factor)
-        self.writer.add_scalar("Hyperparameters/Save Every N Epochs", self.config.training.save_every_n_epochs)
-        self.writer.add_scalar("Hyperparameters/Evaluation Interval", self.config.training.evaluation_interval)
         self.writer.add_scalar("Hyperparameters/Model Complexity", params)
     
     def close(self):

@@ -6,19 +6,22 @@ import vesuvius
 from vesuvius import Volume
 from .config import Config
 import cv2
+import random
 
 class InkVolumeDataset(Dataset):
-    def __init__(self, volume, labels, config: Config):
+    def __init__(self, volume, labels, config, apply_transforms=False):
         """
         volume: [D, H, W] - 3D volume of grayscale slices
         labels: [H, W] - 2D binary mask shared across depth
         config: Configuration object containing tile_size and depth
+        apply_transforms: Whether to apply data augmentation
         """
         self.volume = volume
         self.labels = labels
         self.tile_size = config.data.tile_size
         self.depth = config.data.depth
         self.D, self.H, self.W = volume.shape
+        self.apply_transforms = apply_transforms
 
         self.blocks = []
         for d in range(0, self.D - self.depth + 1, int(self.depth//2)):
@@ -27,6 +30,57 @@ class InkVolumeDataset(Dataset):
                     label_tile = labels[y:y+self.tile_size, x:x+self.tile_size]
                     if label_tile.shape == (self.tile_size, self.tile_size):
                         self.blocks.append((d, y, x))
+
+    def _apply_channel_mixing(self, block):
+        """Mix the order of the 8 depth channels"""
+        # block shape: [D, H, W] where D=8
+        indices = torch.randperm(block.shape[0])
+        return block[indices]
+    
+    def _apply_brightness_adjustment(self, block):
+        """Apply brightness adjustment to each channel independently"""
+        # Random brightness factor per channel (0.7 to 1.3)
+        brightness_factors = torch.rand(block.shape[0], 1, 1) * 0.6 + 0.7  # 0.7 to 1.3
+        return torch.clamp(block * brightness_factors, 0, 1)
+    
+    def _apply_contrast_adjustment(self, block):
+        """Apply contrast adjustment to each channel independently"""
+        adjusted_block = block.clone()
+        for i in range(block.shape[0]):
+            channel = block[i]
+            # Random contrast factor (0.8 to 1.2)
+            contrast_factor = random.uniform(0.8, 1.2)
+            # Apply contrast: new_val = (old_val - mean) * contrast + mean
+            mean_val = torch.mean(channel)
+            adjusted_block[i] = torch.clamp(
+                (channel - mean_val) * contrast_factor + mean_val, 0, 1
+            )
+        return adjusted_block
+    
+    def _apply_gaussian_noise(self, block):
+        """Apply Gaussian noise to each channel independently"""
+        # Small noise to avoid destroying signal (std=0.01 to 0.03)
+        noise_std = random.uniform(0.01, 0.03)
+        noise = torch.randn_like(block) * noise_std
+        return torch.clamp(block + noise, 0, 1)
+    
+    def _apply_rotation(self, block, label_tile):
+        """Apply 90/180/270 degree rotations to all channels and label"""
+        # Choose rotation: 0 (no rotation), 1 (90°), 2 (180°), 3 (270°)
+        rotation = random.choice([0, 1, 2, 3])
+        
+        if rotation == 0:
+            return block, label_tile
+        
+        # Apply rotation to each channel
+        rotated_block = torch.zeros_like(block)
+        for i in range(block.shape[0]):
+            rotated_block[i] = torch.rot90(block[i], k=rotation, dims=[0, 1])
+        
+        # Apply same rotation to label
+        rotated_label = torch.rot90(torch.tensor(label_tile), k=rotation, dims=[0, 1]).numpy()
+        
+        return rotated_block, rotated_label
 
     def __len__(self):
         return len(self.blocks)
@@ -40,6 +94,28 @@ class InkVolumeDataset(Dataset):
         # Convert to tensor and ensure proper normalization
         block = torch.tensor(block, dtype=torch.float32)
         
+        # Apply transforms if enabled (before adding channel dimension)
+        if self.apply_transforms:
+            # 1. Channel mixing (MOST IMPORTANT) - mix the 8 depth channels
+            if random.random() < 0.7:  # 70% chance
+                block = self._apply_channel_mixing(block)
+            
+            # 2. Brightness adjustment per channel
+            if random.random() < 0.5:  # 50% chance
+                block = self._apply_brightness_adjustment(block)
+            
+            # 3. Contrast adjustment per channel
+            if random.random() < 0.5:  # 50% chance
+                block = self._apply_contrast_adjustment(block)
+            
+            # 4. Gaussian noise per channel
+            if random.random() < 0.4:  # 40% chance
+                block = self._apply_gaussian_noise(block)
+            
+            # 5. Rotation (applies to both block and label)
+            if random.random() < 0.5:  # 50% chance
+                block, label_tile = self._apply_rotation(block, label_tile)
+
         # Add channel dimension: [D, H, W] -> [1, D, H, W]
         block = block.unsqueeze(0)
 
@@ -74,8 +150,8 @@ def create_datasets(volume, labels, config: Config):
     valid_volume = volume[:, :, split_x:]
     valid_labels = labels[:, split_x:]
     
-    train_dataset = InkVolumeDataset(train_volume, train_labels, config)
-    valid_dataset = InkVolumeDataset(valid_volume, valid_labels, config)
+    train_dataset = InkVolumeDataset(train_volume, train_labels, config, False)
+    valid_dataset = InkVolumeDataset(valid_volume, valid_labels, config, False)
     
     return train_dataset, valid_dataset, train_volume, train_labels, valid_volume, valid_labels
 

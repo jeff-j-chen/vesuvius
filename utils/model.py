@@ -11,26 +11,26 @@ class InkDetector(nn.Module):
             nn.Conv3d(1, 32, kernel_size=(1, 4, 4), padding=1, bias=False), # (B, 32, 8, 32, 32)
             nn.BatchNorm3d(32),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(0.3),
+            nn.Dropout3d(0.2),
             
             nn.Conv3d(32, 64, kernel_size=(2, 3, 3), padding=1, bias=False), # (B, 64, 7, 32, 32)
             nn.BatchNorm3d(64),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(0.3),
+            nn.Dropout3d(0.2),
             
             nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 64, 7, 16, 16)
             
             nn.Conv3d(64, 96, kernel_size=(2, 3, 3), padding=1, bias=False), # (B, 96, 6, 16, 16)
             nn.BatchNorm3d(96),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(0.4),
+            nn.Dropout3d(0.3),
             
             nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 96, 6, 8, 8)
             
             nn.Conv3d(96, 128, kernel_size=(2, 3, 3), padding=1, bias=False), # (B, 128, 5, 8, 8)
             nn.BatchNorm3d(128),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(0.4),
+            nn.Dropout3d(0.3),
             
             nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 128, 5, 4, 4)
             
@@ -43,12 +43,12 @@ class InkDetector(nn.Module):
             nn.Linear(128, 64, bias=False),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.6),
+            nn.Dropout(0.4),
 
             nn.Linear(64, 32, bias=False),
             nn.BatchNorm1d(32),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.6),
+            nn.Dropout(0.4),
 
             nn.Linear(32, 1)  # Keep bias for final output layer
         )

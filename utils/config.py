@@ -20,7 +20,7 @@ class DataloaderConfig:
 class TrainingConfig:
     num_epochs: int = 100
     learning_rate: float = 1e-5
-    weight_decay: float = 5e-3
+    weight_decay: float = 5e-5
     max_grad_norm: float = 1.0
     patience: int = 5
     lr_scheduler_factor: float = 0.5
