@@ -5,6 +5,7 @@ from collections import Counter
 import vesuvius
 from vesuvius import Volume
 from .config import Config
+import cv2
 
 class InkVolumeDataset(Dataset):
     def __init__(self, volume, labels, config: Config):
@@ -53,8 +54,14 @@ def load_data(config: Config):
     segment = Volume(config.data.segment_id, normalize=config.data.normalize)
     
     # Extract volume and labels according to config
-    volume = segment[0:64, 200:5600, 1000:4600] # type: ignore
-    labels = segment.inklabel[200:5600, 1000:4600] / 255.0
+    volume = segment[27:44, 200:5600, 1000:4600] # type: ignore
+    # labels = segment.inklabel[200:5600, 1000:4600] / 255.0
+    # instead of base labels, define as those taken from file /media/jeff/Seagate/vesuvius/fixed_inklabels.png
+    labels_path = "/media/jeff/Seagate/vesuvius/fixed_inklabels.png"
+    labels = cv2.imread(labels_path, cv2.IMREAD_GRAYSCALE)
+
+    # Normalize labels to range [0, 1]
+    labels = labels[200:5600, 1000:4600] / 255.0
     
     return volume, labels
 

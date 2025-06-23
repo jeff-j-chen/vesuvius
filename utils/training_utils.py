@@ -6,7 +6,7 @@ from .config import Config
 
 def create_optimizer_and_scheduler(model, config: Config):
     """Create optimizer and learning rate scheduler"""
-    optimizer = optim.Adam(
+    optimizer = optim.AdamW(
         model.parameters(),
         lr=config.training.learning_rate,
         weight_decay=config.training.weight_decay

@@ -8,67 +8,71 @@ class InkDetector(nn.Module):
         
         self.features = nn.Sequential(
             # Input: (B, 1, 8, 32, 32)
-            nn.Conv3d(1, 48, kernel_size=(1, 4, 4), padding=1), # (B, 48, 8, 32, 32)
-            nn.BatchNorm3d(48),
+            nn.Conv3d(1, 32, kernel_size=(1, 4, 4), padding=1, bias=False), # (B, 32, 8, 32, 32)
+            nn.BatchNorm3d(32),
             nn.ReLU(inplace=True),
+            nn.Dropout3d(0.3),
             
-            nn.Conv3d(48, 96, kernel_size=(2, 3, 3), padding=1), # (B, 96, 7, 32, 32)
+            nn.Conv3d(32, 64, kernel_size=(2, 3, 3), padding=1, bias=False), # (B, 64, 7, 32, 32)
+            nn.BatchNorm3d(64),
+            nn.ReLU(inplace=True),
+            nn.Dropout3d(0.3),
+            
+            nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 64, 7, 16, 16)
+            
+            nn.Conv3d(64, 96, kernel_size=(2, 3, 3), padding=1, bias=False), # (B, 96, 6, 16, 16)
             nn.BatchNorm3d(96),
             nn.ReLU(inplace=True),
+            nn.Dropout3d(0.4),
             
-            nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 96, 7, 16, 16)
+            nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 96, 6, 8, 8)
             
-            nn.Conv3d(96, 128, kernel_size=(2, 3, 3), padding=1), # (B, 128, 6, 16, 16)
+            nn.Conv3d(96, 128, kernel_size=(2, 3, 3), padding=1, bias=False), # (B, 128, 5, 8, 8)
             nn.BatchNorm3d(128),
             nn.ReLU(inplace=True),
+            nn.Dropout3d(0.4),
             
-            nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 128, 6, 8, 8)
+            nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 128, 5, 4, 4)
             
-            nn.Conv3d(128, 256, kernel_size=(2, 3, 3), padding=1), # (B, 256, 5, 8, 8)
-            nn.BatchNorm3d(256),
-            nn.ReLU(inplace=True),
-            
-            nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 256, 5, 4, 4)
-            
-            nn.AdaptiveAvgPool3d(1) # (B, 256, 1, 1, 1)
+            nn.AdaptiveAvgPool3d(1) # (B, 128, 1, 1, 1)
         )
 
         self.classifier = nn.Sequential(
             nn.Flatten(),
             
-            nn.Linear(256, 256),
+            nn.Linear(128, 64, bias=False),
+            nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.25),
+            nn.Dropout(0.6),
 
-            nn.Linear(256, 128),
+            nn.Linear(64, 32, bias=False),
+            nn.BatchNorm1d(32),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.20),
+            nn.Dropout(0.6),
 
-            nn.Linear(128, 64),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.15),
-
-            nn.Linear(64, 1)
+            nn.Linear(32, 1)  # Keep bias for final output layer
         )
 
         self.activations = {}
 
         # Register hooks to capture activations
         self._register_hooks()
-
     def _register_hooks(self):
         def hook(module, input, output):
             self.activations[module] = output.detach()
 
         for layer in self.features:
-            layer.register_forward_hook(hook)
+            if not isinstance(layer, (nn.Dropout3d, nn.BatchNorm3d)):
+                layer.register_forward_hook(hook)
         for layer in self.classifier:
-            layer.register_forward_hook(hook)
+            if not isinstance(layer, (nn.Dropout, nn.BatchNorm1d)):
+                layer.register_forward_hook(hook)
 
     def forward(self, x):
         x = self.features(x)
         x = self.classifier(x)
         return x
+        
         
 
 def create_model(config: Config):
@@ -78,9 +82,14 @@ def create_model(config: Config):
     # Initialize weights properly
     def init_weights(m):
         if isinstance(m, (nn.Conv3d, nn.Linear)):
-            nn.init.xavier_uniform_(m.weight)
+            # Use smaller initialization to prevent aggressive learning
+            nn.init.xavier_uniform_(m.weight, gain=0.8)
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
+        elif isinstance(m, (nn.BatchNorm3d, nn.BatchNorm1d)):
+            nn.init.constant_(m.weight, 1)
+            nn.init.constant_(m.bias, 0)
+    
     
     model.apply(init_weights)
     
