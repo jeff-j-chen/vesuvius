@@ -11,16 +11,16 @@ class DataConfig:
 
 @dataclass
 class DataloaderConfig:
-    batch_size: int = 16
-    num_workers: int = 4
+    batch_size: int = 128
+    num_workers: int = 8
     shuffle_train: bool = True
     shuffle_valid: bool = False
 
 @dataclass
 class TrainingConfig:
     num_epochs: int = 100
-    learning_rate: float = 1e-5
-    weight_decay: float = 5e-5
+    learning_rate: float = 5e-3
+    weight_decay: float = 1e-6
     max_grad_norm: float = 1.0
     patience: int = 5
     lr_scheduler_factor: float = 0.5

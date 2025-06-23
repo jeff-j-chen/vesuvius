@@ -1,0 +1,8 @@
+opencv-python
+matplotlib
+scikit-learn
+seaborn
+tensorflow
+tensorboard
+vesuvius
+numpy==1.26.4

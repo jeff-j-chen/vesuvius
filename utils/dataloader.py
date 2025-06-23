@@ -133,7 +133,7 @@ def load_data(config: Config):
     volume = segment[27:44, 200:5600, 1000:4600] # type: ignore
     # labels = segment.inklabel[200:5600, 1000:4600] / 255.0
     # instead of base labels, define as those taken from file /media/jeff/Seagate/vesuvius/fixed_inklabels.png
-    labels_path = "/media/jeff/Seagate/vesuvius/fixed_inklabels.png"
+    labels_path = "./fixed_inklabels.png"
     labels = cv2.imread(labels_path, cv2.IMREAD_GRAYSCALE)
 
     # Normalize labels to range [0, 1]
