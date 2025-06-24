@@ -55,7 +55,7 @@ class TensorboardVisualizer:
             self.log_model_graph(model, example_input)
             self.log_hyperparameters(params)
 
-        if epoch > 0 and epoch % self.config.training.evaluation_interval == 0:
+        if (epoch+1) % self.config.training.evaluation_interval == 0:
             print(f"Running full evaluation on epoch {epoch} due to evaluation interval {self.config.training.evaluation_interval}")
             self.add_evaluation_figures(epoch, model, train_volume, train_labels, valid_volume, valid_labels)
         
@@ -243,7 +243,6 @@ class TensorboardVisualizer:
         self.writer.add_scalar("Hyperparameters/Depth", self.config.data.depth)
         self.writer.add_scalar("Hyperparameters/Batch Size", self.config.dataloader.batch_size)
         self.writer.add_scalar("Hyperparameters/Num Workers", self.config.dataloader.num_workers)
-        self.writer.add_scalar("Hyperparameters/Num Epochs", self.config.training.num_epochs)
         self.writer.add_scalar("Hyperparameters/Learning Rate", self.config.training.learning_rate)
         self.writer.add_scalar("Hyperparameters/Weight Decay", self.config.training.weight_decay)
         self.writer.add_scalar("Hyperparameters/L1 Lambda", self.config.training.l1_lambda)

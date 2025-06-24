@@ -136,7 +136,7 @@ def main():
             print(f"New best model saved! Val Loss: {best_val_loss:.4f}")
         
         # Save periodic checkpoints
-        if (epoch + 1) % config.training.save_every_n_epochs == 0:
+        if (epoch+1) % config.training.save_every_n_epochs == 0:
             save_model(model, f'{config.model_dir}/model_epoch_{epoch+1}.pth')
 
         time_elapsed = time.time() - start_time
