@@ -42,7 +42,7 @@ class Config:
     data: DataConfig = DataConfig()
     dataloader: DataloaderConfig = DataloaderConfig()
     training: TrainingConfig = TrainingConfig()
-    model: ModelConfig = ModelConfig
+    model: ModelConfig = ModelConfig()
     
     # Derived properties
     device: str = "cuda" if torch.cuda.is_available() else "cpu"

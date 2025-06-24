@@ -16,7 +16,7 @@ class TensorboardVisualizer:
         if config.experiment_name is None:
             experiment_name = f"ink_detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         else:
-            experiment_name = config.experiment_name
+            experiment_name = config.experiment_name + "_" +  datetime.now().strftime('%d_%H%M%S')
         
         self.log_path = os.path.join(config.training.log_dir, experiment_name)
         self.writer = SummaryWriter(self.log_path)
