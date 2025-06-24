@@ -18,7 +18,7 @@ class DataloaderConfig:
 
 @dataclass
 class TrainingConfig:
-    num_epochs: int = 100
+    num_epochs: int = 500
     learning_rate: float = 2e-3
     weight_decay: float = 1e-7
     l1_lambda: float = 1e-4
@@ -31,14 +31,10 @@ class TrainingConfig:
 
 @dataclass
 class ModelConfig:
-    # conv1_drop: float = 0.15
-    # conv2_drop: float = 0.25
-    # fc1_drop: float = 0.4
-    # fc2_drop: float = 0.6
     conv1_drop: float = 0
     conv2_drop: float = 0
-    fc1_drop: float = 0
-    fc2_drop: float = 0
+    fc1_drop: float = 0.2
+    fc2_drop: float = 0.3
 
 
 @dataclass
