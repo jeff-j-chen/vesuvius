@@ -20,13 +20,21 @@ class DataloaderConfig:
 class TrainingConfig:
     num_epochs: int = 100
     learning_rate: float = 5e-3
-    weight_decay: float = 1e-6
+    weight_decay: float = 0
+    l1_lambda: float = 2e-6
     max_grad_norm: float = 1.0
     patience: int = 5
     lr_scheduler_factor: float = 0.5
     save_every_n_epochs: int = 10
     log_dir: str = './runs'
-    evaluation_interval: int = 10
+    evaluation_interval: int = 50
+
+@dataclass
+class ModelConfig:
+    conv1_drop: float = 0.15
+    conv2_drop: float = 0.25
+    fc1_drop: float = 0.4
+    fc2_drop: float = 0.6
 
 
 @dataclass
@@ -34,6 +42,7 @@ class Config:
     data: DataConfig = DataConfig()
     dataloader: DataloaderConfig = DataloaderConfig()
     training: TrainingConfig = TrainingConfig()
+    model: ModelConfig = ModelConfig
     
     # Derived properties
     device: str = "cuda" if torch.cuda.is_available() else "cpu"

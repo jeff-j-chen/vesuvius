@@ -96,31 +96,26 @@ class InkVolumeDataset(Dataset):
         
         # Apply transforms if enabled (before adding channel dimension)
         if self.apply_transforms:
-            # 1. Channel mixing (MOST IMPORTANT) - mix the 8 depth channels
-            if random.random() < 0.7:  # 70% chance
+            if random.random() < 0.7:
                 block = self._apply_channel_mixing(block)
-            
-            # 2. Brightness adjustment per channel
-            if random.random() < 0.5:  # 50% chance
+            if random.random() < 0.5:
                 block = self._apply_brightness_adjustment(block)
-            
-            # 3. Contrast adjustment per channel
-            if random.random() < 0.5:  # 50% chance
+            if random.random() < 0.5:
                 block = self._apply_contrast_adjustment(block)
-            
-            # 4. Gaussian noise per channel
-            if random.random() < 0.4:  # 40% chance
+            if random.random() < 0.4:
                 block = self._apply_gaussian_noise(block)
-            
-            # 5. Rotation (applies to both block and label)
-            if random.random() < 0.5:  # 50% chance
+            if random.random() < 0.5:
                 block, label_tile = self._apply_rotation(block, label_tile)
 
         # Add channel dimension: [D, H, W] -> [1, D, H, W]
         block = block.unsqueeze(0)
 
         # Binary label: 1 if any ink present (more robust checking)
-        has_ink = np.any(label_tile > 0.5)
+        if d < 4 or d > 28:
+            # For the first and last few slices, assume no ink
+            has_ink = False
+        else:
+            has_ink = np.any(label_tile > 0.5)
         label = torch.tensor([float(has_ink)], dtype=torch.float32)
 
         return block, label
@@ -130,7 +125,7 @@ def load_data(config: Config):
     segment = Volume(config.data.segment_id, normalize=config.data.normalize)
     
     # Extract volume and labels according to config
-    volume = segment[27:44, 200:5600, 1000:4600] # type: ignore
+    volume = segment[20:52, 200:5600, 1000:4600] # type: ignore
     # labels = segment.inklabel[200:5600, 1000:4600] / 255.0
     # instead of base labels, define as those taken from file /media/jeff/Seagate/vesuvius/fixed_inklabels.png
     labels_path = "./fixed_inklabels.png"

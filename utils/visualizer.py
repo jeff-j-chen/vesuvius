@@ -55,7 +55,7 @@ class TensorboardVisualizer:
             self.log_model_graph(model, example_input)
             self.log_hyperparameters(params)
 
-        if epoch % self.config.training.evaluation_interval == 0:
+        if epoch > 0 and epoch % self.config.training.evaluation_interval == 0:
             print(f"Running full evaluation on epoch {epoch} due to evaluation interval {self.config.training.evaluation_interval}")
             self.add_evaluation_figures(epoch, model, train_volume, train_labels, valid_volume, valid_labels)
         
@@ -75,10 +75,12 @@ class TensorboardVisualizer:
         for y in range(0, H - self.config.data.tile_size + 1, self.config.data.tile_size):
             for x in range(0, W - self.config.data.tile_size + 1, self.config.data.tile_size):
                 tile_coords.append((y, x))
+        print("tiles created")
         
         with torch.no_grad():
             # Process tiles with tqdm progress bar
-            for y, x in tqdm(tile_coords, desc=f"Processing {volume_name} volume (depth {depth_start}-{depth_end-1})", leave=False):
+            print("starting processing with no grad")
+            for y, x in tqdm(tile_coords, desc=f"Processing {volume_name} volume (depth {depth_start}-{depth_end-1})"):
                 # Extract block from the specified depth range
                 block = volume[depth_start:depth_end, y:y+self.config.data.tile_size, x:x+self.config.data.tile_size]
                 
@@ -89,9 +91,12 @@ class TensorboardVisualizer:
                     
                     prediction_map[y:y+self.config.data.tile_size, x:x+self.config.data.tile_size] += pred
                     count_map[y:y+self.config.data.tile_size, x:x+self.config.data.tile_size] += 1
+            print("grad back on")
         
         # Normalize predictions
+        print("done, now normalizing")
         prediction_map = np.divide(prediction_map, count_map, where=count_map>0)
+        print("normalization complete, returning")
         return prediction_map
 
     def _create_evaluation_figure(self, full_labels, full_predictions, train_predictions, block_idx, depth_start, depth_end, middle_slice_idx):
@@ -181,6 +186,7 @@ class TensorboardVisualizer:
                 continue
             
             # Process both volumes for this depth block
+            print('beginning preds')
             train_predictions = self._process_volume_depth_block(
                 model, train_volume, "training", depth_start, depth_end
             )
@@ -195,7 +201,6 @@ class TensorboardVisualizer:
                 print(f"Skipping visualization for depth block {block_idx + 1} due to out-of-bounds middle slice index.")
                 continue
             
-            full_volume_slice = np.concatenate([train_volume[middle_slice_idx], valid_volume[middle_slice_idx]], axis=1)
             full_labels = np.concatenate([train_labels, valid_labels], axis=1)
             full_predictions = np.concatenate([train_predictions, valid_predictions], axis=1)
             
@@ -241,6 +246,11 @@ class TensorboardVisualizer:
         self.writer.add_scalar("Hyperparameters/Num Epochs", self.config.training.num_epochs)
         self.writer.add_scalar("Hyperparameters/Learning Rate", self.config.training.learning_rate)
         self.writer.add_scalar("Hyperparameters/Weight Decay", self.config.training.weight_decay)
+        self.writer.add_scalar("Hyperparameters/L1 Lambda", self.config.training.l1_lambda)
+        self.writer.add_scalar("Hyperparameters/Conv1 Dropout", self.config.model.conv1_drop)
+        self.writer.add_scalar("Hyperparameters/Conv2 Dropout", self.config.model.conv2_drop)
+        self.writer.add_scalar("Hyperparameters/FC1 Dropout", self.config.model.fc1_drop)
+        self.writer.add_scalar("Hyperparameters/FC2 Dropout", self.config.model.fc2_drop)
         self.writer.add_scalar("Hyperparameters/Max Grad Norm", self.config.training.max_grad_norm)
         self.writer.add_scalar("Hyperparameters/Patience", self.config.training.patience)
         self.writer.add_scalar("Hyperparameters/LR Scheduler Factor", self.config.training.lr_scheduler_factor)

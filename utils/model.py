@@ -3,7 +3,7 @@ import torch.nn as nn
 from .config import Config
 
 class InkDetector(nn.Module):
-    def __init__(self):
+    def __init__(self, config: Config):
         super(InkDetector, self).__init__()
         
         self.features = nn.Sequential(
@@ -11,28 +11,28 @@ class InkDetector(nn.Module):
             nn.Conv3d(1, 32, kernel_size=(1, 4, 4), padding=1, bias=False), # (B, 32, 8, 32, 32)
             nn.BatchNorm3d(32),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(0.2),
+            nn.Dropout3d(config.model.conv1_drop),
             
             nn.Conv3d(32, 64, kernel_size=(2, 3, 3), padding=1, bias=False), # (B, 64, 7, 32, 32)
             nn.BatchNorm3d(64),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(0.2),
             
             nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 64, 7, 16, 16)
             
             nn.Conv3d(64, 96, kernel_size=(2, 3, 3), padding=1, bias=False), # (B, 96, 6, 16, 16)
             nn.BatchNorm3d(96),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(0.3),
+            nn.Dropout3d(config.model.conv2_drop),
             
             nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 96, 6, 8, 8)
             
             nn.Conv3d(96, 128, kernel_size=(2, 3, 3), padding=1, bias=False), # (B, 128, 5, 8, 8)
             nn.BatchNorm3d(128),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(0.3),
+            nn.Dropout3d(config.model.conv1_drop),
             
             nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 128, 5, 4, 4)
+            nn.Dropout3d(config.model.conv2_drop),
             
             nn.AdaptiveAvgPool3d(1) # (B, 128, 1, 1, 1)
         )
@@ -43,12 +43,12 @@ class InkDetector(nn.Module):
             nn.Linear(128, 64, bias=False),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.4),
+            nn.Dropout(config.model.fc1_drop),
 
             nn.Linear(64, 32, bias=False),
             nn.BatchNorm1d(32),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.4),
+            nn.Dropout(config.model.fc2_drop),
 
             nn.Linear(32, 1)  # Keep bias for final output layer
         )
@@ -77,7 +77,7 @@ class InkDetector(nn.Module):
 
 def create_model(config: Config):
     """Create and initialize the model"""
-    model = InkDetector().to(config.device)
+    model = InkDetector(config).to(config.device)
     
     # Initialize weights properly
     def init_weights(m):

@@ -15,14 +15,10 @@ import random
 import argparse
 
 def train_epoch(model, train_loader, criterion, optimizer, config: Config):
-    """Train for one epoch with 90% of the data ignored"""
+    """Train for one epoch with L1 regularization"""
     model.train()
     train_loss, train_correct, train_total = 0.0, 0, 0
-    i = 0
     for batch_images, batch_labels in tqdm(train_loader, desc="Training"):
-        # i += 1
-        # if i % 100 != 1:
-        #     continue
         batch_images = batch_images.to(config.device)
         batch_labels = batch_labels.to(config.device).view(-1, 1)
         
@@ -30,6 +26,14 @@ def train_epoch(model, train_loader, criterion, optimizer, config: Config):
         outputs = model(batch_images)
         
         loss = criterion(outputs, batch_labels)
+        
+        # Add L1 regularization
+        l1_loss = sum(p.abs().sum() for p in model.parameters())
+        current_lr = optimizer.param_groups[0]['lr']
+        scaled_l1_lambda = config.training.l1_lambda * (current_lr / config.training.learning_rate)
+        loss += scaled_l1_lambda * l1_loss
+        loss += config.training.l1_lambda * l1_loss
+        
         loss.backward()
         
         # Gradient clipping
