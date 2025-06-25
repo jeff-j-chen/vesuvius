@@ -2,44 +2,70 @@ import torch
 import torch.nn as nn
 from .config import Config
 
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super().__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size=kernel_size, padding=kernel_size // 2)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)  # (B, 1, H, W)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)  # (B, 1, H, W)
+        attn = torch.cat([avg_out, max_out], dim=1)  # (B, 2, H, W)
+        attn = self.conv(attn)  # (B, 1, H, W)
+        attn = self.sigmoid(attn)  # (B, 1, H, W)
+        return x * attn  # Apply attention
+
 class InkDetector(nn.Module):
     def __init__(self, config: Config):
         super(InkDetector, self).__init__()
-        
+        self.spatial_attention = SpatialAttention()
+
         self.features = nn.Sequential(
-            # Input: (B, 1, 8, 32, 32)
-            nn.Conv3d(1, 32, kernel_size=(1, 4, 4), padding=1, bias=False), # (B, 32, 8, 32, 32)
+            # Depthwise conv to compress depth (D=8 → maxed out later)
+            nn.Conv3d(1, 32, kernel_size=(3, 1, 1), padding=(1, 0, 0), bias=False),  # (B, 32, 8, 32, 32)
             nn.BatchNorm3d(32),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(config.model.conv1_drop),
-            
-            nn.Conv3d(32, 64, kernel_size=(2, 3, 3), padding=1, bias=False), # (B, 64, 7, 32, 32)
-            nn.BatchNorm3d(64),
+            # Depth collapsed later via max
+        )
+
+        self.conv2d_path = nn.Sequential(
+            # Starting with (B, 32, 32, 32)
+
+            # Add more conv layers with moderate channel growth
+            nn.Conv2d(32, 64, kernel_size=3, padding=1, bias=False),   # (B, 64, 32, 32)
+            nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
-            
-            nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 64, 7, 16, 16)
-            
-            nn.Conv3d(64, 96, kernel_size=(2, 3, 3), padding=1, bias=False), # (B, 96, 6, 16, 16)
-            nn.BatchNorm3d(96),
+
+            nn.Conv2d(64, 64, kernel_size=3, padding=1, bias=False),   # Added conv layer for depth & nonlinearity (B, 64, 32, 32)
+            nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(config.model.conv2_drop),
-            
-            nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 96, 6, 8, 8)
-            
-            nn.Conv3d(96, 128, kernel_size=(2, 3, 3), padding=1, bias=False), # (B, 128, 5, 8, 8)
-            nn.BatchNorm3d(128),
+
+            nn.MaxPool2d(kernel_size=2, stride=1),  # Overlapping pooling (B, 64, 31, 31)
+
+            nn.Conv2d(64, 96, kernel_size=3, padding=1, bias=False),   # (B, 96, 31, 31)
+            nn.BatchNorm2d(96),
             nn.ReLU(inplace=True),
-            nn.Dropout3d(config.model.conv1_drop),
-            
-            nn.MaxPool3d(kernel_size=(1, 2, 2)), # (B, 128, 5, 4, 4)
-            nn.Dropout3d(config.model.conv2_drop),
-            
-            nn.AdaptiveAvgPool3d(1) # (B, 128, 1, 1, 1)
+
+            nn.Conv2d(96, 96, kernel_size=3, padding=1, bias=False),   # Added another conv (B, 96, 31, 31)
+            nn.BatchNorm2d(96),
+            nn.ReLU(inplace=True),
+            nn.Dropout(config.model.conv1_drop),
+
+            nn.MaxPool2d(kernel_size=2, stride=1),  # (B, 96, 30, 30)
+
+            nn.Conv2d(96, 128, kernel_size=3, padding=1, bias=False),  # (B, 128, 30, 30)
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(config.model.conv2_drop),
+
+            SpatialAttention(),
+
+            nn.AdaptiveAvgPool2d((1, 1))  # (B, 128, 1, 1)
         )
 
         self.classifier = nn.Sequential(
-            nn.Flatten(),
-            
+            nn.Flatten(),  # (B, 128)
             nn.Linear(128, 64, bias=False),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
@@ -48,15 +74,22 @@ class InkDetector(nn.Module):
             nn.Linear(64, 32, bias=False),
             nn.BatchNorm1d(32),
             nn.ReLU(inplace=True),
-            nn.Dropout(config.model.fc2_drop),
+            nn.Dropout(config.model.fc15_drop),
 
-            nn.Linear(32, 1)  # Keep bias for final output layer
+            nn.Linear(32, 1)  # Output: (B, 1)
         )
-
         self.activations = {}
 
         # Register hooks to capture activations
         self._register_hooks()
+
+    def forward(self, x):
+        x = self.features(x)  # (B, 32, 8, 32, 32)
+        x = torch.max(x, dim=2).values  # Collapse depth → (B, 32, 32, 32)
+        x = self.conv2d_path(x)  # (B, 128, 1, 1)
+        x = self.classifier(x)  # (B, 1)
+        return x
+
     def _register_hooks(self):
         def hook(module, input, output):
             self.activations[module] = output.detach()
@@ -67,11 +100,6 @@ class InkDetector(nn.Module):
         for layer in self.classifier:
             if not isinstance(layer, (nn.Dropout, nn.BatchNorm1d)):
                 layer.register_forward_hook(hook)
-
-    def forward(self, x):
-        x = self.features(x)
-        x = self.classifier(x)
-        return x
         
         
 

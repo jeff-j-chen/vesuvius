@@ -52,10 +52,8 @@ def create_loss_function(pos_weight, config: Config):
     return criterion
 
 def save_model(model, path):
-    """Save model state dict"""
     torch.save(model.state_dict(), path)
 
 def load_model(model, path):
-    """Load model state dict"""
     model.load_state_dict(torch.load(path))
     return model

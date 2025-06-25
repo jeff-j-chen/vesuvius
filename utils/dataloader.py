@@ -40,7 +40,7 @@ class InkVolumeDataset(Dataset):
     def _apply_brightness_adjustment(self, block):
         """Apply brightness adjustment to each channel independently"""
         # Random brightness factor per channel (0.7 to 1.3)
-        brightness_factors = torch.rand(block.shape[0], 1, 1) * 0.6 + 0.7  # 0.7 to 1.3
+        brightness_factors = torch.rand(block.shape[0], 1, 1) * 0.1 + 0.95  # 0.7 to 1.3
         return torch.clamp(block * brightness_factors, 0, 1)
     
     def _apply_contrast_adjustment(self, block):
@@ -49,7 +49,7 @@ class InkVolumeDataset(Dataset):
         for i in range(block.shape[0]):
             channel = block[i]
             # Random contrast factor (0.8 to 1.2)
-            contrast_factor = random.uniform(0.8, 1.2)
+            contrast_factor = random.uniform(0.9, 1.1)
             # Apply contrast: new_val = (old_val - mean) * contrast + mean
             mean_val = torch.mean(channel)
             adjusted_block[i] = torch.clamp(
@@ -60,7 +60,7 @@ class InkVolumeDataset(Dataset):
     def _apply_gaussian_noise(self, block):
         """Apply Gaussian noise to each channel independently"""
         # Small noise to avoid destroying signal (std=0.01 to 0.03)
-        noise_std = random.uniform(0.01, 0.03)
+        noise_std = random.uniform(0.005, 0.01)
         noise = torch.randn_like(block) * noise_std
         return torch.clamp(block + noise, 0, 1)
     
@@ -70,7 +70,7 @@ class InkVolumeDataset(Dataset):
         rotation = random.choice([0, 1, 2, 3])
         
         if rotation == 0:
-            return block, label_tile
+            return block
         
         # Apply rotation to each channel
         rotated_block = torch.zeros_like(block)
@@ -80,7 +80,7 @@ class InkVolumeDataset(Dataset):
         # Apply same rotation to label
         rotated_label = torch.rot90(torch.tensor(label_tile), k=rotation, dims=[0, 1]).numpy()
         
-        return rotated_block, rotated_label
+        return rotated_block
 
     def __len__(self):
         return len(self.blocks)
@@ -96,22 +96,24 @@ class InkVolumeDataset(Dataset):
         
         # Apply transforms if enabled (before adding channel dimension)
         if self.apply_transforms:
-            if random.random() < 0.7:
+            if random.random() < 0.3:
                 block = self._apply_channel_mixing(block)
-            if random.random() < 0.5:
+            transform_type = random.choice(["brightness", "contrast", "noise", "rotate", None])
+            if transform_type == "brightness":
                 block = self._apply_brightness_adjustment(block)
-            if random.random() < 0.5:
+            elif transform_type == "contrast":
                 block = self._apply_contrast_adjustment(block)
-            if random.random() < 0.4:
+            elif transform_type == "noise":
                 block = self._apply_gaussian_noise(block)
-            if random.random() < 0.5:
-                block, label_tile = self._apply_rotation(block, label_tile)
+            elif transform_type == "rotate":
+                block = self._apply_rotation(block, label_tile)
+
 
         # Add channel dimension: [D, H, W] -> [1, D, H, W]
         block = block.unsqueeze(0)
 
         # Binary label: 1 if any ink present (more robust checking)
-        if d < 4 or d > 28:
+        if d <= 6 or d > 24:
             # For the first and last few slices, assume no ink
             has_ink = False
         else:
@@ -125,7 +127,7 @@ def load_data(config: Config):
     segment = Volume(config.data.segment_id, normalize=config.data.normalize)
     
     # Extract volume and labels according to config
-    volume = segment[20:52, 200:5600, 1000:4600] # type: ignore
+    volume = segment[24:52, 200:5600, 1000:4600] # type: ignore
     # labels = segment.inklabel[200:5600, 1000:4600] / 255.0
     # instead of base labels, define as those taken from file /media/jeff/Seagate/vesuvius/fixed_inklabels.png
     labels_path = "./fixed_inklabels.png"

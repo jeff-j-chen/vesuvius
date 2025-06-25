@@ -29,9 +29,6 @@ def train_epoch(model, train_loader, criterion, optimizer, config: Config):
         
         # Add L1 regularization
         l1_loss = sum(p.abs().sum() for p in model.parameters())
-        current_lr = optimizer.param_groups[0]['lr']
-        scaled_l1_lambda = config.training.l1_lambda * (current_lr / config.training.learning_rate)
-        loss += scaled_l1_lambda * l1_loss
         loss += config.training.l1_lambda * l1_loss
         
         loss.backward()
@@ -112,6 +109,9 @@ def main():
     for epoch in range(config.training.num_epochs):
         start_time = time.time()
         # Train
+        # if epoch > 5 and not train_dataset.apply_transforms:
+        #     print("Transforms will now apply...")
+        #     train_dataset.apply_transforms = True
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, config)
         
         # Validate
