@@ -112,12 +112,13 @@ class InkVolumeDataset(Dataset):
         # Add channel dimension: [D, H, W] -> [1, D, H, W]
         block = block.unsqueeze(0)
 
-        # Binary label: 1 if any ink present (more robust checking)
-        if d <= 6 or d > 24:
-            # For the first and last few slices, assume no ink
-            has_ink = False
-        else:
-            has_ink = np.any(label_tile > 0.5)
+        # # Binary label: 1 if any ink present (more robust checking)
+        # if d <= 6 or d > 24:
+        #     # For the first and last few slices, assume no ink
+        #     has_ink = False
+        # else:
+        #     has_ink = np.any(label_tile > 0.5)
+        has_ink = np.any(label_tile > 0.5)
         label = torch.tensor([float(has_ink)], dtype=torch.float32)
 
         return block, label
@@ -127,7 +128,7 @@ def load_data(config: Config):
     segment = Volume(config.data.segment_id, normalize=config.data.normalize)
     
     # Extract volume and labels according to config
-    volume = segment[24:52, 200:5600, 1000:4600] # type: ignore
+    volume = segment[config.data.start_level:config.data.end_level, 200:5600, 1000:4600] # type: ignore
     # labels = segment.inklabel[200:5600, 1000:4600] / 255.0
     # instead of base labels, define as those taken from file /media/jeff/Seagate/vesuvius/fixed_inklabels.png
     labels_path = "./fixed_inklabels.png"

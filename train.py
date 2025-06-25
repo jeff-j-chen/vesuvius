@@ -67,15 +67,8 @@ def validate_epoch(model, valid_loader, criterion, config: Config):
     
     return val_loss / len(valid_loader), val_correct / val_total
 
-def main():
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
-    parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
-    args = parser.parse_args()
+def main(config: Config):
 
-    # Load configuration
-    config = Config()
-    config.experiment_name = args.experiment_name
 
     # Load and prepare data
     print("Loading data...", end="")
@@ -146,4 +139,35 @@ def main():
     print("Training completed...")
 
 if __name__ == "__main__":
-    main()
+    # parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
+    # parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
+    # args = parser.parse_args()
+    # config = Config()
+    # config.experiment_name = args.experiment_name
+    # main(config)
+
+    # l1s = [1e-3, 5e-4]
+    # for l1 in l1s:
+    #     config = Config()
+    #     config.experiment_name = f"l1_{l1:.0e}"
+    #     config.training.l1_lambda = l1
+    #     main(config)
+    
+
+    config = Config()
+    config.data.start_level = 24
+    config.data.end_level = 52
+    config.experiment_name = f"levels_{config.data.start_level}_{config.data.end_level}"
+    main(config)
+
+    while config.data.end_level - config.data.start_level > 4:
+        config.data.start_level += 4
+        print(f"entry {config.data.start_level} to {config.data.end_level}")
+        config.experiment_name = f"levels_{config.data.start_level}_{config.data.end_level}"
+        main(config)
+
+        config.data.end_level -= 4
+        print(f"entry {config.data.start_level} to {config.data.end_level}")
+        config.experiment_name = f"levels_{config.data.start_level}_{config.data.end_level}"
+        main(config)
+    

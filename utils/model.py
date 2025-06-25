@@ -47,12 +47,12 @@ class InkDetector(nn.Module):
             nn.BatchNorm2d(96),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(96, 96, kernel_size=3, padding=1, bias=False),   # Added another conv (B, 96, 31, 31)
+            nn.Conv2d(96, 96, kernel_size=3, padding=1, bias=False),   # Added another conv (B, 112, 31, 31)
             nn.BatchNorm2d(96),
             nn.ReLU(inplace=True),
             nn.Dropout(config.model.conv1_drop),
 
-            nn.MaxPool2d(kernel_size=2, stride=1),  # (B, 96, 30, 30)
+            nn.MaxPool2d(kernel_size=2, stride=1),  # (B, 112, 30, 30)
 
             nn.Conv2d(96, 128, kernel_size=3, padding=1, bias=False),  # (B, 128, 30, 30)
             nn.BatchNorm2d(128),
@@ -74,7 +74,7 @@ class InkDetector(nn.Module):
             nn.Linear(64, 32, bias=False),
             nn.BatchNorm1d(32),
             nn.ReLU(inplace=True),
-            nn.Dropout(config.model.fc15_drop),
+            nn.Dropout(config.model.fc2_drop),
 
             nn.Linear(32, 1)  # Output: (B, 1)
         )

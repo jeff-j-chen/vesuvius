@@ -210,7 +210,7 @@ class TensorboardVisualizer:
                 block_idx, depth_start, depth_end, middle_slice_idx
             )
             # Log figure to TensorBoard
-            self.writer.add_figure(f'Evaluation/Depth_Block_{depth_start}-{depth_end}', fig, epoch)
+            self.writer.add_figure(f'Evaluation/Depth_Block_{self.config.data.start_level + depth_start}-{self.config.data.start_level + depth_end}', fig, epoch)
             
             # Close the figure to free memory
             plt.close(fig)
