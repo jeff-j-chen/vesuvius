@@ -123,7 +123,7 @@ class InkVolumeDataset(Dataset):
 
         return block, label
 
-def load_data(config: Config):
+def _load_tv_data(config: Config):
     """Load and prepare the volume data according to configuration"""
     segment = Volume(config.data.segment_id, normalize=config.data.normalize)
     
@@ -136,11 +136,6 @@ def load_data(config: Config):
 
     # Normalize labels to range [0, 1]
     labels = labels[200:5600, 1000:4600] / 255.0
-    
-    return volume, labels
-
-def create_datasets(volume, labels, config: Config):
-    """Split data and create train/validation datasets"""
     split_x = int(volume.shape[2] * 0.75)
     
     train_volume = volume[:, :, :split_x]
@@ -148,10 +143,27 @@ def create_datasets(volume, labels, config: Config):
     valid_volume = volume[:, :, split_x:]
     valid_labels = labels[:, split_x:]
     
+    return train_volume, train_labels, valid_volume, valid_labels
+
+def load_test_data(config: Config):
+    segment = Volume(config.data.segment_id, normalize=config.data.normalize)
+    volume = segment[config.data.start_level:config.data.end_level, 200:5600, 4600:] # type: ignore
+    labels = segment.inklabel[200:5600, 4600:] / 255.0
+    return volume, labels
+
+def load_scroll4_data(config: Config):
+    segment = Volume(20231117161658, normalize=config.data.normalize)
+    volume = segment
+    return volume
+
+def create_datasets(config: Config):
+    """Split data and create train/validation datasets"""
+    train_volume, train_labels, valid_volume, valid_labels = _load_tv_data(config)
+    
     train_dataset = InkVolumeDataset(train_volume, train_labels, config, False)
     valid_dataset = InkVolumeDataset(valid_volume, valid_labels, config, False)
     
-    return train_dataset, valid_dataset, train_volume, train_labels, valid_volume, valid_labels
+    return train_dataset, valid_dataset, train_volume, valid_volume
 
 def create_dataloaders(train_dataset, valid_dataset, config: Config):
     """Create DataLoader objects from datasets"""

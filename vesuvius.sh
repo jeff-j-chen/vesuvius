@@ -4,6 +4,5 @@ vesuvius.accept_terms --yes
 git config --global user.name "jeff-j-chen"
 git config --global user.email "jeffc3141@gmail.com"
 apt update
-apt install tmux
+apt install tmux -y
 tmux new -s ten
-tensorboard --logdir ./runs --bind_all

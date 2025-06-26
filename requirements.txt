@@ -4,5 +4,5 @@ scikit-learn
 seaborn
 tensorflow
 tensorboard
-vesuvius
 numpy==1.26.4
+vesuvius==0.2.0a0

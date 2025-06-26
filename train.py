@@ -2,7 +2,7 @@
 import torch
 from tqdm import tqdm
 from utils.config import Config
-from utils.dataloader import load_data, create_datasets, create_dataloaders, calculate_class_weights
+from utils.dataloader import create_datasets, create_dataloaders, calculate_class_weights
 from utils.model import create_model
 from utils.training_utils import (
     create_optimizer_and_scheduler, 
@@ -70,20 +70,13 @@ def validate_epoch(model, valid_loader, criterion, config: Config):
 def main(config: Config):
     torch.backends.cudnn.benchmark = True
 
-    # Load and prepare data
-    print("Loading data...", end="")
-    start_time = time.time()
-    volume, labels = load_data(config)
-    print(f" done in {time.time() - start_time:.2f}s")
-    
     # Create datasets and dataloaders, in addition to the class weights
     print("Creating datasets...", end="")
     start_time = time.time()
-    train_dataset, valid_dataset, train_volume, train_labels, valid_volume, valid_labels = create_datasets(volume, labels, config)
+    train_dataset, valid_dataset, train_volume, valid_volume = create_datasets(config)
     train_loader, valid_loader = create_dataloaders(train_dataset, valid_dataset, config)
     pos_weight = calculate_class_weights(train_dataset)
     print(f" done in {time.time() - start_time:.2f}s")
-    
     
     # Create model
     print(f"Creating model and loss... l1 lamba {config.training.l1_lambda}... ", end="")
@@ -133,7 +126,7 @@ def main(config: Config):
             save_model(model, f'{config.model_dir}/model_epoch_{epoch+1}.pth')
 
         time_elapsed = time.time() - start_time
-        vis.log_epoch_metrics(epoch, model, train_acc, val_acc, train_loss, val_loss, current_lr, time_elapsed, train_volume, train_labels, valid_volume, valid_labels, params)
+        vis.log_epoch_metrics(epoch, model, train_acc, val_acc, train_loss, val_loss, current_lr, time_elapsed, train_volume, valid_volume, labels, params)
     
     vis.close()
     print("Training completed...")
@@ -156,7 +149,7 @@ if __name__ == "__main__":
     #     config.training.l1_lambda = l1
     #     main(config)
 
-    drops = [[0, 0.5, 0.25], [0.05, 0.5, 0.25]]
+    drops = [[0.1, 0.3, 0.5], [0.05, 0.4, 0.6], [0.1, 0.5, 0.7]]
     for drop in drops:
         config = Config()
         config.model.conv1_drop = drop[0]

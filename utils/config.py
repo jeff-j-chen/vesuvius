@@ -30,6 +30,7 @@ class TrainingConfig:
     save_every_n_epochs: int = 10
     log_dir: str = './runs'
     evaluation_interval: int = 50
+    test_interval: int = 50
 
 @dataclass
 class ModelConfig:

@@ -8,6 +8,7 @@ from tqdm import tqdm
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
 from .config import Config
+from .dataloader import load_test_data, load_scroll4_data
 
 
 class TensorboardVisualizer:
@@ -21,11 +22,13 @@ class TensorboardVisualizer:
         
         self.log_path = os.path.join(config.training.log_dir, experiment_name)
         self.writer = SummaryWriter(self.log_path)
+
+        self.test_volume, self.test_labels = load_test_data(self.config)
+        self.scroll4_volume = load_scroll4_data(self.config)
         
         print(f"TensorBoard logs will be saved to: {self.log_path}")
-        print(f"To view, run: tensorboard --logdir={config.training.log_dir}")
     
-    def log_epoch_metrics(self, epoch, model, train_acc, val_acc, train_loss, val_loss, learning_rate, time_elapsed, train_volume, train_labels, valid_volume, valid_labels, params):
+    def log_epoch_metrics(self, epoch, model, train_acc, val_acc, train_loss, val_loss, learning_rate, time_elapsed, train_volume, valid_volume, labels, params):
         print(f"Logging metrics for epoch: {epoch}")
         # Log accuracies
         self.writer.add_scalar('Metrics/Train_Acc', train_acc, epoch)
@@ -56,9 +59,14 @@ class TensorboardVisualizer:
             self.log_model_graph(model, example_input)
             self.log_hyperparameters(params)
 
-        if (epoch+1) % self.config.training.evaluation_interval == 0:
-            print(f"Running full evaluation on epoch {epoch} due to evaluation interval {self.config.training.evaluation_interval}")
-            self.add_evaluation_figures(epoch, model, train_volume, train_labels, valid_volume, valid_labels)
+        # Add evaluation figures at specified intervals
+        if (epoch) % self.config.training.evaluation_interval == 0:
+            self.add_evaluation_figures(epoch, model, train_volume, valid_volume, labels)
+
+        # Add test figures at specified intervals
+        if (epoch) % self.config.training.test_interval == 0:
+            self.add_test_figures(epoch, model, self.test_volume, self.test_labels)
+            self.add_scroll4_figures(epoch, model, self.scroll4_volume)
         
         self.writer.flush()
     
@@ -119,73 +127,124 @@ class TensorboardVisualizer:
         prediction_map = np.divide(prediction_map, count_map, where=count_map>0)
         return prediction_map
 
-    def _create_evaluation_figure(self, full_labels, full_predictions, train_predictions, block_idx):
-        """Create a single validation figure for one depth block with confusion matrix"""
-        fig = plt.figure(figsize=(15, 4))  # Increased width for 3 subplots
+    def _create_combined_evaluation_figure(self, all_predictions_data, labels, num_depth_blocks):
+        """Create a single large figure with all depth blocks as subplots"""
+        print("Creating combined evaluation figure")
         
-        # Predictions
-        plt.subplot(1, 3, 1)
-        img = plt.imshow(full_predictions, cmap='inferno', vmin=0, vmax=1)
-        plt.colorbar(img, fraction=0.046, pad=0.04)
-        plt.title(f'Model Predictions\nDepth Block {block_idx + 1}\nTrain | Valid')
-        plt.axvline(x=train_predictions.shape[1]-0.5, color='red', linestyle='--', linewidth=2, alpha=0.7)
-        plt.axis('off')
+        # Calculate figure size and subplot arrangement
+        # For 4 depth blocks, use 2x2 grid. Adjust as needed.
+        if num_depth_blocks <= 4:
+            rows, cols = 2, 2
+            fig_width, fig_height = 20, 16
+        else:
+            # For more blocks, arrange in rows of 3
+            cols = 3
+            rows = (num_depth_blocks + cols - 1) // cols
+            fig_width, fig_height = 30, 8 * rows
         
-        # Overlay
-        plt.subplot(1, 3, 2)
-        plt.imshow(full_predictions, cmap='inferno', vmin=0, vmax=1)
+        fig, axes = plt.subplots(rows, cols, figsize=(fig_width, fig_height))
         
-        # Create overlay for ground truth
-        label_overlay = np.zeros((*full_labels.shape, 4))  # RGBA
-        label_overlay[full_labels > 0.5] = [1, 1, 1, 0.4]  # White with transparency
-        plt.imshow(label_overlay)
+        # Handle case where we have only one subplot
+        if num_depth_blocks == 1:
+            axes = [axes]
+        elif rows == 1 or cols == 1:
+            axes = axes.flatten()
+        else:
+            axes = axes.flatten()
         
-        plt.title(f'Predictions + Ground Truth\nDepth Block {block_idx + 1}\nTrain | Valid\n(White = True Labels)')
-        plt.axvline(x=train_predictions.shape[1]-0.5, color='red', linestyle='--', linewidth=2, alpha=0.7)
-        plt.axis('off')
+        for block_idx, (full_predictions, train_predictions, depth_start, depth_end) in enumerate(all_predictions_data):
+            if block_idx >= len(axes):
+                break
+                
+            ax = axes[block_idx]
+            
+            # Create the prediction visualization
+            im = ax.imshow(full_predictions, cmap='inferno', vmin=0, vmax=1)
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            
+            # Create overlay for ground truth
+            label_overlay = np.zeros((*labels.shape, 4))  # RGBA
+            label_overlay[labels > 0.5] = [1, 1, 1, 0.4]  # White with transparency
+            ax.imshow(label_overlay)
+            
+            # Add vertical line to separate train/valid
+            ax.axvline(x=train_predictions.shape[1]-0.5, color='red', linestyle='--', linewidth=2, alpha=0.7)
+            
+            s = self.config.data.start_level
+            ax.set_title(f'Depth Block {s+depth_start}-{s+depth_end}\nTrain | Valid\n(White = True Labels)')
+            ax.axis('off')
         
-        # Confusion Matrix
-        plt.subplot(1, 3, 3)
-        
-        # Convert continuous predictions to binary using 0.5 threshold
-        binary_predictions = (full_predictions > 0.5).astype(int)
-        binary_labels = (full_labels > 0.5).astype(int)
-        
-        # Flatten arrays for confusion matrix calculation
-        y_true_flat = binary_labels.flatten()
-        y_pred_flat = binary_predictions.flatten()
-        
-        # Calculate confusion matrix
-        cm = confusion_matrix(y_true_flat, y_pred_flat, labels=[0, 1])
-        
-        # Create heatmap
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                    xticklabels=['No Ink (0)', 'Ink (1)'], 
-                    yticklabels=['No Ink (0)', 'Ink (1)'],
-                    cbar_kws={'shrink': 0.8})
-        
-        plt.title(f'Confusion Matrix\nDepth Block {block_idx + 1}')
-        plt.xlabel('Predicted')
-        plt.ylabel('Actual')
-        
-        # Calculate and add metrics as text
-        tn, fp, fn, tp = cm.ravel()
-        accuracy = (tp + tn) / (tp + tn + fp + fn)
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-        
-        # Add metrics text below the confusion matrix
-        metrics_text = f'Acc: {accuracy:.3f} | Prec: {precision:.3f} | Rec: {recall:.3f} | F1: {f1:.3f}'
-        plt.figtext(0.85, 0.02, metrics_text, fontsize=10, ha='center')
+        # Hide unused subplots
+        for idx in range(num_depth_blocks, len(axes)):
+            axes[idx].axis('off')
         
         plt.tight_layout()
+        print("Finished creating combined evaluation figure")
         return fig
 
-    def add_evaluation_figures(self, epoch, model, train_volume, train_labels, valid_volume, valid_labels):
+    def _create_combined_test_figure(self, all_predictions_data, labels, num_depth_blocks, figure_type="Test"):
+        """Create a single large figure with all test depth blocks as subplots"""
+        print(f"Creating combined {figure_type} figure")
+        
+        # Calculate figure size and subplot arrangement
+        if num_depth_blocks <= 4:
+            rows, cols = 2, 2
+            fig_width, fig_height = 20, 16
+        else:
+            cols = 3
+            rows = (num_depth_blocks + cols - 1) // cols
+            fig_width, fig_height = 30, 8 * rows
+        
+        fig, axes = plt.subplots(rows, cols, figsize=(fig_width, fig_height))
+        
+        # Handle case where we have only one subplot
+        if num_depth_blocks == 1:
+            axes = [axes]
+        elif rows == 1 or cols == 1:
+            axes = axes.flatten()
+        else:
+            axes = axes.flatten()
+        
+        for block_idx, (predictions, depth_start, depth_end) in enumerate(all_predictions_data):
+            if block_idx >= len(axes):
+                break
+                
+            ax = axes[block_idx]
+            
+            # Create the prediction visualization
+            im = ax.imshow(predictions, cmap='inferno', vmin=0, vmax=1)
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            
+            if labels is not None:
+                # Create overlay for ground truth
+                label_overlay = np.zeros((*predictions.shape, 4))  # RGBA
+                label_overlay[labels > 0.5] = [1, 1, 1, 0.4]  # White with transparency
+                ax.imshow(label_overlay)
+                title_suffix = "\n(White = True Labels)"
+            else:
+                title_suffix = ""
+            
+            s = self.config.data.start_level
+            ax.set_title(f'Depth Block {s+depth_start}-{s+depth_end}{title_suffix}')
+            ax.axis('off')
+        
+        # Hide unused subplots
+        for idx in range(num_depth_blocks, len(axes)):
+            axes[idx].axis('off')
+        
+        plt.tight_layout()
+        print(f"Finished creating combined {figure_type} figure")
+        return fig
+
+    def add_evaluation_figures(self, epoch, model, train_volume, valid_volume, labels):
         """
-        Run full validation and log all visualization figures to TensorBoard
+        Run full validation and create one combined figure with all depth blocks
         """
+        print("Starting evaluation figure generation...")
         # Set model to eval mode once at the beginning
         model.eval()
         
@@ -193,69 +252,98 @@ class TensorboardVisualizer:
         D = train_volume.shape[0]
         num_depth_blocks = (D - self.config.data.depth) // int(self.config.data.depth // 2) + 1
         
+        all_predictions_data = []
+        
         for block_idx in range(num_depth_blocks):
             print(f"Processing depth block {block_idx + 1}/{num_depth_blocks} for evaluation...")
             depth_start = block_idx * int(self.config.data.depth // 2)
             depth_end = min(depth_start + self.config.data.depth, D)
             
-            if depth_start >= D or depth_end > D:
-                print(f"Skipping depth block {block_idx + 1} due to out-of-bounds indices.")
+            if depth_start >= D or depth_end > D: 
                 continue
             
-            # Clear GPU cache before processing each block
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            
-            # Process both volumes for this depth block
-            print(f"Processing training volume for block {block_idx + 1}")
             train_predictions = self._process_volume_depth_block(
                 model, train_volume, "training", depth_start, depth_end
             )
-            
-            print(f"Processing validation volume for block {block_idx + 1}")
             valid_predictions = self._process_volume_depth_block(
                 model, valid_volume, "validation", depth_start, depth_end
             )
             
-            # Create visualization for this block
-            middle_slice_idx = depth_start + self.config.data.depth // 2
-            if middle_slice_idx >= D:
-                print(f"Skipping visualization for depth block {block_idx + 1} due to out-of-bounds middle slice index.")
+            full_predictions = np.concatenate([train_predictions, valid_predictions], axis=1)
+            all_predictions_data.append((full_predictions, train_predictions, depth_start, depth_end))
+        
+        if all_predictions_data:
+            # Create one combined figure with all depth blocks
+            fig = self._create_combined_evaluation_figure(all_predictions_data, labels, len(all_predictions_data))
+            self.writer.add_figure('Evaluation/All_Depth_Blocks', fig, epoch)
+            plt.close(fig)  # Important: close figure to free memory
+    
+    def add_test_figures(self, epoch, model, test_volume, test_labels):
+        """
+        Run test evaluation and create one combined figure with all depth blocks
+        """
+        print("Starting test figure generation...")
+        model.eval()
+        
+        # Calculate number of depth blocks
+        D = test_volume.shape[0]
+        num_depth_blocks = (D - self.config.data.depth) // int(self.config.data.depth // 2) + 1
+        
+        all_predictions_data = []
+        
+        for block_idx in range(num_depth_blocks):
+            print(f"Processing depth block {block_idx + 1}/{num_depth_blocks} for test...")
+            depth_start = block_idx * int(self.config.data.depth // 2)
+            depth_end = min(depth_start + self.config.data.depth, D)
+            
+            if depth_start >= D or depth_end > D: 
                 continue
             
-            print(f"Creating visualization for block {block_idx + 1}")
-            # Create concatenated arrays for visualization
-            full_labels = np.concatenate([train_labels, valid_labels], axis=1)
-            full_predictions = np.concatenate([train_predictions, valid_predictions], axis=1)
+            predictions = self._process_volume_depth_block(
+                model, test_volume, "test", depth_start, depth_end
+            )
             
-            # Create and log the validation figure
-            fig = self._create_evaluation_figure(full_labels, full_predictions, train_predictions, block_idx)
-            s = self.config.data.start_level
-            
-            print(f"Logging figure for block {block_idx + 1} to TensorBoard")
-            self.writer.add_figure(f'Evaluation/Depth_Block_{s+depth_start}-{s+depth_end}', fig, epoch)
-            
-            # Immediate cleanup after each block
-            plt.close(fig)
-            del fig, full_labels, full_predictions, train_predictions, valid_predictions
-            
-            # Clear GPU cache again
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            
-            print(f"Completed block {block_idx + 1}")
+            all_predictions_data.append((predictions, depth_start, depth_end))
         
-        # Final cleanup
-        print("Evaluation complete, performing final cleanup")
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        
-        # Force final garbage collection
-        import gc
-        gc.collect()
-        
-        print("Evaluation figures added successfully")
+        if all_predictions_data:
+            # Create one combined figure with all test depth blocks
+            fig = self._create_combined_test_figure(all_predictions_data, test_labels, len(all_predictions_data), "Test")
+            self.writer.add_figure('Test/All_Depth_Blocks', fig, epoch)
+            plt.close(fig)  # Important: close figure to free memory
     
+    def add_scroll4_figures(self, epoch, model, scroll4_volume):
+        """
+        Run scroll4 evaluation and create one combined figure with all depth blocks
+        """
+        print("Starting scroll4 figure generation...")
+        model.eval()
+        
+        # Calculate number of depth blocks
+        D = scroll4_volume.shape[0]
+        num_depth_blocks = (D - self.config.data.depth) // int(self.config.data.depth // 2) + 1
+        
+        all_predictions_data = []
+        
+        for block_idx in range(num_depth_blocks):
+            print(f"Processing depth block {block_idx + 1}/{num_depth_blocks} for scroll4...")
+            depth_start = block_idx * int(self.config.data.depth // 2)
+            depth_end = min(depth_start + self.config.data.depth, D)
+            
+            if depth_start >= D or depth_end > D: 
+                continue
+            
+            predictions = self._process_volume_depth_block(
+                model, scroll4_volume, "scroll4", depth_start, depth_end
+            )
+            
+            all_predictions_data.append((predictions, depth_start, depth_end))
+        
+        if all_predictions_data:
+            # Create one combined figure with all scroll4 depth blocks (no labels for scroll4)
+            fig = self._create_combined_test_figure(all_predictions_data, None, len(all_predictions_data), "Scroll4")
+            self.writer.add_figure('Scroll4/All_Depth_Blocks', fig, epoch)
+            plt.close(fig)  # Important: close figure to free memory
+        
     def log_model_graph(self, model, example_input):
         self.writer.add_graph(model, example_input)
     
