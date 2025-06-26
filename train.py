@@ -146,16 +146,26 @@ if __name__ == "__main__":
     # config.experiment_name = args.experiment_name
     # main(config)
 
-    l1s = [0, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
-    for l1 in l1s:
+    # l1s = [7.5e-4]
+    # for l1 in l1s:
+    #     config = Config()
+    #     if l1 == 0: 
+    #         config.experiment_name = "cbam3d_28-48_l1_0"
+    #     else:
+    #         config.experiment_name = f"cbam3d_28-48_l1_{l1:.0e}"
+    #     config.training.l1_lambda = l1
+    #     main(config)
+
+    drops = [[0, 0.5, 0.25], [0.05, 0.5, 0.25]]
+    for drop in drops:
         config = Config()
-        if l1 == 0: 
-            config.experiment_name = "cbam3d_28-48_l1_0"
-        else:
-            config.experiment_name = f"cbam3d_28-48_l1_{l1:.0e}"
-        config.training.l1_lambda = l1
+        config.model.conv1_drop = drop[0]
+        config.model.conv2_drop = drop[1]
+        config.model.fc1_drop = drop[2]
+        config.experiment_name = f"drops-{drop[0]}-{drop[1]}-{drop[2]}"
         main(config)
     
+    # next up: set all back to 0. try increasing kernel size of cbam, as well as adding more powerful mod to spacial attention
 
     # config = Config()
     # config.data.start_level = 32

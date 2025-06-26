@@ -45,7 +45,6 @@ class InkDetector(nn.Module):
             nn.BatchNorm3d(32),
             nn.ReLU(inplace=True),
             CBAM3D(32),
-            nn.Dropout3d(config.model.conv1_drop),
 
             nn.Conv3d(32, 96, kernel_size=(3, 3, 3), padding=1, bias=False),  # (B, 96, 8, 31, 31)
             nn.BatchNorm3d(96),
@@ -58,6 +57,7 @@ class InkDetector(nn.Module):
             nn.ReLU(inplace=True),
             CBAM3D(128),
             nn.MaxPool3d(kernel_size=(2, 2, 2)),  # (B, 128, 2, 7, 7)
+            nn.Dropout3d(config.model.conv1_drop),
 
             nn.AdaptiveAvgPool3d(1)  # (B, 128, 1, 1, 1)
         )

@@ -8,7 +8,7 @@ from tqdm import tqdm
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
 from .config import Config
-import gc
+
 
 class TensorboardVisualizer:
     def __init__(self, config: Config):
@@ -238,9 +238,6 @@ class TensorboardVisualizer:
             # Immediate cleanup after each block
             plt.close(fig)
             del fig, full_labels, full_predictions, train_predictions, valid_predictions
-            
-            # Force garbage collection between blocks
-            gc.collect()
             
             # Clear GPU cache again
             if torch.cuda.is_available():

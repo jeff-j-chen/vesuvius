@@ -23,7 +23,7 @@ class TrainingConfig:
     num_epochs: int = 51
     learning_rate: float = 1e-4
     weight_decay: float = 0
-    l1_lambda: float = 1
+    l1_lambda: float = 7e-4
     max_grad_norm: float = 1.0
     patience: int = 5
     lr_scheduler_factor: float = 0.5
