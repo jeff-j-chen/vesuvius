@@ -73,7 +73,7 @@ def main(config: Config):
     # Create datasets and dataloaders, in addition to the class weights
     print("Creating datasets...", end="")
     start_time = time.time()
-    train_dataset, valid_dataset, train_volume, valid_volume = create_datasets(config)
+    train_dataset, valid_dataset, train_volume, valid_volume, labels = create_datasets(config)
     train_loader, valid_loader = create_dataloaders(train_dataset, valid_dataset, config)
     pos_weight = calculate_class_weights(train_dataset)
     print(f" done in {time.time() - start_time:.2f}s")
@@ -149,7 +149,7 @@ if __name__ == "__main__":
     #     config.training.l1_lambda = l1
     #     main(config)
 
-    drops = [[0.1, 0.3, 0.5], [0.05, 0.4, 0.6], [0.1, 0.5, 0.7]]
+    drops = [[0.05, 0.4, 0.6], [0.2, 0.3, 0.5]]
     for drop in drops:
         config = Config()
         config.model.conv1_drop = drop[0]
