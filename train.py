@@ -68,7 +68,7 @@ def validate_epoch(model, valid_loader, criterion, config: Config):
     return val_loss / len(valid_loader), val_correct / val_total
 
 def main(config: Config):
-
+    torch.backends.cudnn.benchmark = True
 
     # Load and prepare data
     print("Loading data...", end="")
@@ -86,7 +86,7 @@ def main(config: Config):
     
     
     # Create model
-    print("Creating model and loss...", end="")
+    print(f"Creating model and loss... l1 lamba {config.training.l1_lambda}... ", end="")
     start_time = time.time()
     model, params = create_model(config)
     optimizer, scheduler = create_optimizer_and_scheduler(model, config)
@@ -139,35 +139,38 @@ def main(config: Config):
     print("Training completed...")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
-    parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
-    args = parser.parse_args()
-    config = Config()
-    config.experiment_name = args.experiment_name
-    main(config)
+    # parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
+    # parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
+    # args = parser.parse_args()
+    # config = Config()
+    # config.experiment_name = args.experiment_name
+    # main(config)
 
-    # l1s = [1e-3, 5e-4]
-    # for l1 in l1s:
-    #     config = Config()
-    #     config.experiment_name = f"l1_{l1:.0e}"
-    #     config.training.l1_lambda = l1
-    #     main(config)
+    l1s = [0, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
+    for l1 in l1s:
+        config = Config()
+        if l1 == 0: 
+            config.experiment_name = "cbam3d_28-48_l1_0"
+        else:
+            config.experiment_name = f"cbam3d_28-48_l1_{l1:.0e}"
+        config.training.l1_lambda = l1
+        main(config)
     
 
     # config = Config()
-    # config.data.start_level = 24
-    # config.data.end_level = 52
-    # config.experiment_name = f"levels_{config.data.start_level}_{config.data.end_level}"
+    # config.data.start_level = 32
+    # config.data.end_level = 48
+    # config.experiment_name = f"3dmodel_redo_{config.data.start_level}_{config.data.end_level}"
     # main(config)
 
     # while config.data.end_level - config.data.start_level > 4:
     #     config.data.start_level += 4
     #     print(f"entry {config.data.start_level} to {config.data.end_level}")
-    #     config.experiment_name = f"levels_{config.data.start_level}_{config.data.end_level}"
+    #     config.experiment_name = f"3dmodel_redo_{config.data.start_level}_{config.data.end_level}"
     #     main(config)
 
     #     config.data.end_level -= 4
     #     print(f"entry {config.data.start_level} to {config.data.end_level}")
-    #     config.experiment_name = f"levels_{config.data.start_level}_{config.data.end_level}"
+    #     config.experiment_name = f"3dmodel_redo_{config.data.start_level}_{config.data.end_level}"
     #     main(config)
     

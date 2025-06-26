@@ -8,8 +8,8 @@ class DataConfig:
     tile_size: int = 32
     depth: int = 8
     normalize: bool = True
-    start_level: int = 24
-    end_level: int = 52
+    start_level: int = 28
+    end_level: int = 48
 
 @dataclass
 class DataloaderConfig:
@@ -20,16 +20,16 @@ class DataloaderConfig:
 
 @dataclass
 class TrainingConfig:
-    num_epochs: int = 77
+    num_epochs: int = 51
     learning_rate: float = 1e-4
     weight_decay: float = 0
-    l1_lambda: float = 2e-4
+    l1_lambda: float = 1
     max_grad_norm: float = 1.0
     patience: int = 5
     lr_scheduler_factor: float = 0.5
     save_every_n_epochs: int = 10
     log_dir: str = './runs'
-    evaluation_interval: int = 25
+    evaluation_interval: int = 50
 
 @dataclass
 class ModelConfig:

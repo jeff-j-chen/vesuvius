@@ -8,6 +8,7 @@ from tqdm import tqdm
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
 from .config import Config
+import gc
 
 class TensorboardVisualizer:
     def __init__(self, config: Config):
@@ -61,10 +62,8 @@ class TensorboardVisualizer:
         
         self.writer.flush()
     
-
     def _process_volume_depth_block(self, model, volume, volume_name, depth_start, depth_end):
         """Helper function to process a single volume at a specific depth range"""
-        model.eval()
         D, H, W = volume.shape
         
         prediction_map = np.zeros((H, W), dtype=np.float32)
@@ -75,31 +74,52 @@ class TensorboardVisualizer:
         for y in range(0, H - self.config.data.tile_size + 1, self.config.data.tile_size):
             for x in range(0, W - self.config.data.tile_size + 1, self.config.data.tile_size):
                 tile_coords.append((y, x))
-        print("tiles created")
         
+        # Pre-allocate tensor on GPU to avoid repeated allocations
+        if torch.cuda.is_available():
+            block_tensor = torch.zeros(
+                (1, 1, self.config.data.depth, self.config.data.tile_size, self.config.data.tile_size),
+                dtype=torch.float32,
+                device=self.config.device
+            )
+        else:
+            block_tensor = torch.zeros(
+                (1, 1, self.config.data.depth, self.config.data.tile_size, self.config.data.tile_size),
+                dtype=torch.float32
+            )
+        
+        s = self.config.data.start_level
         with torch.no_grad():
-            # Process tiles with tqdm progress bar
-            print("starting processing with no grad")
-            for y, x in tqdm(tile_coords, desc=f"Processing {volume_name} volume (depth {depth_start}-{depth_end-1})"):
+            for y, x in tqdm(tile_coords, desc=f"Processing {volume_name} volume (depth {s+depth_start}-{s+depth_end})"):
                 # Extract block from the specified depth range
                 block = volume[depth_start:depth_end, y:y+self.config.data.tile_size, x:x+self.config.data.tile_size]
                 
-                if block.shape == (self.config.data.depth, self.config.data.tile_size, self.config.data.tile_size):
-                    block_tensor = torch.from_numpy(block).float().unsqueeze(0).unsqueeze(0).to(self.config.device)
-                    logits = model(block_tensor)
-                    pred = torch.sigmoid(logits).item()
-                    
-                    prediction_map[y:y+self.config.data.tile_size, x:x+self.config.data.tile_size] += pred
-                    count_map[y:y+self.config.data.tile_size, x:x+self.config.data.tile_size] += 1
-            print("grad back on")
+                if block.shape != (self.config.data.depth, self.config.data.tile_size, self.config.data.tile_size):
+                    # Clean up before returning
+                    del block_tensor
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    return np.zeros((H, W), dtype=np.float32)
+                
+                # Copy data to pre-allocated tensor instead of creating new ones
+                block_tensor[0, 0] = torch.from_numpy(block).float()
+                
+                logits = model(block_tensor)
+                pred = torch.sigmoid(logits).item()
+                
+                prediction_map[y:y+self.config.data.tile_size, x:x+self.config.data.tile_size] += pred
+                count_map[y:y+self.config.data.tile_size, x:x+self.config.data.tile_size] += 1
+        
+        # Clean up GPU memory
+        del block_tensor
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
         # Normalize predictions
-        print("done, now normalizing")
         prediction_map = np.divide(prediction_map, count_map, where=count_map>0)
-        print("normalization complete, returning")
         return prediction_map
 
-    def _create_evaluation_figure(self, full_labels, full_predictions, train_predictions, block_idx, depth_start, depth_end, middle_slice_idx):
+    def _create_evaluation_figure(self, full_labels, full_predictions, train_predictions, block_idx):
         """Create a single validation figure for one depth block with confusion matrix"""
         fig = plt.figure(figsize=(15, 4))  # Increased width for 3 subplots
         
@@ -165,55 +185,79 @@ class TensorboardVisualizer:
     def add_evaluation_figures(self, epoch, model, train_volume, train_labels, valid_volume, valid_labels):
         """
         Run full validation and log all visualization figures to TensorBoard
-        
-        Args:
-            epoch: Current epoch number
-            model: PyTorch model to evaluate
-            train_volume: Training volume data
-            train_labels: Training labels
-            valid_volume: Validation volume data  
-            valid_labels: Validation labels
         """
-        # Calculate number of depth blocks to match dataset creation logic
+        # Set model to eval mode once at the beginning
+        model.eval()
+        
+        # Calculate number of depth blocks
         D = train_volume.shape[0]
         num_depth_blocks = (D - self.config.data.depth) // int(self.config.data.depth // 2) + 1
+        
         for block_idx in range(num_depth_blocks):
             print(f"Processing depth block {block_idx + 1}/{num_depth_blocks} for evaluation...")
             depth_start = block_idx * int(self.config.data.depth // 2)
-            depth_end = min(depth_start + self.config.data.depth, D)  # Ensure depth_end does not exceed D
-            if depth_start >= D or depth_end > D:  # Check if depth_start or depth_end is out of bounds
+            depth_end = min(depth_start + self.config.data.depth, D)
+            
+            if depth_start >= D or depth_end > D:
                 print(f"Skipping depth block {block_idx + 1} due to out-of-bounds indices.")
                 continue
             
+            # Clear GPU cache before processing each block
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
             # Process both volumes for this depth block
-            print('beginning preds')
+            print(f"Processing training volume for block {block_idx + 1}")
             train_predictions = self._process_volume_depth_block(
                 model, train_volume, "training", depth_start, depth_end
             )
+            
+            print(f"Processing validation volume for block {block_idx + 1}")
             valid_predictions = self._process_volume_depth_block(
                 model, valid_volume, "validation", depth_start, depth_end
             )
             
-            # Stitch everything back together horizontally
-            # Use the middle slice of the current depth block for visualization
+            # Create visualization for this block
             middle_slice_idx = depth_start + self.config.data.depth // 2
-            if middle_slice_idx >= D:  # Ensure middle_slice_idx is within bounds
+            if middle_slice_idx >= D:
                 print(f"Skipping visualization for depth block {block_idx + 1} due to out-of-bounds middle slice index.")
                 continue
             
+            print(f"Creating visualization for block {block_idx + 1}")
+            # Create concatenated arrays for visualization
             full_labels = np.concatenate([train_labels, valid_labels], axis=1)
             full_predictions = np.concatenate([train_predictions, valid_predictions], axis=1)
             
             # Create and log the validation figure
-            fig = self._create_evaluation_figure(
-                full_labels, full_predictions, train_predictions,
-                block_idx, depth_start, depth_end, middle_slice_idx
-            )
-            # Log figure to TensorBoard
-            self.writer.add_figure(f'Evaluation/Depth_Block_{self.config.data.start_level + depth_start}-{self.config.data.start_level + depth_end}', fig, epoch)
+            fig = self._create_evaluation_figure(full_labels, full_predictions, train_predictions, block_idx)
+            s = self.config.data.start_level
             
-            # Close the figure to free memory
+            print(f"Logging figure for block {block_idx + 1} to TensorBoard")
+            self.writer.add_figure(f'Evaluation/Depth_Block_{s+depth_start}-{s+depth_end}', fig, epoch)
+            
+            # Immediate cleanup after each block
             plt.close(fig)
+            del fig, full_labels, full_predictions, train_predictions, valid_predictions
+            
+            # Force garbage collection between blocks
+            gc.collect()
+            
+            # Clear GPU cache again
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            print(f"Completed block {block_idx + 1}")
+        
+        # Final cleanup
+        print("Evaluation complete, performing final cleanup")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        # Force final garbage collection
+        import gc
+        gc.collect()
+        
+        print("Evaluation figures added successfully")
     
     def log_model_graph(self, model, example_input):
         self.writer.add_graph(model, example_input)
