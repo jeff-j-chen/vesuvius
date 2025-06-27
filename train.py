@@ -51,11 +51,7 @@ def validate_epoch(model, valid_loader, criterion, config: Config):
     val_loss, val_correct, val_total = 0.0, 0, 0
     
     with torch.no_grad():
-        i = 0
         for images, labels in valid_loader:
-            # i += 1
-            # if i % 100 != 1:
-            #     continue
             images = images.to(config.device)
             labels = labels.to(config.device).view(-1, 1)
             outputs = model(images)
@@ -132,12 +128,12 @@ def main(config: Config):
     print("Training completed...")
 
 if __name__ == "__main__":
-    # parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
-    # parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
-    # args = parser.parse_args()
-    # config = Config()
-    # config.experiment_name = args.experiment_name
-    # main(config)
+    parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
+    parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
+    args = parser.parse_args()
+    config = Config()
+    config.experiment_name = args.experiment_name
+    main(config)
 
     # l1s = [7.5e-4]
     # for l1 in l1s:
@@ -149,7 +145,7 @@ if __name__ == "__main__":
     #     config.training.l1_lambda = l1
     #     main(config)
 
-    drops = [[0.05, 0.4, 0.6], [0.2, 0.3, 0.5]]
+    drops = [[0.05, 0.4, 0.6], [0.2, 0.3, 0.5], [0.2, 0.5, 0.3], [0.2, 0.4, 0.6], [0.2, 0.6, 0.4], [0.2, 0.5, 0.7], [0.2, 0.7, 0.5], [0.3, 0.5, 0.3], [0.3, 0.3, 0.5]]
     for drop in drops:
         config = Config()
         config.model.conv1_drop = drop[0]

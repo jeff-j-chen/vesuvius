@@ -147,7 +147,7 @@ def _load_tv_data(config: Config):
 
 def load_test_data(config: Config):
     segment = Volume(config.data.segment_id, normalize=config.data.normalize)
-    volume = segment[:, 5000:, :] # type: ignore
+    volume = segment[:, 4000:, :] # type: ignore
     return volume
 
 def load_scroll4_data(config: Config):

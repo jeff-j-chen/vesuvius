@@ -1,6 +1,7 @@
 opencv-python
 matplotlib
 scikit-learn
+scikit-image
 seaborn
 tensorflow
 tensorboard

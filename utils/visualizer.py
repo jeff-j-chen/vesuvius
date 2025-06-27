@@ -10,9 +10,7 @@ from sklearn.metrics import confusion_matrix
 import seaborn as sns
 from .config import Config
 from .dataloader import load_test_data, load_scroll4_data
-
-
-
+from scipy.ndimage import zoom
 
 class TensorboardVisualizer:
     def __init__(self, config: Config):
@@ -63,8 +61,8 @@ class TensorboardVisualizer:
             self.log_hyperparameters(params)
 
         # Add test figures at specified intervals
-        # if (epoch) % self.config.training.test_interval == 0:
-            # self.add_test_figures(epoch, model, self.test_volume)
+        if (epoch) % self.config.training.test_interval == 0:
+            self.add_test_figures(epoch, model, self.test_volume)
             # self.add_scroll4_figures(epoch, model, self.scroll4_volume)
 
         # Add evaluation figures at specified intervals
@@ -129,90 +127,75 @@ class TensorboardVisualizer:
         prediction_map = np.divide(prediction_map, count_map, where=count_map>0)
         return prediction_map
 
-    def _create_combined_evaluation_figure(self, all_predictions_data, labels, num_depth_blocks):
-        print("Creating combined evaluation figure")
-
-        fig_height = 3 * num_depth_blocks
-        fig = plt.figure(figsize=(10, fig_height))  # Set consistent width
-        gs = gridspec.GridSpec(num_depth_blocks, 2, width_ratios=[1, 1], wspace=0.05, hspace=0.15)
-
+    def _create_combined_evaluation_figure(self, all_predictions_data, labels, num_depth_blocks, scale_factor=0.3):
+        
+        # Calculate figure dimensions based on scaled data
+        fig_height = 6 * num_depth_blocks
+        fig_width = 10
+        
+        # Create subplots directly with minimal spacing
+        fig, axes = plt.subplots(num_depth_blocks, 2, figsize=(fig_width, fig_height))
+        
+        # Handle single row case
+        if num_depth_blocks == 1:
+            axes = axes.reshape(1, -1)
+        
         for block_idx, (full_predictions, train_predictions, depth_start, depth_end) in enumerate(all_predictions_data):
-            s = self.config.data.start_level
-
-            # Predictions only
-            ax_pred = fig.add_subplot(gs[block_idx, 0])
-            im1 = ax_pred.imshow(full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='auto')
-            ax_pred.set_title(f'Model Predictions\nDepth Block {s+depth_start}-{s+depth_end}\nTrain | Valid', fontsize=9)
-            ax_pred.axvline(x=train_predictions.shape[1]-0.5, color='red', linestyle='--', linewidth=1.5)
+            
+            # Scale the prediction arrays
+            scaled_full_predictions = zoom(full_predictions, scale_factor, order=1)
+            scaled_train_predictions = zoom(train_predictions, scale_factor, order=1)
+            scaled_labels = zoom(labels, scale_factor, order=0)
+            
+            # Left plot: Model predictions
+            ax_pred = axes[block_idx, 0]
+            im1 = ax_pred.imshow(scaled_full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+            ax_pred.set_title(f'Depth Block {depth_start}-{depth_end}', fontsize=9)
+            
+            # Adjust the dividing line position based on scaling
+            train_split_pos = scaled_train_predictions.shape[1] - 0.5
+            ax_pred.axvline(x=train_split_pos, color='red', linestyle='--', linewidth=1.2)
             ax_pred.axis('off')
-            cbar = plt.colorbar(im1, ax=ax_pred, fraction=0.046, pad=0.01)
-            cbar.ax.tick_params(labelsize=6)
-
-            # Predictions + GT overlay
-            ax_overlay = fig.add_subplot(gs[block_idx, 1])
-            ax_overlay.imshow(full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='auto')
-
-            # GT overlay
-            label_overlay = np.zeros((*labels.shape, 4))  # RGBA
-            label_overlay[labels > 0.5] = [1, 1, 1, 0.4]
-            ax_overlay.imshow(label_overlay)
-
-            ax_overlay.set_title(f'Predictions + Ground Truth\nDepth Block {s+depth_start}-{s+depth_end}\n(White = GT)', fontsize=9)
-            ax_overlay.axvline(x=train_predictions.shape[1]-0.5, color='red', linestyle='--', linewidth=1.5)
+            
+            # Right plot: Predictions + Ground Truth overlay
+            ax_overlay = axes[block_idx, 1]
+            ax_overlay.imshow(scaled_full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+             
+            if scaled_labels is not None:
+                label_overlay = np.zeros((*scaled_labels.shape, 4))
+                label_overlay[scaled_labels > 0.5] = [1, 1, 1, 0.4]  # White with 40% opacity
+                ax_overlay.imshow(label_overlay)
+            
+            ax_overlay.axvline(x=train_split_pos, color='red', linestyle='--', linewidth=1.2)
             ax_overlay.axis('off')
 
-        plt.subplots_adjust(left=0.02, right=0.98, top=0.96, bottom=0.02)
+        plt.subplots_adjust(wspace=0.1, hspace=0.1, left=0.1, right=0.9, top=0.90, bottom=0.10)
         return fig
 
 
-    def _create_combined_test_figure(self, all_predictions_data, num_depth_blocks):
+    def _create_combined_test_figure(self, all_predictions_data, num_depth_blocks, scale_factor=0.3):
         """Create combined test figure with predictions (no ground truth overlay)"""
         
-        # Rearrange from 8x1 to 4x2 for better space utilization
-        if num_depth_blocks <= 4:
-            # Keep as single column if 4 or fewer blocks
-            cols = 1
-            rows = num_depth_blocks
-        else:
-            # Use 2 columns for more than 4 blocks
-            cols = 2
-            rows = (num_depth_blocks + 1) // 2  # Ceiling division
+        cols = 2
+        rows = (num_depth_blocks + 1) // 2
         
-        # Optimized sizing for square plots
-        fig_width = 6 * cols  # 6 inches per column
-        fig_height = 3 * rows  # 3 inches per row (good for square plots)
+        fig_width = 10
+        fig_height = 7 * rows
         
         fig, axes = plt.subplots(rows, cols, figsize=(fig_width, fig_height))
         
-        # Handle different subplot arrangements
-        if rows == 1 and cols == 1:
-            axes = [axes]
-        elif rows == 1 or cols == 1:
-            axes = axes.flatten()
-        else:
-            axes = axes.flatten()
+        if num_depth_blocks == 1:
+            axes = axes.reshape(1, -1)
         
         for block_idx, (predictions, depth_start, depth_end) in enumerate(all_predictions_data):
-            ax = axes[block_idx]
-            im = ax.imshow(predictions, cmap='inferno', vmin=0, vmax=1)
-            plt.colorbar(im, ax=ax, fraction=0.03, pad=0.02)  # Smaller colorbar
-            ax.set_title(f'Model Predictions\nDepth Block {depth_start}-{depth_end}', fontsize=10)
-            ax.axis('off')
+            ax1 = axes[block_idx // cols, block_idx % cols]
+            scaled_predictions = zoom(predictions, scale_factor, order=1)
+            im = ax1.imshow(scaled_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+            ax1.set_title(f'Depth Block {depth_start}-{depth_end}', fontsize=9)
+            ax1.axis('off')
+
         
-        # Hide any unused subplots
-        for block_idx in range(len(all_predictions_data), len(axes)):
-            axes[block_idx].axis('off')
-        
-        # CRITICAL FIX: Minimal spacing to maximize plot size and eliminate left whitespace
-        plt.subplots_adjust(
-            left=0.02,    # Minimal left margin - eliminates disgusting whitespace
-            right=0.98,   # Minimal right margin  
-            top=0.95,     # Small top margin for titles
-            bottom=0.02,  # Minimal bottom margin
-            wspace=0.05,  # Very small horizontal spacing between plots
-            hspace=0.15   # Small vertical spacing between rows
-        )
-        
+        plt.subplots_adjust(wspace=0.05, hspace=0.05, left=0.05, right=0.95, top=0.95, bottom=0.05)
         return fig
 
 
