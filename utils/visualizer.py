@@ -61,12 +61,12 @@ class TensorboardVisualizer:
             self.log_hyperparameters(params)
 
         # Add test figures at specified intervals
-        if (epoch) % self.config.training.test_interval == 0:
+        if (epoch+1) % self.config.training.test_interval == 0:
             self.add_test_figures(epoch, model, self.test_volume)
             # self.add_scroll4_figures(epoch, model, self.scroll4_volume)
 
         # Add evaluation figures at specified intervals
-        if (epoch) % self.config.training.evaluation_interval == 0:
+        if (epoch+1) % self.config.training.evaluation_interval == 0:
             self.add_evaluation_figures(epoch, model, train_volume, valid_volume, labels)
         
         self.writer.flush()

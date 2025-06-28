@@ -128,12 +128,12 @@ def main(config: Config):
     print("Training completed...")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
-    parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
-    args = parser.parse_args()
-    config = Config()
-    config.experiment_name = args.experiment_name
-    main(config)
+    # parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
+    # parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
+    # args = parser.parse_args()
+    # config = Config()
+    # config.experiment_name = args.experiment_name
+    # main(config)
 
     # l1s = [7.5e-4]
     # for l1 in l1s:
@@ -144,13 +144,17 @@ if __name__ == "__main__":
     #         config.experiment_name = f"cbam3d_28-48_l1_{l1:.0e}"
     #     config.training.l1_lambda = l1
     #     main(config)
-
-    drops = [[0.05, 0.4, 0.6], [0.2, 0.3, 0.5], [0.2, 0.5, 0.3], [0.2, 0.4, 0.6], [0.2, 0.6, 0.4], [0.2, 0.5, 0.7], [0.2, 0.7, 0.5], [0.3, 0.5, 0.3], [0.3, 0.3, 0.5]]
+    # conv1 conv2 fc1 fc2
+    drops = [[0.0, 0.3, 0.5, 0.7],
+             [0.0, 0.4, 0.5, 0.7],
+             [0.0, 0.3, 0.6, 0.8],
+             [0.0, 0.4, 0.6, 0.8]]
     for drop in drops:
         config = Config()
         config.model.conv1_drop = drop[0]
         config.model.conv2_drop = drop[1]
         config.model.fc1_drop = drop[2]
+        config.model.fc2_drop = drop[3]
         config.experiment_name = f"drops-{drop[0]}-{drop[1]}-{drop[2]}"
         main(config)
     
