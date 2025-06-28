@@ -145,17 +145,21 @@ if __name__ == "__main__":
     #     config.training.l1_lambda = l1
     #     main(config)
     # conv1 conv2 fc1 fc2
-    drops = [[0.0, 0.3, 0.5, 0.7],
-             [0.0, 0.4, 0.5, 0.7],
-             [0.0, 0.3, 0.6, 0.8],
-             [0.0, 0.4, 0.6, 0.8]]
+    drops = [
+        [0.0, 0.3, 0.5, 0.7],
+        [0.0, 0.4, 0.5, 0.7],
+        [0.0, 0.3, 0.6, 0.8],
+        [0.0, 0.4, 0.6, 0.8],
+        # next: reduce fc1 drop
+        # increase conv1 drop
+    ]
     for drop in drops:
         config = Config()
         config.model.conv1_drop = drop[0]
         config.model.conv2_drop = drop[1]
         config.model.fc1_drop = drop[2]
         config.model.fc2_drop = drop[3]
-        config.experiment_name = f"drops-{drop[0]}-{drop[1]}-{drop[2]}"
+        config.experiment_name = f"drops-{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
         main(config)
     
     # next up: set all back to 0. try increasing kernel size of cbam, as well as adding more powerful mod to spacial attention
