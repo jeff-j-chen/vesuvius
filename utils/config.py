@@ -34,16 +34,10 @@ class TrainingConfig:
 
 @dataclass
 class ModelConfig:
-    # conv1_drop: float = 0
-    # conv2_drop: float = 0.05
-    # fc1_drop: float = 0.1
-    # fc15_drop: float = 0.15
-    # fc2_drop: float = 0.2
-    conv1_drop: float = 0
-    conv2_drop: float = 0
-    fc1_drop: float = 0
-    fc15_drop: float = 0
-    fc2_drop: float = 0
+    conv1_drop: float = 0.0
+    conv2_drop: float = 0.3
+    fc1_drop: float = 0.6
+    fc2_drop: float = 0.5
 
 
 @dataclass
