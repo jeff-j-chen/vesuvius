@@ -3,7 +3,7 @@ import torch
 from tqdm import tqdm
 from utils.config import Config
 from utils.dataloader import create_datasets, create_dataloaders, calculate_class_weights
-from utils.model import create_model
+from utils.model import create_model, InkDetector, CBAM3D
 from utils.training_utils import (
     create_optimizer_and_scheduler, 
     create_loss_function,
@@ -110,6 +110,9 @@ def main(config: Config):
             f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | "
             f"LR: {current_lr:.6f}"
         )
+        for layer in model.features:
+            if isinstance(layer, CBAM3D):
+                print(f"Spatial Scale: {layer.spatial_scale.item():.4f}\nChannel Scale: {layer.channel_scale.item():.4f}")
         
         # Save best model
         if val_loss < best_val_loss:
@@ -128,12 +131,12 @@ def main(config: Config):
     print("Training completed...")
 
 if __name__ == "__main__":
-    # parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
-    # parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
-    # args = parser.parse_args()
-    # config = Config()
-    # config.experiment_name = args.experiment_name
-    # main(config)
+    parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
+    parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
+    args = parser.parse_args()
+    config = Config()
+    config.experiment_name = args.experiment_name
+    main(config)
 
     # l1s = [7.5e-4]
     # for l1 in l1s:
@@ -144,21 +147,20 @@ if __name__ == "__main__":
     #         config.experiment_name = f"cbam3d_28-48_l1_{l1:.0e}"
     #     config.training.l1_lambda = l1
     #     main(config)
-    # conv1 conv2 fc1 fc2
-    drops = [
-        [0.0, 0.3, 0.8, 0.4],
-    ]
-    for drop in drops:
-        config = Config()
-        config.model.conv1_drop = drop[0]
-        config.model.conv2_drop = drop[1]
-        config.model.fc1_drop = drop[2]
-        config.model.fc2_drop = drop[3]
-        config.experiment_name = f"drops-{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
-        main(config)
-    
-    # next up: set all back to 0. try increasing kernel size of cbam, as well as adding more powerful mod to spacial attention
 
+    # conv1 conv2 fc1 fc2
+    # drops = [
+    #     [0.0, 0.3, 0.8, 0.4],
+    # ]
+    # for drop in drops:
+    #     config = Config()
+    #     config.model.conv1_drop = drop[0]
+    #     config.model.conv2_drop = drop[1]
+    #     config.model.fc1_drop = drop[2]
+    #     config.model.fc2_drop = drop[3]
+    #     config.experiment_name = f"drops-{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
+    #     main(config)
+    
     # config = Config()
     # config.data.start_level = 32
     # config.data.end_level = 48

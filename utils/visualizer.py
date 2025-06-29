@@ -45,6 +45,7 @@ class TensorboardVisualizer:
         # Time elapsed
         self.writer.add_scalar('Time_Elapsed', time_elapsed, epoch)
 
+
         # Log weight histograms
         self.log_weight_histograms(model, epoch)
 
@@ -281,40 +282,6 @@ class TensorboardVisualizer:
 
             fig = self._create_combined_test_figure(all_predictions_data, len(all_predictions_data), 0.3, test_type)
             self.writer.add_figure(f'Test/{test_type.capitalize()}_All_Depth_Blocks', fig, epoch)
-            plt.close(fig)  # Important: close figure to free memory
-    
-    def add_scroll4_figures(self, epoch, model, scroll4_volume):
-        """
-        Run scroll4 evaluation and create one combined figure with all depth blocks
-        No ground truth available for scroll4
-        """
-        print("Starting scroll4 figure generation...")
-        model.eval()
-        
-        # Calculate number of depth blocks
-        D = scroll4_volume.shape[0]
-        num_depth_blocks = (D - self.config.data.depth) // int(self.config.data.depth // 2) + 1
-        
-        all_predictions_data = []
-        
-        for block_idx in range(num_depth_blocks):
-            print(f"Processing depth block {block_idx + 1}/{num_depth_blocks} for scroll4...")
-            depth_start = block_idx * int(self.config.data.depth // 2)
-            depth_end = min(depth_start + self.config.data.depth, D)
-            
-            if depth_start >= D or depth_end > D: 
-                continue
-            
-            predictions = self._process_volume_depth_block(
-                model, scroll4_volume, "scroll4", depth_start, depth_end
-            )
-            
-            all_predictions_data.append((predictions, depth_start, depth_end))
-        
-        if all_predictions_data:
-            # Create one combined figure with all scroll4 depth blocks (no ground truth)
-            fig = self._create_combined_test_figure(all_predictions_data, len(all_predictions_data), 0.3, "Scroll4")
-            self.writer.add_figure('Scroll4/All_Depth_Blocks', fig, epoch)
             plt.close(fig)  # Important: close figure to free memory
         
     def log_model_graph(self, model, example_input):

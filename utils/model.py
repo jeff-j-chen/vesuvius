@@ -5,6 +5,8 @@ from .config import Config
 class CBAM3D(nn.Module):
     def __init__(self, channels, reduction=16, kernel_size=3):
         super(CBAM3D, self).__init__()
+        self.channel_scale = nn.Parameter(torch.tensor(1.0))
+        self.spatial_scale = nn.Parameter(torch.tensor(1.0))
 
         # Channel Attention
         self.avg_pool = nn.AdaptiveAvgPool3d(1)
@@ -26,13 +28,13 @@ class CBAM3D(nn.Module):
         avg_out = self.shared_mlp(self.avg_pool(x))
         max_out = self.shared_mlp(self.max_pool(x))
         channel_attn = self.sigmoid_channel(avg_out + max_out)
-        x = x * channel_attn
+        x = x * (1 + self.channel_scale * (channel_attn - 1))
 
         # --- Spatial Attention ---
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
         spatial_attn = self.sigmoid_spatial(self.conv_spatial(torch.cat([avg_out, max_out], dim=1)))
-        x = x * spatial_attn
+        x = x * (1 + self.spatial_scale * (spatial_attn - 1))
 
         return x
 
