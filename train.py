@@ -146,12 +146,10 @@ if __name__ == "__main__":
     #     main(config)
     # conv1 conv2 fc1 fc2
     drops = [
-        [0.0, 0.3, 0.5, 0.7],
-        [0.0, 0.4, 0.5, 0.7],
-        [0.0, 0.3, 0.6, 0.8],
-        [0.0, 0.4, 0.6, 0.8],
-        # next: reduce fc1 drop
-        # increase conv1 drop
+        [0.0, 0.3, 0.0, 0.8],
+        [0.0, 0.3, 0.8, 0.0],
+        [0.1, 0.3, 0.6, 0.8],
+        [0.3, 0.3, 0.6, 0.8],
     ]
     for drop in drops:
         config = Config()

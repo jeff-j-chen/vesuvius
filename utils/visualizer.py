@@ -150,7 +150,8 @@ class TensorboardVisualizer:
             # Left plot: Model predictions
             ax_pred = axes[block_idx, 0]
             im1 = ax_pred.imshow(scaled_full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
-            ax_pred.set_title(f'Depth Block {depth_start}-{depth_end}', fontsize=9)
+            s = self.config.data.start_level
+            ax_pred.set_title(f'Depth Block {s+depth_start}-{s+depth_end}', fontsize=9)
             
             # Adjust the dividing line position based on scaling
             train_split_pos = scaled_train_predictions.shape[1] - 0.5
@@ -248,15 +249,14 @@ class TensorboardVisualizer:
         
         # Calculate number of depth blocks
         D = test_volume.shape[0]
-        num_depth_blocks = (D + self.config.data.depth - 1) // self.config.data.depth  # Ceiling division
+        all_predictions_data = []
+        num_depth_blocks = (D - self.config.data.depth) // int(self.config.data.depth // 2) + 1
         
         all_predictions_data = []
         
         for block_idx in range(num_depth_blocks):
-            print(f"Processing depth block {block_idx + 1}/{num_depth_blocks} for test...")
-            
-            # Determine depth range for the current block
-            depth_start = block_idx * self.config.data.depth
+            print(f"Processing depth block {block_idx + 1}/{num_depth_blocks} for evaluation...")
+            depth_start = block_idx * int(self.config.data.depth // 2)
             depth_end = min(depth_start + self.config.data.depth, D)
             
             # Skip if depth_start or depth_end is out of bounds
