@@ -151,9 +151,9 @@ def load_test_data(config: Config):
     return volume
 
 def load_scroll4_data(config: Config):
-    segment = Volume(20231117161658, normalize=config.data.normalize)
-    volume = segment
-    return volume
+    data = np.load(config.data.scroll4_path)
+    test_volume = data['stack']
+    return test_volume
 
 def create_datasets(config: Config):
     """Split data and create train/validation datasets"""

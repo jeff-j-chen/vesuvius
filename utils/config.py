@@ -4,6 +4,7 @@ import torch
 
 @dataclass
 class DataConfig:
+    scroll4_path: str = "scroll4_bottomleft.npz"
     segment_id: int = 20230827161847
     tile_size: int = 32
     depth: int = 8

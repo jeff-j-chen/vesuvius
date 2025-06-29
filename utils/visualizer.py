@@ -24,7 +24,7 @@ class TensorboardVisualizer:
         self.log_path = os.path.join(config.training.log_dir, experiment_name)
         self.writer = SummaryWriter(self.log_path)
         self.test_volume = load_test_data(self.config)
-        # self.scroll4_volume = load_scroll4_data(self.config)
+        self.scroll4_volume = load_scroll4_data(self.config)
         
         print(f"TensorBoard logs will be saved to: {self.log_path}")
         print(f"To view, run: tensorboard --logdir={config.training.log_dir}")
@@ -62,8 +62,8 @@ class TensorboardVisualizer:
 
         # Add test figures at specified intervals
         if (epoch+1) % self.config.training.test_interval == 0:
-            self.add_test_figures(epoch, model, self.test_volume)
-            # self.add_scroll4_figures(epoch, model, self.scroll4_volume)
+            self.add_test_figures(epoch, model, self.test_volume, "scroll1")
+            self.add_test_figures(epoch, model, self.scroll4_volume, "scroll4")
 
         # Add evaluation figures at specified intervals
         if (epoch+1) % self.config.training.evaluation_interval == 0:
@@ -174,15 +174,16 @@ class TensorboardVisualizer:
         return fig
 
 
-    def _create_combined_test_figure(self, all_predictions_data, num_depth_blocks, scale_factor=0.3):
+    def _create_combined_test_figure(self, all_predictions_data, num_depth_blocks, scale_factor, test_type):
         """Create combined test figure with predictions (no ground truth overlay)"""
         
         cols = 2
         rows = (num_depth_blocks + 1) // 2
         
         fig_width = 10
-        fig_height = 7 * rows
-        
+        height_mult = 7 if test_type == "scroll1" else 3
+        fig_height = height_mult * rows
+
         fig, axes = plt.subplots(rows, cols, figsize=(fig_width, fig_height))
         
         if num_depth_blocks == 1:
@@ -239,11 +240,13 @@ class TensorboardVisualizer:
             self.writer.add_figure('Evaluation/All_Depth_Blocks', fig, epoch)
             plt.close(fig)  # Important: close figure to free memory
     
-    def add_test_figures(self, epoch, model, test_volume):
+    def add_test_figures(self, epoch, model, test_volume, test_type):
         """
         Run test evaluation and create one combined figure with all depth blocks
         No ground truth overlay for test data
         """
+        if test_type not in ["scroll1", "scroll4"]:
+            print(f"Invalid test type: {test_type}. Expected 'scroll1' or 'scroll4'.")
         print("Starting test figure generation...")
         model.eval()
         
@@ -251,8 +254,6 @@ class TensorboardVisualizer:
         D = test_volume.shape[0]
         all_predictions_data = []
         num_depth_blocks = (D - self.config.data.depth) // int(self.config.data.depth // 2) + 1
-        
-        all_predictions_data = []
         
         for block_idx in range(num_depth_blocks):
             print(f"Processing depth block {block_idx + 1}/{num_depth_blocks} for evaluation...")
@@ -269,7 +270,7 @@ class TensorboardVisualizer:
                 continue
             
             predictions = self._process_volume_depth_block(
-                model, test_volume, "test", depth_start, depth_end
+                model, test_volume, test_type, depth_start, depth_end
             )
             
             all_predictions_data.append((predictions, depth_start, depth_end))
@@ -278,8 +279,8 @@ class TensorboardVisualizer:
             # Create one combined figure with all test depth blocks (no ground truth overlay)
             print(f"got {len(all_predictions_data)} depth blocks for test")
 
-            fig = self._create_combined_test_figure(all_predictions_data, len(all_predictions_data))
-            self.writer.add_figure('Test/All_Depth_Blocks', fig, epoch)
+            fig = self._create_combined_test_figure(all_predictions_data, len(all_predictions_data), 0.3, test_type)
+            self.writer.add_figure(f'Test/{test_type.capitalize()}_All_Depth_Blocks', fig, epoch)
             plt.close(fig)  # Important: close figure to free memory
     
     def add_scroll4_figures(self, epoch, model, scroll4_volume):
@@ -312,7 +313,7 @@ class TensorboardVisualizer:
         
         if all_predictions_data:
             # Create one combined figure with all scroll4 depth blocks (no ground truth)
-            fig = self._create_combined_test_figure(all_predictions_data, len(all_predictions_data), "Scroll4")
+            fig = self._create_combined_test_figure(all_predictions_data, len(all_predictions_data), 0.3, "Scroll4")
             self.writer.add_figure('Scroll4/All_Depth_Blocks', fig, epoch)
             plt.close(fig)  # Important: close figure to free memory
         
