@@ -52,6 +52,8 @@ def create_loss_function(pos_weight, config: Config):
     return criterion
 
 def save_model(model, path):
+    # create directory if it doesn't exist
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save(model.state_dict(), path)
 
 def load_model(model, path):

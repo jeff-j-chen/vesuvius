@@ -18,6 +18,7 @@ class DataloaderConfig:
     num_workers: int = 8
     shuffle_train: bool = True
     shuffle_valid: bool = False
+    apply_transforms: bool = False
 
 @dataclass
 class TrainingConfig:
@@ -38,7 +39,7 @@ class ModelConfig:
     conv1_drop: float = 0.0
     conv2_drop: float = 0.3
     fc1_drop: float = 0.8
-    fc2_drop: float = 0.4
+    fc2_drop: float = 0.5
 
 
 @dataclass

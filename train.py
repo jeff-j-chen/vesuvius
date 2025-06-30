@@ -64,7 +64,7 @@ def validate_epoch(model, valid_loader, criterion, config: Config):
     return val_loss / len(valid_loader), val_correct / val_total
 
 def main(config: Config):
-    torch.backends.cudnn.benchmark = True
+    # torch.backends.cudnn.benchmark = True
 
     # Create datasets and dataloaders, in addition to the class weights
     print("Creating datasets...", end="")
@@ -91,9 +91,8 @@ def main(config: Config):
     for epoch in range(config.training.num_epochs):
         start_time = time.time()
         # Train
-        # if epoch > 5 and not train_dataset.apply_transforms:
-        #     print("Transforms will now apply...")
-        #     train_dataset.apply_transforms = True
+        if epoch > 5 and config.dataloader.apply_transforms:
+            train_dataset.apply_transforms = True
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, config)
         
         # Validate

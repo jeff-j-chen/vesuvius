@@ -39,8 +39,7 @@ class InkVolumeDataset(Dataset):
     
     def _apply_brightness_adjustment(self, block):
         """Apply brightness adjustment to each channel independently"""
-        # Random brightness factor per channel (0.7 to 1.3)
-        brightness_factors = torch.rand(block.shape[0], 1, 1) * 0.1 + 0.95  # 0.7 to 1.3
+        brightness_factors = torch.rand(block.shape[0], 1, 1) * 0.2 + 0.9
         return torch.clamp(block * brightness_factors, 0, 1)
     
     def _apply_contrast_adjustment(self, block):
@@ -49,7 +48,7 @@ class InkVolumeDataset(Dataset):
         for i in range(block.shape[0]):
             channel = block[i]
             # Random contrast factor (0.8 to 1.2)
-            contrast_factor = random.uniform(0.9, 1.1)
+            contrast_factor = random.uniform(0.8, 1.2)
             # Apply contrast: new_val = (old_val - mean) * contrast + mean
             mean_val = torch.mean(channel)
             adjusted_block[i] = torch.clamp(
@@ -59,28 +58,40 @@ class InkVolumeDataset(Dataset):
     
     def _apply_gaussian_noise(self, block):
         """Apply Gaussian noise to each channel independently"""
-        # Small noise to avoid destroying signal (std=0.01 to 0.03)
-        noise_std = random.uniform(0.005, 0.01)
+        # Small noise to avoid destroying signal (std=0.01 to 0.05)
+        noise_std = random.uniform(0.01, 0.05)
         noise = torch.randn_like(block) * noise_std
         return torch.clamp(block + noise, 0, 1)
     
-    def _apply_rotation(self, block, label_tile):
+    def _apply_rotation(self, block):
         """Apply 90/180/270 degree rotations to all channels and label"""
-        # Choose rotation: 0 (no rotation), 1 (90°), 2 (180°), 3 (270°)
-        rotation = random.choice([0, 1, 2, 3])
-        
-        if rotation == 0:
-            return block
+        # Choose rotation: 1 (90°), 2 (180°), 3 (270°)
+        rotation = random.choice([1, 2, 3])
         
         # Apply rotation to each channel
         rotated_block = torch.zeros_like(block)
         for i in range(block.shape[0]):
             rotated_block[i] = torch.rot90(block[i], k=rotation, dims=[0, 1])
         
-        # Apply same rotation to label
-        rotated_label = torch.rot90(torch.tensor(label_tile), k=rotation, dims=[0, 1]).numpy()
-        
         return rotated_block
+    
+    def _apply_flip(self, block):
+        """Apply horizontal or vertical flip to all channels and label"""
+        # Choose flip: 0 (no flip), 1 (horizontal), 2 (vertical)
+        flip_type = random.choice([0, 1])
+        
+        if flip_type == 0:
+            return block
+        
+        # Apply flip to each channel
+        flipped_block = torch.zeros_like(block)
+        for i in range(block.shape[0]):
+            if flip_type == 0:  # Horizontal flip
+                flipped_block[i] = torch.flip(block[i], dims=[1])  # flip along width
+            elif flip_type == 1:  # Vertical flip
+                flipped_block[i] = torch.flip(block[i], dims=[0])  # flip along height
+        
+        return flipped_block
 
     def __len__(self):
         return len(self.blocks)
@@ -96,9 +107,9 @@ class InkVolumeDataset(Dataset):
         
         # Apply transforms if enabled (before adding channel dimension)
         if self.apply_transforms:
-            if random.random() < 0.3:
+            if random.random() < 0.5:
                 block = self._apply_channel_mixing(block)
-            transform_type = random.choice(["brightness", "contrast", "noise", "rotate", None])
+            transform_type = random.choice(["brightness", "contrast", "noise", "rotate", "flip", None])
             if transform_type == "brightness":
                 block = self._apply_brightness_adjustment(block)
             elif transform_type == "contrast":
@@ -106,7 +117,9 @@ class InkVolumeDataset(Dataset):
             elif transform_type == "noise":
                 block = self._apply_gaussian_noise(block)
             elif transform_type == "rotate":
-                block = self._apply_rotation(block, label_tile)
+                block = self._apply_rotation(block)
+            elif transform_type == "flip":
+                block = self._apply_flip(block)
 
 
         # Add channel dimension: [D, H, W] -> [1, D, H, W]
@@ -118,7 +131,9 @@ class InkVolumeDataset(Dataset):
         #     has_ink = False
         # else:
         #     has_ink = np.any(label_tile > 0.5)
-        has_ink = np.any(label_tile > 0.5)
+        # has_ink = np.any(label_tile > 0.5)
+        # instead of any, check if the average is above a threshold
+        has_ink = np.mean(label_tile) > 0.5  # Adjust
         label = torch.tensor([float(has_ink)], dtype=torch.float32)
 
         return block, label
@@ -129,7 +144,8 @@ def _load_tv_data(config: Config):
     
     # Extract volume and labels according to config
     volume = segment[config.data.start_level:config.data.end_level, 200:5600, 1000:4600] # type: ignore
-    # labels = segment.inklabel[200:5600, 1000:4600] / 255.0
+    # print(f"tv data loaded with shape: {volume.shape}, dtype: {volume.dtype}, std {volume.std():.4f}, mean {volume.mean():.4f}")
+    # print(volume[14, 1000:1005, 1000:1005])
     # instead of base labels, define as those taken from file /media/jeff/Seagate/vesuvius/fixed_inklabels.png
     labels_path = "./thin_inklabels.png"
     labels = cv2.imread(labels_path, cv2.IMREAD_GRAYSCALE)
@@ -148,12 +164,16 @@ def _load_tv_data(config: Config):
 def load_test_data(config: Config):
     segment = Volume(config.data.segment_id, normalize=config.data.normalize)
     volume = segment[:, 4000:, :] # type: ignore
+    # print(f"test data loaded with shape: {volume.shape}, dtype: {volume.dtype}, std {volume.std():.4f}, mean {volume.mean():.4f}")
+    print(volume[14, 1000:1005, 1000:1005])
     return volume
 
 def load_scroll4_data(config: Config):
     data = np.load(config.data.scroll4_path)
-    test_volume = data['stack']
-    return test_volume
+    volume = data['stack']
+    # print(f"scroll4 data loaded with shape: {volume.shape}, dtype: {volume.dtype}, std {volume.std():.4f}, mean {volume.mean():.4f}")
+    print(volume[14, 1000:1005, 1000:1005])
+    return volume
 
 def create_datasets(config: Config):
     """Split data and create train/validation datasets"""
