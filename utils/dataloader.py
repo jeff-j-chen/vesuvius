@@ -191,16 +191,18 @@ def create_dataloaders(train_dataset, valid_dataset, config: Config):
     """Create DataLoader objects from datasets"""
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.dataloader.batch_size,
-        num_workers=config.dataloader.num_workers,
-        shuffle=config.dataloader.shuffle_train
+        batch_size=config.dataloader.train_batch_size,
+        num_workers=config.dataloader.train_num_workers,
+        shuffle=config.dataloader.train_shuffle,
+        pin_memory=True,
     )
     
     valid_loader = DataLoader(
         valid_dataset,
-        batch_size=config.dataloader.batch_size,
-        num_workers=config.dataloader.num_workers,
-        shuffle=config.dataloader.shuffle_valid
+        batch_size=config.dataloader.valid_batch_size,
+        num_workers=config.dataloader.valid_num_workers,
+        shuffle=config.dataloader.valid_shuffle,
+        pin_memory=True,
     )
     
     return train_loader, valid_loader

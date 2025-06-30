@@ -14,10 +14,12 @@ class DataConfig:
 
 @dataclass
 class DataloaderConfig:
-    batch_size: int = 128
-    num_workers: int = 8
-    shuffle_train: bool = True
-    shuffle_valid: bool = False
+    train_batch_size: int = 256
+    train_num_workers: int = 12
+    train_shuffle: bool = True
+    valid_batch_size: int = 1024
+    valid_num_workers: int = 12
+    valid_shuffle: bool = False
     apply_transforms: bool = False
 
 @dataclass
