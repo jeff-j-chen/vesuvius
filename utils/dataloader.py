@@ -143,11 +143,13 @@ def _load_tv_data(config: Config):
     segment = Volume(config.data.segment_id, normalize=config.data.normalize)
     
     # Extract volume and labels according to config
-    volume = segment[config.data.start_level:config.data.end_level, 200:5600, 1000:4600] # type: ignore
-    # print(f"tv data loaded with shape: {volume.shape}, dtype: {volume.dtype}, std {volume.std():.4f}, mean {volume.mean():.4f}")
-    # print(volume[14, 1000:1005, 1000:1005])
-    # instead of base labels, define as those taken from file /media/jeff/Seagate/vesuvius/fixed_inklabels.png
-    labels_path = "./thin_inklabels.png"
+    if config.data.segment_id == 20230827161847:
+        volume = segment[config.data.start_level:config.data.end_level, 200:5600, 1000:4600] # type: ignore
+    elif config.data.segment_id == 20231106155351:
+        volume = segment[:, :, 4500:] # type: ignore
+    else:
+        volume = segment[:, :, :] # type: ignore
+    labels_path = f"inklabels/{config.data.segment_id}.png"
     labels = cv2.imread(labels_path, cv2.IMREAD_GRAYSCALE)
 
     # Normalize labels to range [0, 1]

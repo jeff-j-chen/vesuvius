@@ -1,0 +1,17 @@
+--2025-06-30 02:45:18--  https://vesuvius.virtual-void.net/scroll/1/segment/20230827161847/inferred/grand-prize-inklabels/full
+Resolving vesuvius.virtual-void.net (vesuvius.virtual-void.net)... 5.75.212.81
+Connecting to vesuvius.virtual-void.net (vesuvius.virtual-void.net)|5.75.212.81|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 308391 (301K) [image/png]
+Saving to: ‘full.9’
+
+     0K .......... .......... .......... .......... .......... 16%  156K 2s
+    50K .......... .......... .......... .......... .......... 33%  317K 1s
+   100K .......... .......... .......... .......... .......... 49% 21.4M 0s
+   150K .......... .......... .......... .......... .......... 66% 1.91M 0s
+   200K .......... .......... .......... .......... .......... 83%  375K 0s
+   250K .......... .......... .......... .......... .......... 99% 67.0M 0s
+   300K .                                                     100% 2.17T=0.6s
+
+2025-06-30 02:45:19 (471 KB/s) - ‘full.9’ saved [308391/308391]
+

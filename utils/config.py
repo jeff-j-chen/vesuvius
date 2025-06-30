@@ -39,7 +39,7 @@ class ModelConfig:
     conv1_drop: float = 0.0
     conv2_drop: float = 0.3
     fc1_drop: float = 0.8
-    fc2_drop: float = 0.5
+    fc2_drop: float = 0.6
 
 
 @dataclass

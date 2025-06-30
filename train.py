@@ -137,6 +137,27 @@ if __name__ == "__main__":
     config.experiment_name = args.experiment_name
     main(config)
 
+    # scroll_ids = [
+    #     20231007101619,
+    #     20231005123336,
+    #     20231022170901,
+    #     20230929220926,
+    #     20231210121321,
+    #     20230702185753,
+    #     20231106155351, # x > 4500,
+    #     20231016151002,
+    #     20231031143852,
+    #     20231221180251,
+    #     20231012184420,
+    #     20230827161847
+    # ]
+    # for scroll_id in scroll_ids:
+    #     config = Config()
+    #     config.data.segment_id = scroll_id
+    #     config.experiment_name = f"{scroll_id}"
+    #     print(f"Training on scroll {scroll_id}...")
+    #     main(config)
+
     # l1s = [7.5e-4]
     # for l1 in l1s:
     #     config = Config()
@@ -148,17 +169,17 @@ if __name__ == "__main__":
     #     main(config)
 
     # conv1 conv2 fc1 fc2
-    # drops = [
-    #     [0.0, 0.3, 0.8, 0.4],
-    # ]
-    # for drop in drops:
-    #     config = Config()
-    #     config.model.conv1_drop = drop[0]
-    #     config.model.conv2_drop = drop[1]
-    #     config.model.fc1_drop = drop[2]
-    #     config.model.fc2_drop = drop[3]
-    #     config.experiment_name = f"drops-{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
-    #     main(config)
+    drops = [
+        [0.0, 0.3, 0.8, 0.6],
+    ]
+    for drop in drops:
+        config = Config()
+        config.model.conv1_drop = drop[0]
+        config.model.conv2_drop = drop[1]
+        config.model.fc1_drop = drop[2]
+        config.model.fc2_drop = drop[3]
+        config.experiment_name = f"drops-{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
+        main(config)
     
     # config = Config()
     # config.data.start_level = 32
