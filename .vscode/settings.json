@@ -1,3 +1,5 @@
 {
-    "python.analysis.typeCheckingMode": "standard"
+    "python.analysis.typeCheckingMode": "standard",
+    "python.languageServer": "None",
+    "cursorpyright.analysis.typeCheckingMode": "standard"
 }

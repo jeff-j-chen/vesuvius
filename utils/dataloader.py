@@ -8,6 +8,7 @@ from .config import Config
 import cv2
 import random
 
+
 class InkVolumeDataset(Dataset):
     def __init__(self, volume, labels, config, apply_transforms=False):
         """
@@ -149,7 +150,7 @@ def _load_tv_data(config: Config):
         volume = segment[:, :, 4500:] # type: ignore
     else:
         volume = segment[:, :, :] # type: ignore
-    labels_path = f"inklabels/{config.data.segment_id}.png"
+    labels_path = f"./inklabels/{config.data.segment_id}.png"
     labels = cv2.imread(labels_path, cv2.IMREAD_GRAYSCALE)
 
     # Normalize labels to range [0, 1]

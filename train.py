@@ -14,6 +14,15 @@ import time
 import random
 import argparse
 
+def set_seed(seed=42):
+    import random, numpy as np, torch
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 def train_epoch(model, train_loader, criterion, optimizer, config: Config):
     """Train for one epoch with L1 regularization"""
     model.train()
@@ -130,11 +139,19 @@ def main(config: Config):
     print("Training completed...")
 
 if __name__ == "__main__":
+    set_seed(42)  # Set a fixed seed for reproducibility
     parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
     parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
     args = parser.parse_args()
     config = Config()
     config.experiment_name = args.experiment_name
+    for field in config.__dataclass_fields__:
+        value = getattr(config, field)
+        if isinstance(value, dict):
+            for subfield, subvalue in value.items():
+                print(f"{field}.{subfield}: {subvalue}")
+        else:
+            print(f"{field}: {value}")
     main(config)
 
     # scroll_ids = [
@@ -169,17 +186,17 @@ if __name__ == "__main__":
     #     main(config)
 
     # conv1 conv2 fc1 fc2
-    drops = [
-        [0.0, 0.3, 0.8, 0.6],
-    ]
-    for drop in drops:
-        config = Config()
-        config.model.conv1_drop = drop[0]
-        config.model.conv2_drop = drop[1]
-        config.model.fc1_drop = drop[2]
-        config.model.fc2_drop = drop[3]
-        config.experiment_name = f"drops-{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
-        main(config)
+    # drops = [
+    #     [0.0, 0.3, 0.8, 0.6],
+    # ]
+    # for drop in drops:
+    #     config = Config()
+    #     config.model.conv1_drop = drop[0]
+    #     config.model.conv2_drop = drop[1]
+    #     config.model.fc1_drop = drop[2]
+    #     config.model.fc2_drop = drop[3]
+    #     config.experiment_name = f"retrain-drops-{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
+    #     main(config)
     
     # config = Config()
     # config.data.start_level = 32
