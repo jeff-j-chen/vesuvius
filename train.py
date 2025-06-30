@@ -153,6 +153,7 @@ if __name__ == "__main__":
     # config.experiment_name = args.experiment_name
     # main(config)
 
+    # TEST
     config = Config()
     for apply_transforms in [False, True]:
         config.dataloader.apply_transforms = apply_transforms
