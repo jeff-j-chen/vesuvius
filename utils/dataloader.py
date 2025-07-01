@@ -19,6 +19,7 @@ class InkVolumeDataset(Dataset):
         """
         self.volume = volume
         self.labels = labels
+        self.config = config
         self.tile_size = config.data.tile_size
         self.depth = config.data.depth
         self.D, self.H, self.W = volume.shape
@@ -40,7 +41,7 @@ class InkVolumeDataset(Dataset):
     
     def _apply_brightness_adjustment(self, block):
         """Apply brightness adjustment to each channel independently"""
-        brightness_factors = torch.rand(block.shape[0], 1, 1) * 0.2 + 0.9
+        brightness_factors = torch.rand(block.shape[0], 1, 1) * 0.04 + 0.98
         return torch.clamp(block * brightness_factors, 0, 1)
     
     def _apply_contrast_adjustment(self, block):
@@ -49,7 +50,7 @@ class InkVolumeDataset(Dataset):
         for i in range(block.shape[0]):
             channel = block[i]
             # Random contrast factor (0.8 to 1.2)
-            contrast_factor = random.uniform(0.8, 1.2)
+            contrast_factor = random.uniform(0.95, 1.05)
             # Apply contrast: new_val = (old_val - mean) * contrast + mean
             mean_val = torch.mean(channel)
             adjusted_block[i] = torch.clamp(
@@ -59,8 +60,8 @@ class InkVolumeDataset(Dataset):
     
     def _apply_gaussian_noise(self, block):
         """Apply Gaussian noise to each channel independently"""
-        # Small noise to avoid destroying signal (std=0.01 to 0.05)
-        noise_std = random.uniform(0.01, 0.05)
+        # Small noise to avoid destroying signal (std=0.01 to 0.03)
+        noise_std = random.uniform(0.005, 0.01)
         noise = torch.randn_like(block) * noise_std
         return torch.clamp(block + noise, 0, 1)
     
@@ -80,9 +81,6 @@ class InkVolumeDataset(Dataset):
         """Apply horizontal or vertical flip to all channels and label"""
         # Choose flip: 0 (no flip), 1 (horizontal), 2 (vertical)
         flip_type = random.choice([0, 1])
-        
-        if flip_type == 0:
-            return block
         
         # Apply flip to each channel
         flipped_block = torch.zeros_like(block)
@@ -108,11 +106,11 @@ class InkVolumeDataset(Dataset):
         
         # Apply transforms if enabled (before adding channel dimension)
         if self.apply_transforms:
-            if random.random() < 0.5:
-                block = self._apply_channel_mixing(block)
-            transform_type = random.choice(["brightness", "contrast", "noise", "rotate", "flip", None])
+            transform_type = self.config.dataloader.transform_type
             if transform_type == "brightness":
                 block = self._apply_brightness_adjustment(block)
+            elif transform_type == "mix":
+                block = self._apply_channel_mixing(block)
             elif transform_type == "contrast":
                 block = self._apply_contrast_adjustment(block)
             elif transform_type == "noise":
@@ -121,6 +119,8 @@ class InkVolumeDataset(Dataset):
                 block = self._apply_rotation(block)
             elif transform_type == "flip":
                 block = self._apply_flip(block)
+            else:
+                raise ValueError(f"Invalid transform type: {transform_type}")
 
 
         # Add channel dimension: [D, H, W] -> [1, D, H, W]

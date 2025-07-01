@@ -11,8 +11,9 @@ from utils.training_utils import (
 )
 from utils.visualizer import TensorboardVisualizer
 import time
-from torch.cuda.amp.autocast_mode import autocast
-
+from torch.amp.autocast_mode import autocast
+from torch.cuda.amp.grad_scaler import GradScaler
+import argparse
 
 def set_seed(seed=42):
     import random, numpy as np, torch
@@ -23,45 +24,52 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def train_epoch(model, train_loader, criterion, optimizer, config: Config):
+def train_epoch(model, train_loader, criterion, optimizer, config: Config, scaler: GradScaler):
     """Train for one epoch with L1 regularization"""
     model.train()
-    train_loss, train_correct, train_total = 0.0, 0, 0
-    with autocast():
-        for batch_images, batch_labels in tqdm(train_loader, desc="Training"):
-            batch_images = batch_images.to(config.device)
-            batch_labels = batch_labels.to(config.device).view(-1, 1)
-            
-            optimizer.zero_grad()
-            outputs = model(batch_images)
-            
-            loss = criterion(outputs, batch_labels)
-            
-            # Add L1 regularization
-            l1_loss = sum(p.abs().sum() for p in model.parameters())
-            loss += config.training.l1_lambda * l1_loss
-            
-            loss.backward()
-            
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.training.max_grad_norm)
-            
-            optimizer.step()
-            
-            train_loss += loss.item()
-            predicted = (torch.sigmoid(outputs) > 0.5).float()
-            train_correct += (predicted == batch_labels).sum().item()
-            train_total += batch_labels.size(0)
-    
-    return train_loss / len(train_loader), train_correct / train_total
+    train_loss, train_raw_loss, train_correct, train_total = 0.0, 0.0, 0, 0
+    i = 0
+    for batch_images, batch_labels in tqdm(train_loader, desc="Training"):
+        # i += 1
+        # if i > 10:
+        #     break
+        batch_images = batch_images.to(config.device)
+        batch_labels = batch_labels.to(config.device).view(-1, 1)
+        
+        optimizer.zero_grad()
 
-def validate_epoch(model, valid_loader, criterion, config: Config):
+        with autocast(config.device):
+            outputs = model(batch_images)
+            raw_loss = criterion(outputs, batch_labels)
+            l1_loss = sum(p.abs().sum() for p in model.parameters())
+            loss = raw_loss + config.training.l1_lambda * l1_loss
+        
+        scaler.scale(loss).backward()
+        
+        # Gradient clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.training.max_grad_norm)
+        
+        scaler.step(optimizer)
+        scaler.update()
+        
+        train_loss += loss.item()
+        train_raw_loss += raw_loss.item()
+        predicted = (torch.sigmoid(outputs) > 0.5).float()
+        train_correct += (predicted == batch_labels).sum().item()
+        train_total += batch_labels.size(0)
+    
+    return train_loss / len(train_loader), train_raw_loss / len(train_loader), train_correct / train_total
+
+def validate_epoch(model, valid_loader, criterion, config: Config, scaler: GradScaler):
     """Validate for one epoch (unchanged)"""
     model.eval()
     val_loss, val_correct, val_total = 0.0, 0, 0
-    
-    with torch.no_grad(), autocast():
+    i = 0
+    with torch.no_grad(), autocast(config.device):
         for images, labels in valid_loader:
+            # i += 1
+            # if i > 10:
+            #     break
             images = images.to(config.device)
             labels = labels.to(config.device).view(-1, 1)
             outputs = model(images)
@@ -74,7 +82,7 @@ def validate_epoch(model, valid_loader, criterion, config: Config):
     return val_loss / len(valid_loader), val_correct / val_total
 
 def main(config: Config):
-    set_seed(42)
+    set_seed(41)
     for field in config.__dataclass_fields__:
         value = getattr(config, field)
         if isinstance(value, dict):
@@ -103,16 +111,18 @@ def main(config: Config):
     start_time = time.time()
     vis = TensorboardVisualizer(config)
     best_val_loss = float('inf')
+
     
+    scaler = GradScaler()
     for epoch in range(config.training.num_epochs):
         start_time = time.time()
         # Train
         if epoch >= 5 and config.dataloader.apply_transforms:
             train_dataset.apply_transforms = True
-        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, config)
+        train_loss, train_raw_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, config, scaler)
         
         # Validate
-        val_loss, val_acc = validate_epoch(model, valid_loader, criterion, config)
+        val_loss, val_acc = validate_epoch(model, valid_loader, criterion, config, scaler)
         
         # Update scheduler
         scheduler.step(val_loss)
@@ -140,26 +150,25 @@ def main(config: Config):
             save_model(model, f'{config.model_dir}/model_epoch_{epoch+1}.pth')
 
         time_elapsed = time.time() - start_time
-        vis.log_epoch_metrics(epoch, model, train_acc, val_acc, train_loss, val_loss, current_lr, time_elapsed, train_volume, valid_volume, labels, params)
+        vis.log_epoch_metrics(epoch, model, train_acc, val_acc, train_loss, train_raw_loss, val_loss, current_lr, time_elapsed, train_volume, valid_volume, labels, params)
     
     vis.close()
     print("Training completed...")
 
 if __name__ == "__main__":
-    # parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
-    # parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
-    # args = parser.parse_args()
-    # config = Config()
-    # config.experiment_name = args.experiment_name
-    # main(config)
-
-    # TEST
+    parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
+    parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
+    args = parser.parse_args()
     config = Config()
-    for apply_transforms in [False, True]:
-        config.dataloader.apply_transforms = apply_transforms
-        config.experiment_name = f"0.0-0.3-0.8-0.6-trans_{apply_transforms}"
-        print(f"apply_transforms {apply_transforms}...")
-        main(config)
+    config.experiment_name = args.experiment_name
+    main(config)
+
+    # for transform_type in ["mix", "brightness", "contrast", "noise", "rotate", "flip"]:
+    #     config = Config()
+    #     config.dataloader.transform_type = transform_type
+    #     config.experiment_name = f"transform_{transform_type}"
+    #     print(f"Training with transform type: {transform_type}...")
+    #     main(config)
 
     # scroll_ids = [
     #     20231007101619,
@@ -202,7 +211,7 @@ if __name__ == "__main__":
     #     config.model.conv2_drop = drop[1]
     #     config.model.fc1_drop = drop[2]
     #     config.model.fc2_drop = drop[3]
-    #     config.experiment_name = f"retrain-drops-{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
+    #     config.experiment_name = f"sanity-{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
     #     main(config)
     
     # config = Config()

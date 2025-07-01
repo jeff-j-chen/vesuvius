@@ -22,25 +22,34 @@ class TensorboardVisualizer:
             experiment_name = config.experiment_name + "_" +  datetime.now().strftime('%d_%H%M%S')
         
         self.log_path = os.path.join(config.training.log_dir, experiment_name)
+        self.layout = {
+            "Training_Overview": {
+                "loss": ["Multiline", ["Training_Metrics/Loss/Train", "Training_Metrics/Loss/Train_Raw", "Training_Metrics/Loss/Validation"]],
+                "accuracy": ["Multiline", ["Training_Metrics/Accuracy/Train", "Training_Metrics/Accuracy/Validation"]],
+            },
+        }
         self.writer = SummaryWriter(self.log_path)
-        self.test_volume = load_test_data(self.config)
-        self.scroll4_volume = load_scroll4_data(self.config)
+        self.writer.add_custom_scalars(self.layout)
+        self.test_volume = None
+        self.scroll4_volume = None
+        # self.test_volume = load_test_data(self.config)
+        # self.scroll4_volume = load_scroll4_data(self.config)
+
         
         print(f"TensorBoard logs will be saved to: {self.log_path}")
         print(f"To view, run: tensorboard --logdir={config.training.log_dir}")
     
-    def log_epoch_metrics(self, epoch, model, train_acc, val_acc, train_loss, val_loss, learning_rate, time_elapsed, train_volume, valid_volume, labels, params):
+    def log_epoch_metrics(self, epoch, model, train_acc, val_acc, train_loss, train_raw_loss, val_loss, learning_rate, time_elapsed, train_volume, valid_volume, labels, params):
         print(f"Logging metrics for epoch: {epoch}")
-        # Log accuracies
-        self.writer.add_scalar('Metrics/Train_Acc', train_acc, epoch)
-        self.writer.add_scalar('Metrics/Validation_Acc', val_acc, epoch)
+        self.writer.add_scalar("Training_Metrics/Loss/Train", train_loss, epoch)
+        self.writer.add_scalar("Training_Metrics/Loss/Train_Raw", train_raw_loss, epoch)
+        self.writer.add_scalar("Training_Metrics/Loss/Validation", val_loss, epoch)
         
-        # Log losses
-        self.writer.add_scalar('Metrics/Train_Loss', train_loss, epoch)
-        self.writer.add_scalar('Metrics/Validation_Loss', val_loss, epoch)
+        self.writer.add_scalar("Training_Metrics/Accuracy/Train", train_acc, epoch)
+        self.writer.add_scalar("Training_Metrics/Accuracy/Validation", val_acc, epoch)
         
         # Log learning rate
-        self.writer.add_scalar('Metrics/Learning_Rate', learning_rate, epoch)
+        self.writer.add_scalar('Learning_Rate', learning_rate, epoch)
 
         # Time elapsed
         self.writer.add_scalar('Time_Elapsed', time_elapsed, epoch)
@@ -310,8 +319,8 @@ class TensorboardVisualizer:
     def log_hyperparameters(self, params):
         self.writer.add_scalar("Hyperparameters/Tile Size", self.config.data.tile_size)
         self.writer.add_scalar("Hyperparameters/Depth", self.config.data.depth)
-        self.writer.add_scalar("Hyperparameters/Batch Size", self.config.dataloader.batch_size)
-        self.writer.add_scalar("Hyperparameters/Num Workers", self.config.dataloader.num_workers)
+        self.writer.add_scalar("Hyperparameters/Batch Size", self.config.dataloader.train_batch_size)
+        self.writer.add_scalar("Hyperparameters/Num Workers", self.config.dataloader.train_num_workers)
         self.writer.add_scalar("Hyperparameters/Learning Rate", self.config.training.learning_rate)
         self.writer.add_scalar("Hyperparameters/Weight Decay", self.config.training.weight_decay)
         self.writer.add_scalar("Hyperparameters/L1 Lambda", self.config.training.l1_lambda)
