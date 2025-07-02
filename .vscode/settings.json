@@ -1,5 +1,5 @@
 {
     "python.analysis.typeCheckingMode": "standard",
-    "python.languageServer": "None",
+    "python.languageServer": "Pylance",
     "cursorpyright.analysis.typeCheckingMode": "standard"
 }

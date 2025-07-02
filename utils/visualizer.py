@@ -30,10 +30,8 @@ class TensorboardVisualizer:
         }
         self.writer = SummaryWriter(self.log_path)
         self.writer.add_custom_scalars(self.layout)
-        self.test_volume = None
-        self.scroll4_volume = None
-        # self.test_volume = load_test_data(self.config)
-        # self.scroll4_volume = load_scroll4_data(self.config)
+        self.test_volume = load_test_data(self.config)
+        self.scroll4_volume = load_scroll4_data(self.config)
 
         
         print(f"TensorBoard logs will be saved to: {self.log_path}")
@@ -312,9 +310,15 @@ class TensorboardVisualizer:
     def log_weight_histograms(self, model, epoch):
         for name, param in model.named_parameters():
             if param.requires_grad:
+                # Log weights
                 self.writer.add_histogram(f"Weights/{name}", param.data.cpu().numpy(), epoch)
-                if param.grad is not None:
-                    self.writer.add_histogram(f"Gradients/{name}", param.grad.cpu().numpy(), epoch)
+                
+                # Log gradients (with safety checks)
+                if param.grad is not None and param.grad.numel() > 0:
+                    grad = param.grad.detach().cpu()
+                    if grad.abs().sum() > 0:  # Avoid empty or all-zero gradients
+                        self.writer.add_histogram(f"Gradients/{name}", grad.numpy(), epoch)
+
 
     def log_hyperparameters(self, params):
         self.writer.add_scalar("Hyperparameters/Tile Size", self.config.data.tile_size)

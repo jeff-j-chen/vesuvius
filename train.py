@@ -66,7 +66,7 @@ def validate_epoch(model, valid_loader, criterion, config: Config, scaler: GradS
     val_loss, val_correct, val_total = 0.0, 0, 0
     i = 0
     with torch.no_grad(), autocast(config.device):
-        for images, labels in valid_loader:
+        for images, labels in tqdm(valid_loader, desc="Validating"):
             # i += 1
             # if i > 10:
             #     break
@@ -156,19 +156,48 @@ def main(config: Config):
     print("Training completed...")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
-    parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
-    args = parser.parse_args()
+    # parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
+    # parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
+    # args = parser.parse_args()
+    # config = Config()
+    # config.experiment_name = args.experiment_name
+    # main(config)
+
+    # test stronger augmentations
+    for transform_type in ["brightness", "contrast"]:
+        config = Config()
+        config.dataloader.apply_transforms = True
+        config.dataloader.transform_type = transform_type
+        config.experiment_name = f"transform_{transform_type}_strong"
+        print(f"Training with transform type: {transform_type}...")
+        main(config)
+    
+    # test if a lower l1 will allow for mix to generalize
     config = Config()
-    config.experiment_name = args.experiment_name
+    config.dataloader.transform_type = "mix"
+    config.experiment_name = f"mix_1e-4l1"
+    config.training.l1_lambda = 1e-4
+    main(config)
+    
+    # test if a lower l1 will allow for mix to generalize
+    config = Config()
+    config.dataloader.apply_transforms = False
+    config.experiment_name = f"transform_off_128b"
+    config.training.l1_lambda = 7e-4
     main(config)
 
-    # for transform_type in ["mix", "brightness", "contrast", "noise", "rotate", "flip"]:
-    #     config = Config()
-    #     config.dataloader.transform_type = transform_type
-    #     config.experiment_name = f"transform_{transform_type}"
-    #     print(f"Training with transform type: {transform_type}...")
-    #     main(config)
+    # re-run tests on every augmentation, to see if they work better with a lower probability (33%)
+    for transform_type in ["brightness", "mix", "contrast", "noise", "rotate", "flip"]:
+        config = Config()
+        config.training.l1_lambda = 7e-4
+        config.dataloader.apply_transforms = True
+        config.dataloader.low_trans_prob = True
+        config.dataloader.transform_type = transform_type
+        config.experiment_name = f"transform_{transform_type}_lowprob"
+        print(f"Training with transform type: {transform_type}...")
+        main(config)
+
+    # add additional testing for every augmentation type, but this time have them turn on only 33% of the time.
 
     # scroll_ids = [
     #     20231007101619,
