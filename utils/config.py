@@ -15,14 +15,12 @@ class DataConfig:
 @dataclass
 class DataloaderConfig:
     train_batch_size: int = 128
-    # train_batch_size: int = 128
-    train_num_workers: int = 12
+    train_num_workers: int = 8
     train_shuffle: bool = True
-    valid_batch_size: int = 1024
-    # valid_batch_size: int = 128
-    valid_num_workers: int = 12
+    valid_batch_size: int = 128
+    valid_num_workers: int = 8
     valid_shuffle: bool = False
-    apply_transforms: bool = False
+    apply_transforms: bool = True
     low_trans_prob: bool = False
     transform_type: str = ""
 
@@ -31,7 +29,7 @@ class TrainingConfig:
     num_epochs: int = 50
     learning_rate: float = 1e-4
     weight_decay: float = 0
-    l1_lambda: float = 7e-4
+    l1_lambda: float = 1e-5
     max_grad_norm: float = 1.0
     patience: int = 5
     lr_scheduler_factor: float = 0.5

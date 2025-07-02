@@ -163,39 +163,46 @@ if __name__ == "__main__":
     # config.experiment_name = args.experiment_name
     # main(config)
 
-    # test stronger augmentations
-    for transform_type in ["brightness", "contrast"]:
-        config = Config()
-        config.dataloader.apply_transforms = True
-        config.dataloader.transform_type = transform_type
-        config.experiment_name = f"transform_{transform_type}_strong"
-        print(f"Training with transform type: {transform_type}...")
-        main(config)
+    # # test stronger augmentations
+    # for transform_type in ["brightness", "contrast"]:
+    #     config = Config()
+    #     config.dataloader.apply_transforms = True
+    #     config.dataloader.transform_type = transform_type
+    #     config.experiment_name = f"transform_{transform_type}_strong"
+    #     print(f"Training with transform type: {transform_type}...")
+    #     main(config)
     
     # test if a lower l1 will allow for mix to generalize
     config = Config()
     config.dataloader.transform_type = "mix"
-    config.experiment_name = f"mix_1e-4l1"
-    config.training.l1_lambda = 1e-4
-    main(config)
-    
-    # test if a lower l1 will allow for mix to generalize
-    config = Config()
-    config.dataloader.apply_transforms = False
-    config.experiment_name = f"transform_off_128b"
-    config.training.l1_lambda = 7e-4
+    config.experiment_name = f"mix_1e-5l1"
+    config.training.l1_lambda = 1e-5
     main(config)
 
-    # re-run tests on every augmentation, to see if they work better with a lower probability (33%)
-    for transform_type in ["brightness", "mix", "contrast", "noise", "rotate", "flip"]:
-        config = Config()
-        config.training.l1_lambda = 7e-4
-        config.dataloader.apply_transforms = True
-        config.dataloader.low_trans_prob = True
-        config.dataloader.transform_type = transform_type
-        config.experiment_name = f"transform_{transform_type}_lowprob"
-        print(f"Training with transform type: {transform_type}...")
-        main(config)
+    # # test if a lower l1 will allow for mix to generalize
+    # config = Config()
+    # config.dataloader.transform_type = "mix"
+    # config.experiment_name = f"mix_1e-4l1"
+    # config.training.l1_lambda = 1e-4
+    # main(config)
+    
+    # # test if a lower l1 will allow for mix to generalize
+    # config = Config()
+    # config.dataloader.apply_transforms = False
+    # config.experiment_name = f"transform_off_128b"
+    # config.training.l1_lambda = 7e-4
+    # main(config)
+
+    # # re-run tests on every augmentation, to see if they work better with a lower probability (33%)
+    # for transform_type in ["brightness", "mix", "contrast", "noise", "rotate", "flip"]:
+    #     config = Config()
+    #     config.training.l1_lambda = 7e-4
+    #     config.dataloader.apply_transforms = True
+    #     config.dataloader.low_trans_prob = True
+    #     config.dataloader.transform_type = transform_type
+    #     config.experiment_name = f"transform_{transform_type}_lowprob"
+    #     print(f"Training with transform type: {transform_type}...")
+    #     main(config)
 
     # add additional testing for every augmentation type, but this time have them turn on only 33% of the time.
 
