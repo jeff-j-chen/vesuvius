@@ -8,33 +8,35 @@ class CBAM3D(nn.Module):
         self.channel_scale = nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
         self.spatial_scale = nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
 
-        # Channel Attention
-        self.avg_pool = nn.AdaptiveAvgPool3d(1)
-        self.max_pool = nn.AdaptiveMaxPool3d(1)
-
-        self.shared_mlp = nn.Sequential(
-            nn.Conv3d(channels, channels // reduction, kernel_size=1, bias=False),
+        # Permutation-Invariant Channel Attention (shared MLP across spatial)
+        self.channel_mlp = nn.Sequential(
+            nn.Linear(channels, channels // reduction, bias=False),
             nn.ReLU(),
-            nn.Conv3d(channels // reduction, channels, kernel_size=1, bias=False)
+            nn.Linear(channels // reduction, channels, bias=False)
         )
         self.sigmoid_channel = nn.Sigmoid()
 
-        # Spatial Attention
+        # Spatial Attention (unchanged)
         self.conv_spatial = nn.Conv3d(2, 1, kernel_size=kernel_size, padding=kernel_size // 2, bias=False)
         self.sigmoid_spatial = nn.Sigmoid()
 
     def forward(self, x):
-        # --- Channel Attention ---
-        avg_out = self.shared_mlp(self.avg_pool(x))
-        max_out = self.shared_mlp(self.max_pool(x))
-        channel_attn = self.sigmoid_channel(avg_out + max_out)
-        scale = (1 + self.channel_scale * (channel_attn - 1)).float()
+        # x: (B, C, D, H, W)
+
+        # --- Permutation-Invariant Channel Attention ---
+        b, c, d, h, w = x.shape
+        x_perm = x.permute(0, 2, 3, 4, 1).contiguous()  # (B, D, H, W, C)
+        x_flat = x_perm.view(-1, c)                     # (B*D*H*W, C)
+        attn = self.sigmoid_channel(self.channel_mlp(x_flat))  # (B*D*H*W, C)
+        attn = attn.view(b, d, h, w, c).permute(0, 4, 1, 2, 3)  # (B, C, D, H, W)
+        scale = (1 + self.channel_scale * (attn - 1)).float()
         x = x * scale
 
-        # --- Spatial Attention ---
+        # --- Spatial Attention (same as before) ---
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
         spatial_attn = self.sigmoid_spatial(self.conv_spatial(torch.cat([avg_out, max_out], dim=1)))
+
         scale = (1 + self.spatial_scale * (spatial_attn - 1)).float()
         x = x * scale
 
@@ -50,17 +52,17 @@ class InkDetector(nn.Module):
             nn.ReLU(inplace=True),
             CBAM3D(32),
 
-            nn.Conv3d(32, 96, kernel_size=(3, 3, 3), padding=1, bias=False),  # (B, 96, 8, 31, 31)
-            nn.BatchNorm3d(96).to(dtype=torch.float32),
-            nn.ReLU(inplace=True),
-            CBAM3D(96),
-            nn.MaxPool3d(kernel_size=(2, 2, 2)),  # (B, 96, 4, 15, 15)
-            nn.Dropout3d(config.model.conv1_drop),
-
-            nn.Conv3d(96, 128, kernel_size=(3, 3, 3), padding=1, bias=False),  # (B, 128, 4, 15, 15)
+            nn.Conv3d(32, 128, kernel_size=(3, 3, 3), padding=1, bias=False),  # (B, 96, 8, 31, 31)
             nn.BatchNorm3d(128).to(dtype=torch.float32),
             nn.ReLU(inplace=True),
             CBAM3D(128),
+            nn.MaxPool3d(kernel_size=(2, 2, 2)),  # (B, 96, 4, 15, 15)
+            nn.Dropout3d(config.model.conv1_drop),
+
+            nn.Conv3d(128, 256, kernel_size=(3, 3, 3), padding=1, bias=False),  # (B, 128, 4, 15, 15)
+            nn.BatchNorm3d(256).to(dtype=torch.float32),
+            nn.ReLU(inplace=True),
+            CBAM3D(256),
             nn.MaxPool3d(kernel_size=(2, 2, 2)),  # (B, 128, 2, 7, 7)
             nn.Dropout3d(config.model.conv2_drop),
 
@@ -70,6 +72,21 @@ class InkDetector(nn.Module):
 
         self.classifier = nn.Sequential(
             nn.Flatten(),  # (B, 128)
+            nn.Linear(256, 512, bias=False),
+            nn.BatchNorm1d(512).to(dtype=torch.float32),
+            nn.ReLU(inplace=True),
+            nn.Dropout(config.model.fc1_drop),
+
+            nn.Linear(512, 256, bias=False),
+            nn.BatchNorm1d(256).to(dtype=torch.float32),
+            nn.ReLU(inplace=True),
+            nn.Dropout(config.model.fc1_drop),
+
+            nn.Linear(256, 128, bias=False),
+            nn.BatchNorm1d(128).to(dtype=torch.float32),
+            nn.ReLU(inplace=True),
+            nn.Dropout(config.model.fc1_drop),
+
             nn.Linear(128, 64, bias=False),
             nn.BatchNorm1d(64).to(dtype=torch.float32),
             nn.ReLU(inplace=True),

@@ -106,7 +106,7 @@ class InkVolumeDataset(Dataset):
         
         # Apply transforms if enabled (before adding channel dimension)
         if self.apply_transforms:
-            if not self.config.dataloader.low_trans_prob or self.config.dataloader.low_trans_prob and random.random() < 0.3:
+            if not self.config.dataloader.low_trans_prob or self.config.dataloader.low_trans_prob and random.random() < 0.5:
                 transform_type = self.config.dataloader.transform_type
                 if transform_type == "brightness":
                     block = self._apply_brightness_adjustment(block)

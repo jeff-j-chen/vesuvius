@@ -111,7 +111,6 @@ def main(config: Config):
     start_time = time.time()
     vis = TensorboardVisualizer(config)
     best_val_loss = float('inf')
-
     
     scaler = GradScaler()
     for epoch in range(config.training.num_epochs):
@@ -172,12 +171,13 @@ if __name__ == "__main__":
     #     print(f"Training with transform type: {transform_type}...")
     #     main(config)
     
-    # test if a lower l1 will allow for mix to generalize
-    config = Config()
-    config.dataloader.transform_type = "mix"
-    config.experiment_name = f"mix_1e-5l1"
-    config.training.l1_lambda = 1e-5
-    main(config)
+    # for l1 in [1e-3, 7.5e-4, 5e-4, 2.5e-4, 1e-4, 7.5e-5, 5e-5, 2.5e-5, 1e-5, 1e-6, 1e-7, 1e-8]:
+    #     config = Config()
+    #     config.dataloader.apply_transforms = True
+    #     config.dataloader.transform_type = "mix"
+    #     config.experiment_name = f"mixed_{l1:.0e}l1_nodrop"
+    #     config.training.l1_lambda = l1
+    #     main(config)
 
     # # test if a lower l1 will allow for mix to generalize
     # config = Config()
