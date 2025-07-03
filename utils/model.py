@@ -75,7 +75,6 @@ class InkDetector(nn.Module):
             nn.Linear(256, 512, bias=False),
             nn.BatchNorm1d(512).to(dtype=torch.float32),
             nn.ReLU(inplace=True),
-            nn.Dropout(config.model.fc1_drop),
 
             nn.Linear(512, 256, bias=False),
             nn.BatchNorm1d(256).to(dtype=torch.float32),

@@ -171,13 +171,24 @@ if __name__ == "__main__":
     #     print(f"Training with transform type: {transform_type}...")
     #     main(config)
     
-    # for l1 in [1e-3, 7.5e-4, 5e-4, 2.5e-4, 1e-4, 7.5e-5, 5e-5, 2.5e-5, 1e-5, 1e-6, 1e-7, 1e-8]:
-    #     config = Config()
-    #     config.dataloader.apply_transforms = True
-    #     config.dataloader.transform_type = "mix"
-    #     config.experiment_name = f"mixed_{l1:.0e}l1_nodrop"
-    #     config.training.l1_lambda = l1
-    #     main(config)
+    for l1 in [5e-5, 3e-5, 1e-5]:
+        config = Config()
+        config.training.l1_lambda = l1
+        config.dataloader.apply_transforms = True
+        config.dataloader.transform_type = "mix"
+        drops = [
+            [0.0, 0.1, 0.4, 0.2],
+            [0.0, 0.2, 0.6, 0.4],
+            [0.0, 0.3, 0.7, 0.5],
+        ]
+        for drop in drops:
+            if l1 == 5e-5 and drop[1] == 0.1: continue
+            config.model.conv1_drop = drop[0]
+            config.model.conv2_drop = drop[1]
+            config.model.fc1_drop = drop[2]
+            config.model.fc2_drop = drop[3]
+            config.experiment_name = f"mixed_{l1:.0e}l1_{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
+            main(config)
 
     # # test if a lower l1 will allow for mix to generalize
     # config = Config()
