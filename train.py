@@ -171,22 +171,28 @@ if __name__ == "__main__":
     #     print(f"Training with transform type: {transform_type}...")
     #     main(config)
     
-    for l1 in [1e-5]:
-        config = Config()
-        config.training.l1_lambda = l1
-        config.dataloader.apply_transforms = True
-        config.dataloader.transform_type = "mix"
-        drops = [
-            [0.0, 0.05, 0.3, 0.1],
-            [0.0, 0.1, 0.4, 0.2],
-        ]
-        for drop in drops:
-            config.model.conv1_drop = drop[0]
-            config.model.conv2_drop = drop[1]
-            config.model.fc1_drop = drop[2]
-            config.model.fc2_drop = drop[3]
-            config.experiment_name = f"mixed_{l1:.0e}l1_{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
-            main(config)
+    # for l1 in [7.5e-6, 1e-5, 2.5e-5, 5e-5, 7.5e-5, 1e-4]:
+    #     config = Config()
+    #     config.training.l1_lambda = l1
+    #     drops = [
+    #         [0.0, 0.0, 0.2, 0.1],
+    #         [0.0, 0.05, 0.2, 0.1],
+    #         [0.0, 0.0, 0.3, 0.1],
+    #         [0.0, 0.05, 0.3, 0.1],
+    #         [0.0, 0.1, 0.3, 0.1],
+    #         [0.0, 0, 0.4, 0.2],
+    #         [0.0, 0.05, 0.4, 0.2],
+    #         [0.0, 0.1, 0.4, 0.2],
+    #         [0.0, 0.2, 0.5, 0.3],
+    #         [0.0, 0.3, 0.6, 0.8],
+    #     ]
+    #     for drop in drops:
+    #         config.model.conv1_drop = drop[0]
+    #         config.model.conv2_drop = drop[1]
+    #         config.model.fc1_drop = drop[2]
+    #         config.model.fc2_drop = drop[3]
+    #         config.experiment_name = f"alltrans_{l1:.0e}l1_{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
+    #         main(config)
 
     # # test if a lower l1 will allow for mix to generalize
     # config = Config()
@@ -215,26 +221,26 @@ if __name__ == "__main__":
 
     # add additional testing for every augmentation type, but this time have them turn on only 33% of the time.
 
-    # scroll_ids = [
-    #     20231007101619,
-    #     20231005123336,
-    #     20231022170901,
-    #     20230929220926,
-    #     20231210121321,
-    #     20230702185753,
-    #     20231106155351, # x > 4500,
-    #     20231016151002,
-    #     20231031143852,
-    #     20231221180251,
-    #     20231012184420,
-    #     20230827161847
-    # ]
-    # for scroll_id in scroll_ids:
-    #     config = Config()
-    #     config.data.segment_id = scroll_id
-    #     config.experiment_name = f"{scroll_id}"
-    #     print(f"Training on scroll {scroll_id}...")
-    #     main(config)
+    scroll_ids = [
+        20231007101619,
+        20231005123336,
+        20231022170901,
+        20230929220926,
+        20231210121321,
+        20230702185753,
+        20231106155351, # x > 4500,
+        20231016151002,
+        20231031143852,
+        20231221180251,
+        20231012184420,
+        20230827161847
+    ]
+    for scroll_id in scroll_ids:
+        config = Config()
+        config.data.segment_id = scroll_id
+        config.experiment_name = f"{scroll_id}"
+        print(f"Training on scroll {scroll_id}...")
+        main(config)
 
     # l1s = [7.5e-4]
     # for l1 in l1s:

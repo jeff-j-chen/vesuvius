@@ -61,7 +61,7 @@ class InkVolumeDataset(Dataset):
     def _apply_gaussian_noise(self, block):
         """Apply Gaussian noise to each channel independently"""
         # Small noise to avoid destroying signal (std=0.01 to 0.03)
-        noise_std = random.uniform(0.01, 0.01)
+        noise_std = random.uniform(0.005, 0.015)
         noise = torch.randn_like(block) * noise_std
         return torch.clamp(block + noise, 0, 1)
     
@@ -106,22 +106,18 @@ class InkVolumeDataset(Dataset):
         
         # Apply transforms if enabled (before adding channel dimension)
         if self.apply_transforms:
-            if not self.config.dataloader.low_trans_prob or self.config.dataloader.low_trans_prob and random.random() < 0.5:
-                transform_type = self.config.dataloader.transform_type
-                if transform_type == "brightness":
-                    block = self._apply_brightness_adjustment(block)
-                elif transform_type == "mix":
-                    block = self._apply_channel_mixing(block)
-                elif transform_type == "contrast":
-                    block = self._apply_contrast_adjustment(block)
-                elif transform_type == "noise":
-                    block = self._apply_gaussian_noise(block)
-                elif transform_type == "rotate":
-                    block = self._apply_rotation(block)
-                elif transform_type == "flip":
-                    block = self._apply_flip(block)
-                else:
-                    raise ValueError(f"Invalid transform type: {transform_type}")
+            if random.random() < 0.25:
+                block = self._apply_channel_mixing(block)
+            if random.random() < 0.25:
+                block = self._apply_rotation(block)
+            if random.random() < 0.25:
+                block = self._apply_flip(block)
+            if random.random() < 0.3:
+                block = self._apply_gaussian_noise(block)
+            if random.random() < 0.5:
+                block = self._apply_brightness_adjustment(block)
+            if random.random() < 0.5:
+                block = self._apply_contrast_adjustment(block)
 
 
         # Add channel dimension: [D, H, W] -> [1, D, H, W]
