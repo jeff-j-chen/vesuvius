@@ -7,31 +7,44 @@ from vesuvius import Volume
 from .config import Config
 import cv2
 import random
+import os
 
 
 class InkVolumeDataset(Dataset):
-    def __init__(self, volume, labels, config, apply_transforms=False):
+    def __init__(self, volume_params, label_path, config, block_coords, apply_transforms=False):
         """
-        volume: [D, H, W] - 3D volume of grayscale slices
-        labels: [H, W] - 2D binary mask shared across depth
-        config: Configuration object containing tile_size and depth
+        RAM-efficient dataset for lazy loading of 3D volume blocks using Zarr-backed Volume.
+        volume_params: dict of args for Volume (e.g., segment_id, normalization, etc.)
+        label_path: path to the label PNG
+        config: config object
+        block_coords: list of (d, y, x) tuples for valid blocks
         apply_transforms: Whether to apply data augmentation
         """
-        self.volume = volume
-        self.labels = labels
+        self.volume_params = volume_params
+        self.label_path = label_path
         self.config = config
+        self.block_coords = block_coords
+        self.apply_transforms = apply_transforms
         self.tile_size = config.data.tile_size
         self.depth = config.data.depth
-        self.D, self.H, self.W = volume.shape
-        self.apply_transforms = apply_transforms
+        self._volume = None
+        self._labels = None
 
-        self.blocks = []
-        for d in range(0, self.D - self.depth + 1, int(self.depth//2)):
-            for y in range(0, self.H - self.tile_size + 1, self.tile_size):
-                for x in range(0, self.W - self.tile_size + 1, self.tile_size):
-                    label_tile = labels[y:y+self.tile_size, x:x+self.tile_size]
-                    if label_tile.shape == (self.tile_size, self.tile_size):
-                        self.blocks.append((d, y, x))
+    @property
+    def volume(self):
+        # Lazily instantiate Volume per worker
+        if self._volume is None:
+            self._volume = Volume(**self.volume_params)
+        return self._volume
+
+    @property
+    def labels(self):
+        # Lazily load labels per worker
+        if self._labels is None:
+            labels = cv2.imread(self.label_path, cv2.IMREAD_GRAYSCALE)
+            labels = labels / 255.0
+            self._labels = labels
+        return self._labels
 
     def _apply_channel_mixing(self, block):
         """Mix the order of the 8 depth channels"""
@@ -93,18 +106,15 @@ class InkVolumeDataset(Dataset):
         return flipped_block
 
     def __len__(self):
-        return len(self.blocks)
+        return len(self.block_coords)
 
     def __getitem__(self, idx):
-        d, y, x = self.blocks[idx]
-        
+        d, y, x = self.block_coords[idx]
+        # Only load the required block from disk (lazy, RAM-efficient)
         block = self.volume[d:d+self.depth, y:y+self.tile_size, x:x+self.tile_size]
         label_tile = self.labels[y:y+self.tile_size, x:x+self.tile_size]
-
-        # Convert to tensor and ensure proper normalization
         block = torch.tensor(block, dtype=torch.float32)
-        
-        # Apply transforms if enabled (before adding channel dimension)
+        # Apply transforms if enabled
         if self.apply_transforms:
             if random.random() < 0.25:
                 block = self._apply_channel_mixing(block)
@@ -118,74 +128,67 @@ class InkVolumeDataset(Dataset):
                 block = self._apply_brightness_adjustment(block)
             if random.random() < 0.5:
                 block = self._apply_contrast_adjustment(block)
-
-
-        # Add channel dimension: [D, H, W] -> [1, D, H, W]
         block = block.unsqueeze(0)
-
-        # # Binary label: 1 if any ink present (more robust checking)
-        # if d <= 6 or d > 24:
-        #     # For the first and last few slices, assume no ink
-        #     has_ink = False
-        # else:
-        #     has_ink = np.any(label_tile > 0.5)
-        # has_ink = np.any(label_tile > 0.5)
-        # instead of any, check if the average is above a threshold
-        has_ink = np.mean(label_tile) > 0.5  # Adjust
+        has_ink = np.mean(label_tile) > 0.5
         label = torch.tensor([float(has_ink)], dtype=torch.float32)
-
         return block, label
 
+# Helper to compute valid block coordinates without loading the full volume
+
+def compute_block_coords(volume_shape, tile_size, depth):
+    """
+    Compute valid (d, y, x) block coordinates for a given volume shape.
+    volume_shape: (D, H, W)
+    tile_size: int
+    depth: int
+    Returns: list of (d, y, x)
+    """
+    D, H, W = volume_shape
+    coords = []
+    for d in range(0, D - depth + 1, max(1, depth // 2)):
+        for y in range(0, H - tile_size + 1, tile_size):
+            for x in range(0, W - tile_size + 1, tile_size):
+                coords.append((d, y, x))
+    return coords
+
+# Updated _load_tv_data for lazy loading
+
 def _load_tv_data(config: Config):
-    """Load and prepare the volume data according to configuration"""
-    segment = Volume(config.data.segment_id, normalize=config.data.normalize)
-    
-    # Extract volume and labels according to config
+    """Prepare volume parameters and label path for lazy loading."""
+    volume_params = dict(type='segment', segment_id=config.data.segment_id, normalization_scheme='none')
+    segment = Volume(**volume_params)
+    # Determine cropping based on segment_id
     if config.data.segment_id == 20230827161847:
-        volume = segment[config.data.start_level:config.data.end_level, 200:5600, 1000:4600] # type: ignore
+        y0, y1, x0, x1 = 200, 5600, 1000, 4600
+        volume_shape = (segment.shape()[0], y1 - y0, x1 - x0)
+        label_path = f"./inklabels/{config.data.segment_id}.png"
+        # Labels will be cropped in the Dataset
     elif config.data.segment_id == 20231106155351:
-        volume = segment[:, :, 4500:] # type: ignore
+        y0, y1, x0, x1 = 0, segment.shape()[1], 4500, segment.shape()[2]
+        volume_shape = (segment.shape()[0], y1 - y0, segment.shape()[2] - x0)
+        label_path = f"./inklabels/{config.data.segment_id}.png"
     else:
-        volume = segment[:, :, :] # type: ignore
-    labels_path = f"./inklabels/{config.data.segment_id}.png"
-    labels = cv2.imread(labels_path, cv2.IMREAD_GRAYSCALE)
-
-    # Normalize labels to range [0, 1]
-    labels = labels[200:5600, 1000:4600] / 255.0
-    split_x = int(volume.shape[2] * 0.75)
-    
-    train_volume = volume[:, :, :split_x]
-    train_labels = labels[:, :split_x]
-    valid_volume = volume[:, :, split_x:]
-    valid_labels = labels[:, split_x:]
-    
-    return train_volume, train_labels, valid_volume, valid_labels, labels
-
-def load_test_data(config: Config):
-    segment = Volume(config.data.segment_id, normalize=config.data.normalize)
-    volume = segment[:, 4000:, :] # type: ignore
-    # print(f"test data loaded with shape: {volume.shape}, dtype: {volume.dtype}, std {volume.std():.4f}, mean {volume.mean():.4f}")
-    print(volume[14, 1000:1005, 1000:1005])
-    return volume
-
-def load_scroll4_data(config: Config):
-    data = np.load(config.data.scroll4_path)
-    volume = data['stack']
-    # print(f"scroll4 data loaded with shape: {volume.shape}, dtype: {volume.dtype}, std {volume.std():.4f}, mean {volume.mean():.4f}")
-    print(volume[14, 1000:1005, 1000:1005])
-    return volume
+        y0, y1, x0, x1 = 0, segment.shape()[1], 0, segment.shape()[2]
+        volume_shape = (segment.shape()[0], y1 - y0, x1 - x0)
+        label_path = f"./inklabels/{config.data.segment_id}.png"
+    # Compute block coordinates
+    block_coords = compute_block_coords(volume_shape, config.data.tile_size, config.data.depth)
+    # For splitting, use 75%/25% along width
+    split_x = int(volume_shape[2] * 0.75)
+    train_block_coords = [c for c in block_coords if c[2] < split_x]
+    valid_block_coords = [c for c in block_coords if c[2] >= split_x]
+    return volume_params, label_path, y0, x0, train_block_coords, valid_block_coords
 
 def create_datasets(config: Config):
-    """Split data and create train/validation datasets"""
-    train_volume, train_labels, valid_volume, valid_labels, labels = _load_tv_data(config)
-    
-    train_dataset = InkVolumeDataset(train_volume, train_labels, config, False)
-    valid_dataset = InkVolumeDataset(valid_volume, valid_labels, config, False)
-    
-    return train_dataset, valid_dataset, train_volume, valid_volume, labels
+    """Create RAM-efficient, lazy datasets for train/validation."""
+    volume_params, label_path, y0, x0, train_block_coords, valid_block_coords = _load_tv_data(config)
+    # Pass cropping info to the dataset via config (or as extra args if needed)
+    train_dataset = InkVolumeDataset(volume_params, label_path, config, train_block_coords, apply_transforms=False)
+    valid_dataset = InkVolumeDataset(volume_params, label_path, config, valid_block_coords, apply_transforms=False)
+    return train_dataset, valid_dataset, None, None, None  # No full volumes/labels loaded
 
 def create_dataloaders(train_dataset, valid_dataset, config: Config):
-    """Create DataLoader objects from datasets"""
+    """Create DataLoader objects from datasets (RAM-efficient)."""
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.dataloader.train_batch_size,
@@ -193,7 +196,6 @@ def create_dataloaders(train_dataset, valid_dataset, config: Config):
         shuffle=config.dataloader.train_shuffle,
         pin_memory=True,
     )
-    
     valid_loader = DataLoader(
         valid_dataset,
         batch_size=config.dataloader.valid_batch_size,
@@ -201,7 +203,6 @@ def create_dataloaders(train_dataset, valid_dataset, config: Config):
         shuffle=config.dataloader.valid_shuffle,
         pin_memory=True,
     )
-    
     return train_loader, valid_loader
 
 def calculate_class_weights(dataset):
@@ -218,3 +219,17 @@ def calculate_class_weights(dataset):
         print("Warning: Only one class present in training data!")
     
     return pos_weight
+
+def load_test_data(config: Config):
+    segment = Volume(config.data.segment_id, normalize=config.data.normalize)
+    volume = segment[:, 4000:, :] # type: ignore
+    # print(f"test data loaded with shape: {volume.shape}, dtype: {volume.dtype}, std {volume.std():.4f}, mean {volume.mean():.4f}")
+    print(volume[14, 1000:1005, 1000:1005])
+    return volume
+
+def load_scroll4_data(config: Config):
+    data = np.load(config.data.scroll4_path)
+    volume = data['stack']
+    # print(f"scroll4 data loaded with shape: {volume.shape}, dtype: {volume.dtype}, std {volume.std():.4f}, mean {volume.mean():.4f}")
+    print(volume[14, 1000:1005, 1000:1005])
+    return volume
