@@ -310,7 +310,7 @@ def main(config: Config):
         periodic_model_save(model, epoch, val_metrics, best_val_f1, best_val_loss)
 
         time_elapsed = time.time() - start_time
-        vis.log_epoch_metrics(epoch, model, train_metrics, val_metrics, current_lr, time_elapsed, volume, labels, params)
+        vis.log_epoch_metrics(epoch, model, train_metrics, val_metrics, current_lr, time_elapsed, params)
 
     vis.close()
     print("Training completed...")

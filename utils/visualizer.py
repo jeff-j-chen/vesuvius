@@ -1,3 +1,6 @@
+from numpy._typing._array_like import NDArray
+from numpy import floating
+from numpy._typing import _32Bit
 import os
 from typing import Any, Literal
 import numpy as np
@@ -10,7 +13,7 @@ from tqdm import tqdm
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
 from .config import Config
-from .dataloader import get_test_dataset, load_scroll4_data, get_tile_coords_for_split, generate_tile_coords
+from .dataloader import get_test_dataset, load_scroll4_data, get_tile_coords_for_split, generate_tile_coords, get_or_compute_normalization, load_tv_data
 import scipy.ndimage as ndimage
 from collections import defaultdict
 
@@ -42,7 +45,9 @@ class TensorboardVisualizer:
                 "pr_auc": ["Multiline", ["AUC/PR_AUC/Train", "AUC/PR_AUC/Validation"]],
             },
         }
-        
+
+        self.volume, self.mask, self.labels, _, _, _ = load_tv_data(self.config)
+        self.global_mean, self.global_std = get_or_compute_normalization(self.config, self.volume, self.mask)
         self.writer = SummaryWriter(self.log_path)
         self.writer.add_custom_scalars(self.layout)
         # self.test_volume = get_test_dataset(self.config)
@@ -51,7 +56,7 @@ class TensorboardVisualizer:
         print(f"TensorBoard logs will be saved to: {self.log_path}")
         print(f"To view, run: tensorboard --logdir={config.training.log_dir}")
     
-    def log_epoch_metrics(self, epoch, model, train_metrics, val_metrics, learning_rate, time_elapsed, volume, labels, params):
+    def log_epoch_metrics(self, epoch, model, train_metrics, val_metrics, learning_rate, time_elapsed, params):
         """Log comprehensive metrics including class-wise metrics"""
         print(f"Logging metrics for epoch: {epoch+1}")
         
@@ -102,7 +107,7 @@ class TensorboardVisualizer:
 
         # Add evaluation figures at specified intervals
         if (epoch+1) % self.config.training.evaluation_interval == 0:
-            self.add_evaluation_figures(epoch, model, volume, labels)
+            self.add_evaluation_figures(epoch, model)
 
         # # Add test figures at specified intervals
         # if (epoch+1) % self.config.training.test_interval == 0:
@@ -277,7 +282,7 @@ class TensorboardVisualizer:
             grouped[d_off].append((d_off, y_off, x_off))
         return grouped
     
-    def add_evaluation_figures(self, epoch, model, volume, labels):
+    def add_evaluation_figures(self, epoch, model):
         print("Starting evaluation figure generation...")
         model.eval()
         # Use the exact same tile logic as the dataloader
@@ -295,13 +300,13 @@ class TensorboardVisualizer:
             depth_end = depth_start + self.config.data.depth
             train_block_coords = train_grouped.get(d_off, [])
             valid_block_coords = valid_grouped.get(d_off, [])
-            train_predictions = self._predict_tiles(model, volume, train_block_coords, y_range, train_x_range, depth_start, volume_name="training")
-            valid_predictions = self._predict_tiles(model, volume, valid_block_coords, y_range, valid_x_range, depth_start, volume_name="validation")
+            train_predictions = self._predict_tiles(model, self.volume, train_block_coords, y_range, train_x_range, depth_start, volume_name="training")
+            valid_predictions: NDArray[floating[_32Bit]] = self._predict_tiles(model, self.volume, valid_block_coords, y_range, valid_x_range, depth_start, volume_name="validation")
             print(f"[EVAL] train_predictions shape: {train_predictions.shape}, valid_predictions shape: {valid_predictions.shape}")
             full_predictions = np.concatenate([train_predictions, valid_predictions], axis=1)
             all_predictions_data.append((full_predictions, train_predictions, depth_start, depth_end))
         if all_predictions_data:
-            cropped_labels = labels[y_range[0]:y_range[1], train_x_range[0]:valid_x_range[1]]
+            cropped_labels = self.labels[y_range[0]:y_range[1], train_x_range[0]:valid_x_range[1]]
             print(f"[EVAL] cropped_labels shape: {cropped_labels.shape}")
             fig = self._create_combined_evaluation_figure(all_predictions_data, cropped_labels, len(all_predictions_data))
             self.writer.add_figure('Evaluation/All_Depth_Blocks', fig, epoch)
@@ -345,7 +350,7 @@ class TensorboardVisualizer:
                     block = np.array(volume[d:d+self.config.data.depth, y:y+tile_size, x:x+tile_size]).astype(np.float32)
                     # Only normalize for training/validation
                     if volume_name in ["training", "validation"]:
-                        block = block / 65535.0
+                        block = (block - self.global_mean) / self.global_std
                     if block.shape != (self.config.data.depth, tile_size, tile_size):
                         print(f"Block shape mismatch: {block.shape} != ({self.config.data.depth}, {tile_size}, {tile_size})")
                         continue

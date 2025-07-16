@@ -140,12 +140,24 @@ class InkVolumeDataset(IterableDataset):
                 flipped_block[i] = torch.flip(block[i], dims=[0])
         return flipped_block
 
-    def _normalize_block(self, block):
-        """Normalize a block using global mean and std."""
+    def _normalize_block(self, block, mask):
+        """Normalize a block using global mean, std, min, and max."""
         if self.global_std == 0:
             print("[WARNING] Standard deviation is 0, skipping normalization.")
             return block.astype(np.float32)
-        return (block.astype(np.float32) - self.global_mean) / self.global_std
+
+        # Subtract mean and divide by std
+        normalized_block = (block.astype(np.float32) - self.global_mean) / self.global_std
+
+        # Apply mask to exclude invalid regions
+        mask_exp = mask.unsqueeze(0).expand_as(normalized_block)
+        normalized_block[mask_exp == 0] = 0  # Zero out masked regions
+
+        # Scale to [0, 1] using global min and max
+        normalized_block = (normalized_block - self.global_min) / (self.global_max - self.global_min)
+        normalized_block = np.clip(normalized_block, 0, 1)  # Ensure values are within [0, 1]
+
+        return normalized_block
 
     def _fetch_block(self, z_offset, y_offset, x_offset):
         """Fetch and normalize a block from zarr volume."""
@@ -157,7 +169,7 @@ class InkVolumeDataset(IterableDataset):
             y_start:y_start + self.config.data.tile_size, 
             x_start:x_start + self.config.data.tile_size
         ]
-        return torch.tensor(self._normalize_block(block), dtype=torch.float32)
+        return block
 
     def _fetch_label(self, y_offset, x_offset):
         """Fetch a label tile from the full mask."""
@@ -203,41 +215,34 @@ class InkVolumeDataset(IterableDataset):
         if self._current_idx >= len(self._worker_indices):
             raise StopIteration
         z_offset, y_offset, x_offset = self._worker_indices[self._current_idx]
-        block = self._fetch_block(z_offset, y_offset, x_offset)
-        label = self._fetch_label(y_offset, x_offset)
         mask = self._fetch_mask(y_offset, x_offset)
+        block = self._fetch_block(z_offset, y_offset, x_offset)
+        block_normalized = self._normalize_block(block, mask)
+        label = self._fetch_label(y_offset, x_offset)
         if self.apply_transforms:
-            if random.random() < 0.25:
-                block = self._apply_channel_mixing(block)
-            if random.random() < 0.25:
-                block = self._apply_rotation(block)
-            if random.random() < 0.25:
-                block = self._apply_flip(block)
-            if random.random() < 0.3:
-                block = self._apply_gaussian_noise(block)
-            if random.random() < 0.5:
-                block = self._apply_brightness_adjustment(block)
-            if random.random() < 0.5:
-                block = self._apply_contrast_adjustment(block)
+            if random.random() < 0.25: block = self._apply_channel_mixing(block)
+            if random.random() < 0.25: block = self._apply_rotation(block)
+            if random.random() < 0.25: block = self._apply_flip(block)
+            if random.random() < 0.30: block = self._apply_gaussian_noise(block)
+            if random.random() < 0.50: block = self._apply_brightness_adjustment(block)
+            if random.random() < 0.50: block = self._apply_contrast_adjustment(block)
         block = block.unsqueeze(0)
-        # print(block)
         self._current_idx += 1
-        # print(f"block shape: {block.shape}")
-        # print(f"mask shape: {mask.shape}")
-        # print(f"label shape: {label.shape}")
         return block, label, mask
 
 def get_or_compute_normalization(config, volume, mask):
-    """Retrieve or compute global mean and std for normalization."""
+    """Retrieve or compute global mean, std, min, and max for normalization."""
     segment_id = config.data.segment_id
     cache = _load_normalization_cache()
-    
+
     if str(segment_id) in cache:
         print(f"[INFO] Using cached normalization for segment {segment_id}")
-        return cache[str(segment_id)]["mean"], cache[str(segment_id)]["std"]
+        return cache[str(segment_id)]["mean"], cache[str(segment_id)]["std"], cache[str(segment_id)]["min"], cache[str(segment_id)]["max"]
 
     print(f"[INFO] Computing normalization for segment {segment_id}")
     total_sum, total_squared_sum, total_count = 0.0, 0.0, 0
+    global_min, global_max = float('inf'), float('-inf')
+
     for z in tqdm(range(volume.shape[0])):
         for y in range(0, volume.shape[1], 1024):
             for x in range(0, volume.shape[2], 1024):
@@ -246,9 +251,14 @@ def get_or_compute_normalization(config, volume, mask):
                 valid_pixels = chunk[mask_chunk > 0]
                 if valid_pixels.size == 0:
                     continue
+
                 total_sum += np.sum(valid_pixels, dtype=np.float64)
                 total_squared_sum += np.sum(valid_pixels.astype(np.float64) ** 2, dtype=np.float64)
                 total_count += valid_pixels.size
+
+                # Update global min and max
+                global_min = min(global_min, valid_pixels.min())
+                global_max = max(global_max, valid_pixels.max())
 
     if total_count == 0:
         raise ValueError("No valid pixels found in the dataset.")
@@ -265,9 +275,12 @@ def get_or_compute_normalization(config, volume, mask):
     print(f"  Total count: {total_count}")
     print(f"  Global Mean: {global_mean:.6f}")
     print(f"  Global Std: {global_std:.6f}")
+    print(f"  Global Min: {global_min:.6f}")
+    print(f"  Global Max: {global_max:.6f}")
 
-    _update_normalization_cache(segment_id, global_mean, global_std)
-    return global_mean, global_std
+    _update_normalization_cache(segment_id, global_mean, global_std, global_min, global_max)
+    return global_mean, global_std, global_min, global_max
+
 
 def _load_normalization_cache():
     """Load normalization cache from file."""
@@ -278,23 +291,16 @@ def _load_normalization_cache():
         print(f"[INFO] Cache found, loading...")
         return json.load(f)
 
-def _update_normalization_cache(segment_id, mean, std):
+def _update_normalization_cache(segment_id, mean, std, min_val, max_val):
     """Update normalization cache with new values."""
-    # Ensure the directory for the cache file exists
-    cache_dir = os.path.dirname("./normalization_cache.json")
-    if not os.path.exists(cache_dir):
-        os.makedirs(cache_dir, exist_ok=True)
-
-    # Load the existing cache
     cache = _load_normalization_cache()
-    cache[str(segment_id)] = {"mean": mean, "std": std}
+    cache[str(segment_id)] = {"mean": mean, "std": std, "min": min_val, "max": max_val}
 
-    # Write the updated cache to the file
     try:
         with open("./normalization_cache.json", "w") as f:
             json.dump(cache, f, indent=4)  # Use indent for readability
             f.flush()  # Ensure data is written to disk
-        print(f"[INFO] Updated normalization cache for segment {segment_id} with mean={mean:.6f}, std={std:.6f}")
+        print(f"[INFO] Updated normalization cache for segment {segment_id} with mean={mean:.6f}, std={std:.6f}, min={min_val:.6f}, max={max_val:.6f}")
     except Exception as e:
         print(f"[ERROR] Failed to update normalization cache: {e}")
 
@@ -373,7 +379,7 @@ def load_scroll4_data(config: Config):
 def get_tv_datasets(config: Config):
     (volume, mask, labels, train_x_range, valid_x_range, y_range) = load_tv_data(config)
     global_mean, global_std = get_or_compute_normalization(config, volume, mask)
-    train_dataset = InkVolumeDataset(volume, mask, labels, config, train_x_range, y_range, global_mean, global_std, shuffle=False, apply_transforms=True)
+    train_dataset = InkVolumeDataset(volume, mask, labels, config, train_x_range, y_range, global_mean, global_std, shuffle=True, apply_transforms=True)
     valid_dataset = InkVolumeDataset(volume, mask, labels, config, valid_x_range, y_range, global_mean, global_std, shuffle=False, apply_transforms=False)
     return train_dataset, valid_dataset
 
@@ -397,26 +403,25 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
     return train_loader, valid_loader
 
 def _sample_labels(dataset, sample_size):
-    """Helper function to sample labels from a dataset."""
+    """Helper function to sample labels from a dataset, respecting the mask."""
     all_labels = []
     dataset_iter = iter(dataset)
-    for i in range(sample_size):
+    for _ in range(sample_size):
         try:
-            _, label, _ = next(dataset_iter)  # Unpack block, label, and mask
-            all_labels.append(int(label.item()))
+            _, label, mask = next(dataset_iter)  # Unpack block, label, and mask
+            if mask.sum() > 0:  # Only include labels where the mask is non-zero
+                all_labels.append(int(label.item()))
         except StopIteration:
             break
     return all_labels
 
-def calculate_class_weights(dataset_a, dataset_b):
-    """Calculate class weights - requires sampling from two iterable datasets"""
+def calculate_class_weights(train_set, valid_set):
+    """Calculate class weights, ensuring sampling respects the mask."""
     print("Sampling datasets to calculate average class weights...")
-    sample_size = 5000  # Sample 5000 items from each dataset
-
-
+    sample_size = 5000
     # Sample labels from both datasets
-    labels_a = _sample_labels(dataset_a, sample_size)
-    labels_b = _sample_labels(dataset_b, sample_size)
+    labels_a = _sample_labels(train_set, sample_size * 2)
+    labels_b = _sample_labels(valid_set, sample_size)
 
     # Combine labels from both datasets
     all_labels = labels_a + labels_b
