@@ -88,45 +88,42 @@ def calculate_metrics(y_true, y_pred, y_scores):
 
 
 def train_epoch(model, train_loader, criterion, optimizer, config: Config, scaler: GradScaler):
-    """Train for one epoch with L1 regularization"""
+    """Train for one epoch with L1 regularization and mask-based loss zeroing."""
     model.train()
     train_loss, train_raw_loss = 0.0, 0.0
     all_labels = []
     all_predictions = []
     all_scores = []
-    for batch_images, batch_labels in tqdm(train_loader, desc="Training"):
-        # i += 1
-        # if i > 10:
-        #     break
+    for batch_images, batch_labels, mask in tqdm(train_loader, desc="Training"):
         batch_images = batch_images.to(config.device)
         batch_labels = batch_labels.to(config.device).view(-1, 1)
-        
+        mask = mask.to(config.device).view(-1, 1)  # Ensure mask matches the shape of the loss
+
         optimizer.zero_grad()
 
         with autocast(config.device):
             outputs = model(batch_images)
             raw_loss = criterion(outputs, batch_labels)
+
+            # Zero out loss in masked-out regions
+            raw_loss = raw_loss * mask  # Apply mask to the loss
+            raw_loss = raw_loss.sum() / mask.sum()  # Normalize by the number of valid regions
+
             l1_loss = sum(p.abs().sum() for p in model.parameters())
             loss = raw_loss + config.training.l1_lambda * l1_loss
-        
+
         scaler.scale(loss).backward()
-        
+
         # Gradient clipping
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.training.max_grad_norm)
-        
+
         scaler.step(optimizer)
         scaler.update()
-        
+
         train_loss += loss.item()
         train_raw_loss += raw_loss.item()
-        # with torch.no_grad():
-        #     scores = torch.sigmoid(outputs).cpu().numpy().flatten()
-        #     predicted = (scores > 0.5).astype(int)
-        #     labels = batch_labels.cpu().numpy().flatten().astype(int)
-            
-        #     all_labels.extend(labels)
-        #     all_predictions.extend(predicted)
-        #     all_scores.extend(scores)
+
+        # Predictions and metrics
         scores = torch.sigmoid(outputs).cpu().detach().numpy().flatten()
         predicted = (scores > 0.5).astype(int)
         labels = batch_labels.cpu().detach().numpy().flatten().astype(int)
@@ -136,46 +133,56 @@ def train_epoch(model, train_loader, criterion, optimizer, config: Config, scale
         all_scores.extend(scores)
 
     metrics = calculate_metrics(
-        np.array(all_labels), 
-        np.array(all_predictions), 
+        np.array(all_labels),
+        np.array(all_predictions),
         np.array(all_scores)
     )
-    
+
     metrics['loss'] = train_loss / len(train_loader)
     metrics['raw_loss'] = train_raw_loss / len(train_loader)
-    
+
     return metrics
 
+
 def validate_epoch(model, valid_loader, criterion, config: Config, scaler: GradScaler):
-    """Validate for one epoch (unchanged)"""
+    """Validate for one epoch with mask-based loss zeroing."""
     model.eval()
     val_loss = 0.0
     all_labels = []
     all_predictions = []
     all_scores = []
     with torch.no_grad(), autocast(config.device):
-        for images, labels in tqdm(valid_loader, desc="Validating"):
-            images = images.to(config.device)
-            labels = labels.to(config.device).view(-1, 1)
-            outputs = model(images)
-            val_loss += criterion(outputs, labels).item()
-            
+        for batch_images, batch_labels, mask in tqdm(valid_loader, desc="Validating"):
+            batch_images = batch_images.to(config.device)
+            batch_labels = batch_labels.to(config.device).view(-1, 1)
+            mask = mask.to(config.device).view(-1, 1)  # Ensure mask matches the shape of the loss
+
+            outputs = model(batch_images)
+            raw_loss = criterion(outputs, batch_labels)
+
+            # Zero out loss in masked-out regions
+            raw_loss = raw_loss * mask  # Apply mask to the loss
+            raw_loss = raw_loss.sum() / mask.sum()  # Normalize by the number of valid regions
+
+            val_loss += raw_loss.item()
+
+            # Predictions and metrics
             scores = torch.sigmoid(outputs).cpu().numpy().flatten()
             predicted = (scores > 0.5).astype(int)
-            labels_np = labels.cpu().numpy().flatten().astype(int)
+            labels_np = batch_labels.cpu().numpy().flatten().astype(int)
 
             all_labels.extend(labels_np)
             all_predictions.extend(predicted)
             all_scores.extend(scores)
-    
+
     metrics = calculate_metrics(
-        np.array(all_labels), 
-        np.array(all_predictions), 
+        np.array(all_labels),
+        np.array(all_predictions),
         np.array(all_scores)
     )
-    
+
     metrics['loss'] = val_loss / len(valid_loader)
-    
+
     return metrics
 
 def print_metrics_summary(epoch, train_metrics, val_metrics, current_lr):
@@ -435,4 +442,3 @@ if __name__ == "__main__":
     #     print(f"entry {config.data.start_level} to {config.data.end_level}")
     #     config.experiment_name = f"3dmodel_redo_{config.data.start_level}_{config.data.end_level}"
     #     main(config)
-    

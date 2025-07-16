@@ -36,41 +36,10 @@ def generate_tile_coords(z_range, y_range, x_range, config, volume):
     block_coords = []
     
     for d in range(0, z_range_size, max(1, int(config.data.depth//2))):
-        # Only generate if the block fits within the z range
         if z_start + d + config.data.depth > z_end:
             continue
         for y in range(0, y_range_size, config.data.tile_size):
             for x in range(0, x_range_size, config.data.tile_size):
-                # Check if volume is provided and if so, test for empty regions
-                if volume is not None:
-                    # Calculate global coordinates for the block
-                    z_global = z_start + d
-                    y_global = y_start + y
-                    x_global = x_start + x
-                    
-                    # Sample a smaller region to check if it's empty (more efficient)
-                    sample_size = min(8, config.data.tile_size)
-                    sample_depth = min(4, config.data.depth)
-                    
-                    try:
-                        # Sample a small region from the center of the block
-                        sample_block = volume[
-                            z_global:z_global + sample_depth,
-                            y_global:y_global + sample_size,
-                            x_global:x_global + sample_size
-                        ]
-                        
-                        # Convert to numpy array and normalize
-                        sample_array = np.array(sample_block).astype(np.float32) / 65535.0
-                        
-                        # Skip if the block is essentially empty
-                        if np.mean(sample_array) < 0.01:
-                            continue
-                            
-                    except (IndexError, ValueError):
-                        # Skip if we can't access this region
-                        continue
-                
                 block_coords.append((d, y, x))
     
     return block_coords
@@ -81,8 +50,7 @@ class InkVolumeDataset(IterableDataset):
                  global_mean: float,
                  global_std: float,
                  apply_transforms: bool = False,
-                 shuffle: bool = True,
-                 filter_empty: bool = True):
+                 shuffle: bool = True):
         """
         volume: zarr.Array
         labels: [H, W] - 2D binary mask (full mask, not cropped)
@@ -91,7 +59,6 @@ class InkVolumeDataset(IterableDataset):
         y_range: (start, end) for y dimension (global)
         apply_transforms: Whether to apply data augmentation
         shuffle: Whether to shuffle the order of tiles (for training) or not (for evaluation)
-        filter_empty: Whether to filter out empty regions during coordinate generation
         """
         self.volume = volume
         self.mask = mask
@@ -121,7 +88,6 @@ class InkVolumeDataset(IterableDataset):
         )
         
         self.samples_per_epoch = len(self.block_coords)
-        print(f"[DEBUG] InkVolumeDataset: filtered to {self.samples_per_epoch} non-empty blocks")
 
     def __len__(self):
         """Return the number of samples per epoch for progress bars and DataLoader."""
@@ -194,17 +160,15 @@ class InkVolumeDataset(IterableDataset):
         return torch.tensor(self._normalize_block(block), dtype=torch.float32)
 
     def _fetch_label(self, y_offset, x_offset):
-        """Fetch a label tile from the full mask"""
+        """Fetch a label tile from the full mask."""
         y_start = self.y_start + y_offset
         x_start = self.x_start + x_offset
         label_tile = self.labels[
             y_start:y_start + self.config.data.tile_size, 
-            x_start:x_start + self.config.data.tile_size, 
+            x_start:x_start + self.config.data.tile_size
         ]
-        # has_ink = np.mean(label_tile) > 0.5
-        has_ink = np.any(label_tile > 0.5)
-        # print(f"fetched label at (y={y_start}, x={x_start}), has_ink={has_ink}")
-        # print(f"label at x{x_start} y{y_start} is {has_ink}")
+        # Determine if the region contains ink (binary label)
+        has_ink = np.any(label_tile > 0.5)  # True if any pixel in the region has ink
         return torch.tensor([float(has_ink)], dtype=torch.float32)
 
     def _fetch_mask(self, y_offset, x_offset):
@@ -261,7 +225,7 @@ class InkVolumeDataset(IterableDataset):
         # print(f"block shape: {block.shape}")
         # print(f"mask shape: {mask.shape}")
         # print(f"label shape: {label.shape}")
-        return block, label
+        return block, label, mask
 
 def get_or_compute_normalization(config, volume, mask):
     """Retrieve or compute global mean and std for normalization."""
@@ -433,12 +397,12 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
     return train_loader, valid_loader
 
 def _sample_labels(dataset, sample_size):
-    """Helper function to sample labels from a dataset"""
+    """Helper function to sample labels from a dataset."""
     all_labels = []
     dataset_iter = iter(dataset)
     for i in range(sample_size):
         try:
-            _, label = next(dataset_iter)
+            _, label, _ = next(dataset_iter)  # Unpack block, label, and mask
             all_labels.append(int(label.item()))
         except StopIteration:
             break
