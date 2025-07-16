@@ -4,22 +4,18 @@ import torch
 
 @dataclass
 class DataConfig:
-    scroll4_path: str = "scroll4_bottomleft.npz"
+    zarr_path: str = "/media/jeff/Seagate/vesuvius-3dstreamer/"
     segment_id: int = 20230827161847
+    scroll4_path: str = "scroll4_bottomleft.npz"
     tile_size: int = 32
     depth: int = 8
-    normalize: bool = True
     start_level: int = 28
     end_level: int = 48
 
 @dataclass
 class DataloaderConfig:
-    train_batch_size: int = 128
-    train_num_workers: int = 8
-    train_shuffle: bool = True
-    valid_batch_size: int = 128
-    valid_num_workers: int = 8
-    valid_shuffle: bool = False
+    batch_size: int = 64
+    num_workers: int = 8
     apply_transforms: bool = True
 
 @dataclass
