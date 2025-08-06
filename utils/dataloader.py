@@ -49,6 +49,8 @@ class InkVolumeDataset(IterableDataset):
                  x_range: tuple, y_range: tuple,
                  global_mean: float,
                  global_std: float,
+                 global_min: float,
+                 global_max: float,
                  apply_transforms: bool = False,
                  shuffle: bool = True):
         """
@@ -70,6 +72,8 @@ class InkVolumeDataset(IterableDataset):
         self.shuffle = shuffle
         self.global_mean = global_mean
         self.global_std = global_std
+        self.global_min = global_min
+        self.global_max = global_max
 
         # Store coordinate ranges (global)
         self.z_start, self.z_end = self.config.data.start_level, self.config.data.end_level
@@ -94,50 +98,53 @@ class InkVolumeDataset(IterableDataset):
         return self.samples_per_epoch
 
     def _apply_channel_mixing(self, block):
-        """Mix the order of the 8 depth channels"""
-        indices = torch.randperm(block.shape[0])
+        """Mix the order of the depth channels."""
+        indices = np.random.permutation(block.shape[0])
         return block[indices]
     
     def _apply_brightness_adjustment(self, block):
-        """Apply brightness adjustment to each channel independently"""
-        brightness_factors = torch.rand(block.shape[0], 1, 1) * 0.3 + 0.85
-        return torch.clamp(block * brightness_factors, 0, 1)
+        """Apply brightness adjustment to each channel independently."""
+
+        brightness_factors = np.random.uniform(0.85, 1.15, size=(block.shape[0], 1, 1))
+        return np.clip(block * brightness_factors, 0, 1)
     
     def _apply_contrast_adjustment(self, block):
-        """Apply contrast adjustment to each channel independently"""
-        adjusted_block = block.clone()
+        """Apply contrast adjustment to each channel independently."""
+
+        adjusted_block = block.copy()
         for i in range(block.shape[0]):
             channel = block[i]
             contrast_factor = random.uniform(0.85, 1.15)
-            mean_val = torch.mean(channel)
-            adjusted_block[i] = torch.clamp(
-                (channel - mean_val) * contrast_factor + mean_val, 0, 1
-            )
+            mean_val = np.mean(channel)
+            adjusted_block[i] = np.clip((channel - mean_val) * contrast_factor + mean_val, 0, 1)
         return adjusted_block
     
     def _apply_gaussian_noise(self, block):
-        """Apply Gaussian noise to each channel independently"""
+        """Apply Gaussian noise to each channel independently."""
+
         noise_std = random.uniform(0.005, 0.015)
-        noise = torch.randn_like(block) * noise_std
-        return torch.clamp(block + noise, 0, 1)
+        noise = np.random.normal(0, noise_std, block.shape)
+        return np.clip(block + noise, 0, 1)
     
     def _apply_rotation(self, block):
-        """Apply 90/180/270 degree rotations to all channels"""
-        rotation = random.choice([1, 2, 3])
-        rotated_block = torch.zeros_like(block)
-        for i in range(block.shape[0]):
-            rotated_block[i] = torch.rot90(block[i], k=rotation, dims=[0, 1])
+        """Apply 90/180/270 degree rotations to all channels."""
+
+        rotation = random.choice([1, 2, 3])  # Rotate by 90, 180, or 270 degrees
+        rotated_block = np.zeros_like(block)
+        for i in range(block.shape[0]):  # Rotate each channel independently
+            rotated_block[i] = np.rot90(block[i], k=rotation)
         return rotated_block
     
     def _apply_flip(self, block):
-        """Apply horizontal or vertical flip to all channels"""
+        """Apply horizontal or vertical flip to all channels."""
+
         flip_type = random.choice([0, 1])
-        flipped_block = torch.zeros_like(block)
+        flipped_block = np.zeros_like(block)
         for i in range(block.shape[0]):
             if flip_type == 0:  # Horizontal flip
-                flipped_block[i] = torch.flip(block[i], dims=[1])
+                flipped_block[i] = np.flip(block[i], axis=1)
             elif flip_type == 1:  # Vertical flip
-                flipped_block[i] = torch.flip(block[i], dims=[0])
+                flipped_block[i] = np.flip(block[i], axis=0)
         return flipped_block
 
     def _normalize_block(self, block, mask):
@@ -146,11 +153,15 @@ class InkVolumeDataset(IterableDataset):
             print("[WARNING] Standard deviation is 0, skipping normalization.")
             return block.astype(np.float32)
 
+        # Convert mask to PyTorch tensor if it's not already
+        if not isinstance(mask, torch.Tensor):
+            mask = torch.tensor(mask, dtype=torch.float32)
+
         # Subtract mean and divide by std
         normalized_block = (block.astype(np.float32) - self.global_mean) / self.global_std
 
         # Apply mask to exclude invalid regions
-        mask_exp = mask.unsqueeze(0).expand_as(normalized_block)
+        mask_exp = mask.unsqueeze(0).expand_as(torch.tensor(normalized_block))
         normalized_block[mask_exp == 0] = 0  # Zero out masked regions
 
         # Scale to [0, 1] using global min and max
@@ -218,17 +229,20 @@ class InkVolumeDataset(IterableDataset):
         mask = self._fetch_mask(y_offset, x_offset)
         block = self._fetch_block(z_offset, y_offset, x_offset)
         block_normalized = self._normalize_block(block, mask)
+        if isinstance(block_normalized, torch.Tensor):
+            block_normalized = block_normalized.numpy()
         label = self._fetch_label(y_offset, x_offset)
         if self.apply_transforms:
-            if random.random() < 0.25: block = self._apply_channel_mixing(block)
-            if random.random() < 0.25: block = self._apply_rotation(block)
-            if random.random() < 0.25: block = self._apply_flip(block)
-            if random.random() < 0.30: block = self._apply_gaussian_noise(block)
-            if random.random() < 0.50: block = self._apply_brightness_adjustment(block)
-            if random.random() < 0.50: block = self._apply_contrast_adjustment(block)
-        block = block.unsqueeze(0)
+            if random.random() < 0.25: block_normalized = self._apply_channel_mixing(block_normalized)
+            if random.random() < 0.25: block_normalized = self._apply_rotation(block_normalized)
+            if random.random() < 0.25: block_normalized = self._apply_flip(block_normalized)
+            if random.random() < 0.30: block_normalized = self._apply_gaussian_noise(block_normalized)
+            if random.random() < 0.50: block_normalized = self._apply_brightness_adjustment(block_normalized)
+            if random.random() < 0.50: block_normalized = self._apply_contrast_adjustment(block_normalized)
+        # Convert block to PyTorch tensor at the very end
+        block_normalized = torch.tensor(block_normalized, dtype=torch.float32).unsqueeze(0)
         self._current_idx += 1
-        return block, label, mask
+        return block_normalized, label, mask
 
 def get_or_compute_normalization(config, volume, mask):
     """Retrieve or compute global mean, std, min, and max for normalization."""
@@ -256,27 +270,38 @@ def get_or_compute_normalization(config, volume, mask):
                 total_squared_sum += np.sum(valid_pixels.astype(np.float64) ** 2, dtype=np.float64)
                 total_count += valid_pixels.size
 
-                # Update global min and max
-                global_min = min(global_min, valid_pixels.min())
-                global_max = max(global_max, valid_pixels.max())
-
     if total_count == 0:
         raise ValueError("No valid pixels found in the dataset.")
 
+    # Compute global mean and std
     global_mean = total_sum / total_count
     mean_of_squares = total_squared_sum / total_count
     square_of_mean = global_mean ** 2
     variance = max(mean_of_squares - square_of_mean, 0)
     global_std = np.sqrt(variance)
 
+    # Compute global min and max after normalization
+    for z in tqdm(range(volume.shape[0])):
+        for y in range(0, volume.shape[1], 1024):
+            for x in range(0, volume.shape[2], 1024):
+                chunk = volume[z, y:y+1024, x:x+1024]
+                mask_chunk = mask[y:y+1024, x:x+1024]
+                valid_pixels = chunk[mask_chunk > 0]
+                if valid_pixels.size == 0:
+                    continue
+
+                # Normalize the valid pixels
+                normalized_pixels = (valid_pixels.astype(np.float64) - global_mean) / global_std
+
+                # Update global min and max
+                global_min = min(global_min, normalized_pixels.min())
+                global_max = max(global_max, normalized_pixels.max())
+
     print(f"Final Statistics:")
-    print(f"  Total sum: {total_sum:.2f}")
-    print(f"  Total squared sum: {total_squared_sum:.2f}")
-    print(f"  Total count: {total_count}")
     print(f"  Global Mean: {global_mean:.6f}")
     print(f"  Global Std: {global_std:.6f}")
-    print(f"  Global Min: {global_min:.6f}")
-    print(f"  Global Max: {global_max:.6f}")
+    print(f"  Global Min (after normalization): {global_min:.6f}")
+    print(f"  Global Max (after normalization): {global_max:.6f}")
 
     _update_normalization_cache(segment_id, global_mean, global_std, global_min, global_max)
     return global_mean, global_std, global_min, global_max
@@ -294,7 +319,12 @@ def _load_normalization_cache():
 def _update_normalization_cache(segment_id, mean, std, min_val, max_val):
     """Update normalization cache with new values."""
     cache = _load_normalization_cache()
-    cache[str(segment_id)] = {"mean": mean, "std": std, "min": min_val, "max": max_val}
+    cache[str(segment_id)] = {
+        "mean": float(mean),  # Convert to float
+        "std": float(std),    # Convert to float
+        "min": float(min_val),  # Convert to float
+        "max": float(max_val)   # Convert to float
+    }
 
     try:
         with open("./normalization_cache.json", "w") as f:
@@ -308,7 +338,7 @@ def _update_normalization_cache(segment_id, mean, std, min_val, max_val):
 def load_tv_data(config: Config):
     """Load labels and determine coordinate ranges for train/validation split, streaming Zarr data chunk by chunk only."""
     # Construct zarr path for the segment
-    zarr_path = os.path.join(config.data.zarr_path, f"{config.data.segment_id}_multithreaded.zarr")
+    zarr_path = os.path.join(config.data.zarr_path, f"{config.data.segment_id}_fixed.zarr")
     # Open zarr just to get dimensions (do not read the full array)
     volume = zarr.open(zarr_path, mode='r')
     D, H, W = map(int, volume.shape)
@@ -378,9 +408,9 @@ def load_scroll4_data(config: Config):
 
 def get_tv_datasets(config: Config):
     (volume, mask, labels, train_x_range, valid_x_range, y_range) = load_tv_data(config)
-    global_mean, global_std = get_or_compute_normalization(config, volume, mask)
-    train_dataset = InkVolumeDataset(volume, mask, labels, config, train_x_range, y_range, global_mean, global_std, shuffle=True, apply_transforms=True)
-    valid_dataset = InkVolumeDataset(volume, mask, labels, config, valid_x_range, y_range, global_mean, global_std, shuffle=False, apply_transforms=False)
+    global_mean, global_std, global_min, global_max = get_or_compute_normalization(config, volume, mask)
+    train_dataset = InkVolumeDataset(volume, mask, labels, config, train_x_range, y_range, global_mean, global_std, global_min, global_max, shuffle=True, apply_transforms=True)
+    valid_dataset = InkVolumeDataset(volume, mask, labels, config, valid_x_range, y_range, global_mean, global_std, global_min, global_max, shuffle=False, apply_transforms=False)
     return train_dataset, valid_dataset
 
 
@@ -418,9 +448,10 @@ def _sample_labels(dataset, sample_size):
 def calculate_class_weights(train_set, valid_set):
     """Calculate class weights, ensuring sampling respects the mask."""
     print("Sampling datasets to calculate average class weights...")
-    sample_size = 5000
+    sample_size = 100
     # Sample labels from both datasets
     labels_a = _sample_labels(train_set, sample_size * 2)
+    print('got a')
     labels_b = _sample_labels(valid_set, sample_size)
 
     # Combine labels from both datasets

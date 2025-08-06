@@ -31,23 +31,31 @@ class TensorboardVisualizer:
         # Enhanced layout with class-wise metrics
         self.layout = {
             "Training_Overview": {
-                "loss": ["Multiline", ["Training_Metrics/Loss/Train", "Training_Metrics/Loss/Train_Raw", "Training_Metrics/Loss/Validation"]],
-                "accuracy": ["Multiline", ["Training_Metrics/Accuracy/Train", "Training_Metrics/Accuracy/Validation"]],
+                "loss": ["Multiline", ["G_M/Loss/Train", "G_M/Loss/Train_Raw", "G_M/Loss/Valid"]],
+                "accuracy": ["Multiline", ["G_M/Acc/Train", "G_M/Acc/Valid"]],
             },
-            "Classification_Metrics": {
-                "precision_recall": ["Multiline", ["Classification/Precision/Train", "Classification/Precision/Validation", 
-                                                   "Classification/Recall/Train", "Classification/Recall/Validation"]],
-                "f1_specificity": ["Multiline", ["Classification/F1/Train", "Classification/F1/Validation",
-                                                  "Classification/Specificity/Train", "Classification/Specificity/Validation"]],
+            "P_M_Metrics": {
+                "precision_recall": [
+                    "Multiline", [
+                        "P_M/Precision/Train", "P_M/Precision/Valid", 
+                        "P_M/Recall/Train", "P_M/Recall/Valid"
+                        ]
+                    ],
+                "f1_specificity": [
+                    "Multiline", [
+                        "P_M/F1_Score/Train", "P_M/F1_Score/Valid",
+                        "P_M/Specificity/Train", "P_M/Specificity/Valid"
+                    ]
+                ],
             },
             "AUC_Metrics": {
-                "roc_auc": ["Multiline", ["AUC/ROC_AUC/Train", "AUC/ROC_AUC/Validation"]],
-                "pr_auc": ["Multiline", ["AUC/PR_AUC/Train", "AUC/PR_AUC/Validation"]],
+                "roc_auc": ["Multiline", ["AUC/ROC_AUC/Train", "AUC/ROC_AUC/Valid"]],
+                "pr_auc": ["Multiline", ["AUC/PR_AUC/Train", "AUC/PR_AUC/Valid"]],
             },
         }
 
         self.volume, self.mask, self.labels, _, _, _ = load_tv_data(self.config)
-        self.global_mean, self.global_std = get_or_compute_normalization(self.config, self.volume, self.mask)
+        self.global_mean, self.global_std, self.global_min, self.global_max = get_or_compute_normalization(self.config, self.volume, self.mask)
         self.writer = SummaryWriter(self.log_path)
         self.writer.add_custom_scalars(self.layout)
         # self.test_volume = get_test_dataset(self.config)
@@ -61,28 +69,28 @@ class TensorboardVisualizer:
         print(f"Logging metrics for epoch: {epoch+1}")
         
         # Original loss and accuracy metrics
-        self.writer.add_scalar("Training_Metrics/Loss/Train", train_metrics['loss'], epoch)
-        self.writer.add_scalar("Training_Metrics/Loss/Train_Raw", train_metrics['raw_loss'], epoch)
-        self.writer.add_scalar("Training_Metrics/Loss/Validation", val_metrics['loss'], epoch)
+        self.writer.add_scalar("G_M/Loss/Train", train_metrics['loss'], epoch)
+        self.writer.add_scalar("G_M/Loss/Train_Raw", train_metrics['raw_loss'], epoch)
+        self.writer.add_scalar("G_M/Loss/Valid", val_metrics['loss'], epoch)
         
-        self.writer.add_scalar("Training_Metrics/Accuracy/Train", train_metrics['accuracy'], epoch)
-        self.writer.add_scalar("Training_Metrics/Accuracy/Validation", val_metrics['accuracy'], epoch)
+        self.writer.add_scalar("G_M/Acc/Train", train_metrics['accuracy'], epoch)
+        self.writer.add_scalar("G_M/Acc/Valid", val_metrics['accuracy'], epoch)
         
-        # Classification metrics
-        self.writer.add_scalar("Classification/Precision/Train", train_metrics['precision'], epoch)
-        self.writer.add_scalar("Classification/Precision/Validation", val_metrics['precision'], epoch)
-        self.writer.add_scalar("Classification/Recall/Train", train_metrics['recall'], epoch)
-        self.writer.add_scalar("Classification/Recall/Validation", val_metrics['recall'], epoch)
-        self.writer.add_scalar("Classification/F1/Train", train_metrics['f1'], epoch)
-        self.writer.add_scalar("Classification/F1/Validation", val_metrics['f1'], epoch)
-        self.writer.add_scalar("Classification/Specificity/Train", train_metrics['specificity'], epoch)
-        self.writer.add_scalar("Classification/Specificity/Validation", val_metrics['specificity'], epoch)
+        # P_M metrics
+        self.writer.add_scalar("P_M/Precision/Train", train_metrics['precision'], epoch)
+        self.writer.add_scalar("P_M/Precision/Valid", val_metrics['precision'], epoch)
+        self.writer.add_scalar("P_M/Recall/Train", train_metrics['recall'], epoch)
+        self.writer.add_scalar("P_M/Recall/Valid", val_metrics['recall'], epoch)
+        self.writer.add_scalar("P_M/F1_Score/Train", train_metrics['f1'], epoch)
+        self.writer.add_scalar("P_M/F1_Score/Valid", val_metrics['f1'], epoch)
+        self.writer.add_scalar("P_M/Specificity/Train", train_metrics['specificity'], epoch)
+        self.writer.add_scalar("P_M/Specificity/Valid", val_metrics['specificity'], epoch)
         
         # AUC metrics
         self.writer.add_scalar("AUC/ROC_AUC/Train", train_metrics['roc_auc'], epoch)
-        self.writer.add_scalar("AUC/ROC_AUC/Validation", val_metrics['roc_auc'], epoch)
+        self.writer.add_scalar("AUC/ROC_AUC/Valid", val_metrics['roc_auc'], epoch)
         self.writer.add_scalar("AUC/PR_AUC/Train", train_metrics['pr_auc'], epoch)
-        self.writer.add_scalar("AUC/PR_AUC/Validation", val_metrics['pr_auc'], epoch)
+        self.writer.add_scalar("AUC/PR_AUC/Valid", val_metrics['pr_auc'], epoch)
         
         # Learning rate and time
         self.writer.add_scalar('Learning_Rate', learning_rate, epoch)
@@ -133,7 +141,7 @@ class TensorboardVisualizer:
                    yticklabels=['Actual No Ink', 'Actual Ink'])
         ax1.set_title(f'Training Confusion Matrix\nPrecision: {train_metrics["precision"]:.3f}, Recall: {train_metrics["recall"]:.3f}')
         
-        # Validation confusion matrix
+        # Valid confusion matrix
         val_tp = val_metrics['positive_samples'] * val_metrics['recall']
         val_fp = val_tp * (1 - val_metrics['precision']) / val_metrics['precision'] if val_metrics['precision'] > 0 else 0
         val_fn = val_metrics['positive_samples'] - val_tp
@@ -144,7 +152,7 @@ class TensorboardVisualizer:
         sns.heatmap(val_cm, annot=True, fmt='.0f', cmap='Oranges', ax=ax2,
                    xticklabels=['Predicted No Ink', 'Predicted Ink'],
                    yticklabels=['Actual No Ink', 'Actual Ink'])
-        ax2.set_title(f'Validation Confusion Matrix\nPrecision: {val_metrics["precision"]:.3f}, Recall: {val_metrics["recall"]:.3f}')
+        ax2.set_title(f'Valid Confusion Matrix\nPrecision: {val_metrics["precision"]:.3f}, Recall: {val_metrics["recall"]:.3f}')
         
         plt.tight_layout()
         self.writer.add_figure('Confusion_Matrix', fig, epoch)
@@ -166,11 +174,11 @@ class TensorboardVisualizer:
         width = 0.35
         
         bars1 = ax1.bar(x - width/2, train_values, width, label='Train', color='skyblue', alpha=0.8)
-        bars2 = ax1.bar(x + width/2, val_values, width, label='Validation', color='lightcoral', alpha=0.8)
+        bars2 = ax1.bar(x + width/2, val_values, width, label='Valid', color='lightcoral', alpha=0.8)
         
         ax1.set_xlabel('Metrics')
         ax1.set_ylabel('Score')
-        ax1.set_title('Training vs Validation Metrics Comparison')
+        ax1.set_title('Training vs Valid Metrics Comparison')
         ax1.set_xticks(x)
         ax1.set_xticklabels([m.replace('_', ' ').title() for m in metrics_to_plot], rotation=45)
         ax1.legend()
@@ -205,7 +213,7 @@ class TensorboardVisualizer:
         radar_ax = fig.add_subplot(1, 2, 2, projection='polar')
         radar_ax.plot(angles, train_values_radar, 'o-', linewidth=2, label='Train', color='blue')
         radar_ax.fill(angles, train_values_radar, alpha=0.25, color='blue')
-        radar_ax.plot(angles, val_values_radar, 'o-', linewidth=2, label='Validation', color='red')
+        radar_ax.plot(angles, val_values_radar, 'o-', linewidth=2, label='Valid', color='red')
         radar_ax.fill(angles, val_values_radar, alpha=0.25, color='red')
         
         radar_ax.set_xticks(angles[:-1])
@@ -300,8 +308,8 @@ class TensorboardVisualizer:
             depth_end = depth_start + self.config.data.depth
             train_block_coords = train_grouped.get(d_off, [])
             valid_block_coords = valid_grouped.get(d_off, [])
-            train_predictions = self._predict_tiles(model, self.volume, train_block_coords, y_range, train_x_range, depth_start, volume_name="training")
-            valid_predictions: NDArray[floating[_32Bit]] = self._predict_tiles(model, self.volume, valid_block_coords, y_range, valid_x_range, depth_start, volume_name="validation")
+            train_predictions = self._predict_tiles(model, self.volume, self.mask, train_block_coords, y_range, train_x_range, depth_start, volume_name="training")
+            valid_predictions: NDArray[floating[_32Bit]] = self._predict_tiles(model, self.volume, self.mask, valid_block_coords, y_range, valid_x_range, depth_start, volume_name="validation")
             print(f"[EVAL] train_predictions shape: {train_predictions.shape}, valid_predictions shape: {valid_predictions.shape}")
             full_predictions = np.concatenate([train_predictions, valid_predictions], axis=1)
             all_predictions_data.append((full_predictions, train_predictions, depth_start, depth_end))
@@ -312,7 +320,7 @@ class TensorboardVisualizer:
             self.writer.add_figure('Evaluation/All_Depth_Blocks', fig, epoch)
             plt.close(fig)
 
-    def _predict_tiles(self, model, volume, block_coords, y_range, x_range, depth_start, volume_name="training"):
+    def _predict_tiles(self, model, volume, mask, block_coords, y_range, x_range, depth_start, volume_name="training"):
         tile_size = self.config.data.tile_size
         region_H = y_range[1] - y_range[0]
         region_W = x_range[1] - x_range[0]
@@ -350,7 +358,13 @@ class TensorboardVisualizer:
                     block = np.array(volume[d:d+self.config.data.depth, y:y+tile_size, x:x+tile_size]).astype(np.float32)
                     # Only normalize for training/validation
                     if volume_name in ["training", "validation"]:
-                        block = (block - self.global_mean) / self.global_std
+                        block = (block.astype(np.float32) - self.global_mean) / self.global_std
+                        if not isinstance(mask, torch.Tensor):
+                            mask = torch.tensor(mask, dtype=torch.float32)
+                        mask_exp = mask.unsqueeze(0).expand_as(block)
+                        block[mask_exp == 0] = 0
+                        block = (block - self.global_min) / (self.global_max - self.global_min)
+                        block = np.clip(block, 0, 1)
                     if block.shape != (self.config.data.depth, tile_size, tile_size):
                         print(f"Block shape mismatch: {block.shape} != ({self.config.data.depth}, {tile_size}, {tile_size})")
                         continue

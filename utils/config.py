@@ -4,7 +4,7 @@ import torch
 
 @dataclass
 class DataConfig:
-    zarr_path: str = "/media/jeff/Seagate/vesuvius-3dstreamer/"
+    zarr_path: str = "/media/jeff/Seagate/vesuvius-3dstreamer/data/"
     segment_id: int = 20230827161847
     scroll4_path: str = "scroll4_bottomleft.npz"
     tile_size: int = 32
