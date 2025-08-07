@@ -58,8 +58,8 @@ class TensorboardVisualizer:
         self.global_mean, self.global_std, self.global_min, self.global_max = get_or_compute_normalization(self.config, self.volume, self.mask)
         self.writer = SummaryWriter(self.log_path)
         self.writer.add_custom_scalars(self.layout)
-        # self.test_volume = get_test_dataset(self.config)
-        # self.scroll4_volume = load_scroll4_data(self.config)
+        self.test_volume = get_test_dataset(self.config)
+        self.scroll4_volume = load_scroll4_data(self.config)
 
         print(f"TensorBoard logs will be saved to: {self.log_path}")
         print(f"To view, run: tensorboard --logdir={config.training.log_dir}")
@@ -118,9 +118,9 @@ class TensorboardVisualizer:
             self.add_evaluation_figures(epoch, model)
 
         # # Add test figures at specified intervals
-        # if (epoch+1) % self.config.training.test_interval == 0:
-        #     self.add_test_figures(epoch, model, self.test_volume, "scroll1")
-        #     self.add_test_figures(epoch, model, self.scroll4_volume, "scroll4")
+        if (epoch+1) % self.config.training.test_interval == 0:
+            self.add_test_figures(epoch, model, self.test_volume, "scroll1")
+            self.add_test_figures(epoch, model, self.scroll4_volume, "scroll4")
         
         self.writer.flush()
 
@@ -356,13 +356,14 @@ class TensorboardVisualizer:
                     if d + self.config.data.depth > volume.shape[0]:
                         continue
                     block = np.array(volume[d:d+self.config.data.depth, y:y+tile_size, x:x+tile_size]).astype(np.float32)
-                    # Only normalize for training/validation
+                    # Only normalize for training/validation, test/scroll4 are pre-normalized
                     if volume_name in ["training", "validation"]:
                         block = (block.astype(np.float32) - self.global_mean) / self.global_std
-                        if not isinstance(mask, torch.Tensor):
-                            mask = torch.tensor(mask, dtype=torch.float32)
-                        mask_exp = mask.unsqueeze(0).expand_as(block)
-                        block[mask_exp == 0] = 0
+                        if block.ndim == 3 and mask.ndim == 2:
+                            mask_tile = mask[y:y+tile_size, x:x+tile_size]
+                            mask_exp = np.expand_dims(mask_tile, axis=0)  # shape: (1, tile_size, tile_size)
+                            mask_exp = np.broadcast_to(mask_exp, block.shape)  # shape: (D, tile_size, tile_size)
+                            block[mask_exp == 0] = 0
                         block = (block - self.global_min) / (self.global_max - self.global_min)
                         block = np.clip(block, 0, 1)
                     if block.shape != (self.config.data.depth, tile_size, tile_size):
@@ -497,7 +498,7 @@ class TensorboardVisualizer:
             
             volume_name = f"test_{test_type}"
             predictions = self._predict_tiles(
-                model, test_volume, block_coords, y_range, x_range, depth_start, volume_name=volume_name
+                model, test_volume, None, block_coords, y_range, x_range, depth_start, volume_name=volume_name
             )
             print(f"[TEST] predictions shape: {predictions.shape}")
             depth_end = depth_start + depth
