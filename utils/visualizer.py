@@ -55,15 +55,21 @@ class TensorboardVisualizer:
         }
 
         self.volume, self.mask, self.labels, _, _, _ = load_tv_data(self.config)
-        self.global_mean, self.global_std, self.global_min, self.global_max = get_or_compute_normalization(self.config, self.volume, self.mask)
+        self.global_mean, self.global_std, self.global_min, self.global_max = get_or_compute_normalization(self.config.data.train_segment_id, self.volume, self.mask)
+        
+        # Load test datasets with normalization
+        self.test_volume, self.test_mask, self.test_y_range, self.test_x_range = get_test_dataset(self.config)
+        self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max = get_or_compute_normalization(self.config.data.train_segment_id, self.test_volume, self.test_mask)
+
+        self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range = load_scroll4_data(self.config)
+        self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max = get_or_compute_normalization(self.config.data.scroll4_segment_id, self.scroll4_volume, self.scroll4_mask)
+        
         self.writer = SummaryWriter(self.log_path)
         self.writer.add_custom_scalars(self.layout)
-        self.test_volume = get_test_dataset(self.config)
-        self.scroll4_volume = load_scroll4_data(self.config)
 
         print(f"TensorBoard logs will be saved to: {self.log_path}")
         print(f"To view, run: tensorboard --logdir={config.training.log_dir}")
-    
+
     def log_epoch_metrics(self, epoch, model, train_metrics, val_metrics, learning_rate, time_elapsed, params):
         """Log comprehensive metrics including class-wise metrics"""
         print(f"Logging metrics for epoch: {epoch+1}")
@@ -117,10 +123,9 @@ class TensorboardVisualizer:
         if (epoch+1) % self.config.training.evaluation_interval == 0:
             self.add_evaluation_figures(epoch, model)
 
-        # # Add test figures at specified intervals
+        # Add test figures at specified intervals
         if (epoch+1) % self.config.training.test_interval == 0:
-            self.add_test_figures(epoch, model, self.test_volume, "scroll1")
-            self.add_test_figures(epoch, model, self.scroll4_volume, "scroll4")
+            self.add_test_figures(epoch, model)
         
         self.writer.flush()
 
@@ -293,45 +298,43 @@ class TensorboardVisualizer:
     def add_evaluation_figures(self, epoch, model):
         print("Starting evaluation figure generation...")
         model.eval()
-        # Use the exact same tile logic as the dataloader
+        
         train_coords, y_range, train_x_range, z_range = get_tile_coords_for_split(self.config, 'train')
         valid_coords, _, valid_x_range, _ = get_tile_coords_for_split(self.config, 'valid')
-        print(f"[EVAL] y_range: {y_range}, train_x_range: {train_x_range}, valid_x_range: {valid_x_range}")
-        # Group tile coordinates by depth block (z_offset)
-
+        
         train_grouped = self.group_by_depth(train_coords)
         valid_grouped = self.group_by_depth(valid_coords)
         all_depth_offsets = sorted(set(train_grouped.keys()) | set(valid_grouped.keys()))
         all_predictions_data = []
+        
         for d_off in all_depth_offsets:
             depth_start = d_off + self.config.data.start_level
             depth_end = depth_start + self.config.data.depth
             train_block_coords = train_grouped.get(d_off, [])
             valid_block_coords = valid_grouped.get(d_off, [])
-            train_predictions = self._predict_tiles(model, self.volume, self.mask, train_block_coords, y_range, train_x_range, depth_start, volume_name="training")
-            valid_predictions: NDArray[floating[_32Bit]] = self._predict_tiles(model, self.volume, self.mask, valid_block_coords, y_range, valid_x_range, depth_start, volume_name="validation")
-            print(f"[EVAL] train_predictions shape: {train_predictions.shape}, valid_predictions shape: {valid_predictions.shape}")
+
+            train_predictions = self._predict_tiles(model, self.volume, self.mask, train_block_coords, y_range, train_x_range, depth_start, "training", self.global_mean, self.global_std, self.global_min, self.global_max)
+            valid_predictions = self._predict_tiles(model, self.volume, self.mask, valid_block_coords, y_range, valid_x_range, depth_start, "validation", self.global_mean, self.global_std, self.global_min, self.global_max)
+
             full_predictions = np.concatenate([train_predictions, valid_predictions], axis=1)
             all_predictions_data.append((full_predictions, train_predictions, depth_start, depth_end))
+        
         if all_predictions_data:
             cropped_labels = self.labels[y_range[0]:y_range[1], train_x_range[0]:valid_x_range[1]]
-            print(f"[EVAL] cropped_labels shape: {cropped_labels.shape}")
             fig = self._create_combined_evaluation_figure(all_predictions_data, cropped_labels, len(all_predictions_data))
             self.writer.add_figure('Evaluation/All_Depth_Blocks', fig, epoch)
             plt.close(fig)
 
-    def _predict_tiles(self, model, volume, mask, block_coords, y_range, x_range, depth_start, volume_name="training"):
+    def _predict_tiles(self, model, volume, mask, block_coords, y_range, x_range, depth_start, volume_name, global_mean, global_std, global_min, global_max):
         tile_size = self.config.data.tile_size
         region_H = y_range[1] - y_range[0]
         region_W = x_range[1] - x_range[0]
         prediction_map = np.zeros((region_H, region_W), dtype=np.float32)
         batch_size = self.config.dataloader.batch_size
-        if torch.cuda.is_available():
-            device = self.config.device
-        else:
-            device = "cpu"
-        from tqdm import tqdm
+        device = self.config.device if torch.cuda.is_available() else "cpu"
+        
         desc = f"Predicting tiles (depth {depth_start}-{depth_start + self.config.data.depth})"
+        
         # Prepare all tile info for this block
         tile_infos = []
         for d_off, y_off, x_off in block_coords:
@@ -345,45 +348,87 @@ class TensorboardVisualizer:
             y = y_range[0] + y_off
             x = x_range[0] + x_off
             tile_infos.append((d, y, x, y_off, x_off))
+        
         # Batched inference
         with torch.no_grad():
             for i in tqdm(range(0, len(tile_infos), batch_size), desc=desc, leave=True):
                 batch = tile_infos[i:i+batch_size]
                 batch_blocks = []
                 batch_indices = []
+                
                 for d, y, x, y_off, x_off in batch:
                     # Skip if the block would exceed the available depth
                     if d + self.config.data.depth > volume.shape[0]:
                         continue
+                    
                     block = np.array(volume[d:d+self.config.data.depth, y:y+tile_size, x:x+tile_size]).astype(np.float32)
-                    # Only normalize for training/validation, test/scroll4 are pre-normalized
-                    if volume_name in ["training", "validation"]:
-                        block = (block.astype(np.float32) - self.global_mean) / self.global_std
-                        if block.ndim == 3 and mask.ndim == 2:
-                            mask_tile = mask[y:y+tile_size, x:x+tile_size]
-                            mask_exp = np.expand_dims(mask_tile, axis=0)  # shape: (1, tile_size, tile_size)
-                            mask_exp = np.broadcast_to(mask_exp, block.shape)  # shape: (D, tile_size, tile_size)
-                            block[mask_exp == 0] = 0
-                        block = (block - self.global_min) / (self.global_max - self.global_min)
-                        block = np.clip(block, 0, 1)
+                    
+                    # Apply normalization
+                    block = (block - global_mean) / global_std
+                    
+                    # Apply mask
+                    if block.ndim == 3 and mask.ndim == 2:
+                        mask_tile = mask[y:y+tile_size, x:x+tile_size]
+                        mask_tile = mask_tile.astype(np.uint8)
+                        mask_exp = np.expand_dims(mask_tile, axis=0)
+                        mask_exp = np.broadcast_to(mask_exp, block.shape)
+                        block[mask_exp == 0] = 0
+                    
+                    block = (block - global_min) / (global_max - global_min)
+                    block = np.clip(block, 0, 1)
+                    
                     if block.shape != (self.config.data.depth, tile_size, tile_size):
                         print(f"Block shape mismatch: {block.shape} != ({self.config.data.depth}, {tile_size}, {tile_size})")
                         continue
+                    
                     batch_blocks.append(block)
                     batch_indices.append((y_off, x_off))
+                
                 if not batch_blocks:
                     continue
-                batch_tensor = torch.from_numpy(np.stack(batch_blocks)).float().unsqueeze(1).to(device)  # [B, 1, D, H, W]
+                
+                batch_tensor = torch.from_numpy(np.stack(batch_blocks)).float().unsqueeze(1).to(device)
                 logits = model(batch_tensor)
                 preds = torch.sigmoid(logits).cpu().numpy().flatten()
+                
                 for (y_off, x_off), pred in zip(batch_indices, preds):
-                    y = y_off
-                    x = x_off
-                    prediction_map[y:y+tile_size, x:x+tile_size] = pred
+                    prediction_map[y_off:y_off+tile_size, x_off:x_off+tile_size] = pred
+                
                 del batch_tensor
+        
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return prediction_map
+
+    def add_test_figures(self, epoch, model):
+        """Add test figures for both test and scroll4 data"""
+        print("Starting test figure generation...")
+        model.eval()
+        
+        # Test data (bottom section of training segment)
+        self._add_single_test_figure(epoch, model, self.test_volume, self.test_mask, self.test_y_range, self.test_x_range, self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max, "Test")
+        
+        # Scroll4 data
+        self._add_single_test_figure(epoch, model, self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range, self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max, "Scroll4")
+
+    def _add_single_test_figure(self, epoch, model, volume, mask, y_range, x_range, global_mean, global_std, global_min, global_max, test_name):
+        """Generate predictions and create figure for a single test dataset"""
+        z_range = (0, volume.shape[0])
+        test_coords = generate_tile_coords(z_range, y_range, x_range, self.config, volume)
+        grouped = self.group_by_depth(test_coords)
+        all_depth_offsets = sorted(grouped.keys())
+        all_predictions_data = []
+        
+        for depth_start in all_depth_offsets:
+            block_coords = grouped[depth_start]
+            predictions = self._predict_tiles(model, volume, mask, block_coords, y_range, x_range, depth_start, test_name, global_mean, global_std, global_min, global_max)
+            depth_end = depth_start + self.config.data.depth
+            all_predictions_data.append((predictions, depth_start, depth_end))
+        
+        if all_predictions_data:
+            fig = self._create_combined_test_figure(all_predictions_data, len(all_predictions_data), 0.3, test_name.lower())
+            self.writer.add_figure(f'Test/{test_name}_All_Depth_Blocks', fig, epoch)
+            plt.close(fig)
 
     def _create_combined_evaluation_figure(self, all_predictions_data, labels, num_depth_blocks, scale_factor=0.3):
         
@@ -464,52 +509,6 @@ class TensorboardVisualizer:
         plt.subplots_adjust(wspace=0.05, hspace=0.05, left=0.05, right=0.95, top=0.95, bottom=0.05)
         return fig
 
-    def add_test_figures(self, epoch, model, test_volume, test_type):
-        """
-        Run test evaluation and create one combined figure with all depth blocks
-        No ground truth overlay for test data
-        Uses unified logic based on scroll1's correct tile coordinate generation
-        """
-        if test_type not in ["scroll1", "scroll4"]:
-            print(f"Invalid test type: {test_type}. Expected 'scroll1' or 'scroll4'.")
-            return
-            
-        print("Starting test figure generation...")
-        model.eval()
-        D = test_volume.shape[0]
-        all_predictions_data = []
-        
-        # Unified logic - use scroll1's exact approach for both test types
-        y_range = (0, test_volume.shape[1])
-        x_range = (0, test_volume.shape[2])
-        tile_size = self.config.data.tile_size
-        depth = self.config.data.depth
-        z_range = (0, D)
-        print("test_volume.shape:", test_volume.shape)
-        print("tile_size:", tile_size)
-        print("depth:", depth)
-        print("z_range:", z_range)
-        test_coords = generate_tile_coords(z_range, y_range, x_range, self.config, test_volume)
-        grouped = self.group_by_depth(test_coords)
-        all_depth_offsets = sorted(grouped.keys())
-        
-        for depth_start in all_depth_offsets:
-            block_coords = grouped[depth_start]
-            
-            volume_name = f"test_{test_type}"
-            predictions = self._predict_tiles(
-                model, test_volume, None, block_coords, y_range, x_range, depth_start, volume_name=volume_name
-            )
-            print(f"[TEST] predictions shape: {predictions.shape}")
-            depth_end = depth_start + depth
-            all_predictions_data.append((predictions, depth_start, depth_end))
-        
-        if all_predictions_data:
-            print(f"got {len(all_predictions_data)} depth blocks for test")
-            fig = self._create_combined_test_figure(all_predictions_data, len(all_predictions_data), 0.3, test_type)
-            self.writer.add_figure(f'Test/{test_type.capitalize()}_All_Depth_Blocks', fig, epoch)
-            plt.close(fig)  # Important: close figure to free memory
-        
     def log_model_graph(self, model, example_input):
         self.writer.add_graph(model, example_input)
     

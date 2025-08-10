@@ -185,64 +185,6 @@ def validate_epoch(model, valid_loader, criterion, config: Config, scaler: GradS
 
     return metrics
 
-def print_metrics_summary(epoch, train_metrics, val_metrics, current_lr):
-    """Print a comprehensive summary of metrics"""
-    print(f"\n{'='*80}")
-    print(f"EPOCH {epoch+1} SUMMARY")
-    print(f"{'='*80}")
-    print(f"Learning Rate: {current_lr:.6f}")
-    print(f"{'='*80}")
-    
-    # Loss metrics
-    print(f"{'LOSS METRICS':<25} {'TRAIN':<15} {'VALIDATION':<15}")
-    print(f"{'-'*55}")
-    print(f"{'Total Loss':<25} {train_metrics['loss']:<15.4f} {val_metrics['loss']:<15.4f}")
-    print(f"{'Raw Loss':<25} {train_metrics['raw_loss']:<15.4f} {val_metrics['loss']:<15.4f}")
-    
-    # Classification metrics
-    print(f"\n{'CLASSIFICATION METRICS':<25} {'TRAIN':<15} {'VALIDATION':<15}")
-    print(f"{'-'*55}")
-    print(f"{'Accuracy':<25} {train_metrics['accuracy']:<15.4f} {val_metrics['accuracy']:<15.4f}")
-    print(f"{'Precision':<25} {train_metrics['precision']:<15.4f} {val_metrics['precision']:<15.4f}")
-    print(f"{'Recall':<25} {train_metrics['recall']:<15.4f} {val_metrics['recall']:<15.4f}")
-    print(f"{'F1-Score':<25} {train_metrics['f1']:<15.4f} {val_metrics['f1']:<15.4f}")
-    print(f"{'Specificity':<25} {train_metrics['specificity']:<15.4f} {val_metrics['specificity']:<15.4f}")
-    
-    # AUC metrics
-    print(f"\n{'AUC METRICS':<25} {'TRAIN':<15} {'VALIDATION':<15}")
-    print(f"{'-'*55}")
-    print(f"{'ROC-AUC':<25} {train_metrics['roc_auc']:<15.4f} {val_metrics['roc_auc']:<15.4f}")
-    print(f"{'PR-AUC':<25} {train_metrics['pr_auc']:<15.4f} {val_metrics['pr_auc']:<15.4f}")
-    
-    # Dataset balance
-    print(f"\n{'DATASET BALANCE':<25} {'TRAIN':<15} {'VALIDATION':<15}")
-    print(f"{'-'*55}")
-    
-    # Performance interpretation
-    print(f"\n{'PERFORMANCE INTERPRETATION':<50}")
-    print(f"{'-'*50}")
-    
-    val_precision = val_metrics['precision']
-    val_recall = val_metrics['recall']
-    val_f1 = val_metrics['f1']
-    val_pr_auc = val_metrics['pr_auc']
-    
-    if val_precision > 0.7 and val_recall > 0.6:
-        print("✓ GOOD: High precision and recall - model is performing well")
-    elif val_precision > 0.5 and val_recall > 0.4:
-        print("~ FAIR: Moderate precision and recall - room for improvement")
-    else:
-        print("✗ POOR: Low precision or recall - model needs significant improvement")
-    
-    if val_pr_auc > 0.4:
-        print("✓ GOOD: High PR-AUC - model distinguishes classes well")
-    elif val_pr_auc > 0.2:
-        print("~ FAIR: Moderate PR-AUC - some discriminative ability")
-    else:
-        print("✗ POOR: Low PR-AUC - model struggles to distinguish classes")
-    
-    print(f"{'='*80}\n")
-
 def periodic_model_save(model, epoch, val_metrics, best_val_f1, best_val_loss):
     # Save best model based on F1 score (better metric for imbalanced data)
     if val_metrics['f1'] > best_val_f1:
@@ -305,8 +247,6 @@ def main(config: Config):
         scheduler.step(val_metrics['loss'])
         current_lr = optimizer.param_groups[0]['lr']
 
-        print_metrics_summary(epoch, train_metrics, val_metrics, current_lr)
-        
         periodic_model_save(model, epoch, val_metrics, best_val_f1, best_val_loss)
 
         time_elapsed = time.time() - start_time

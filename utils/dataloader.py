@@ -244,9 +244,8 @@ class InkVolumeDataset(IterableDataset):
         self._current_idx += 1
         return block_normalized, label, mask
 
-def get_or_compute_normalization(config, volume, mask):
+def get_or_compute_normalization(segment_id, volume, mask):
     """Retrieve or compute global mean, std, min, and max for normalization."""
-    segment_id = config.data.segment_id
     cache = _load_normalization_cache()
 
     if str(segment_id) in cache:
@@ -338,22 +337,22 @@ def _update_normalization_cache(segment_id, mean, std, min_val, max_val):
 def load_tv_data(config: Config):
     """Load labels and determine coordinate ranges for train/validation split, streaming Zarr data chunk by chunk only."""
     # Construct zarr path for the segment
-    zarr_path = os.path.join(config.data.zarr_path, f"{config.data.segment_id}_fixed.zarr")
+    zarr_path = os.path.join(config.data.zarr_path, f"{config.data.train_segment_id}.zarr")
     # Open zarr just to get dimensions (do not read the full array)
     volume = zarr.open(zarr_path, mode='r')
     D, H, W = map(int, volume.shape)
     # Load labels (these are small, so OK to load fully)
-    labels_path = f"./eroded_inklabels/{config.data.segment_id}.png"
+    labels_path = f"./eroded_inklabels/{config.data.train_segment_id}.png"
     labels = cv2.imread(labels_path, cv2.IMREAD_GRAYSCALE) / 255.0
 
-    mask_path = f"./masks/{config.data.segment_id}.png"
+    mask_path = f"./masks/{config.data.train_segment_id}.png"
     mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) / 255.0
     # Apply segment-specific processing
-    if config.data.segment_id == 20230827161847:
+    if config.data.train_segment_id == 20230827161847:
         z_start, z_end = config.data.start_level, config.data.end_level
         y_start, y_end = 200, 5600
         x_start, x_end = 1000, 4600
-    elif config.data.segment_id == 20231106155351:
+    elif config.data.train_segment_id == 20231106155351:
         z_start, z_end = 0, D
         y_start, y_end = 0, H
         x_start, x_end = 4500, W
@@ -375,40 +374,43 @@ def load_tv_data(config: Config):
     return (volume, mask, labels, train_x_range, valid_x_range, y_range)
 
 
-def get_test_dataset(config: Config):
-    """Load test data from zarr - returns a view for on-demand access (never loads full array)."""
-    zarr_path = os.path.join(config.data.zarr_path, f"{config.data.segment_id}.zarr")
-    volume = zarr.open(zarr_path, mode='r')
-    class TestVolumeView:
-        def __init__(self, zarr_volume):
-            self.zarr_volume = zarr_volume
-            self.shape = (zarr_volume.shape[0], zarr_volume.shape[1] - 4000, zarr_volume.shape[2])
-        def __getitem__(self, key):
-            if isinstance(key, tuple) and len(key) == 3:
-                z_slice, y_slice, x_slice = key
-                y_adj = slice(y_slice.start + 4000, y_slice.stop + 4000)
-                # Only loads the requested chunk/slice
-                return self.zarr_volume[z_slice, y_adj, x_slice] / 65535.0
-            else:
-                return self.zarr_volume[key] / 65535.0
-    test_volume = TestVolumeView(volume)
-    print("Test volume shape:", test_volume.shape)
-    print(test_volume[14, 3000:3005, 3000:3005])
-    return test_volume
-
-
 def load_scroll4_data(config: Config):
-    """Load scroll4 data - keeping original implementation unchanged"""
-    data = np.load(config.data.scroll4_path)
-    volume = data['stack']
-    print("Scroll4 volume shape:", volume.shape)
-    print(volume[14, 1000:1005, 1000:1005])
-    return volume
+    """Load scroll4 data from zarr with proper segmentation"""
+    zarr_path = os.path.join(config.data.zarr_path, f"{config.data.scroll4_segment_id}.zarr")
+    volume = zarr.open(zarr_path, mode='r')
+    D, H, W = map(int, volume.shape)
+    
+    # Load mask for scroll4
+    mask_path = f"./masks/{config.data.scroll4_segment_id}.png"
+    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) / 255.0
+    
+    # Define scroll4 specific ranges
+    y_start, y_end = 6500, H
+    x_start, x_end = 0, 5000
+    
+    return volume, mask, (y_start, y_end), (x_start, x_end)
+
+
+def get_test_dataset(config: Config):
+    """Load test data from zarr - bottom section of segment 20230827161847"""
+    zarr_path = os.path.join(config.data.zarr_path, "20230827161847.zarr")
+    volume = zarr.open(zarr_path, mode='r')
+    D, H, W = map(int, volume.shape)
+    
+    # Load mask for test data (same segment as training)
+    mask_path = f"./masks/20230827161847.png"
+    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) / 255.0
+    
+    # Define test specific ranges - bottom section
+    y_start, y_end = 4200, H
+    x_start, x_end = 0, W
+    
+    return volume, mask, (y_start, y_end), (x_start, x_end)
 
 
 def get_tv_datasets(config: Config):
     (volume, mask, labels, train_x_range, valid_x_range, y_range) = load_tv_data(config)
-    global_mean, global_std, global_min, global_max = get_or_compute_normalization(config, volume, mask)
+    global_mean, global_std, global_min, global_max = get_or_compute_normalization(config.data.train_segment_id, volume, mask)
     train_dataset = InkVolumeDataset(volume, mask, labels, config, train_x_range, y_range, global_mean, global_std, global_min, global_max, shuffle=True, apply_transforms=True)
     valid_dataset = InkVolumeDataset(volume, mask, labels, config, valid_x_range, y_range, global_mean, global_std, global_min, global_max, shuffle=False, apply_transforms=False)
     return train_dataset, valid_dataset
@@ -448,7 +450,7 @@ def _sample_labels(dataset, sample_size):
 def calculate_class_weights(train_set, valid_set):
     """Calculate class weights, ensuring sampling respects the mask."""
     print("Sampling datasets to calculate average class weights...")
-    sample_size = 100
+    sample_size = 2500
     # Sample labels from both datasets
     labels_a = _sample_labels(train_set, sample_size * 2)
     print('got a')
