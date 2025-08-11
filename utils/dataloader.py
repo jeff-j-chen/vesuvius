@@ -12,7 +12,7 @@ import json
 from tqdm import tqdm
 
 
-def generate_tile_coords(z_range, y_range, x_range, config, volume):
+def generate_tile_coords(z_range, y_range, x_range, config, volume, mask=None):
     """
     Generate all valid (z, y, x) block start coordinates for a given region.
     Returns a list of (z_offset, y_offset, x_offset) tuples.
@@ -24,6 +24,7 @@ def generate_tile_coords(z_range, y_range, x_range, config, volume):
         depth: depth of the 3D block
         tile_size: size of the 2D tile
         volume: zarr volume to check for empty regions (optional)
+        mask: 2D mask array (optional, used to filter blocks with no valid region)
         empty_threshold: minimum mean value to consider a block non-empty
     """
     z_start, z_end = z_range
@@ -40,6 +41,14 @@ def generate_tile_coords(z_range, y_range, x_range, config, volume):
             continue
         for y in range(0, y_range_size, config.data.tile_size):
             for x in range(0, x_range_size, config.data.tile_size):
+                # Mask filtering: only add block if mask region contains any 1s
+                if mask is not None:
+                    mask_block = mask[
+                        y_start + y : y_start + y + config.data.tile_size,
+                        x_start + x : x_start + x + config.data.tile_size
+                    ]
+                    if np.sum(mask_block) == 0:
+                        continue  # Skip blocks with no valid mask region
                 block_coords.append((d, y, x))
     
     return block_coords
@@ -81,14 +90,14 @@ class InkVolumeDataset(IterableDataset):
         self.x_start, self.x_end = x_range
         
         # Pre-calculate all valid block coordinates with overlapping sampling (global coordinates)
-        # Pass volume for empty region filtering if requested
-        
+        # Pass mask for empty region filtering
         self.block_coords = generate_tile_coords(
             (self.z_start, self.z_end),
             (self.y_start, self.y_end),
             (self.x_start, self.x_end),
             self.config,
-            volume  # Adjust this threshold as needed
+            volume,
+            mask=self.mask  # Only include blocks with mask sum > 0
         )
         
         self.samples_per_epoch = len(self.block_coords)

@@ -95,6 +95,10 @@ def train_epoch(model, train_loader, criterion, optimizer, config: Config, scale
     all_predictions = []
     all_scores = []
     for batch_images, batch_labels, mask in tqdm(train_loader, desc="Training"):
+        # Safety check: mask sum must be non-zero
+        if mask.sum() <= 0:
+            print("[ERROR] Encountered batch with mask sum == 0. This block should not be loaded!")
+
         batch_images = batch_images.to(config.device)
         batch_labels = batch_labels.to(config.device).view(-1, 1)
         mask = mask.to(config.device).view(-1, 1)  # Ensure mask matches the shape of the loss
@@ -107,6 +111,9 @@ def train_epoch(model, train_loader, criterion, optimizer, config: Config, scale
 
             # Zero out loss in masked-out regions
             raw_loss = raw_loss * mask  # Apply mask to the loss
+            if mask.sum() <= 0:
+                print("[ERROR] Mask sum is zero, skipping loss calculation.")
+                continue
             raw_loss = raw_loss.sum() / mask.sum()  # Normalize by the number of valid regions
 
             l1_loss = sum(p.abs().sum() for p in model.parameters())
@@ -153,6 +160,10 @@ def validate_epoch(model, valid_loader, criterion, config: Config, scaler: GradS
     all_scores = []
     with torch.no_grad(), autocast(config.device):
         for batch_images, batch_labels, mask in tqdm(valid_loader, desc="Validating"):
+            # Safety check: mask sum must be non-zero
+            if mask.sum() <= 0:
+                print("[ERROR] Encountered batch with mask sum == 0 in validation. This block should not be loaded!")
+
             batch_images = batch_images.to(config.device)
             batch_labels = batch_labels.to(config.device).view(-1, 1)
             mask = mask.to(config.device).view(-1, 1)  # Ensure mask matches the shape of the loss
@@ -162,6 +173,9 @@ def validate_epoch(model, valid_loader, criterion, config: Config, scaler: GradS
 
             # Zero out loss in masked-out regions
             raw_loss = raw_loss * mask  # Apply mask to the loss
+            if mask.sum() <= 0:
+                print("[ERROR] Mask sum is zero, skipping loss calculation.")
+                continue
             raw_loss = raw_loss.sum() / mask.sum()  # Normalize by the number of valid regions
 
             val_loss += raw_loss.item()
