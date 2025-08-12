@@ -10,18 +10,18 @@ class DataConfig:
     scroll4_segment_id: int = 20231210132040
     tile_size: int = 32
     depth: int = 8
-    start_level: int = 28
-    end_level: int = 48
+    start_level: int = 0
+    end_level: int = 64
 
 @dataclass
 class DataloaderConfig:
     batch_size: int = 256
     num_workers: int = 8
-    apply_transforms: bool = True
+    apply_transforms: bool = False
 
 @dataclass
 class TrainingConfig:
-    num_epochs: int = 15
+    num_epochs: int = 10
     learning_rate: float = 1e-4
     weight_decay: float = 0
     l1_lambda: float = 0
@@ -31,8 +31,8 @@ class TrainingConfig:
     lr_scheduler_factor: float = 0.5
     save_every_n_epochs: int = 10
     log_dir: str = './runs'
-    evaluation_interval: int = 15
-    test_interval: int = 15
+    evaluation_interval: int = 10
+    test_interval: int = 10
 
 @dataclass
 class ModelConfig:

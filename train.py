@@ -1,4 +1,3 @@
-# VERSION 2
 import torch
 from tqdm import tqdm
 from utils.config import Config
@@ -147,6 +146,7 @@ def train_epoch(model, train_loader, criterion, optimizer, config: Config, scale
 
     metrics['loss'] = train_loss / len(train_loader)
     metrics['raw_loss'] = train_raw_loss / len(train_loader)
+    metrics['scores'] = all_scores
 
     return metrics
 
@@ -196,6 +196,7 @@ def validate_epoch(model, valid_loader, criterion, config: Config, scaler: GradS
     )
 
     metrics['loss'] = val_loss / len(valid_loader)
+    metrics['scores'] = all_scores
 
     return metrics
 
@@ -226,7 +227,7 @@ def main(config: Config):
         else:
             print(f"{field}: {value}")
 
-    print("Creating datasets...", end="")
+    print("Creating datasets...")
     start_time = time.time()
     volume, mask, labels, train_x_range, valid_x_range, y_range = load_tv_data(config)
     train_dataset, valid_dataset = get_tv_datasets(config)
@@ -251,7 +252,7 @@ def main(config: Config):
     scaler = GradScaler()
     for epoch in range(config.training.num_epochs):
         start_time = time.time()
-        # Train
+        # Activate transforms only after epoch 5
         if epoch >= 5 and config.dataloader.apply_transforms:
             train_dataset.apply_transforms = True
         

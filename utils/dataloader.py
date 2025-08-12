@@ -60,7 +60,6 @@ class InkVolumeDataset(IterableDataset):
                  global_std: float,
                  global_min: float,
                  global_max: float,
-                 apply_transforms: bool = False,
                  shuffle: bool = True):
         """
         volume: zarr.Array
@@ -77,7 +76,8 @@ class InkVolumeDataset(IterableDataset):
         self.config = config
         self.tile_size = config.data.tile_size
         self.depth = config.data.depth
-        self.apply_transforms = apply_transforms
+        # default to false, controlled later by epoch and config
+        self.apply_transforms = False
         self.shuffle = shuffle
         self.global_mean = global_mean
         self.global_std = global_std
@@ -420,8 +420,8 @@ def get_test_dataset(config: Config):
 def get_tv_datasets(config: Config):
     (volume, mask, labels, train_x_range, valid_x_range, y_range) = load_tv_data(config)
     global_mean, global_std, global_min, global_max = get_or_compute_normalization(config.data.train_segment_id, volume, mask)
-    train_dataset = InkVolumeDataset(volume, mask, labels, config, train_x_range, y_range, global_mean, global_std, global_min, global_max, shuffle=True, apply_transforms=True)
-    valid_dataset = InkVolumeDataset(volume, mask, labels, config, valid_x_range, y_range, global_mean, global_std, global_min, global_max, shuffle=False, apply_transforms=False)
+    train_dataset = InkVolumeDataset(volume, mask, labels, config, train_x_range, y_range, global_mean, global_std, global_min, global_max, shuffle=True)
+    valid_dataset = InkVolumeDataset(volume, mask, labels, config, valid_x_range, y_range, global_mean, global_std, global_min, global_max, shuffle=False)
     return train_dataset, valid_dataset
 
 

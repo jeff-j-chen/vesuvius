@@ -22,9 +22,9 @@ class TensorboardVisualizer:
         self.config = config
 
         if config.experiment_name is None:
-            experiment_name = f"ink_detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            experiment_name = f"ink_detection_{datetime.now().strftime('%d.%m_%H:%M:%S')}"
         else:
-            experiment_name = config.experiment_name + "_" +  datetime.now().strftime('%d_%H%M%S')
+            experiment_name = config.experiment_name + "_" +  datetime.now().strftime('%d_%H:%M:%S')
         
         self.log_path = os.path.join(config.training.log_dir, experiment_name)
         
@@ -105,6 +105,9 @@ class TensorboardVisualizer:
         # Create and log confusion matrix
         self.log_confusion_matrix(train_metrics, val_metrics, epoch)
         
+        # Create and log output histogram
+        self.log_output_histogram(train_metrics, val_metrics, epoch)
+        
         # Create and log metrics comparison chart
         self.log_metrics_comparison(train_metrics, val_metrics, epoch)
 
@@ -163,6 +166,32 @@ class TensorboardVisualizer:
         self.writer.add_figure('Confusion_Matrix', fig, epoch)
         plt.close(fig)
     
+    def log_output_histogram(self, train_metrics, val_metrics, epoch):
+        """Create and log histogram of model outputs for training and validation"""
+        fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+        
+        bins = np.linspace(0, 1, 51)
+        
+        # Plot overlapping histograms
+        ax.hist(train_metrics['scores'], bins=bins, alpha=0.6, label='Training', 
+                color='skyblue', edgecolor='black', density=True)
+        ax.hist(val_metrics['scores'], bins=bins, alpha=0.6, label='Validation', 
+                color='lightcoral', edgecolor='black', density=True)
+        
+        ax.set_xlabel('Model Output (Sigmoid Score)')
+        ax.set_ylabel('Density')
+        ax.set_title('Model Output Distribution\nTraining vs Validation')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0, 1)
+        
+        # Add vertical line at decision boundary
+        ax.axvline(x=0.5, color='black', linestyle='--', alpha=0.7, linewidth=1)
+        
+        plt.tight_layout()
+        self.writer.add_figure('Output_Histogram', fig, epoch)
+        plt.close(fig)
+
     def log_metrics_comparison(self, train_metrics, val_metrics, epoch):
         """Create and log a comprehensive metrics comparison chart"""
         fig, axes = plt.subplots(1, 2, figsize=(15, 10))  # Creates a 1D array of axes
@@ -426,7 +455,7 @@ class TensorboardVisualizer:
             all_predictions_data.append((predictions, depth_start, depth_end))
         
         if all_predictions_data:
-            fig = self._create_combined_test_figure(all_predictions_data, len(all_predictions_data), 0.3, test_name.lower())
+            fig = self._create_combined_test_figure(all_predictions_data, len(all_predictions_data), 0.3, test_name)
             self.writer.add_figure(f'Test/{test_name}_All_Depth_Blocks', fig, epoch)
             plt.close(fig)
 
