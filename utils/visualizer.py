@@ -350,15 +350,23 @@ class TensorboardVisualizer:
         
         if all_predictions_data:
             cropped_labels = self.labels[y_range[0]:y_range[1], train_x_range[0]:valid_x_range[1]]
-            fig = self._create_combined_evaluation_figure(all_predictions_data, cropped_labels, len(all_predictions_data))
-            self.writer.add_figure('Evaluation/All_Depth_Blocks', fig, epoch)
-            plt.close(fig)
+            for prediction_data in all_predictions_data:
+                depth_start = prediction_data[2]
+                depth_end = prediction_data[3]
+                fig = self._create_evaluation_figure(prediction_data, cropped_labels)
+                self.writer.add_figure(f'Evaluation/Depth_Block_{depth_start}-{depth_end}', fig, epoch)
+                plt.close(fig)
 
     def _predict_tiles(self, model, volume, mask, block_coords, y_range, x_range, depth_start, volume_name, global_mean, global_std, global_min, global_max):
         tile_size = self.config.data.tile_size
         region_H = y_range[1] - y_range[0]
         region_W = x_range[1] - x_range[0]
-        prediction_map = np.zeros((region_H, region_W), dtype=np.float32)
+        
+        # Create a downsampled prediction map
+        downsampled_H = region_H // tile_size
+        downsampled_W = region_W // tile_size
+        prediction_map = np.zeros((downsampled_H, downsampled_W), dtype=np.float32)
+        
         batch_size = self.config.dataloader.batch_size
         device = self.config.device if torch.cuda.is_available() else "cpu"
         
@@ -421,7 +429,11 @@ class TensorboardVisualizer:
                 preds = torch.sigmoid(logits).cpu().numpy().flatten()
                 
                 for (y_off, x_off), pred in zip(batch_indices, preds):
-                    prediction_map[y_off:y_off+tile_size, x_off:x_off+tile_size] = pred
+                    # Update the downsampled map at the corresponding pixel
+                    y_idx = y_off // tile_size
+                    x_idx = x_off // tile_size
+                    if 0 <= y_idx < downsampled_H and 0 <= x_idx < downsampled_W:
+                        prediction_map[y_idx, x_idx] = pred
                 
                 del batch_tensor
         
@@ -459,51 +471,49 @@ class TensorboardVisualizer:
             self.writer.add_figure(f'Test/{test_name}_All_Depth_Blocks', fig, epoch)
             plt.close(fig)
 
-    def _create_combined_evaluation_figure(self, all_predictions_data, labels, num_depth_blocks, scale_factor=0.3):
+    def _create_evaluation_figure(self, prediction_data, labels, scale_factor=0.3):
+        """Create an evaluation figure for a single depth block."""
+        full_predictions, train_predictions, depth_start, depth_end = prediction_data
         
-        # Calculate figure dimensions based on scaled data
-        fig_height = 6 * num_depth_blocks
-        fig_width = 10
+        fig, axes = plt.subplots(1, 2, figsize=(15, 9))
         
-        # Create subplots directly with minimal spacing
-        fig, axes = plt.subplots(num_depth_blocks, 2, figsize=(fig_width, fig_height))
-        
-        # Handle single row case
-        if num_depth_blocks == 1:
-            axes = axes.reshape(1, -1)
-        
-        for block_idx, (full_predictions, train_predictions, depth_start, depth_end) in enumerate(all_predictions_data):
-            
-            # Scale the prediction arrays
-            scaled_full_predictions = ndimage.zoom(full_predictions, scale_factor, order=1)
-            scaled_train_predictions = ndimage.zoom(train_predictions, scale_factor, order=1)
-            scaled_labels = ndimage.zoom(labels, scale_factor, order=0)
-            
-            # Left plot: Model predictions
-            ax_pred = axes[block_idx, 0]
-            im1 = ax_pred.imshow(scaled_full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
-            ax_pred.set_title(f'Depth Block {depth_start}-{depth_end}', fontsize=9)
-            
-            # Adjust the dividing line position based on scaling
-            train_split_pos = scaled_train_predictions.shape[1] - 0.5
-            ax_pred.axvline(x=train_split_pos, color='red', linestyle='--', linewidth=1.2)
-            ax_pred.axis('off')
-            
-            # Right plot: Predictions + Ground Truth overlay
-            ax_overlay = axes[block_idx, 1]
-            ax_overlay.imshow(scaled_full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
-             
-            if scaled_labels is not None:
-                label_overlay = np.zeros((*scaled_labels.shape, 4))
-                label_overlay[scaled_labels > 0.5] = [1, 1, 1, 0.4]  # White with 40% opacity
-                ax_overlay.imshow(label_overlay)
-            
-            ax_overlay.axvline(x=train_split_pos, color='red', linestyle='--', linewidth=1.2)
-            ax_overlay.axis('off')
+        # Downsample labels to match prediction map dimensions
+        tile_size = self.config.data.tile_size
+        downsampled_labels = labels[::tile_size, ::tile_size]
 
-        plt.subplots_adjust(wspace=0.1, hspace=0.1, left=0.1, right=0.9, top=0.90, bottom=0.10)
+        # Keep zoom function with factor of 1 as requested, using downsampled data directly.
+        scaled_full_predictions = ndimage.zoom(full_predictions, 1, order=1)
+        scaled_train_predictions = ndimage.zoom(train_predictions, 1, order=1)
+        scaled_labels = ndimage.zoom(downsampled_labels, 1, order=0)
+        
+        # Left plot: Model predictions
+        ax_pred = axes[0]
+        im1 = ax_pred.imshow(scaled_full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+        ax_pred.set_title(f'Predictions (Depth {depth_start}-{depth_end})', fontsize=9)
+        
+        # Adjust the dividing line position based on scaling
+        train_split_pos = scaled_train_predictions.shape[1] - 0.5
+        ax_pred.axvline(x=train_split_pos, color='red', linestyle='--', linewidth=1.2)
+        ax_pred.axis('off')
+        
+        # Right plot: Predictions + Ground Truth overlay
+        ax_overlay = axes[1]
+        ax_overlay.imshow(scaled_full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+        ax_overlay.set_title(f'Overlay (Depth {depth_start}-{depth_end})', fontsize=9)
+         
+        if scaled_labels is not None:
+            # Ensure label overlay matches the shape of the predictions
+            label_overlay = np.zeros((*scaled_full_predictions.shape, 4))
+            # We need to handle the case where downsampled labels might be slightly different in size
+            h, w = min(scaled_labels.shape[0], label_overlay.shape[0]), min(scaled_labels.shape[1], label_overlay.shape[1])
+            label_overlay[:h, :w][scaled_labels[:h, :w] > 0.5] = [1, 1, 1, 0.4]  # White with 40% opacity
+            ax_overlay.imshow(label_overlay)
+        
+        ax_overlay.axvline(x=train_split_pos, color='red', linestyle='--', linewidth=1.2)
+        ax_overlay.axis('off')
+
+        plt.subplots_adjust(wspace=0.05, hspace=0.05, left=0.05, right=0.95, top=0.95, bottom=0.05)
         return fig
-
 
     def _create_combined_test_figure(self, all_predictions_data, num_depth_blocks, scale_factor, test_type):
         """Create combined test figure with predictions (no ground truth overlay)"""
