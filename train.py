@@ -217,7 +217,7 @@ def periodic_model_save(model, epoch, val_metrics, best_val_f1, best_val_loss):
     if (epoch+1) % config.training.save_every_n_epochs == 0:
         save_model(model, f'{config.model_dir}/model_epoch_{epoch+1}.pth')
 
-def main(config: Config):
+def main(config: Config, pos_weight):
     set_seed(41)
     for field in config.__dataclass_fields__:
         value = getattr(config, field)
@@ -238,7 +238,8 @@ def main(config: Config):
     start_time = time.time()
     model, params = create_model(config)
     optimizer, scheduler = create_optimizer_and_scheduler(model, config)
-    pos_weight = calculate_class_weights(train_dataset, valid_dataset)
+    # pos_weight = calculate_class_weights(train_dataset, valid_dataset)
+    pos_weight = torch.tensor([pos_weight])
     criterion = create_loss_function(pos_weight, config)
     print(f" done in {time.time() - start_time:.2f}s")
 
@@ -276,7 +277,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     config = Config()
     config.experiment_name = args.experiment_name
-    main(config)
+    for w in [9.25, 2.0, 4.0, 6.0]:
+        main(config, w)
+    # main(config)
 
     # # test stronger augmentations
     # for transform_type in ["brightness", "contrast"]:

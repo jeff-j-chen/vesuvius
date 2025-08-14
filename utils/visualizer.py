@@ -17,12 +17,107 @@ from .dataloader import get_test_dataset, load_scroll4_data, get_tile_coords_for
 import scipy.ndimage as ndimage
 from collections import defaultdict
 
+def group_by_depth(coords):
+    """Group tile coordinates by their depth offset."""
+    grouped = defaultdict(list)
+    for d_off, y_off, x_off in coords:
+        grouped[d_off].append((d_off, y_off, x_off))
+    return grouped
+
+def predict_tiles(config, model, volume, mask, block_coords, y_range, x_range, depth_start, volume_name, global_mean, global_std, global_min, global_max):
+    tile_size = config.data.tile_size
+    region_H = y_range[1] - y_range[0]
+    region_W = x_range[1] - x_range[0]
+    
+    # Create a downsampled prediction map
+    downsampled_H = region_H // tile_size
+    downsampled_W = region_W // tile_size
+    prediction_map = np.zeros((downsampled_H, downsampled_W), dtype=np.float32)
+    
+    batch_size = config.dataloader.batch_size
+    device = config.device if torch.cuda.is_available() else "cpu"
+    
+    desc = f"Predicting tiles (depth {depth_start}-{depth_start + config.data.depth})"
+    
+    # Prepare all tile info for this block
+    tile_infos = []
+    for d_off, y_off, x_off in block_coords:
+        # Apply start_level offset only for training/validation volumes
+        if volume_name in ["training", "validation"]:
+            d = d_off + config.data.start_level
+        else:
+            d = d_off
+        if not (depth_start <= d < depth_start + config.data.depth):
+            continue
+        y = y_range[0] + y_off
+        x = x_range[0] + x_off
+        tile_infos.append((d, y, x, y_off, x_off))
+    
+    # Batched inference
+    with torch.no_grad():
+        for i in tqdm(range(0, len(tile_infos), batch_size), desc=desc, leave=True):
+            batch = tile_infos[i:i+batch_size]
+            batch_blocks = []
+            batch_indices = []
+            
+            for d, y, x, y_off, x_off in batch:
+                # Skip if the block would exceed the available depth
+                if d + config.data.depth > volume.shape[0]:
+                    continue
+                
+                block = np.array(volume[d:d+config.data.depth, y:y+tile_size, x:x+tile_size]).astype(np.float32)
+                
+                # Apply normalization
+                block = (block - global_mean) / global_std
+                
+                # Apply mask
+                if block.ndim == 3 and mask.ndim == 2:
+                    mask_tile = mask[y:y+tile_size, x:x+tile_size]
+                    mask_tile = mask_tile.astype(np.uint8)
+                    mask_exp = np.expand_dims(mask_tile, axis=0)
+                    mask_exp = np.broadcast_to(mask_exp, block.shape)
+                    block[mask_exp == 0] = 0
+                
+                block = (block - global_min) / (global_max - global_min)
+                block = np.clip(block, 0, 1)
+                
+                if block.shape != (config.data.depth, tile_size, tile_size):
+                    print(f"Block shape mismatch: {block.shape} != ({config.data.depth}, {tile_size}, {tile_size})")
+                    continue
+                
+                batch_blocks.append(block)
+                batch_indices.append((y_off, x_off))
+            
+            if not batch_blocks:
+                continue
+            
+            batch_tensor = torch.from_numpy(np.stack(batch_blocks)).float().unsqueeze(1).to(device)
+            logits = model(batch_tensor)
+            preds = torch.sigmoid(logits).cpu().numpy().flatten()
+            
+            for (y_off, x_off), pred in zip(batch_indices, preds):
+                # Update the downsampled map at the corresponding pixel
+                y_idx = y_off // tile_size
+                x_idx = x_off // tile_size
+                if 0 <= y_idx < downsampled_H and 0 <= x_idx < downsampled_W:
+                    prediction_map[y_idx, x_idx] = pred
+            
+            del batch_tensor
+    
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return prediction_map
+
 class TensorboardVisualizer:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, mode: str = 'train'):
         self.config = config
+        self.mode = mode
 
         if config.experiment_name is None:
-            experiment_name = f"ink_detection_{datetime.now().strftime('%d.%m_%H:%M:%S')}"
+            if self.mode == 'finetune':
+                experiment_name = f"finetune_{datetime.now().strftime('%d.%m_%H:%M:%S')}"
+            else:
+                experiment_name = f"ink_detection_{datetime.now().strftime('%d.%m_%H:%M:%S')}"
         else:
             experiment_name = config.experiment_name + "_" +  datetime.now().strftime('%d_%H:%M:%S')
         
@@ -54,15 +149,16 @@ class TensorboardVisualizer:
             },
         }
 
-        self.volume, self.mask, self.labels, _, _, _ = load_tv_data(self.config)
-        self.global_mean, self.global_std, self.global_min, self.global_max = get_or_compute_normalization(self.config.data.train_segment_id, self.volume, self.mask)
-        
-        # Load test datasets with normalization
-        self.test_volume, self.test_mask, self.test_y_range, self.test_x_range = get_test_dataset(self.config)
-        self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max = get_or_compute_normalization(self.config.data.train_segment_id, self.test_volume, self.test_mask)
+        if self.mode == 'train':
+            self.volume, self.mask, self.labels, _, _, _ = load_tv_data(self.config)
+            self.global_mean, self.global_std, self.global_min, self.global_max = get_or_compute_normalization(self.config.data.train_segment_id, self.volume, self.mask)
+            
+            # Load test datasets with normalization
+            self.test_volume, self.test_mask, self.test_y_range, self.test_x_range = get_test_dataset(self.config)
+            self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max = get_or_compute_normalization(self.config.data.train_segment_id, self.test_volume, self.test_mask)
 
-        self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range = load_scroll4_data(self.config)
-        self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max = get_or_compute_normalization(self.config.data.scroll4_segment_id, self.scroll4_volume, self.scroll4_mask)
+            self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range = load_scroll4_data(self.config)
+            self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max = get_or_compute_normalization(self.config.data.scroll4_segment_id, self.scroll4_volume, self.scroll4_mask)
         
         self.writer = SummaryWriter(self.log_path)
         self.writer.add_custom_scalars(self.layout)
@@ -123,11 +219,11 @@ class TensorboardVisualizer:
             self.log_hyperparameters(params)
 
         # Add evaluation figures at specified intervals
-        if (epoch+1) % self.config.training.evaluation_interval == 0:
+        if self.mode == 'train' and (epoch+1) % self.config.training.evaluation_interval == 0:
             self.add_evaluation_figures(epoch, model)
 
         # Add test figures at specified intervals
-        if (epoch+1) % self.config.training.test_interval == 0:
+        if self.mode == 'train' and (epoch+1) % self.config.training.test_interval == 0:
             self.add_test_figures(epoch, model)
         
         self.writer.flush()
@@ -318,12 +414,6 @@ class TensorboardVisualizer:
         self.writer.add_figure('Performance_Analysis', fig, epoch)
         plt.close(fig)
 
-    def group_by_depth(self, coords):
-        grouped = defaultdict(list)
-        for d_off, y_off, x_off in coords:
-            grouped[d_off].append((d_off, y_off, x_off))
-        return grouped
-    
     def add_evaluation_figures(self, epoch, model):
         print("Starting evaluation figure generation...")
         model.eval()
@@ -331,8 +421,8 @@ class TensorboardVisualizer:
         train_coords, y_range, train_x_range, z_range = get_tile_coords_for_split(self.config, 'train')
         valid_coords, _, valid_x_range, _ = get_tile_coords_for_split(self.config, 'valid')
         
-        train_grouped = self.group_by_depth(train_coords)
-        valid_grouped = self.group_by_depth(valid_coords)
+        train_grouped = group_by_depth(train_coords)
+        valid_grouped = group_by_depth(valid_coords)
         all_depth_offsets = sorted(set(train_grouped.keys()) | set(valid_grouped.keys()))
         all_predictions_data = []
         
@@ -341,9 +431,8 @@ class TensorboardVisualizer:
             depth_end = depth_start + self.config.data.depth
             train_block_coords = train_grouped.get(d_off, [])
             valid_block_coords = valid_grouped.get(d_off, [])
-
-            train_predictions = self._predict_tiles(model, self.volume, self.mask, train_block_coords, y_range, train_x_range, depth_start, "training", self.global_mean, self.global_std, self.global_min, self.global_max)
-            valid_predictions = self._predict_tiles(model, self.volume, self.mask, valid_block_coords, y_range, valid_x_range, depth_start, "validation", self.global_mean, self.global_std, self.global_min, self.global_max)
+            train_predictions = predict_tiles(self.config, model, self.volume, self.mask, train_block_coords, y_range, train_x_range, depth_start, "training", self.global_mean, self.global_std, self.global_min, self.global_max)
+            valid_predictions = predict_tiles(self.config, model, self.volume, self.mask, valid_block_coords, y_range, valid_x_range, depth_start, "validation", self.global_mean, self.global_std, self.global_min, self.global_max)
 
             full_predictions = np.concatenate([train_predictions, valid_predictions], axis=1)
             all_predictions_data.append((full_predictions, train_predictions, depth_start, depth_end))
@@ -357,89 +446,7 @@ class TensorboardVisualizer:
                 self.writer.add_figure(f'Evaluation/Depth_Block_{depth_start}-{depth_end}', fig, epoch)
                 plt.close(fig)
 
-    def _predict_tiles(self, model, volume, mask, block_coords, y_range, x_range, depth_start, volume_name, global_mean, global_std, global_min, global_max):
-        tile_size = self.config.data.tile_size
-        region_H = y_range[1] - y_range[0]
-        region_W = x_range[1] - x_range[0]
-        
-        # Create a downsampled prediction map
-        downsampled_H = region_H // tile_size
-        downsampled_W = region_W // tile_size
-        prediction_map = np.zeros((downsampled_H, downsampled_W), dtype=np.float32)
-        
-        batch_size = self.config.dataloader.batch_size
-        device = self.config.device if torch.cuda.is_available() else "cpu"
-        
-        desc = f"Predicting tiles (depth {depth_start}-{depth_start + self.config.data.depth})"
-        
-        # Prepare all tile info for this block
-        tile_infos = []
-        for d_off, y_off, x_off in block_coords:
-            # Apply start_level offset only for training/validation volumes
-            if volume_name in ["training", "validation"]:
-                d = d_off + self.config.data.start_level
-            else:
-                d = d_off
-            if not (depth_start <= d < depth_start + self.config.data.depth):
-                continue
-            y = y_range[0] + y_off
-            x = x_range[0] + x_off
-            tile_infos.append((d, y, x, y_off, x_off))
-        
-        # Batched inference
-        with torch.no_grad():
-            for i in tqdm(range(0, len(tile_infos), batch_size), desc=desc, leave=True):
-                batch = tile_infos[i:i+batch_size]
-                batch_blocks = []
-                batch_indices = []
-                
-                for d, y, x, y_off, x_off in batch:
-                    # Skip if the block would exceed the available depth
-                    if d + self.config.data.depth > volume.shape[0]:
-                        continue
-                    
-                    block = np.array(volume[d:d+self.config.data.depth, y:y+tile_size, x:x+tile_size]).astype(np.float32)
-                    
-                    # Apply normalization
-                    block = (block - global_mean) / global_std
-                    
-                    # Apply mask
-                    if block.ndim == 3 and mask.ndim == 2:
-                        mask_tile = mask[y:y+tile_size, x:x+tile_size]
-                        mask_tile = mask_tile.astype(np.uint8)
-                        mask_exp = np.expand_dims(mask_tile, axis=0)
-                        mask_exp = np.broadcast_to(mask_exp, block.shape)
-                        block[mask_exp == 0] = 0
-                    
-                    block = (block - global_min) / (global_max - global_min)
-                    block = np.clip(block, 0, 1)
-                    
-                    if block.shape != (self.config.data.depth, tile_size, tile_size):
-                        print(f"Block shape mismatch: {block.shape} != ({self.config.data.depth}, {tile_size}, {tile_size})")
-                        continue
-                    
-                    batch_blocks.append(block)
-                    batch_indices.append((y_off, x_off))
-                
-                if not batch_blocks:
-                    continue
-                
-                batch_tensor = torch.from_numpy(np.stack(batch_blocks)).float().unsqueeze(1).to(device)
-                logits = model(batch_tensor)
-                preds = torch.sigmoid(logits).cpu().numpy().flatten()
-                
-                for (y_off, x_off), pred in zip(batch_indices, preds):
-                    # Update the downsampled map at the corresponding pixel
-                    y_idx = y_off // tile_size
-                    x_idx = x_off // tile_size
-                    if 0 <= y_idx < downsampled_H and 0 <= x_idx < downsampled_W:
-                        prediction_map[y_idx, x_idx] = pred
-                
-                del batch_tensor
-        
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        return prediction_map
+
 
     def add_test_figures(self, epoch, model):
         """Add test figures for both test and scroll4 data"""
@@ -456,13 +463,13 @@ class TensorboardVisualizer:
         """Generate predictions and create figure for a single test dataset"""
         z_range = (0, volume.shape[0])
         test_coords = generate_tile_coords(z_range, y_range, x_range, self.config, volume)
-        grouped = self.group_by_depth(test_coords)
+        grouped = group_by_depth(test_coords)
         all_depth_offsets = sorted(grouped.keys())
         all_predictions_data = []
         
         for depth_start in all_depth_offsets:
             block_coords = grouped[depth_start]
-            predictions = self._predict_tiles(model, volume, mask, block_coords, y_range, x_range, depth_start, test_name, global_mean, global_std, global_min, global_max)
+            predictions = predict_tiles(self.config, model, volume, mask, block_coords, y_range, x_range, depth_start, test_name, global_mean, global_std, global_min, global_max)
             depth_end = depth_start + self.config.data.depth
             all_predictions_data.append((predictions, depth_start, depth_end))
         

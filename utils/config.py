@@ -21,7 +21,7 @@ class DataloaderConfig:
 
 @dataclass
 class TrainingConfig:
-    num_epochs: int = 15
+    num_epochs: int = 10
     learning_rate: float = 1e-4
     weight_decay: float = 0
     # l1_lambda: float = 0
@@ -31,8 +31,8 @@ class TrainingConfig:
     lr_scheduler_factor: float = 0.5
     save_every_n_epochs: int = 10
     log_dir: str = './runs'
-    evaluation_interval: int = 15
-    test_interval: int = 15
+    evaluation_interval: int = 10
+    test_interval: int = 10
 
 @dataclass
 class ModelConfig:
