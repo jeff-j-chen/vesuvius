@@ -166,7 +166,7 @@ class TensorboardVisualizer:
         print(f"TensorBoard logs will be saved to: {self.log_path}")
         print(f"To view, run: tensorboard --logdir={config.training.log_dir}")
 
-    def log_epoch_metrics(self, epoch, model, train_metrics, val_metrics, learning_rate, time_elapsed, params):
+    def log_epoch_metrics(self, epoch, model, train_metrics, val_metrics, learning_rate, time_elapsed, params, pos_weight):
         """Log comprehensive metrics including class-wise metrics"""
         print(f"Logging metrics for epoch: {epoch+1}")
         
@@ -216,7 +216,7 @@ class TensorboardVisualizer:
             example_input = torch.randn(1, self.config.data.depth, self.config.data.tile_size, self.config.data.tile_size).to(self.config.device)
             example_input = example_input.unsqueeze(0)
             # self.log_model_graph(model, example_input)
-            self.log_hyperparameters(params)
+            self.log_hyperparameters(params, pos_weight)
 
         # Add evaluation figures at specified intervals
         if self.mode == 'train' and (epoch+1) % self.config.training.evaluation_interval == 0:
@@ -590,7 +590,7 @@ class TensorboardVisualizer:
                         except ValueError as e:
                             print(f"[WARNING] Could not log histogram for Gradients/{name}: {e}")
 
-    def log_hyperparameters(self, params):
+    def log_hyperparameters(self, params, pos_weight):
         self.writer.add_scalar("Hyperparameters/Tile Size", self.config.data.tile_size)
         self.writer.add_scalar("Hyperparameters/Depth", self.config.data.depth)
         self.writer.add_scalar("Hyperparameters/Batch Size", self.config.dataloader.batch_size)
@@ -606,6 +606,7 @@ class TensorboardVisualizer:
         self.writer.add_scalar("Hyperparameters/Patience", self.config.training.patience)
         self.writer.add_scalar("Hyperparameters/LR Scheduler Factor", self.config.training.lr_scheduler_factor)
         self.writer.add_scalar("Hyperparameters/Model Complexity", params)
+        self.writer.add_scalar("Hyperparameters/Pos Weight", pos_weight)
     
     def close(self):
         self.writer.close()

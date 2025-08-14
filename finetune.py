@@ -60,7 +60,7 @@ def main(config: Config, model_path: str):
 
     # --- 3. Setup Training Components ---
     # Use a smaller learning rate for fine-tuning
-    config.training.learning_rate = 1e-5
+    config.training.learning_rate = config.finetune.learning_rate
     optimizer, scheduler = create_optimizer_and_scheduler(model, config)
     
     # For fine-tuning, we can use a simple pos_weight or calculate it on the small dataset
@@ -74,9 +74,9 @@ def main(config: Config, model_path: str):
     best_val_loss = float('inf')
     scaler = GradScaler()
     
-    config.training.num_epochs = 25 # More epochs for fine-tuning on small data
+    num_epochs = config.finetune.num_epochs
     
-    for epoch in range(config.training.num_epochs):
+    for epoch in range(num_epochs):
         start_time = time.time()
         
         train_metrics = train_epoch(model, train_loader, criterion, optimizer, config, scaler)
@@ -92,7 +92,7 @@ def main(config: Config, model_path: str):
             print(f"New best F1 model saved! Val F1: {best_val_f1:.4f}")
 
         time_elapsed = time.time() - start_time
-        vis.log_epoch_metrics(epoch, model, train_metrics, val_metrics, current_lr, time_elapsed, params)
+        vis.log_epoch_metrics(epoch, model, train_metrics, val_metrics, current_lr, time_elapsed, params, pos_weight)
 
     vis.close()
     print("Fine-tuning completed.")
