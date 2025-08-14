@@ -4,7 +4,7 @@ import torch
 
 @dataclass
 class DataConfig:
-    zarr_path: str = "/media/jeff/SSD_2/ves_zarrs2/"
+    zarr_path: str = "/vesuvius/ves_zarrs2/"
     train_segment_id: int = 20230827161847
     # train_segment_id: int = 20230702185753
     scroll4_segment_id: int = 20231210132040
@@ -21,7 +21,7 @@ class DataloaderConfig:
 
 @dataclass
 class TrainingConfig:
-    num_epochs: int = 20
+    num_epochs: int = 1
     learning_rate: float = 1e-4
     weight_decay: float = 0
     # l1_lambda: float = 0
@@ -31,8 +31,8 @@ class TrainingConfig:
     lr_scheduler_factor: float = 0.5
     save_every_n_epochs: int = 10
     log_dir: str = './runs'
-    evaluation_interval: int = 20
-    test_interval: int = 20
+    evaluation_interval: int = 1
+    test_interval: int = 1
 
 @dataclass
 class FinetuneConfig:

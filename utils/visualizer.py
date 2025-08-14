@@ -474,11 +474,11 @@ class TensorboardVisualizer:
             all_predictions_data.append((predictions, depth_start, depth_end))
         
         if all_predictions_data:
-            fig = self._create_combined_test_figure(all_predictions_data, len(all_predictions_data), 0.3, test_name)
+            fig = self._create_combined_test_figure(all_predictions_data, len(all_predictions_data), test_name)
             self.writer.add_figure(f'Test/{test_name}_All_Depth_Blocks', fig, epoch)
             plt.close(fig)
 
-    def _create_evaluation_figure(self, prediction_data, labels, scale_factor=0.3):
+    def _create_evaluation_figure(self, prediction_data, labels):
         """Create an evaluation figure for a single depth block."""
         full_predictions, train_predictions, depth_start, depth_end = prediction_data
         
@@ -489,28 +489,28 @@ class TensorboardVisualizer:
         downsampled_labels = labels[::tile_size, ::tile_size]
 
         # Keep zoom function with factor of 1 as requested, using downsampled data directly.
-        scaled_full_predictions = ndimage.zoom(full_predictions, 1, order=1)
-        scaled_train_predictions = ndimage.zoom(train_predictions, 1, order=1)
+        # scaled_full_predictions = ndimage.zoom(full_predictions, 1, order=1)
+        # scaled_train_predictions = ndimage.zoom(train_predictions, 1, order=1)
         scaled_labels = ndimage.zoom(downsampled_labels, 1, order=0)
         
         # Left plot: Model predictions
         ax_pred = axes[0]
-        im1 = ax_pred.imshow(scaled_full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+        im1 = ax_pred.imshow(full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
         ax_pred.set_title(f'Predictions (Depth {depth_start}-{depth_end})', fontsize=9)
         
         # Adjust the dividing line position based on scaling
-        train_split_pos = scaled_train_predictions.shape[1] - 0.5
+        train_split_pos = train_predictions.shape[1] - 0.5
         ax_pred.axvline(x=train_split_pos, color='red', linestyle='--', linewidth=1.2)
         ax_pred.axis('off')
         
         # Right plot: Predictions + Ground Truth overlay
         ax_overlay = axes[1]
-        ax_overlay.imshow(scaled_full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+        ax_overlay.imshow(full_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
         ax_overlay.set_title(f'Overlay (Depth {depth_start}-{depth_end})', fontsize=9)
          
         if scaled_labels is not None:
             # Ensure label overlay matches the shape of the predictions
-            label_overlay = np.zeros((*scaled_full_predictions.shape, 4))
+            label_overlay = np.zeros((*full_predictions.shape, 4))
             # We need to handle the case where downsampled labels might be slightly different in size
             h, w = min(scaled_labels.shape[0], label_overlay.shape[0]), min(scaled_labels.shape[1], label_overlay.shape[1])
             label_overlay[:h, :w][scaled_labels[:h, :w] > 0.5] = [1, 1, 1, 0.4]  # White with 40% opacity
@@ -522,7 +522,7 @@ class TensorboardVisualizer:
         plt.subplots_adjust(wspace=0.05, hspace=0.05, left=0.05, right=0.95, top=0.95, bottom=0.05)
         return fig
 
-    def _create_combined_test_figure(self, all_predictions_data, num_depth_blocks, scale_factor, test_type):
+    def _create_combined_test_figure(self, all_predictions_data, num_depth_blocks, test_type):
         """Create combined test figure with predictions (no ground truth overlay)"""
         
         cols = 2
@@ -543,8 +543,8 @@ class TensorboardVisualizer:
         
         for block_idx, (predictions, depth_start, depth_end) in enumerate(all_predictions_data):
             ax1 = axes[block_idx // cols, block_idx % cols]
-            scaled_predictions = ndimage.zoom(predictions, scale_factor, order=1)
-            im = ax1.imshow(scaled_predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+            # scaled_predictions = ndimage.zoom(predictions, 1, order=1)
+            im = ax1.imshow(predictions, cmap='inferno', vmin=0, vmax=1, aspect='equal')
             ax1.set_title(f'Depth Block {depth_start}-{depth_end}', fontsize=9)
             ax1.axis('off')
         # Hide any unused subplots

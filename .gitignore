@@ -3,3 +3,4 @@
 .venv
 *.tar
 ves_zarrs2/
+.vscode/
