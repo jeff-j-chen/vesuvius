@@ -16,6 +16,7 @@ from .config import Config
 from .dataloader import get_test_dataset, load_scroll4_data, get_tile_coords_for_split, generate_tile_coords, get_or_compute_normalization, load_tv_data
 import scipy.ndimage as ndimage
 from collections import defaultdict
+import json
 
 def group_by_depth(coords):
     """Group tile coordinates by their depth offset."""
@@ -53,6 +54,9 @@ def predict_tiles(config, model, volume, mask, block_coords, y_range, x_range, d
         x = x_range[0] + x_off
         tile_infos.append((d, y, x, y_off, x_off))
     
+    debug_samples = []
+    debug_limit = 50
+    did_debug_log = False
     # Batched inference
     with torch.no_grad():
         for i in tqdm(range(0, len(tile_infos), batch_size), desc=desc, leave=True):
@@ -73,8 +77,10 @@ def predict_tiles(config, model, volume, mask, block_coords, y_range, x_range, d
                 # Apply mask
                 if block.ndim == 3 and mask.ndim == 2:
                     mask_tile = mask[y:y+tile_size, x:x+tile_size]
-                    mask_tile = mask_tile.astype(np.uint8)
-                    mask_exp = np.expand_dims(mask_tile, axis=0)
+                    # Previous code cast to uint8, turning fractional mask values (<1) into 0 (problem for scroll4).
+                    # Treat any positive value as valid region.
+                    binary_mask = (mask_tile > 0).astype(np.uint8)
+                    mask_exp = np.expand_dims(binary_mask, axis=0)
                     mask_exp = np.broadcast_to(mask_exp, block.shape)
                     block[mask_exp == 0] = 0
                 
@@ -159,6 +165,8 @@ class TensorboardVisualizer:
 
             self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range = load_scroll4_data(self.config)
             self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max = get_or_compute_normalization(self.config.data.scroll4_segment_id, self.scroll4_volume, self.scroll4_mask)
+        
+            self._debug_scroll4_ranges_once()
         
         self.writer = SummaryWriter(self.log_path)
         self.writer.add_custom_scalars(self.layout)
@@ -269,10 +277,8 @@ class TensorboardVisualizer:
         bins = np.linspace(0, 1, 51)
         
         # Plot overlapping histograms
-        ax.hist(train_metrics['scores'], bins=bins, alpha=0.6, label='Training', 
-                color='skyblue', edgecolor='black', density=True)
-        ax.hist(val_metrics['scores'], bins=bins, alpha=0.6, label='Validation', 
-                color='lightcoral', edgecolor='black', density=True)
+        ax.hist(train_metrics['scores'], bins=bins, alpha=0.6, label='Training', color='skyblue', edgecolor='black', density=True) # type: ignore
+        ax.hist(val_metrics['scores'], bins=bins, alpha=0.6, label='Validation', color='lightcoral', edgecolor='black', density=True) # type: ignore
         
         ax.set_xlabel('Model Output (Sigmoid Score)')
         ax.set_ylabel('Density')
@@ -425,6 +431,15 @@ class TensorboardVisualizer:
         valid_grouped = group_by_depth(valid_coords)
         all_depth_offsets = sorted(set(train_grouped.keys()) | set(valid_grouped.keys()))
         all_predictions_data = []
+        # Hard mining setup
+        do_mining = self.config.hard_mining.next_iter_ratio > 0
+        if do_mining:
+            mining_path = f"hard_mining_epoch_{epoch}.jsonl"
+            mining_f = open(mining_path, "w")
+            hn_cut = self.config.hard_mining.hard_negative_cutoff
+            hp_cut = self.config.hard_mining.hard_positive_cutoff
+            hard_neg_cnt = 0
+            hard_pos_cnt = 0
         
         for d_off in all_depth_offsets:
             depth_start = d_off + self.config.data.start_level
@@ -434,9 +449,46 @@ class TensorboardVisualizer:
             train_predictions = predict_tiles(self.config, model, self.volume, self.mask, train_block_coords, y_range, train_x_range, depth_start, "training", self.global_mean, self.global_std, self.global_min, self.global_max)
             valid_predictions = predict_tiles(self.config, model, self.volume, self.mask, valid_block_coords, y_range, valid_x_range, depth_start, "validation", self.global_mean, self.global_std, self.global_min, self.global_max)
 
+            # Hard mining (per train tile)
+            if do_mining and train_block_coords:
+                tile_size = self.config.data.tile_size
+                # Map coords to downsample indices
+                for (z_off, y_off, x_off) in train_block_coords:
+                    # indices
+                    y_idx = y_off // tile_size
+                    x_idx = x_off // tile_size
+                    if y_idx < 0 or y_idx >= train_predictions.shape[0] or x_idx < 0 or x_idx >= train_predictions.shape[1]:
+                        continue
+                    score = float(train_predictions[y_idx, x_idx])
+                    # Global coordinates
+                    z_global = depth_start
+                    y_global = y_range[0] + y_off
+                    x_global = train_x_range[0] + x_off
+                    # Label
+                    label_tile = self.labels[
+                        y_global:y_global+tile_size,
+                        x_global:x_global+tile_size
+                    ]
+                    has_ink = int(np.any(label_tile > 0.5))
+                    # Decide hard
+                    if has_ink == 0 and score >= hn_cut:
+                        mining_f.write(json.dumps({"z": z_global, "y": y_global, "x": x_global, "score": score, "label": 0}) + "\n")
+                        hard_neg_cnt += 1
+                    elif has_ink == 1 and score <= hp_cut:
+                        mining_f.write(json.dumps({"z": z_global, "y": y_global, "x": x_global, "score": score, "label": 1}) + "\n")
+                        hard_pos_cnt += 1
+
             full_predictions = np.concatenate([train_predictions, valid_predictions], axis=1)
             all_predictions_data.append((full_predictions, train_predictions, depth_start, depth_end))
         
+        if do_mining:
+            # Meta line with counts
+            mining_f.write(json.dumps({"_type": "meta", "hard_negatives": hard_neg_cnt, "hard_positives": hard_pos_cnt}) + "\n")
+            mining_f.close()
+            # Log counts
+            self.writer.add_scalar("HardMining/HardNegatives", hard_neg_cnt, epoch)
+            self.writer.add_scalar("HardMining/HardPositives", hard_pos_cnt, epoch)
+
         if all_predictions_data:
             cropped_labels = self.labels[y_range[0]:y_range[1], train_x_range[0]:valid_x_range[1]]
             for prediction_data in all_predictions_data:
@@ -611,3 +663,41 @@ class TensorboardVisualizer:
     def close(self):
         self.writer.close()
         print(f"TensorBoard logs saved to: {self.log_path}")
+    
+    def _debug_scroll4_ranges_once(self):
+        """One-time detailed sanity checks for scroll4 coordinate / mask alignment."""
+        try:
+            vol = self.scroll4_volume
+            mask = self.scroll4_mask
+            y_range = self.scroll4_y_range
+            x_range = self.scroll4_x_range
+            issues = []
+            # Shape checks
+            if mask.shape != (vol.shape[1], vol.shape[2]):
+                issues.append(f"Mask shape {mask.shape} != volume spatial {(vol.shape[1], vol.shape[2])}")
+            # Range bounds
+            if not (0 <= y_range[0] < y_range[1] <= vol.shape[1]):
+                issues.append(f"Y range {y_range} out of bounds (0,{vol.shape[1]})")
+            if not (0 <= x_range[0] < x_range[1] <= vol.shape[2]):
+                issues.append(f"X range {x_range} out of bounds (0,{vol.shape[2]})")
+            # Tile alignment
+            tile = self.config.data.tile_size
+            if (y_range[0] % tile != 0) or (x_range[0] % tile != 0):
+                issues.append(f"Ranges not tile aligned: y_start%tile={y_range[0]%tile}, x_start%tile={x_range[0]%tile}")
+            # Mask coverage stats inside region
+            region_mask = mask[y_range[0]:y_range[1], x_range[0]:x_range[1]]
+            if region_mask.size == 0:
+                issues.append("Region mask slice empty")
+            else:
+                nz_frac = (region_mask > 0).mean()
+                print(f"[SCROLL4 DEBUG] Region mask non-zero fraction: {nz_frac:.4f}")
+                if nz_frac == 0:
+                    issues.append("Region mask entirely zero")
+            if issues:
+                print("[SCROLL4 DEBUG] Potential issues detected:")
+                for iss in issues:
+                    print(" -", iss)
+            else:
+                print("[SCROLL4 DEBUG] Scroll4 mask / range basic checks passed.")
+        except Exception as e:
+            print(f"[SCROLL4 DEBUG] Exception during range debug: {e}")

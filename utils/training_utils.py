@@ -48,7 +48,7 @@ def create_loss_function(pos_weight, config: Config):
     """Create loss function with optional class weighting"""
     criterion = nn.BCEWithLogitsLoss(
         pos_weight=pos_weight.to(config.device) if pos_weight is not None else None
-    )asd
+    )
     return criterion
 
 def save_model(model, path):

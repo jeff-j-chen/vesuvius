@@ -15,6 +15,7 @@ import time
 from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 import argparse
+from utils.hard_mining import HardMiningManager, HardMiningInjector
 
 def set_seed(seed=42):
     import random, numpy as np, torch
@@ -86,17 +87,33 @@ def calculate_metrics(y_true, y_pred, y_scores):
     return metrics
 
 
-def train_epoch(model, train_loader, criterion, optimizer, config: Config, scaler: GradScaler):
+def train_epoch(model, train_loader, criterion, optimizer, config: Config, scaler: GradScaler, hard_injector: HardMiningInjector):
     """Train for one epoch with L1 regularization and mask-based loss zeroing."""
     model.train()
     train_loss, train_raw_loss = 0.0, 0.0
     all_labels = []
     all_predictions = []
     all_scores = []
-    for batch_images, batch_labels, mask in tqdm(train_loader, desc="Training"):
-        # Safety check: mask sum must be non-zero
-        if mask.sum() <= 0:
-            print("[ERROR] Encountered batch with mask sum == 0. This block should not be loaded!")
+    total_batches = len(train_loader)
+    for batch_idx, (batch_images, batch_labels, mask) in enumerate(tqdm(train_loader, desc="Training")):
+        # Hard mining injection
+        if hard_injector and hard_injector.has_next():
+            # Determine how many to inject this batch
+            remaining_batches = total_batches - batch_idx
+            remaining_needed = hard_injector.remaining()
+            inject_n = min(batch_images.size(0), (remaining_needed + remaining_batches - 1) // remaining_batches)
+            if inject_n > 0:
+                replace_indices = np.random.choice(batch_images.size(0), inject_n, replace=False)
+                for ri in replace_indices:
+                    sample = None
+                    while hard_injector.has_next() and sample is None:
+                        sample = hard_injector.next_sample()
+                    if sample is None:
+                        break
+                    hi_block, hi_label, hi_mask = sample
+                    batch_images[ri] = hi_block.to(config.device)
+                    batch_labels[ri] = hi_label.to(config.device)
+                    mask[ri] = hi_mask.to(config.device)
 
         batch_images = batch_images.to(config.device)
         batch_labels = batch_labels.to(config.device).view(-1, 1)
@@ -246,6 +263,7 @@ def main(config: Config):
     print("Initializing Tensorboard...")
     start_time = time.time()
     vis = TensorboardVisualizer(config)
+    hard_manager = HardMiningManager(vis.log_path)
     best_val_loss = float('inf')
     best_val_f1 = 0.0
     
@@ -256,7 +274,18 @@ def main(config: Config):
         if epoch >= 5 and config.dataloader.apply_transforms:
             train_dataset.apply_transforms = True
         
-        train_metrics = train_epoch(model, train_loader, criterion, optimizer, config, scaler)
+        # Prepare hard injector from previous epoch mining file (if evaluation had run)
+        hard_injector = None
+        if config.hard_mining.next_iter_ratio > 0 and epoch > 0:
+            prev_eval_epoch = epoch - 1
+            if (prev_eval_epoch + 1) % config.training.evaluation_interval == 0 and hard_manager.mined_file_exists(prev_eval_epoch):
+                target_hard = int(config.hard_mining.next_iter_ratio * len(train_dataset))
+                samples = hard_manager.sample_for_epoch(prev_eval_epoch, target_hard)
+                if samples:
+                    hard_injector = HardMiningInjector(samples, train_dataset)
+                    vis.writer.add_scalar("HardMining/InjectedSamples", len(samples), epoch)
+
+        train_metrics = train_epoch(model, train_loader, criterion, optimizer, config, scaler, hard_injector)
         val_metrics = validate_epoch(model, valid_loader, criterion, config, scaler)
         
         scheduler.step(val_metrics['loss'])
