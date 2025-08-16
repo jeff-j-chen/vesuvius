@@ -1,6 +1,6 @@
 {
-    "python.analysis.typeCheckingMode": "standard",
-    "python.languageServer": "Pylance",
+    "python.analysis.typeCheckingMode": "off",
+    "python.languageServer": "None",
     "cursorpyright.analysis.typeCheckingMode": "standard",
     "python-envs.pythonProjects": [],
 }

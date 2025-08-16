@@ -16,6 +16,7 @@ from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 import argparse
 from utils.hard_mining import HardMiningManager, HardMiningInjector
+import os
 
 def set_seed(seed=42):
     import random, numpy as np, torch
@@ -87,21 +88,26 @@ def calculate_metrics(y_true, y_pred, y_scores):
     return metrics
 
 
-def train_epoch(model, train_loader, criterion, optimizer, config: Config, scaler: GradScaler, hard_injector: HardMiningInjector):
+def train_epoch(model, train_loader, criterion, optimizer, config: Config, scaler: GradScaler,
+                hard_injector: HardMiningInjector, suppress_hard_logging: bool = False):
     """Train for one epoch with L1 regularization and mask-based loss zeroing."""
     model.train()
     train_loss, train_raw_loss = 0.0, 0.0
-    all_labels = []
-    all_predictions = []
-    all_scores = []
+    all_labels = []; all_predictions = []; all_scores = []
     total_batches = len(train_loader)
+    # --- diagnostics counters ---
+    hard_planned_total = 0
+    hard_injected_total = 0
+    hard_skipped_total = 0
+
     for batch_idx, (batch_images, batch_labels, mask) in enumerate(tqdm(train_loader, desc="Training")):
         # Hard mining injection
         if hard_injector and hard_injector.has_next():
-            # Determine how many to inject this batch
             remaining_batches = total_batches - batch_idx
             remaining_needed = hard_injector.remaining()
             inject_n = min(batch_images.size(0), (remaining_needed + remaining_batches - 1) // remaining_batches)
+            hard_planned_total += inject_n
+            actual_injected = 0
             if inject_n > 0:
                 replace_indices = np.random.choice(batch_images.size(0), inject_n, replace=False)
                 for ri in replace_indices:
@@ -114,57 +120,56 @@ def train_epoch(model, train_loader, criterion, optimizer, config: Config, scale
                     batch_images[ri] = hi_block.to(config.device)
                     batch_labels[ri] = hi_label.to(config.device)
                     mask[ri] = hi_mask.to(config.device)
-
+                    actual_injected += 1
+                hard_injected_total += actual_injected
+                hard_skipped_total += (inject_n - actual_injected)
+            # Throttled debug printing
+            if not suppress_hard_logging:
+                if batch_idx == 0 or batch_idx == total_batches - 1:
+                    print(f"[HARD][Batch {batch_idx}/{total_batches}] planned={inject_n} injected={actual_injected} "
+                          f"remaining={hard_injector.remaining()} used_total={hard_injector.used} skipped_total={hard_injector.skipped}")
         batch_images = batch_images.to(config.device)
         batch_labels = batch_labels.to(config.device).view(-1, 1)
-        mask = mask.to(config.device).view(-1, 1)  # Ensure mask matches the shape of the loss
+        mask = mask.to(config.device).view(-1, 1)
 
         optimizer.zero_grad()
-
         with autocast(config.device):
             outputs = model(batch_images)
             raw_loss = criterion(outputs, batch_labels)
-
-            # Zero out loss in masked-out regions
-            raw_loss = raw_loss * mask  # Apply mask to the loss
+            raw_loss = raw_loss * mask
             if mask.sum() <= 0:
                 print("[ERROR] Mask sum is zero, skipping loss calculation.")
                 continue
-            raw_loss = raw_loss.sum() / mask.sum()  # Normalize by the number of valid regions
-
+            raw_loss = raw_loss.sum() / mask.sum()
             l1_loss = sum(p.abs().sum() for p in model.parameters())
             loss = raw_loss + config.training.l1_lambda * l1_loss
 
         scaler.scale(loss).backward()
-
-        # Gradient clipping
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.training.max_grad_norm)
-
         scaler.step(optimizer)
         scaler.update()
 
         train_loss += loss.item()
         train_raw_loss += raw_loss.item()
 
-        # Predictions and metrics
         scores = torch.sigmoid(outputs).cpu().detach().numpy().flatten()
         predicted = (scores > 0.5).astype(int)
         labels = batch_labels.cpu().detach().numpy().flatten().astype(int)
+        all_labels.extend(labels); all_predictions.extend(predicted); all_scores.extend(scores)
 
-        all_labels.extend(labels)
-        all_predictions.extend(predicted)
-        all_scores.extend(scores)
-
-    metrics = calculate_metrics(
-        np.array(all_labels),
-        np.array(all_predictions),
-        np.array(all_scores)
-    )
-
+    metrics = calculate_metrics(np.array(all_labels), np.array(all_predictions), np.array(all_scores))
     metrics['loss'] = train_loss / len(train_loader)
     metrics['raw_loss'] = train_raw_loss / len(train_loader)
     metrics['scores'] = all_scores
-
+    # Diagnostics summary
+    metrics['hard_planned'] = hard_planned_total
+    metrics['hard_injected'] = hard_injected_total
+    metrics['hard_skipped'] = hard_skipped_total
+    if hard_injector and not suppress_hard_logging:
+        st = hard_injector.stats()
+        print(f"[HARD][Epoch Summary] planned={hard_planned_total} injected={hard_injected_total} "
+              f"skipped={hard_skipped_total} injector_used={st['used']} injector_skipped={st['skipped']} "
+              f"reasons={st['skip_reasons']}")
     return metrics
 
 
@@ -233,6 +238,8 @@ def periodic_model_save(model, epoch, val_metrics, best_val_f1, best_val_loss):
     # Save periodic checkpoints
     if (epoch+1) % config.training.save_every_n_epochs == 0:
         save_model(model, f'{config.model_dir}/model_epoch_{epoch+1}.pth')
+    
+    return best_val_f1, best_val_loss  # ensure updated values propagate
 
 def main(config: Config):
     set_seed(41)
@@ -268,6 +275,7 @@ def main(config: Config):
     best_val_f1 = 0.0
     
     scaler = GradScaler()
+    injection_started = False  # Track whether we've ever injected
     for epoch in range(config.training.num_epochs):
         start_time = time.time()
         # Activate transforms only after epoch 5
@@ -278,24 +286,43 @@ def main(config: Config):
         hard_injector = None
         if config.hard_mining.next_iter_ratio > 0 and epoch > 0:
             prev_eval_epoch = epoch - 1
-            if (prev_eval_epoch + 1) % config.training.evaluation_interval == 0 and hard_manager.mined_file_exists(prev_eval_epoch):
-                target_hard = int(config.hard_mining.next_iter_ratio * len(train_dataset))
-                samples = hard_manager.sample_for_epoch(prev_eval_epoch, target_hard)
-                if samples:
-                    hard_injector = HardMiningInjector(samples, train_dataset)
-                    vis.writer.add_scalar("HardMining/InjectedSamples", len(samples), epoch)
-
-        train_metrics = train_epoch(model, train_loader, criterion, optimizer, config, scaler, hard_injector)
+            if (prev_eval_epoch + 1) % config.training.evaluation_interval == 0:
+                # Debug expected file locations
+                expected_primary = hard_manager._epoch_file(prev_eval_epoch)
+                expected_fallback = hard_manager._fallback_epoch_file(prev_eval_epoch)
+                if not hard_manager.mined_file_exists(prev_eval_epoch):
+                    print(f"[HARD][Epoch {epoch}] Expected mining file missing. Searched: "
+                          f"primary='{expected_primary}' exists={os.path.exists(expected_primary)} "
+                          f"fallback='{expected_fallback}' exists={os.path.exists(expected_fallback)}")
+                else:
+                    target_hard = int(config.hard_mining.next_iter_ratio * len(train_dataset))
+                    samples = hard_manager.sample_for_epoch(prev_eval_epoch, target_hard)
+                    if samples:
+                        # Only set injection_started after initial print
+                        preview = samples[:5]
+                        print(f"[HARD][Epoch {epoch}] Injector creating from epoch {prev_eval_epoch} "
+                              f"file (target={target_hard} got={len(samples)}) preview="
+                              f"{[(p['z'],p['y'],p['x'],p['label']) for p in preview]}")
+                        hard_injector = HardMiningInjector(samples, train_dataset)
+                        injection_started = True
+                        vis.writer.add_scalar("HardMining/InjectedSamplesPlanned", len(samples), epoch)
+                    else:
+                        print(f"[HARD][Epoch {epoch}] Mining file present but no samples selected.")
+        # Train
+        train_metrics = train_epoch(model, train_loader, criterion, optimizer, config, scaler, hard_injector, suppress_hard_logging=not injection_started)
+        # Validate
         val_metrics = validate_epoch(model, valid_loader, criterion, config, scaler)
-        
+        # Scheduler & model save
         scheduler.step(val_metrics['loss'])
         current_lr = optimizer.param_groups[0]['lr']
-
-        periodic_model_save(model, epoch, val_metrics, best_val_f1, best_val_loss)
-
+        best_val_f1, best_val_loss = periodic_model_save(model, epoch, val_metrics, best_val_f1, best_val_loss)
+        # Logging
         time_elapsed = time.time() - start_time
         vis.log_epoch_metrics(epoch, model, train_metrics, val_metrics, current_lr, time_elapsed, params, pos_weight)
-
+        # Extra logging to Tensorboard
+        vis.writer.add_scalar("HardMining/Planned", train_metrics.get('hard_planned', 0), epoch)
+        vis.writer.add_scalar("HardMining/Injected", train_metrics.get('hard_injected', 0), epoch)
+        vis.writer.add_scalar("HardMining/Skipped", train_metrics.get('hard_skipped', 0), epoch)
     vis.close()
     print("Training completed...")
 
@@ -423,6 +450,9 @@ if __name__ == "__main__":
     #     main(config)
 
     #     config.data.end_level -= 4
+    #     print(f"entry {config.data.start_level} to {config.data.end_level}")
+    #     config.experiment_name = f"3dmodel_redo_{config.data.start_level}_{config.data.end_level}"
+    #     main(config)
     #     print(f"entry {config.data.start_level} to {config.data.end_level}")
     #     config.experiment_name = f"3dmodel_redo_{config.data.start_level}_{config.data.end_level}"
     #     main(config)

@@ -434,8 +434,11 @@ class TensorboardVisualizer:
         # Hard mining setup
         do_mining = self.config.hard_mining.next_iter_ratio > 0
         if do_mining:
-            mining_path = f"hard_mining_epoch_{epoch}.jsonl"
+            # Ensure mining file is written where HardMiningManager expects
+            mining_path = os.path.join(self.log_path, f"hard_mining_epoch_{epoch}.jsonl")
+            os.makedirs(self.log_path, exist_ok=True)
             mining_f = open(mining_path, "w")
+            print(f"[HARD][Eval] Writing mining file to: {mining_path}")
             hn_cut = self.config.hard_mining.hard_negative_cutoff
             hp_cut = self.config.hard_mining.hard_positive_cutoff
             hard_neg_cnt = 0
@@ -485,6 +488,7 @@ class TensorboardVisualizer:
             # Meta line with counts
             mining_f.write(json.dumps({"_type": "meta", "hard_negatives": hard_neg_cnt, "hard_positives": hard_pos_cnt}) + "\n")
             mining_f.close()
+            print(f"[HARD][Eval] Finished mining epoch {epoch}: neg={hard_neg_cnt} pos={hard_pos_cnt}")
             # Log counts
             self.writer.add_scalar("HardMining/HardNegatives", hard_neg_cnt, epoch)
             self.writer.add_scalar("HardMining/HardPositives", hard_pos_cnt, epoch)
