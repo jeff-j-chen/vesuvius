@@ -27,12 +27,22 @@ class TrainingConfig:
     # l1_lambda: float = 0
     l1_lambda: float = 7e-6
     max_grad_norm: float = 1.0
+
     patience: int = 5
     lr_scheduler_factor: float = 0.5
-    save_every_n_epochs: int = 10
-    log_dir: str = './runs'
-    evaluation_interval: int = 25
+    warmup_epochs: int = 5
+    eval_rewarm_epochs: int = 5
+    eval_drop_factor: float = 0.001
+
+    epoch_save_freq: int = 10
+    evaluation_interval: int = 20
     test_interval: int = 50
+
+
+@dataclass
+class HardMining:
+    hard_negative_cutoff: float = 0.8
+    hard_positive_cutoff: float = 0.4
 
 @dataclass
 class FinetuneConfig:
@@ -49,12 +59,6 @@ class ModelConfig:
     conv2_drop: float = 0.05
     fc1_drop: float = 0.2
     fc2_drop: float = 0.1
-
-@dataclass
-class HardMining:
-    hard_negative_cutoff: float = 0.55
-    hard_positive_cutoff: float = 0.45
-    next_iter_ratio: float = 0.5
 
 @dataclass
 class Config:

@@ -12,8 +12,10 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
+import cv2  # added
 from .config import Config
 from .dataloader import get_test_dataset, load_scroll4_data, get_tile_coords_for_split, generate_tile_coords, get_or_compute_normalization, load_tv_data
+from .hard_mining import ensure_hard_negs_dir, mining_filename
 import scipy.ndimage as ndimage
 from collections import defaultdict
 import json
@@ -127,7 +129,8 @@ class TensorboardVisualizer:
         else:
             experiment_name = config.experiment_name + "_" +  datetime.now().strftime('%d_%H:%M:%S')
         
-        self.log_path = os.path.join(config.training.log_dir, experiment_name)
+        self.log_dir = "./runs"
+        self.log_path = os.path.join(self.log_dir, experiment_name)
         
         # Enhanced layout with class-wise metrics
         self.layout = {
@@ -172,7 +175,7 @@ class TensorboardVisualizer:
         self.writer.add_custom_scalars(self.layout)
 
         print(f"TensorBoard logs will be saved to: {self.log_path}")
-        print(f"To view, run: tensorboard --logdir={config.training.log_dir}")
+        print(f"To view, run: tensorboard --logdir={self.log_dir}")
 
     def log_epoch_metrics(self, epoch, model, train_metrics, val_metrics, learning_rate, time_elapsed, params, pos_weight):
         """Log comprehensive metrics including class-wise metrics"""
@@ -432,18 +435,13 @@ class TensorboardVisualizer:
         all_depth_offsets = sorted(set(train_grouped.keys()) | set(valid_grouped.keys()))
         all_predictions_data = []
         # Hard mining setup
-        do_mining = self.config.hard_mining.next_iter_ratio > 0
-        if do_mining:
-            # Ensure mining file is written where HardMiningManager expects
-            mining_path = os.path.join(self.log_path, f"hard_mining_epoch_{epoch}.jsonl")
-            os.makedirs(self.log_path, exist_ok=True)
-            mining_f = open(mining_path, "w")
-            print(f"[HARD][Eval] Writing mining file to: {mining_path}")
-            hn_cut = self.config.hard_mining.hard_negative_cutoff
-            hp_cut = self.config.hard_mining.hard_positive_cutoff
-            hard_neg_cnt = 0
-            hard_pos_cnt = 0
-        
+        hard_dir = ensure_hard_negs_dir()
+        mining_path = mining_filename(epoch)
+        hn_cut = self.config.hard_mining.hard_negative_cutoff
+        hp_cut = self.config.hard_mining.hard_positive_cutoff
+        hard_neg_cnt = 0; hard_pos_cnt = 0
+        mf = open(mining_path, "w")
+        print(f"[HARD][Eval] Mining file: {mining_path}")
         for d_off in all_depth_offsets:
             depth_start = d_off + self.config.data.start_level
             depth_end = depth_start + self.config.data.depth
@@ -452,47 +450,46 @@ class TensorboardVisualizer:
             train_predictions = predict_tiles(self.config, model, self.volume, self.mask, train_block_coords, y_range, train_x_range, depth_start, "training", self.global_mean, self.global_std, self.global_min, self.global_max)
             valid_predictions = predict_tiles(self.config, model, self.volume, self.mask, valid_block_coords, y_range, valid_x_range, depth_start, "validation", self.global_mean, self.global_std, self.global_min, self.global_max)
 
-            # Hard mining (per train tile)
-            if do_mining and train_block_coords:
-                tile_size = self.config.data.tile_size
-                # Map coords to downsample indices
-                for (z_off, y_off, x_off) in train_block_coords:
-                    # indices
-                    y_idx = y_off // tile_size
-                    x_idx = x_off // tile_size
-                    if y_idx < 0 or y_idx >= train_predictions.shape[0] or x_idx < 0 or x_idx >= train_predictions.shape[1]:
-                        continue
-                    score = float(train_predictions[y_idx, x_idx])
-                    # Global coordinates
-                    z_global = depth_start
-                    y_global = y_range[0] + y_off
-                    x_global = train_x_range[0] + x_off
-                    # Label
-                    label_tile = self.labels[
-                        y_global:y_global+tile_size,
-                        x_global:x_global+tile_size
-                    ]
-                    has_ink = int(np.any(label_tile > 0.5))
-                    # Decide hard
-                    if has_ink == 0 and score >= hn_cut:
-                        mining_f.write(json.dumps({"z": z_global, "y": y_global, "x": x_global, "score": score, "label": 0}) + "\n")
-                        hard_neg_cnt += 1
-                    elif has_ink == 1 and score <= hp_cut:
-                        mining_f.write(json.dumps({"z": z_global, "y": y_global, "x": x_global, "score": score, "label": 1}) + "\n")
-                        hard_pos_cnt += 1
+            tile_size = self.config.data.tile_size
+            # Map coords to downsample indices
+            for (z_off, y_off, x_off) in train_block_coords:
+                # indices
+                y_idx = y_off // tile_size
+                x_idx = x_off // tile_size
+                if y_idx < 0 or y_idx >= train_predictions.shape[0] or x_idx < 0 or x_idx >= train_predictions.shape[1]:
+                    continue
+                score = float(train_predictions[y_idx, x_idx])
+                # Global coordinates
+                z_global = depth_start
+                y_global = y_range[0] + y_off
+                x_global = train_x_range[0] + x_off
+                # Label
+                label_tile = self.labels[
+                    y_global:y_global+tile_size,
+                    x_global:x_global+tile_size
+                ]
+                has_ink = int(np.any(label_tile > 0.5))
+                # Decide hard
+                if has_ink == 0 and score >= hn_cut:
+                    mf.write(json.dumps({"z": z_global, "y": y_global, "x": x_global, "score": score, "label": 0}) + "\n")
+                    hard_neg_cnt += 1
+                elif has_ink == 1 and score <= hp_cut:
+                    mf.write(json.dumps({"z": z_global, "y": y_global, "x": x_global, "score": score, "label": 1}) + "\n")
+                    hard_pos_cnt += 1
 
             full_predictions = np.concatenate([train_predictions, valid_predictions], axis=1)
             all_predictions_data.append((full_predictions, train_predictions, depth_start, depth_end))
         
-        if do_mining:
-            # Meta line with counts
-            mining_f.write(json.dumps({"_type": "meta", "hard_negatives": hard_neg_cnt, "hard_positives": hard_pos_cnt}) + "\n")
-            mining_f.close()
-            print(f"[HARD][Eval] Finished mining epoch {epoch}: neg={hard_neg_cnt} pos={hard_pos_cnt}")
-            # Log counts
-            self.writer.add_scalar("HardMining/HardNegatives", hard_neg_cnt, epoch)
-            self.writer.add_scalar("HardMining/HardPositives", hard_pos_cnt, epoch)
-
+        mf.write(json.dumps({"_type":"meta","hard_negatives":hard_neg_cnt,"hard_positives":hard_pos_cnt}) + "\n")
+        mf.close()
+        print(f"[HARD][Eval] Counts neg={hard_neg_cnt} pos={hard_pos_cnt}")
+        self.writer.add_scalar("HardMining/HardNegatives", hard_neg_cnt, epoch)
+        self.writer.add_scalar("HardMining/HardPositives", hard_pos_cnt, epoch)
+        fig = self._create_hard_examples_overlay(mining_path)
+        if fig is not None:
+            self.writer.add_figure(f"HardMined/Overlays/epoch_{epoch}", fig, epoch)
+            plt.close(fig)
+        
         if all_predictions_data:
             cropped_labels = self.labels[y_range[0]:y_range[1], train_x_range[0]:valid_x_range[1]]
             for prediction_data in all_predictions_data:
@@ -705,3 +702,185 @@ class TensorboardVisualizer:
                 print("[SCROLL4 DEBUG] Scroll4 mask / range basic checks passed.")
         except Exception as e:
             print(f"[SCROLL4 DEBUG] Exception during range debug: {e}")
+
+    def _create_hard_examples_overlay(self, mining_path):
+        """
+        Downsampled (tile-grid) recreation of visualize_hard_examples:
+          - Base: grayscale eroded ink labels (cropped) converted to BGR then downsampled (1 pixel per tile).
+          - Hard negatives (label 0): blue tile (B channel) intensity = score.
+          - Hard positives (label 1): red tile (R channel) intensity = 1 - score.
+          - Alpha blend per tile: new = alpha*color + (1-alpha)*orig (alpha=0.45).
+        """
+        if not os.path.exists(mining_path):
+            return None
+        seg_id = self.config.data.train_segment_id
+        label_path = f"./eroded_inklabels/{seg_id}.png"
+        if not os.path.exists(label_path):
+            return None
+        label_gray = cv2.imread(label_path, cv2.IMREAD_GRAYSCALE)
+        if label_gray is None:
+            return None
+
+        # Training region crop (keep logic consistent with notebook)
+        if seg_id == 20230827161847:
+            y0, y1 = 200, 5600
+            x0, x1 = 1000, 4600
+        else:
+            y0, y1 = 0, label_gray.shape[0]
+            x0, x1 = 0, label_gray.shape[1]
+
+        cropped_gray = label_gray[y0:y1, x0:x1]
+        tile = self.config.data.tile_size
+        H_tiles = cropped_gray.shape[0] // tile
+        W_tiles = cropped_gray.shape[1] // tile
+        if H_tiles <= 0 or W_tiles <= 0:
+            return None
+
+        # Downsample: take top-left pixel of each tile (cheap & deterministic)
+        base_small_gray = cropped_gray[:H_tiles * tile:tile, :W_tiles * tile:tile].astype(np.float32)
+        if base_small_gray.shape != (H_tiles, W_tiles):
+            return None
+
+        # Convert to BGR (replicate gray across channels)
+        base_small = np.stack([base_small_gray, base_small_gray, base_small_gray], axis=-1)  # BGR uint8-ish domain
+        # Keep float for blending
+        canvas_template = base_small.copy()
+
+        # Load mined records grouped by z
+        by_z = {}
+        with open(mining_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("_type"):
+                    continue
+                z = obj.get("z")
+                lbl = obj.get("label")
+                if z is None or lbl not in (0, 1):
+                    continue
+                by_z.setdefault(z, {"neg": [], "pos": []})
+                if lbl == 0:
+                    by_z[z]["neg"].append(obj)
+                else:
+                    by_z[z]["pos"].append(obj)
+        if not by_z:
+            return None
+
+        zs = sorted(by_z.keys())
+        cols = 4
+        rows = (len(zs) + cols - 1) // cols
+        fig, axes = plt.subplots(rows, cols, figsize=(cols * 3, rows * 6))
+        axes = np.array(axes).reshape(rows, cols)
+        alpha = 0.45
+
+        for idx, z in enumerate(zs):
+            ax = axes[idx // cols, idx % cols]
+            canvas = canvas_template.copy()  # fresh base for each z (BGR float)
+
+            # Negatives (blue channel, intensity = score)
+            for rec in by_z[z]["neg"]:
+                xg, yg = rec["x"], rec["y"]
+                x_rel, y_rel = xg - x0, yg - y0
+                if x_rel < 0 or y_rel < 0:
+                    continue
+                x_idx = x_rel // tile
+                y_idx = y_rel // tile
+                if not (0 <= x_idx < W_tiles and 0 <= y_idx < H_tiles):
+                    continue
+                score = float(rec.get("score", 0.0))
+                intensity = max(0.0, min(1.0, score))
+                b_val = 255.0 * intensity
+                # Alpha blend this "tile pixel"
+                orig = canvas[y_idx, x_idx]
+                blend_color = np.array([b_val, 0.0, 0.0], dtype=np.float32)
+                canvas[y_idx, x_idx] = alpha * blend_color + (1 - alpha) * orig
+
+            # Positives (red channel, intensity = 1 - score)
+            for rec in by_z[z]["pos"]:
+                xg, yg = rec["x"], rec["y"]
+                x_rel, y_rel = xg - x0, yg - y0
+                if x_rel < 0 or y_rel < 0:
+                    continue
+                x_idx = x_rel // tile
+                y_idx = y_rel // tile
+                if not (0 <= x_idx < W_tiles and 0 <= y_idx < H_tiles):
+                    continue
+                score = float(rec.get("score", 0.0))
+                intensity = max(0.0, min(1.0, 1.0 - score))
+                r_val = 255.0 * intensity
+                orig = canvas[y_idx, x_idx]
+                blend_color = np.array([0.0, 0.0, r_val], dtype=np.float32)
+                canvas[y_idx, x_idx] = alpha * blend_color + (1 - alpha) * orig
+
+            # Display: convert BGR -> RGB for matplotlib
+            ax.imshow(canvas[:, :, ::-1].astype(np.uint8), interpolation='nearest')
+            ax.set_title(f"z={z}\nN={len(by_z[z]['neg'])} P={len(by_z[z]['pos'])}", fontsize=8)
+            ax.axis("off")
+
+        # Hide unused axes
+        for j in range(len(zs), rows * cols):
+            axes[j // cols, j % cols].axis("off")
+
+        fig.suptitle("Hard Examples (Per Z, Tile Grid Overlay)", fontsize=12)
+        plt.subplots_adjust(wspace=0.05, hspace=0.05, left=0.05, right=0.95, top=0.95, bottom=0.05)
+        return fig
+
+    def log_hard_mined_metrics(self, epoch, mine_metrics):
+        """
+        Log mined-file metrics on the SAME graphs as normal Train/Valid by adding
+        series with suffix HM-<mined_epoch>, e.g.:
+          AUC/PR_AUC/HM-15, AUC/PR_AUC/HM-30, ...
+        Dynamically extends the custom scalars layout so they appear in multiline panels.
+        """
+        # Helper to ensure a tag is present in a given layout panel list
+        def _ensure(panel_key, tag):
+            panel = self.layout.get("Training_Overview", {}).get("loss")
+            # handled per specific metric lists below
+            pass
+
+        # Maps metric -> (tag prefix, layout path components)
+        spec = {
+            'loss':        ("G_M/Loss/",        ("Training_Overview", "loss")),
+            'accuracy':    ("G_M/Acc/",         ("Training_Overview", "accuracy")),
+            'precision':   ("P_M/Precision/",   ("P_M_Metrics", "precision_recall")),
+            'recall':      ("P_M/Recall/",      ("P_M_Metrics", "precision_recall")),
+            'f1':          ("P_M/F1_Score/",    ("P_M_Metrics", "f1_specificity")),
+            'specificity': ("P_M/Specificity/", ("P_M_Metrics", "f1_specificity")),
+            'roc_auc':     ("AUC/ROC_AUC/",     ("AUC_Metrics", "roc_auc")),
+            'pr_auc':      ("AUC/PR_AUC/",      ("AUC_Metrics", "pr_auc")),
+        }
+
+        # Collect tags we add to update layout once
+        newly_added = set()
+
+        for path, metrics in mine_metrics.items():
+            base = os.path.basename(path)  # hard_mining_epoch_<ep>.jsonl
+            # Extract mined epoch number
+            try:
+                mined_ep = int(base.replace("hard_mining_epoch_", "").replace(".jsonl", ""))
+            except ValueError:
+                continue
+            suffix = f"HM-{mined_ep}"
+            for mk, (prefix, layout_keys) in spec.items():
+                if mk not in metrics:
+                    continue
+                tag = prefix + suffix
+                self.writer.add_scalar(tag, metrics[mk], epoch)
+                # Extend layout list so it shows in multiline panel
+                top, panel = layout_keys
+                if top in self.layout and panel in self.layout[top]:
+                    entry = self.layout[top][panel]
+                    if isinstance(entry, list) and len(entry) == 2 and entry[0] == "Multiline":
+                        tag_list = entry[1]
+                        if tag not in tag_list:
+                            tag_list.append(tag)
+                            newly_added.add((top, panel))
+        # Re-register layout only if new tags were added
+        if newly_added:
+            self.writer.add_custom_scalars(self.layout)
+        self.writer.flush()
