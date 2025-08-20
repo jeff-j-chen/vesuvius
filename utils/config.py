@@ -21,7 +21,7 @@ class DataloaderConfig:
 
 @dataclass
 class TrainingConfig:
-    num_epochs: int = 50
+    num_epochs: int = 100
     learning_rate: float = 1e-4
     weight_decay: float = 0
     # l1_lambda: float = 0
@@ -31,8 +31,8 @@ class TrainingConfig:
     lr_scheduler_factor: float = 0.5
     save_every_n_epochs: int = 10
     log_dir: str = './runs'
-    evaluation_interval: int = 25
-    test_interval: int = 50
+    evaluation_interval: int = 20
+    test_interval: int = 100
 
 @dataclass
 class FinetuneConfig:
@@ -52,8 +52,8 @@ class ModelConfig:
 
 @dataclass
 class HardMining:
-    hard_negative_cutoff: float = 0.55
-    hard_positive_cutoff: float = 0.45
+    hard_negative_cutoff: float = 0.7
+    hard_positive_cutoff: float = 0.3
     next_iter_ratio: float = 0.5
 
 @dataclass

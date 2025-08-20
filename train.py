@@ -6,6 +6,7 @@ from utils.model import create_model, InkDetector, CBAM3D
 from utils.training_utils import (
     create_optimizer_and_scheduler, 
     create_loss_function,
+    calculate_metrics,
     save_model
 )
 import numpy as np
@@ -27,69 +28,8 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def calculate_metrics(y_true, y_pred, y_scores):
-    """
-    Calculate comprehensive metrics for binary classification
-    
-    Args:
-        y_true: Ground truth labels (0 or 1)
-        y_pred: Predicted labels (0 or 1) 
-        y_scores: Predicted probabilities (0 to 1)
-    
-    Returns:
-        Dictionary with all metrics
-    """
-    metrics = {}
-    
-    # Basic counts
-    tp = np.sum((y_true == 1) & (y_pred == 1))
-    tn = np.sum((y_true == 0) & (y_pred == 0))
-    fp = np.sum((y_true == 0) & (y_pred == 1))
-    fn = np.sum((y_true == 1) & (y_pred == 0))
-    
-    # Accuracy
-    metrics['accuracy'] = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0.0
-    
-    # Precision, Recall, F1
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-    
-    metrics['precision'] = precision
-    metrics['recall'] = recall
-    metrics['f1'] = f1
-    
-    # Specificity (True Negative Rate)
-    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
-    metrics['specificity'] = specificity
-    
-    # Class distribution
-    pos_samples = np.sum(y_true == 1)
-    neg_samples = np.sum(y_true == 0)
-    total_samples = len(y_true)
-    metrics['positive_samples'] = pos_samples
-    metrics['negative_samples'] = neg_samples
-    metrics['positive_ratio'] = pos_samples / total_samples
-
-    
-    # ROC-AUC and PR-AUC (handle edge cases)
-    try:
-        if len(np.unique(y_true)) == 2:  # Both classes present
-            metrics['roc_auc'] = roc_auc_score(y_true, y_scores)
-            metrics['pr_auc'] = average_precision_score(y_true, y_scores)
-        else:
-            metrics['roc_auc'] = 0.5  # Random performance when only one class
-            metrics['pr_auc'] = pos_samples / total_samples  # Baseline for PR-AUC
-    except Exception as e:
-        print(f"Warning: Could not calculate AUC metrics: {e}")
-        metrics['roc_auc'] = 0.5
-        metrics['pr_auc'] = 0.0
-    
-    return metrics
-
-
 def train_epoch(model, train_loader, criterion, optimizer, config: Config, scaler: GradScaler,
-                hard_injector: HardMiningInjector, suppress_hard_logging: bool = False):
+                hard_injector: HardMiningInjector):
     """Train for one epoch with L1 regularization and mask-based loss zeroing."""
     model.train()
     train_loss, train_raw_loss = 0.0, 0.0
@@ -105,7 +45,13 @@ def train_epoch(model, train_loader, criterion, optimizer, config: Config, scale
         if hard_injector and hard_injector.has_next():
             remaining_batches = total_batches - batch_idx
             remaining_needed = hard_injector.remaining()
-            inject_n = min(batch_images.size(0), (remaining_needed + remaining_batches - 1) // remaining_batches)
+            
+            # Prevent division by zero if there are no remaining batches
+            if remaining_batches <= 0:
+                inject_n = 0
+            else:
+                inject_n = min(batch_images.size(0), (remaining_needed + remaining_batches - 1) // remaining_batches)
+
             hard_planned_total += inject_n
             actual_injected = 0
             if inject_n > 0:
@@ -123,11 +69,6 @@ def train_epoch(model, train_loader, criterion, optimizer, config: Config, scale
                     actual_injected += 1
                 hard_injected_total += actual_injected
                 hard_skipped_total += (inject_n - actual_injected)
-            # Throttled debug printing
-            if not suppress_hard_logging:
-                if batch_idx == 0 or batch_idx == total_batches - 1:
-                    print(f"[HARD][Batch {batch_idx}/{total_batches}] planned={inject_n} injected={actual_injected} "
-                          f"remaining={hard_injector.remaining()} used_total={hard_injector.used} skipped_total={hard_injector.skipped}")
         batch_images = batch_images.to(config.device)
         batch_labels = batch_labels.to(config.device).view(-1, 1)
         mask = mask.to(config.device).view(-1, 1)
@@ -165,7 +106,7 @@ def train_epoch(model, train_loader, criterion, optimizer, config: Config, scale
     metrics['hard_planned'] = hard_planned_total
     metrics['hard_injected'] = hard_injected_total
     metrics['hard_skipped'] = hard_skipped_total
-    if hard_injector and not suppress_hard_logging:
+    if hard_injector:
         st = hard_injector.stats()
         print(f"[HARD][Epoch Summary] planned={hard_planned_total} injected={hard_injected_total} "
               f"skipped={hard_skipped_total} injector_used={st['used']} injector_skipped={st['skipped']} "
@@ -270,46 +211,41 @@ def main(config: Config):
     print("Initializing Tensorboard...")
     start_time = time.time()
     vis = TensorboardVisualizer(config)
-    hard_manager = HardMiningManager(vis.log_path)
+    hard_manager = HardMiningManager()
     best_val_loss = float('inf')
     best_val_f1 = 0.0
     
     scaler = GradScaler()
-    injection_started = False  # Track whether we've ever injected
+    all_hard_samples = []  # Accumulate all hard samples here
+    
     for epoch in range(config.training.num_epochs):
         start_time = time.time()
         # Activate transforms only after epoch 5
         if epoch >= 5 and config.dataloader.apply_transforms:
             train_dataset.apply_transforms = True
         
-        # Prepare hard injector from previous epoch mining file (if evaluation had run)
+        # Check for new hard mining files at evaluation intervals
+        prev_eval_epoch = epoch - 1
+        if epoch > 5 and (prev_eval_epoch + 1) % config.training.evaluation_interval == 0:
+            target_hard = int(config.hard_mining.next_iter_ratio * len(train_dataset))
+            # Pass the visualizer's log_path to find the file
+            new_samples = hard_manager.sample_for_epoch(prev_eval_epoch, target_hard)
+            if new_samples:
+                all_hard_samples.extend(new_samples)
+                print(f"[HARD][Epoch {epoch}] Added {len(new_samples)} new hard samples. Total is now {len(all_hard_samples)}.")
+                vis.writer.add_scalar("HardMining/TotalSamplesInPool", len(all_hard_samples), epoch)
+            else:
+                print(f"[HARD][Epoch {epoch}] Mining file processed but no new samples were added.")
+
+        # Create injector if we have any hard samples in our pool
         hard_injector = None
-        if config.hard_mining.next_iter_ratio > 0 and epoch > 0:
-            prev_eval_epoch = epoch - 1
-            if (prev_eval_epoch + 1) % config.training.evaluation_interval == 0:
-                # Debug expected file locations
-                expected_primary = hard_manager._epoch_file(prev_eval_epoch)
-                expected_fallback = hard_manager._fallback_epoch_file(prev_eval_epoch)
-                if not hard_manager.mined_file_exists(prev_eval_epoch):
-                    print(f"[HARD][Epoch {epoch}] Expected mining file missing. Searched: "
-                          f"primary='{expected_primary}' exists={os.path.exists(expected_primary)} "
-                          f"fallback='{expected_fallback}' exists={os.path.exists(expected_fallback)}")
-                else:
-                    target_hard = int(config.hard_mining.next_iter_ratio * len(train_dataset))
-                    samples = hard_manager.sample_for_epoch(prev_eval_epoch, target_hard)
-                    if samples:
-                        # Only set injection_started after initial print
-                        preview = samples[:5]
-                        print(f"[HARD][Epoch {epoch}] Injector creating from epoch {prev_eval_epoch} "
-                              f"file (target={target_hard} got={len(samples)}) preview="
-                              f"{[(p['z'],p['y'],p['x'],p['label']) for p in preview]}")
-                        hard_injector = HardMiningInjector(samples, train_dataset)
-                        injection_started = True
-                        vis.writer.add_scalar("HardMining/InjectedSamplesPlanned", len(samples), epoch)
-                    else:
-                        print(f"[HARD][Epoch {epoch}] Mining file present but no samples selected.")
+        if all_hard_samples:
+            hard_injector = HardMiningInjector(all_hard_samples, train_dataset)
+            if (prev_eval_epoch + 1) % config.training.evaluation_interval == 0: # Log on new injection
+                 vis.writer.add_scalar("HardMining/InjectedSamplesPlanned", len(all_hard_samples), epoch)
+
         # Train
-        train_metrics = train_epoch(model, train_loader, criterion, optimizer, config, scaler, hard_injector, suppress_hard_logging=not injection_started)
+        train_metrics = train_epoch(model, train_loader, criterion, optimizer, config, scaler, hard_injector)
         # Validate
         val_metrics = validate_epoch(model, valid_loader, criterion, config, scaler)
         # Scheduler & model save
@@ -333,126 +269,3 @@ if __name__ == "__main__":
     config = Config()
     config.experiment_name = args.experiment_name
     main(config)
-
-    # # test stronger augmentations
-    # for transform_type in ["brightness", "contrast"]:
-    #     config = Config()
-    #     config.dataloader.apply_transforms = True
-    #     config.dataloader.transform_type = transform_type
-    #     config.experiment_name = f"transform_{transform_type}_strong"
-    #     print(f"Training with transform type: {transform_type}...")
-    #     main(config)
-    
-    # for l1 in [7.5e-6, 1e-5, 2.5e-5, 5e-5, 7.5e-5, 1e-4]:
-    #     config = Config()
-    #     config.training.l1_lambda = l1
-    #     drops = [
-    #         [0.0, 0.0, 0.2, 0.1],
-    #         [0.0, 0.05, 0.2, 0.1],
-    #         [0.0, 0.0, 0.3, 0.1],
-    #         [0.0, 0.05, 0.3, 0.1],
-    #         [0.0, 0.1, 0.3, 0.1],
-    #         [0.0, 0, 0.4, 0.2],
-    #         [0.0, 0.05, 0.4, 0.2],
-    #         [0.0, 0.1, 0.4, 0.2],
-    #         [0.0, 0.2, 0.5, 0.3],
-    #         [0.0, 0.3, 0.6, 0.8],
-    #     ]
-    #     for drop in drops:
-    #         config.model.conv1_drop = drop[0]
-    #         config.model.conv2_drop = drop[1]
-    #         config.model.fc1_drop = drop[2]
-    #         config.model.fc2_drop = drop[3]
-    #         config.experiment_name = f"alltrans_{l1:.0e}l1_{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
-    #         main(config)
-
-    # # test if a lower l1 will allow for mix to generalize
-    # config = Config()
-    # config.dataloader.transform_type = "mix"
-    # config.experiment_name = f"mix_1e-4l1"
-    # config.training.l1_lambda = 1e-4
-    # main(config)
-    
-    # # test if a lower l1 will allow for mix to generalize
-    # config = Config()
-    # config.dataloader.apply_transforms = False
-    # config.experiment_name = f"transform_off_128b"
-    # config.training.l1_lambda = 7e-4
-    # main(config)
-
-    # # re-run tests on every augmentation, to see if they work better with a lower probability (33%)
-    # for transform_type in ["brightness", "mix", "contrast", "noise", "rotate", "flip"]:
-    #     config = Config()
-    #     config.training.l1_lambda = 7e-4
-    #     config.dataloader.apply_transforms = True
-    #     config.dataloader.low_trans_prob = True
-    #     config.dataloader.transform_type = transform_type
-    #     config.experiment_name = f"transform_{transform_type}_lowprob"
-    #     print(f"Training with transform type: {transform_type}...")
-    #     main(config)
-
-    # add additional testing for every augmentation type, but this time have them turn on only 33% of the time.
-
-    # scroll_ids = [
-    #     20231007101619,
-    #     20231005123336,
-    #     20231022170901,
-    #     20230929220926,
-    #     20231210121321,
-    #     20230702185753,
-    #     20231106155351, # x > 4500,
-    #     20231016151002,
-    #     20231031143852,
-    #     20231221180251,
-    #     20231012184420,
-    #     20230827161847
-    # ]
-    # for scroll_id in scroll_ids:
-    #     config = Config()
-    #     config.data.segment_id = scroll_id
-    #     config.experiment_name = f"{scroll_id}"
-    #     print(f"Training on scroll {scroll_id}...")
-    #     main(config)
-
-    # l1s = [7.5e-4]
-    # for l1 in l1s:
-    #     config = Config()
-    #     if l1 == 0: 
-    #         config.experiment_name = "cbam3d_28-48_l1_0"
-    #     else:
-    #         config.experiment_name = f"cbam3d_28-48_l1_{l1:.0e}"
-    #     config.training.l1_lambda = l1
-    #     main(config)
-
-    # conv1 conv2 fc1 fc2
-    # drops = [
-    #     [0.0, 0.3, 0.8, 0.6],
-    # ]
-    # for drop in drops:
-    #     config = Config()
-    #     config.model.conv1_drop = drop[0]
-    #     config.model.conv2_drop = drop[1]
-    #     config.model.fc1_drop = drop[2]
-    #     config.model.fc2_drop = drop[3]
-    #     config.experiment_name = f"sanity-{drop[0]}-{drop[1]}-{drop[2]}-{drop[3]}"
-    #     main(config)
-    
-    # config = Config()
-    # config.data.start_level = 32
-    # config.data.end_level = 48
-    # config.experiment_name = f"3dmodel_redo_{config.data.start_level}_{config.data.end_level}"
-    # main(config)
-
-    # while config.data.end_level - config.data.start_level > 4:
-    #     config.data.start_level += 4
-    #     print(f"entry {config.data.start_level} to {config.data.end_level}")
-    #     config.experiment_name = f"3dmodel_redo_{config.data.start_level}_{config.data.end_level}"
-    #     main(config)
-
-    #     config.data.end_level -= 4
-    #     print(f"entry {config.data.start_level} to {config.data.end_level}")
-    #     config.experiment_name = f"3dmodel_redo_{config.data.start_level}_{config.data.end_level}"
-    #     main(config)
-    #     print(f"entry {config.data.start_level} to {config.data.end_level}")
-    #     config.experiment_name = f"3dmodel_redo_{config.data.start_level}_{config.data.end_level}"
-    #     main(config)

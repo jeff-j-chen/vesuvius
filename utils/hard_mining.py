@@ -107,9 +107,14 @@ class HardMiningManager:
         """Reservoir sample from previous epoch mining file (supports legacy CWD location)."""
         if target_count <= 0:
             return []
-        path = self._epoch_file(prev_epoch)
-        if path is None:
+        
+        filename = self._epoch_file(prev_epoch)
+        path = os.path.join("./hard_negs", filename)
+
+        if not os.path.exists(path):
+            print(f"[ERROR] Mining file not found at '{path}'")
             return []
+
         reservoir = []
         scanned = 0
         with open(path, "r") as f:
