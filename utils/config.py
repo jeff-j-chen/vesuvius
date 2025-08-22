@@ -5,8 +5,8 @@ import torch
 @dataclass
 class DataConfig:
     zarr_path: str = "/media/jeff/SSD_2/ves_zarrs2/"
-    train_segment_id: int = 20230827161847
-    # train_segment_id: int = 20230702185753
+    # train_segment_id: int = 20230827161847
+    train_segment_id: int = 20230702185753
     scroll4_segment_id: int = 20231210132040
     tile_size: int = 32
     depth: int = 8
@@ -21,18 +21,18 @@ class DataloaderConfig:
 
 @dataclass
 class TrainingConfig:
-    num_epochs: int = 100
+    num_epochs: int = 50
     learning_rate: float = 1e-4
     weight_decay: float = 0
     # l1_lambda: float = 0
     l1_lambda: float = 7e-6
-    max_grad_norm: float = 1.0
+    max_grad_norm: float = 0.5
     patience: int = 5
     lr_scheduler_factor: float = 0.5
     save_every_n_epochs: int = 10
     log_dir: str = './runs'
     evaluation_interval: int = 20
-    test_interval: int = 100
+    test_interval: int = 50
 
 @dataclass
 class FinetuneConfig:
@@ -52,8 +52,8 @@ class ModelConfig:
 
 @dataclass
 class HardMining:
-    hard_negative_cutoff: float = 0.7
-    hard_positive_cutoff: float = 0.3
+    hard_negative_cutoff: float = 0.8
+    hard_positive_cutoff: float = 0.5
     next_iter_ratio: float = 0.5
 
 @dataclass
