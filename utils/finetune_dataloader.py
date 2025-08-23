@@ -63,7 +63,7 @@ class FinetuneDataset(Dataset):
         x, y, label = tile_info['x'], tile_info['y'], tile_info['label']
         
         # Fetch 3D block from zarr volume for a random depth slice
-        z_start = random.randint(self.config.data.start_level, self.config.data.end_level - self.depth)
+        z_start = random.randint(self.config.data.d_start, self.config.data.d_end - self.depth)
         
         block = np.array(self.volume[
             z_start : z_start + self.depth,

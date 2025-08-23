@@ -6,497 +6,374 @@ import zarr
 import cv2
 import random
 import os
-from typing import Iterator, List, Optional, Union
+from typing import Iterator
 from .config import Config
 import json
 from tqdm import tqdm
 
-
-def generate_tile_coords(z_range, y_range, x_range, config, volume, mask=None):
-    """
-    Generate all valid (z, y, x) block start coordinates for a given region.
-    Returns a list of (z_offset, y_offset, x_offset) tuples.
-    
-    Args:
-        z_range: (start, end) for z dimension
-        y_range: (start, end) for y dimension  
-        x_range: (start, end) for x dimension
-        depth: depth of the 3D block
-        tile_size: size of the 2D tile
-        volume: zarr volume to check for empty regions (optional)
-        mask: 2D mask array (optional, used to filter blocks with no valid region)
-        empty_threshold: minimum mean value to consider a block non-empty
-    """
-    z_start, z_end = z_range
-    y_start, y_end = y_range
-    x_start, x_end = x_range
-    z_range_size = max(0, z_end - z_start - config.data.depth + 1)
-    y_range_size = max(0, y_end - y_start - config.data.tile_size + 1)
-    x_range_size = max(0, x_end - x_start - config.data.tile_size + 1)
-    
-    block_coords = []
-    
-    for d in range(0, z_range_size, max(1, int(config.data.depth//2))):
-        if z_start + d + config.data.depth > z_end:
-            continue
-        for y in range(0, y_range_size, config.data.tile_size):
-            for x in range(0, x_range_size, config.data.tile_size):
-                # Mask filtering: only add block if mask region contains any 1s
-                if mask is not None:
-                    mask_block = mask[
-                        y_start + y : y_start + y + config.data.tile_size,
-                        x_start + x : x_start + x + config.data.tile_size
-                    ]
-                    if np.sum(mask_block) == 0:
-                        continue  # Skip blocks with no valid mask region
-                block_coords.append((d, y, x))
-    
-    return block_coords
-
-class InkVolumeDataset(IterableDataset):
-    def __init__(self, volume, mask: np.ndarray, labels: np.ndarray, config: Config, 
-                 x_range: tuple, y_range: tuple,
-                 global_mean: float,
-                 global_std: float,
-                 global_min: float,
-                 global_max: float,
-                 shuffle: bool = True):
-        """
-        volume: zarr.Array
-        labels: [H, W] - 2D binary mask (full mask, not cropped)
-        config: Configuration object
-        x_range: (start, end) for x dimension (global)
-        y_range: (start, end) for y dimension (global)
-        apply_transforms: Whether to apply data augmentation
-        shuffle: Whether to shuffle the order of tiles (for training) or not (for evaluation)
-        """
-        self.volume = volume
-        self.mask = mask
-        self.labels = labels
-        self.config = config
-        self.tile_size = config.data.tile_size
-        self.depth = config.data.depth
-        # default to false, controlled later by epoch and config
-        self.apply_transforms = False
-        self.shuffle = shuffle
-        self.global_mean = global_mean
-        self.global_std = global_std
-        self.global_min = global_min
-        self.global_max = global_max
-
-        # Store coordinate ranges (global)
-        self.z_start, self.z_end = self.config.data.start_level, self.config.data.end_level
-        self.y_start, self.y_end = y_range
-        self.x_start, self.x_end = x_range
-        
-        # Pre-calculate all valid block coordinates with overlapping sampling (global coordinates)
-        # Pass mask for empty region filtering
-        self.block_coords = generate_tile_coords(
-            (self.z_start, self.z_end),
-            (self.y_start, self.y_end),
-            (self.x_start, self.x_end),
-            self.config,
-            volume,
-            mask=self.mask  # Only include blocks with mask sum > 0
-        )
-        
-        self.samples_per_epoch = len(self.block_coords)
-
-    def __len__(self):
-        """Return the number of samples per epoch for progress bars and DataLoader."""
-        return self.samples_per_epoch
+class Transform:
+    """handles data augmentation transforms"""
+    def __call__(self, block):
+        """applies a random sequence of transforms to a block"""
+        # each transform is applied with a certain probability
+        if random.random() < 0.25: 
+            block = self._apply_channel_mixing(block)
+        if random.random() < 0.25: 
+            block = self._apply_rotation(block)
+        if random.random() < 0.25: 
+            block = self._apply_flip(block)
+        if random.random() < 0.30: 
+            block = self._apply_gaussian_noise(block)
+        if random.random() < 0.50: 
+            block = self._apply_brightness_adjustment(block)
+        if random.random() < 0.50: 
+            block = self._apply_contrast_adjustment(block)
+        # ensure the final result is contiguous to avoid negative strides
+        return np.ascontiguousarray(block)
 
     def _apply_channel_mixing(self, block):
-        """Mix the order of the depth channels."""
+        """mixes the order of the depth channels"""
         indices = np.random.permutation(block.shape[0])
-        return block[indices]
+        mixed = block[indices]
+        # guard against any non contiguous result from advanced indexing
+        return np.ascontiguousarray(mixed)
     
     def _apply_brightness_adjustment(self, block):
-        """Apply brightness adjustment to each channel independently."""
-
-        brightness_factors = np.random.uniform(0.85, 1.15, size=(block.shape[0], 1, 1))
-        return np.clip(block * brightness_factors, 0, 1)
+        """applies brightness adjustment to each channel independently"""
+        factors = np.random.uniform(0.85, 1.15, size=(block.shape[0], 1, 1))
+        return np.clip(block * factors, 0, 1)
     
     def _apply_contrast_adjustment(self, block):
-        """Apply contrast adjustment to each channel independently."""
-
-        adjusted_block = block.copy()
+        """applies contrast adjustment to each channel independently"""
+        adj_block = block.copy()
         for i in range(block.shape[0]):
             channel = block[i]
-            contrast_factor = random.uniform(0.85, 1.15)
-            mean_val = np.mean(channel)
-            adjusted_block[i] = np.clip((channel - mean_val) * contrast_factor + mean_val, 0, 1)
-        return adjusted_block
+            factor = random.uniform(0.85, 1.15)
+            mean = np.mean(channel)
+            adj_block[i] = np.clip((channel - mean) * factor + mean, 0, 1)
+        return adj_block
     
     def _apply_gaussian_noise(self, block):
-        """Apply Gaussian noise to each channel independently."""
-
-        noise_std = random.uniform(0.005, 0.015)
-        noise = np.random.normal(0, noise_std, block.shape)
+        """applies gaussian noise to each channel independently"""
+        std = random.uniform(0.005, 0.015)
+        noise = np.random.normal(0, std, block.shape)
         return np.clip(block + noise, 0, 1)
     
     def _apply_rotation(self, block):
-        """Apply 90/180/270 degree rotations to all channels."""
-
-        rotation = random.choice([1, 2, 3])  # Rotate by 90, 180, or 270 degrees
-        rotated_block = np.zeros_like(block)
-        for i in range(block.shape[0]):  # Rotate each channel independently
-            rotated_block[i] = np.rot90(block[i], k=rotation)
-        return rotated_block
+        """applies 90 180 270 degree rotations to all channels"""
+        k = random.choice([1, 2, 3])
+        # np.rot90 can produce negative strides so force a copy
+        return np.rot90(block, k=k, axes=(1, 2)).copy()
     
     def _apply_flip(self, block):
-        """Apply horizontal or vertical flip to all channels."""
+        """applies horizontal or vertical flip to all channels"""
+        axis = random.choice([1, 2])
+        # np.flip returns a view with negative strides so force a copy
+        return np.flip(block, axis=axis).copy()
 
-        flip_type = random.choice([0, 1])
-        flipped_block = np.zeros_like(block)
-        for i in range(block.shape[0]):
-            if flip_type == 0:  # Horizontal flip
-                flipped_block[i] = np.flip(block[i], axis=1)
-            elif flip_type == 1:  # Vertical flip
-                flipped_block[i] = np.flip(block[i], axis=0)
-        return flipped_block
+class InkVolumeDataset(IterableDataset):
+    """iterable dataset for ink volume data"""
+    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True):
+        """initializes the dataset"""
+        self.vol = volume
+        self.mask = mask
+        self.labels = labels
+        self.c = config
+        self.tile_size = config.data.tile_size
+        self.depth = config.data.depth
+        self.apply_transforms = False # controlled by trainer
+        self.shuffle = shuffle
+        self.norm_stats = norm_stats
+        self.transform = Transform()
 
-    def _normalize_block(self, block, mask):
-        """Normalize a block using global mean, std, min, and max."""
-        if self.global_std == 0:
-            print("[WARNING] Standard deviation is 0, skipping normalization.")
-            return block.astype(np.float32)
+        self.z_start, self.z_end = self.c.data.d_start, self.c.data.d_end
+        self.y_start, self.y_end = y_range
+        self.x_start, self.x_end = x_range
+        
+        # pre-calculate all valid block coordinates
+        self.block_coords = self._gen_tile_coords()
+        self.samples_per_epoch = len(self.block_coords)
 
-        # Convert mask to PyTorch tensor if it's not already
-        if not isinstance(mask, torch.Tensor):
-            mask = torch.tensor(mask, dtype=torch.float32)
+    def _gen_tile_coords(self):
+        """generates all valid (z, y, x) block start coordinates"""
+        z_range_size = max(0, self.z_end - self.z_start - self.depth + 1)
+        y_range_size = max(0, self.y_end - self.y_start - self.tile_size + 1)
+        x_range_size = max(0, self.x_end - self.x_start - self.tile_size + 1)
+        
+        coords = []
+        z_step = max(1, int(self.depth // 2))
 
-        # Subtract mean and divide by std
-        normalized_block = (block.astype(np.float32) - self.global_mean) / self.global_std
+        # iterate over the volume with specified step sizes to generate coordinates
+        for d in range(0, z_range_size, z_step):
+            if self.z_start + d + self.depth > self.z_end: continue
+            for y in range(0, y_range_size, self.tile_size):
+                for x in range(0, x_range_size, self.tile_size):
+                    # check if the corresponding mask area has any valid pixels
+                    mask_block = self.mask[
+                        self.y_start + y : self.y_start + y + self.tile_size,
+                        self.x_start + x : self.x_start + x + self.tile_size
+                    ]
+                    if np.sum(mask_block) > 0:
+                        coords.append((d, y, x))
+        return coords
 
-        # Apply mask to exclude invalid regions
-        mask_exp = mask.unsqueeze(0).expand_as(torch.tensor(normalized_block))
-        normalized_block[mask_exp == 0] = 0  # Zero out masked regions
+    def __len__(self):
+        """returns the number of samples per epoch"""
+        return self.samples_per_epoch
 
-        # Scale to [0, 1] using global min and max
-        normalized_block = (normalized_block - self.global_min) / (self.global_max - self.global_min)
-        normalized_block = np.clip(normalized_block, 0, 1)  # Ensure values are within [0, 1]
+    def _normalize_block(self, block):
+        """normalizes a block using pre computed global stats"""
+        mean, std, g_min, g_max = self.norm_stats
+        if std == 0:
+            return block.astype(np.float32, copy=False)
+        
+        # z score normalization followed by scaling to [0, 1]
+        norm_block = (block.astype(np.float32, copy=False) - mean) / std
+        norm_block = (norm_block - g_min) / (g_max - g_min)
+        # ensure dtype and contiguity
+        return np.ascontiguousarray(np.clip(norm_block, 0, 1).astype(np.float32, copy=False))
 
-        return normalized_block
+    def _fetch_block(self, z_off, y_off, x_off):
+        """fetches and normalizes a block from zarr volume"""
+        z = self.z_start + z_off
+        y = self.y_start + y_off
+        x = self.x_start + x_off
+        
+        # slice the block from the zarr volume
+        block = self.vol[z:z+self.depth, y:y+self.tile_size, x:x+self.tile_size]
+        return self._normalize_block(block)
 
-    def _fetch_block(self, z_offset, y_offset, x_offset):
-        """Fetch and normalize a block from zarr volume."""
-        z_start = self.z_start + z_offset
-        y_start = self.y_start + y_offset
-        x_start = self.x_start + x_offset
-        block = self.volume[
-            z_start:z_start + self.config.data.depth, 
-            y_start:y_start + self.config.data.tile_size, 
-            x_start:x_start + self.config.data.tile_size
-        ]
-        return block
-
-    def _fetch_label(self, y_offset, x_offset):
-        """Fetch a label tile from the full mask."""
-        y_start = self.y_start + y_offset
-        x_start = self.x_start + x_offset
-        label_tile = self.labels[
-            y_start:y_start + self.config.data.tile_size, 
-            x_start:x_start + self.config.data.tile_size
-        ]
-        # Determine if the region contains ink (binary label)
-        has_ink = np.any(label_tile > 0.5)  # True if any pixel in the region has ink
+    def _fetch_label(self, y_off, x_off):
+        """fetches a label tile"""
+        y = self.y_start + y_off
+        x = self.x_start + x_off
+        
+        # slice the label tile and check for ink presence
+        label_tile = self.labels[y:y+self.tile_size, x:x+self.tile_size]
+        has_ink = np.any(label_tile > 0.5)
         return torch.tensor([float(has_ink)], dtype=torch.float32)
 
-    def _fetch_mask(self, y_offset, x_offset):
-        """Fetch a mask tile from the full mask"""
-        y_start = self.y_start + y_offset
-        x_start = self.x_start + x_offset
-        mask_tile = self.mask[
-            y_start:y_start + self.config.data.tile_size, 
-            x_start:x_start + self.config.data.tile_size, 
-        ]
+    def _fetch_mask(self, y_off, x_off):
+        """fetches a mask tile"""
+        y = self.y_start + y_off
+        x = self.x_start + x_off
+        
+        # slice the mask tile
+        mask_tile = self.mask[y:y+self.tile_size, x:x+self.tile_size]
         return torch.tensor(mask_tile, dtype=torch.float32)
 
     def __iter__(self) -> Iterator:
-        self._shuffled_blocks = self.block_coords.copy()
+        """sets up the iterator for an epoch"""
+        shuffled_coords = self.block_coords.copy()
         if self.shuffle:
-            np.random.shuffle(self._shuffled_blocks)
+            np.random.shuffle(shuffled_coords)
+            
+        # handle multi-worker data loading
         worker_info = get_worker_info()
         if worker_info is None:
-            # Single-process data loading, return the full iterator
-            self._worker_indices = self._shuffled_blocks
+            # single-process loading
+            self.worker_indices = shuffled_coords
         else:
-            # In a worker process, split the workload
-            per_worker = int(np.ceil(len(self._shuffled_blocks) / float(worker_info.num_workers)))
-            worker_id = worker_info.id
-            start = worker_id * per_worker
-            end = min(start + per_worker, len(self._shuffled_blocks))
-            self._worker_indices = self._shuffled_blocks[start:end]
-        self._current_idx = 0
+            # split workload among workers
+            per_worker = int(np.ceil(len(shuffled_coords) / float(worker_info.num_workers)))
+            start = worker_info.id * per_worker
+            end = min(start + per_worker, len(shuffled_coords))
+            self.worker_indices = shuffled_coords[start:end]
+            
+        self.current_idx = 0
         return self
 
     def __next__(self):
-        if self._current_idx >= len(self._worker_indices):
+        """returns the next item in the dataset"""
+        if self.current_idx >= len(self.worker_indices):
             raise StopIteration
-        z_offset, y_offset, x_offset = self._worker_indices[self._current_idx]
-        mask = self._fetch_mask(y_offset, x_offset)
-        block = self._fetch_block(z_offset, y_offset, x_offset)
-        block_normalized = self._normalize_block(block, mask)
-        if isinstance(block_normalized, torch.Tensor):
-            block_normalized = block_normalized.numpy()
-        label = self._fetch_label(y_offset, x_offset)
+            
+        # get coordinates for the next item
+        z_off, y_off, x_off = self.worker_indices[self.current_idx]
+        
+        # fetch data components
+        mask = self._fetch_mask(y_off, x_off)
+        block = self._fetch_block(z_off, y_off, x_off)
+        label = self._fetch_label(y_off, x_off)
+        
+        # apply transforms if enabled
         if self.apply_transforms:
-            if random.random() < 0.25: block_normalized = self._apply_channel_mixing(block_normalized)
-            if random.random() < 0.25: block_normalized = self._apply_rotation(block_normalized)
-            if random.random() < 0.25: block_normalized = self._apply_flip(block_normalized)
-            if random.random() < 0.30: block_normalized = self._apply_gaussian_noise(block_normalized)
-            if random.random() < 0.50: block_normalized = self._apply_brightness_adjustment(block_normalized)
-            if random.random() < 0.50: block_normalized = self._apply_contrast_adjustment(block_normalized)
-        # Convert block to PyTorch tensor at the very end
-        block_normalized = torch.tensor(block_normalized, dtype=torch.float32).unsqueeze(0)
-        self._current_idx += 1
-        return block_normalized, label, mask
+            block = self.transform(block)
+        
+        # enforce contiguity and dtype before converting to torch to avoid negative strides
+        block = np.ascontiguousarray(block, dtype=np.float32)
+            
+        # convert to tensor for the model
+        block_tensor = torch.tensor(block, dtype=torch.float32).unsqueeze(0)
+        
+        self.current_idx += 1
+        return block_tensor, label, mask
 
-def get_or_compute_normalization(segment_id, volume, mask):
-    """Retrieve or compute global mean, std, min, and max for normalization."""
-    cache = _load_normalization_cache()
+class DataManager:
+    """manages data loading, splitting, and normalization"""
+    def __init__(self, config: Config):
+        """initializes the data manager"""
+        self.c = config
+        
+        # load raw data and define splits
+        self.vol, self.mask, self.labels, self.train_x, self.valid_x, self.y_range = self._load_raw_data()
+        
+        # get or compute normalization statistics
+        self.norm_stats = self._get_or_compute_norm()
 
-    if str(segment_id) in cache:
-        print(f"[INFO] Using cached normalization for segment {segment_id}")
-        return cache[str(segment_id)]["mean"], cache[str(segment_id)]["std"], cache[str(segment_id)]["min"], cache[str(segment_id)]["max"]
+    def _load_raw_data(self):
+        """loads raw zarr data and metadata"""
+        # open the zarr volume in read-only mode
+        vol = zarr.open(
+            os.path.join(
+                self.c.data.zarr_path, f"{self.c.data.scroll1_id}.zarr"
+            ),
+            mode='r'
+        )
+        
+        # load labels and mask, and normalize to [0, 1]
+        labels = cv2.imread(
+            f"./eroded_inklabels/{self.c.data.scroll1_id}.png",
+            cv2.IMREAD_GRAYSCALE
+        ) / 255.0
 
-    print(f"[INFO] Computing normalization for segment {segment_id}")
-    total_sum, total_squared_sum, total_count = 0.0, 0.0, 0
-    global_min, global_max = float('inf'), float('-inf')
+        mask = cv2.imread(
+            f"./masks/{self.c.data.scroll1_id}.png", 
+            cv2.IMREAD_GRAYSCALE
+        ) / 255.0
+        
+        # define the working area and split for train/validation
+        x_start, x_end = 0, vol.shape[2]
+        y_start, y_end = 0, vol.shape[1]
+        
+        split_x = int((x_end - x_start) * 0.75) # type: ignore
+        train_x_range = (x_start, x_start + split_x)
+        valid_x_range = (x_start + split_x, x_end)
+        y_range = (y_start, y_end)
+        
+        return vol, mask, labels, train_x_range, valid_x_range, y_range
 
-    for z in tqdm(range(volume.shape[0])):
-        for y in range(0, volume.shape[1], 1024):
-            for x in range(0, volume.shape[2], 1024):
-                chunk = volume[z, y:y+1024, x:x+1024]
-                mask_chunk = mask[y:y+1024, x:x+1024]
-                valid_pixels = chunk[mask_chunk > 0]
-                if valid_pixels.size == 0:
-                    continue
+    def _get_or_compute_norm(self):
+        """retrieves or computes normalization statistics"""
+        cache_path = "./norm_cache.json"
+        seg_id = str(self.c.data.scroll1_id)
+        
+        # first, try to load from cache
+        if os.path.exists(cache_path):
+            with open(cache_path, "r") as f:
+                cache = json.load(f)
+            if seg_id in cache:
+                print(f"[info] using cached normalization for segment {seg_id}")
+                stats = cache[seg_id]
+                return stats["mean"], stats["std"], stats["min"], stats["max"]
 
-                total_sum += np.sum(valid_pixels, dtype=np.float64)
-                total_squared_sum += np.sum(valid_pixels.astype(np.float64) ** 2, dtype=np.float64)
-                total_count += valid_pixels.size
+        # if not in cache, compute the statistics
+        print(f"[info] computing normalization for segment {seg_id}")
+        total_sum, total_sq_sum, total_count = 0.0, 0.0, 0
+        
+        # first pass: calculate mean and standard deviation
+        for z in tqdm(range(self.vol.shape[0])): # type: ignore
+            chunk = self.vol[z, :, :]
+            mask_chunk = self.mask[:, :]
+            valid_pixels = chunk[mask_chunk > 0]
+            if valid_pixels.size == 0: continue
+            
+            total_sum += np.sum(valid_pixels, dtype=np.float64) # type: ignore
+            total_sq_sum += np.sum(np.square(valid_pixels, dtype=np.float64), dtype=np.float64) # type: ignore
+            total_count += valid_pixels.size # type: ignore
 
-    if total_count == 0:
-        raise ValueError("No valid pixels found in the dataset.")
+        if total_count == 0: raise ValueError("no valid pixels found")
 
-    # Compute global mean and std
-    global_mean = total_sum / total_count
-    mean_of_squares = total_squared_sum / total_count
-    square_of_mean = global_mean ** 2
-    variance = max(mean_of_squares - square_of_mean, 0)
-    global_std = np.sqrt(variance)
+        mean = total_sum / total_count
+        std = np.sqrt((total_sq_sum / total_count) - np.square(mean))
+        
+        # second pass: calculate min and max of normalized values
+        g_min, g_max = float('inf'), float('-inf')
+        for z in tqdm(range(self.vol.shape[0])): # type: ignore
+            chunk = self.vol[z, :, :]
+            mask_chunk = self.mask[:, :]
+            valid_pixels = chunk[mask_chunk > 0]
+            if valid_pixels.size == 0: continue
+            
+            norm_pixels = (valid_pixels.astype(np.float64) - mean) / std # type: ignore
+            g_min = min(g_min, norm_pixels.min())
+            g_max = max(g_max, norm_pixels.max())
 
-    # Compute global min and max after normalization
-    for z in tqdm(range(volume.shape[0])):
-        for y in range(0, volume.shape[1], 1024):
-            for x in range(0, volume.shape[2], 1024):
-                chunk = volume[z, y:y+1024, x:x+1024]
-                mask_chunk = mask[y:y+1024, x:x+1024]
-                valid_pixels = chunk[mask_chunk > 0]
-                if valid_pixels.size == 0:
-                    continue
+        stats = {"mean": mean, "std": std, "min": g_min, "max": g_max}
+        
+        # update the cache file
+        try:
+            with open(cache_path, "r") as f: 
+                cache = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            cache = {}
+        cache[seg_id] = stats
+        with open(cache_path, "w") as f: 
+            json.dump(cache, f, indent=4)
+            
+        return mean, std, g_min, g_max
 
-                # Normalize the valid pixels
-                normalized_pixels = (valid_pixels.astype(np.float64) - global_mean) / global_std
-
-                # Update global min and max
-                global_min = min(global_min, normalized_pixels.min())
-                global_max = max(global_max, normalized_pixels.max())
-
-    print(f"Final Statistics:")
-    print(f"  Global Mean: {global_mean:.6f}")
-    print(f"  Global Std: {global_std:.6f}")
-    print(f"  Global Min (after normalization): {global_min:.6f}")
-    print(f"  Global Max (after normalization): {global_max:.6f}")
-
-    _update_normalization_cache(segment_id, global_mean, global_std, global_min, global_max)
-    return global_mean, global_std, global_min, global_max
-
-
-def _load_normalization_cache():
-    """Load normalization cache from file."""
-    if not os.path.exists("./normalization_cache.json"):
-        print(f"[INFO] No cache found.")
-        return {}
-    with open("./normalization_cache.json", "r") as f:
-        print(f"[INFO] Cache found, loading...")
-        return json.load(f)
-
-def _update_normalization_cache(segment_id, mean, std, min_val, max_val):
-    """Update normalization cache with new values."""
-    cache = _load_normalization_cache()
-    cache[str(segment_id)] = {
-        "mean": float(mean),  # Convert to float
-        "std": float(std),    # Convert to float
-        "min": float(min_val),  # Convert to float
-        "max": float(max_val)   # Convert to float
-    }
-
-    try:
-        with open("./normalization_cache.json", "w") as f:
-            json.dump(cache, f, indent=4)  # Use indent for readability
-            f.flush()  # Ensure data is written to disk
-        print(f"[INFO] Updated normalization cache for segment {segment_id} with mean={mean:.6f}, std={std:.6f}, min={min_val:.6f}, max={max_val:.6f}")
-    except Exception as e:
-        print(f"[ERROR] Failed to update normalization cache: {e}")
-
-
-def load_tv_data(config: Config):
-    """Load labels and determine coordinate ranges for train/validation split, streaming Zarr data chunk by chunk only."""
-    # Construct zarr path for the segment
-    zarr_path = os.path.join(config.data.zarr_path, f"{config.data.train_segment_id}.zarr")
-    # Open zarr just to get dimensions (do not read the full array)
-    volume = zarr.open(zarr_path, mode='r')
-    D, H, W = map(int, volume.shape)
-    # Load labels (these are small, so OK to load fully)
-    labels_path = f"./eroded_inklabels/{config.data.train_segment_id}.png"
-    labels = cv2.imread(labels_path, cv2.IMREAD_GRAYSCALE) / 255.0
-
-    mask_path = f"./masks/{config.data.train_segment_id}.png"
-    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) / 255.0
-    # Apply segment-specific processing
-    if config.data.train_segment_id == 20230827161847:
-        z_start, z_end = config.data.start_level, config.data.end_level
-        y_start, y_end = 200, 5600
-        x_start, x_end = 1000, 4600
-    elif config.data.train_segment_id == 20231106155351:
-        z_start, z_end = 0, D
-        y_start, y_end = 0, H
-        x_start, x_end = 4500, W
-    else:
-        z_start, z_end = 0, D
-        y_start, y_end = 0, H
-        x_start, x_end = 0, W
-    # Calculate train/validation split along x-axis
-    working_width = int(x_end) - int(x_start)
-    split_x = int(working_width * 0.75)
-    # Define ranges for train and validation
-    train_x_range = (x_start, x_start+split_x)
-    valid_x_range = (x_start+split_x, x_end)
-    y_range = (y_start, y_end)
-    # Split labels accordingly
-    # print(f"[DEBUG] Zarr shape: (D={D}, H={H}, W={W})")
-    # print(f"[DEBUG] Train x_range: {train_x_range}, y_range: {train_y_range}, z_range: {train_z_range}, shape: {train_labels.shape}")
-    # print(f"[DEBUG] Valid x_range: {valid_x_range}, y_range: {valid_y_range}, z_range: {valid_z_range}, shape: {valid_labels.shape}")
-    return (volume, mask, labels, train_x_range, valid_x_range, y_range)
-
-
-def load_scroll4_data(config: Config):
-    """Load scroll4 data from zarr with proper segmentation"""
-    zarr_path = os.path.join(config.data.zarr_path, f"{config.data.scroll4_segment_id}.zarr")
-    volume = zarr.open(zarr_path, mode='r')
-    D, H, W = map(int, volume.shape)
-    
-    # Load mask for scroll4
-    mask_path = f"./masks/{config.data.scroll4_segment_id}.png"
-    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) / 255.0
-    
-    # Define scroll4 specific ranges
-    y_start, y_end = 6500, H
-    x_start, x_end = 0, 5000
-    
-    return volume, mask, (y_start, y_end), (x_start, x_end)
-
-
-def get_test_dataset(config: Config):
-    """Load test data from zarr - bottom section of segment 20230827161847"""
-    zarr_path = os.path.join(config.data.zarr_path, "20230827161847.zarr")
-    volume = zarr.open(zarr_path, mode='r')
-    D, H, W = map(int, volume.shape)
-    
-    # Load mask for test data (same segment as training)
-    mask_path = f"./masks/20230827161847.png"
-    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) / 255.0
-    
-    # Define test specific ranges - bottom section
-    y_start, y_end = 4200, H
-    x_start, x_end = 0, W
-    
-    return volume, mask, (y_start, y_end), (x_start, x_end)
-
-
-def get_tv_datasets(config: Config):
-    (volume, mask, labels, train_x_range, valid_x_range, y_range) = load_tv_data(config)
-    global_mean, global_std, global_min, global_max = get_or_compute_normalization(config.data.train_segment_id, volume, mask)
-    train_dataset = InkVolumeDataset(volume, mask, labels, config, train_x_range, y_range, global_mean, global_std, global_min, global_max, shuffle=True)
-    valid_dataset = InkVolumeDataset(volume, mask, labels, config, valid_x_range, y_range, global_mean, global_std, global_min, global_max, shuffle=False)
-    return train_dataset, valid_dataset
-
+    def get_datasets(self):
+        """creates train and validation datasets"""
+        train_set = InkVolumeDataset(self.vol, self.mask, self.labels, self.c, self.train_x, self.y_range, self.norm_stats, shuffle=True)
+        valid_set = InkVolumeDataset(self.vol, self.mask, self.labels, self.c, self.valid_x, self.y_range, self.norm_stats, shuffle=False)
+        return train_set, valid_set
 
 def get_dataloaders(train_dataset, valid_dataset, config: Config):
-    """Create DataLoader objects from datasets"""
+    """creates dataloader objects from datasets"""
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.dataloader.batch_size,
-        num_workers=config.dataloader.num_workers,
+        batch_size=config.dl.batch_size,
+        num_workers=config.dl.num_workers,
         pin_memory=True,
     )
     
     valid_loader = DataLoader(
         valid_dataset,
-        batch_size=config.dataloader.batch_size,
-        num_workers=config.dataloader.num_workers,
+        batch_size=config.dl.batch_size,
+        num_workers=config.dl.num_workers,
         pin_memory=True,
     )
     
     return train_loader, valid_loader
 
 def _sample_labels(dataset, sample_size):
-    """Helper function to sample labels from a dataset, respecting the mask."""
-    all_labels = []
+    """helper function to sample labels from a dataset"""
+    labels = []
     dataset_iter = iter(dataset)
     for _ in range(sample_size):
         try:
-            _, label, mask = next(dataset_iter)  # Unpack block, label, and mask
-            if mask.sum() > 0:  # Only include labels where the mask is non-zero
-                all_labels.append(int(label.item()))
+            # get next item and only consider it if the mask is valid
+            _, label, mask = next(dataset_iter)
+            if mask.sum() > 0:
+                labels.append(int(label.item()))
         except StopIteration:
             break
-    return all_labels
+    return labels
 
-def calculate_class_weights(train_set, valid_set):
-    """Calculate class weights, ensuring sampling respects the mask."""
-    print("Sampling datasets to calculate average class weights...")
+def calc_class_wgts(train_set, valid_set):
+    """calculates class weights from dataset samples"""
+    print("sampling datasets to calculate average class weights")
     sample_size = 2500
-    # Sample labels from both datasets
+    
+    # sample from both training and validation sets for a representative distribution
     labels_a = _sample_labels(train_set, sample_size * 2)
-    print('got a')
     labels_b = _sample_labels(valid_set, sample_size)
-
-    # Combine labels from both datasets
     all_labels = labels_a + labels_b
 
-    if len(all_labels) == 0:
-        print("Warning: No samples found for class weight calculation!")
+    if not all_labels:
+        print("warning: no samples found for class weight calculation")
         return None
 
-    # Calculate label counts
-    label_counts = Counter(all_labels)
-    print(f"Label distribution (from {len(all_labels)} samples): {label_counts}")
+    # count positive and negative samples
+    counts = Counter(all_labels)
+    print(f"label distribution (from {len(all_labels)} samples): {counts}")
 
-    pos_weight = None
-    if label_counts.get(0, 0) > 0 and label_counts.get(1, 0) > 0:
-        pos_weight = torch.tensor([label_counts[0] / label_counts[1]])
-        print(f"Using average pos_weight: {pos_weight.item():.2f}")
-    else:
-        print("Warning: Only one class present in sampled data!")
-
-    return pos_weight
-
-
-def get_tile_coords_for_split(config: Config, split: str):
-    """
-    Returns tile coordinates for a given split ('train' or 'valid') using the same logic as InkVolumeDataset.
-    """
-    volume, mask, labels, train_x_range, valid_x_range, y_range = load_tv_data(config)
-    z_range = (config.data.start_level, config.data.end_level)
-    if split == 'train':
-        x_range = train_x_range
-    elif split == 'valid':
-        x_range = valid_x_range
-    else:
-        raise ValueError(f"Unknown split: {split}")
-    coords = generate_tile_coords(z_range, y_range, x_range, config, volume)
-    return coords, y_range, x_range, z_range
+    # calculate weight for the positive class
+    if counts.get(0, 0) > 0 and counts.get(1, 0) > 0:
+        pos_weight = torch.tensor([counts[0] / counts[1]])
+        print(f"using average pos_weight: {pos_weight.item():.2f}")
+        return pos_weight
+    
+    print("warning: only one class present in sampled data")
+    return None

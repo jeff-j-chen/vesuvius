@@ -49,18 +49,18 @@ def main(config: Config, model_path: str):
     # --- 2. Load Data and Dataloaders ---
     print("Loading Scroll 4 data for fine-tuning...")
     volume, mask, _, _ = load_scroll4_data(config)
-    labels_path = f"./eroded_inklabels/{config.data.scroll4_segment_id}.png"
+    labels_path = f"./eroded_inklabels/{config.data.scroll4_id}.png"
     labels = cv2.imread(labels_path, cv2.IMREAD_GRAYSCALE) / 255.0
     
     print("Getting normalization stats for Scroll 4...")
-    norm_stats = get_or_compute_normalization(config.data.scroll4_segment_id, volume, mask)
+    norm_stats = get_or_compute_normalization(config.data.scroll4_id, volume, mask)
     
     print("Creating fine-tuning dataloaders...")
     train_loader, valid_loader = get_finetune_dataloaders(config, volume, labels, mask, norm_stats, locs)
 
     # --- 3. Setup Training Components ---
     # Use a smaller learning rate for fine-tuning
-    config.training.learning_rate = config.finetune.learning_rate
+    config.tra.lr = config.finetune.learning_rate
     optimizer, scheduler = create_optimizer_and_scheduler(model, config)
     
     # For fine-tuning, we can use a simple pos_weight or calculate it on the small dataset
@@ -110,6 +110,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     config = Config()
-    config.experiment_name = args.experiment_name
+    config.exp_name = args.experiment_name
     
     main(config, args.model_path)

@@ -120,7 +120,7 @@ class InkDetector(nn.Module):
         
 
 def create_model(config: Config):
-    """Create and initialize the model"""
+    """create and initialize the model"""
     model = InkDetector(config).to(config.device)
     
     # Initialize weights properly
