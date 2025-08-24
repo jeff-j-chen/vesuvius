@@ -121,7 +121,8 @@ def main(config: Config, model_path: str):
 
     # --- 3. Generate Coordinates and Predict ---
     print("Generating tile coordinates for the entire scroll...")
-    z_range = (config.data.d_start, config.data.d_end)
+    # scan full depth with half-depth step (0..D with step depth//2)
+    z_range = (0, volume.shape[0])
     all_coords = generate_tile_coords(z_range, y_range, x_range, config, mask)
     grouped_coords = group_by_depth(all_coords)
     

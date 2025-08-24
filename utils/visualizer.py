@@ -45,10 +45,9 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     device = config.device if torch.cuda.is_available() else "cpu"
 
     tiles = []
-    for d_off, y_off, x_off in coords:
-        d = d_off + depth_start
-        if not (depth_start <= d < depth_start + config.data.depth):
-            continue
+    for _, y_off, x_off in coords:
+        # each call to predict_tiles targets a single depth window [depth_start, depth_start + depth)
+        d = depth_start
         y = y_range[0] + y_off
         x = x_range[0] + x_off
         tiles.append((d, y, x, y_off, x_off))
@@ -58,7 +57,6 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
             batch = tiles[i:i + bs]
             b_blocks = []
             b_idx = []
-
             for d, y, x, y_off, x_off in batch:
                 if d + config.data.depth > vol.shape[0]:
                     continue
@@ -163,9 +161,21 @@ class TensorboardVisualizer:
         self.volume = dm.vol
         self.mask = dm.mask
         self.labels = dm.labels
-        self.train_x_range = dm.train_x
-        self.valid_x_range = dm.valid_x
-        self.y_range = dm.y_range
+        # respect original bounds for the main training scroll when applicable
+        if self.config.data.scroll1_id == 20230827161847:
+            # original spatial crop
+            y0, y1 = 200, 5600
+            x0, x1 = 1000, 4600
+            self.y_range = (y0, y1)
+            # split the cropped x-range 75/25 for train/valid to mirror original behavior
+            x_len = x1 - x0
+            split = int(x_len * 0.75)
+            self.train_x_range = (x0, x0 + split)
+            self.valid_x_range = (x0 + split, x1)
+        else:
+            self.train_x_range = dm.train_x
+            self.valid_x_range = dm.valid_x
+            self.y_range = dm.y_range
         self.global_mean, self.global_std, self.global_min, self.global_max = dm.norm_stats
 
         # load test data region and scroll4 data with stats
@@ -281,7 +291,8 @@ class TensorboardVisualizer:
         mask_path = f"./masks/{sid}.png"
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) / 255.0
 
-        y_range = (max(0, H - max(0, H - 4200)), H)
+        # y_range = (max(0, H - max(0, H - 4200)), H)
+        y_range = (0, H)
         x_range = (0, W)
 
         return vol, mask, y_range, x_range
@@ -557,7 +568,7 @@ class TensorboardVisualizer:
 
         fig = self._create_hard_examples_overlay(mining_path)
         if fig is not None:
-            self.writer.add_figure(f"HardMined/Overlays/epoch_{epoch}", fig, epoch)
+            self.writer.add_figure(f"HardMined/Overlay", fig, epoch)
             plt.close(fig)
 
         if all_pred_data:
@@ -691,6 +702,7 @@ class TensorboardVisualizer:
         model.eval()
 
         self._add_single_test_figure(epoch, model, self.test_volume, self.test_mask, self.test_y_range, self.test_x_range, self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max, "Test")
+        
         self._add_single_test_figure(epoch, model, self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range, self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max, "Scroll4")
 
     def _add_single_test_figure(self, epoch, model, vol, mask, y_range, x_range, g_mean, g_std, g_min, g_max, name):

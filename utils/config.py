@@ -5,8 +5,8 @@ import torch
 @dataclass
 class DataConfig:
     zarr_path: str = "/media/jeff/SSD_2/ves_zarrs2/"
-    scroll1_id: int = 20230827161847
-    # scroll1_id: int = 20230702185753
+    # scroll1_id: int = 20230827161847
+    scroll1_id: int = 20230702185753
     scroll4_id: int = 20231210132040
     tile_size: int = 32
     depth: int = 8
@@ -53,8 +53,8 @@ class ModelConfig:
 @dataclass
 class HardMining:
     hn_cutoff: float = 0.8
-    hp_cutoff: float = 0.5
-    hm_frac: float = 0.2
+    hp_cutoff: float = 0.45
+    hm_frac: float = 0.1
 
 @dataclass
 class Config:
