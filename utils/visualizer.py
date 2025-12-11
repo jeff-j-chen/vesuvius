@@ -103,7 +103,7 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
 class TensorboardVisualizer:
     def __init__(self, config: Config, mode: str = 'train'):
         """initialize tensorboard visualizer and precompute datasets and stats"""
-        self.config = config
+        self.c = config
         self.mode = mode
 
         if config.exp_name is None:
@@ -155,14 +155,14 @@ class TensorboardVisualizer:
     def _init_training_assets(self):
         """load training and auxiliary datasets and normalization stats"""
         # data manager holds main training volume mask labels and splits
-        dm = DataManager(self.config)
+        dm = DataManager(self.c)
         self.dm = dm
 
         self.volume = dm.vol
         self.mask = dm.mask
         self.labels = dm.labels
         # respect original bounds for the main training scroll when applicable
-        if self.config.data.scroll1_id == 20230827161847:
+        if self.c.data.scroll1_id == 20230827161847:
             # original spatial crop
             y0, y1 = 200, 5600
             x0, x1 = 1000, 4600
@@ -181,12 +181,12 @@ class TensorboardVisualizer:
         # load test data region and scroll4 data with stats
         self.test_volume, self.test_mask, self.test_y_range, self.test_x_range = self._load_test_region()
         self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max = self._get_or_compute_norm(
-            self.test_volume, self.test_mask, str(self.config.data.scroll1_id)
+            self.test_volume, self.test_mask, str(self.c.data.scroll1_id)
         )
 
         self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range = self._load_scroll4_region()
         self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max = self._get_or_compute_norm(
-            self.scroll4_volume, self.scroll4_mask, str(self.config.data.scroll4_id)
+            self.scroll4_volume, self.scroll4_mask, str(self.c.data.scroll4_id)
         )
 
         self._debug_scroll4_ranges_once()
@@ -254,8 +254,8 @@ class TensorboardVisualizer:
         y0, y1 = y_range
         x0, x1 = x_range
 
-        depth = self.config.data.depth
-        tile = self.config.data.tile_size
+        depth = self.c.data.depth
+        tile = self.c.data.tile_size
 
         z_span = max(0, z1 - z0 - depth + 1)
         y_span = max(0, y1 - y0 - tile + 1)
@@ -277,8 +277,8 @@ class TensorboardVisualizer:
 
     def _load_test_region(self):
         """load test region based on training segment bottom slice"""
-        sid = self.config.data.scroll1_id
-        zarr_path = os.path.join(self.config.data.zarr_path, f"{sid}.zarr")
+        sid = self.c.data.scroll1_id
+        zarr_path = os.path.join(self.c.data.zarr_path, f"{sid}.zarr")
         vol = None
         try:
             import zarr
@@ -299,8 +299,8 @@ class TensorboardVisualizer:
 
     def _load_scroll4_region(self):
         """load scroll4 region with predefined slicing"""
-        sid = self.config.data.scroll4_id
-        zarr_path = os.path.join(self.config.data.zarr_path, f"{sid}.zarr")
+        sid = self.c.data.scroll4_id
+        zarr_path = os.path.join(self.c.data.zarr_path, f"{sid}.zarr")
         vol = None
         try:
             import zarr
@@ -354,15 +354,15 @@ class TensorboardVisualizer:
 
         if epoch == 0:
             print("Logging hyperparameters and model graph")
-            ex = torch.randn(1, self.config.data.depth, self.config.data.tile_size, self.config.data.tile_size).to(self.config.device)
+            ex = torch.randn(1, self.c.data.depth, self.c.data.tile_size, self.c.data.tile_size).to(self.c.device)
             ex = ex.unsqueeze(0)
             # self.log_model_graph(model, ex)
             self.log_hyperparameters(params, pos_weight)
 
-        if self.mode == 'train' and (epoch + 1) % self.config.tra.eval_int == 0:
+        if self.mode == 'train' and (epoch + 1) % self.c.tra.eval_int == 0:
             self.add_evaluation_figures(epoch, model)
 
-        if self.mode == 'train' and (epoch + 1) % self.config.tra.test_int == 0:
+        if self.mode == 'train' and (epoch + 1) % self.c.tra.test_int == 0:
             self.add_test_figures(epoch, model)
 
         self.writer.flush()
@@ -484,7 +484,7 @@ class TensorboardVisualizer:
         print("Starting evaluation figure generation...")
         model.eval()
 
-        z_range = (self.config.data.d_start, self.config.data.d_end)
+        z_range = (self.c.data.d_start, self.c.data.d_end)
 
         train_coords = self._gen_tile_coords(z_range, self.y_range, self.train_x_range, self.mask)
         valid_coords = self._gen_tile_coords(z_range, self.y_range, self.valid_x_range, self.mask)
@@ -498,8 +498,8 @@ class TensorboardVisualizer:
         mining_path = os.path.join("hard_negs", f"hard_mining_epoch_{epoch}.jsonl")
         mining_f = open(mining_path, "w")
         print(f"[HARD][Eval] Writing mining file to: {mining_path}")
-        hn_cut = self.config.hm.hn_cutoff
-        hp_cut = self.config.hm.hp_cutoff
+        hn_cut = self.c.hm.hn_cutoff
+        hp_cut = self.c.hm.hp_cutoff
         hn_cnt = 0
         hp_cnt = 0
 
@@ -509,23 +509,23 @@ class TensorboardVisualizer:
         new_keys = set()
 
         for d_off in depth_offsets:
-            depth_start = d_off + self.config.data.d_start
-            depth_end = depth_start + self.config.data.depth
+            depth_start = d_off + self.c.data.d_start
+            depth_end = depth_start + self.c.data.depth
 
             t_coords = train_grouped.get(d_off, [])
             v_coords = valid_grouped.get(d_off, [])
 
             t_pred = predict_tiles(
-                self.config, model, self.volume, self.mask, t_coords, self.y_range, self.train_x_range,
+                self.c, model, self.volume, self.mask, t_coords, self.y_range, self.train_x_range,
                 depth_start, "train", self.global_mean, self.global_std, self.global_min, self.global_max
             )
 
             v_pred = predict_tiles(
-                self.config, model, self.volume, self.mask, v_coords, self.y_range, self.valid_x_range,
+                self.c, model, self.volume, self.mask, v_coords, self.y_range, self.valid_x_range,
                 depth_start, "valid", self.global_mean, self.global_std, self.global_min, self.global_max
             )
 
-            tile = self.config.data.tile_size
+            tile = self.c.data.tile_size
 
             for (_, y_off, x_off) in t_coords:
                 yi = y_off // tile
@@ -632,9 +632,9 @@ class TensorboardVisualizer:
         all_labels = []
         all_scores = []
 
-        device = self.config.device
-        tile = self.config.data.tile_size
-        bs = self.config.dl.batch_size
+        device = self.c.device
+        tile = self.c.data.tile_size
+        bs = self.c.dl.batch_size
 
         with torch.no_grad():
             for i in tqdm(range(0, len(samples), bs), desc=f"Eval HM {os.path.basename(file_path)}", leave=False):
@@ -645,10 +645,10 @@ class TensorboardVisualizer:
                 for s in b_samp:
                     z, y, x, lbl = s['z'], s['y'], s['x'], s['label']
 
-                    if z + self.config.data.depth > self.volume.shape[0]:
+                    if z + self.c.data.depth > self.volume.shape[0]:
                         continue
 
-                    blk = np.array(self.volume[z:z + self.config.data.depth, y:y + tile, x:x + tile]).astype(np.float32)
+                    blk = np.array(self.volume[z:z + self.c.data.depth, y:y + tile, x:x + tile]).astype(np.float32)
 
                     blk = (blk - self.global_mean) / self.global_std
 
@@ -718,10 +718,10 @@ class TensorboardVisualizer:
         for d_start in depths:
             b_coords = grp[d_start]
             pred = predict_tiles(
-                self.config, model, vol, mask, b_coords, y_range, x_range,
+                self.c, model, vol, mask, b_coords, y_range, x_range,
                 d_start, name, g_mean, g_std, g_min, g_max
             )
-            d_end = d_start + self.config.data.depth
+            d_end = d_start + self.c.data.depth
             all_data.append((pred, d_start, d_end))
 
         if all_data:
@@ -735,7 +735,7 @@ class TensorboardVisualizer:
 
         fig, axes = plt.subplots(1, 2, figsize=(15, 9))
 
-        tile = self.config.data.tile_size
+        tile = self.c.data.tile_size
         d_labels = labels[::tile, ::tile]
 
         scaled_labels = ndimage.zoom(d_labels, 1, order=0)
@@ -768,9 +768,9 @@ class TensorboardVisualizer:
     def _create_combined_test_figure(self, all_data, n_blocks, test_type):
         """create combined test figure showing prediction mosaics"""
         cols = 2
-        rows = (n_blocks + 1) // 2
+        rows = (n_blocks + cols - 1) // cols
 
-        fig_w = 10
+        fig_w = 8
         h_mult = 7 if test_type == "scroll1" else 3
         fig_h = h_mult * rows
 
@@ -833,14 +833,14 @@ class TensorboardVisualizer:
     def _create_hard_examples_overlay(self, mining_path):
         """
         downsampled tile grid overlay for mined examples
-        base is grayscale eroded labels converted to bgr then downsampled
+        base is grayscale eroded labels converted to rgb then downsampled
         negatives add blue intensity equal to score and positives add red intensity equal to one minus score
         alpha blend per tile with fixed alpha
         """
         if not os.path.exists(mining_path):
             return None
 
-        seg_id = self.config.data.scroll1_id
+        seg_id = self.c.data.scroll1_id
         label_path = f"./eroded_inklabels/{seg_id}.png"
         if not os.path.exists(label_path):
             return None
@@ -857,7 +857,7 @@ class TensorboardVisualizer:
             x0, x1 = 0, label_gray.shape[1]
 
         crop = label_gray[y0:y1, x0:x1]
-        tile = self.config.data.tile_size
+        tile = self.c.data.tile_size
         Ht = crop.shape[0] // tile
         Wt = crop.shape[1] // tile
         if Ht <= 0 or Wt <= 0:
@@ -867,8 +867,9 @@ class TensorboardVisualizer:
         if base_small.shape != (Ht, Wt):
             return None
 
-        base_small_bgr = np.stack([base_small, base_small, base_small], axis=-1)
-        canvas_tmpl = base_small_bgr.copy()
+        # build base in rgb to avoid channel confusion
+        base_small_rgb = np.stack([base_small, base_small, base_small], axis=-1)
+        canvas_tmpl = base_small_rgb.copy()
 
         by_z = {}
         with open(mining_path, "r") as f:
@@ -896,16 +897,18 @@ class TensorboardVisualizer:
             return None
 
         zs = sorted(by_z.keys())
-        cols = 4
+        cols = 2
         rows = (len(zs) + cols - 1) // cols
-        fig, axes = plt.subplots(rows, cols, figsize=(cols * 3, rows * 6))
+        fig_w = 10
+        fig, axes = plt.subplots(rows, cols, figsize=(fig_w, rows * 4))
         axes = np.array(axes).reshape(rows, cols)
         alpha = 0.45
 
         for idx, z in enumerate(zs):
             ax = axes[idx // cols, idx % cols]
-            canvas = canvas_tmpl.copy()
+            canvas = canvas_tmpl.copy()  # rgb float canvas
 
+            # negatives: blue in rgb with intensity = score
             for rec in by_z[z]["neg"]:
                 xg, yg = rec["x"], rec["y"]
                 xr, yr = xg - x0, yg - y0
@@ -918,9 +921,10 @@ class TensorboardVisualizer:
                 score = float(rec.get("score", 0.0))
                 b_val = 255.0 * max(0.0, min(1.0, score))
                 orig = canvas[yi, xi]
-                blend = np.array([b_val, 0.0, 0.0], dtype=np.float32)
-                canvas[yi, xi] = alpha * blend + (1 - alpha) * orig
+                blend_rgb = np.array([0.0, 0.0, b_val], dtype=np.float32)
+                canvas[yi, xi] = alpha * blend_rgb + (1 - alpha) * orig
 
+            # positives: red in rgb with intensity = 1 - score
             for rec in by_z[z]["pos"]:
                 xg, yg = rec["x"], rec["y"]
                 xr, yr = xg - x0, yg - y0
@@ -933,10 +937,10 @@ class TensorboardVisualizer:
                 score = float(rec.get("score", 0.0))
                 r_val = 255.0 * max(0.0, min(1.0, 1.0 - score))
                 orig = canvas[yi, xi]
-                blend = np.array([0.0, 0.0, r_val], dtype=np.float32)
-                canvas[yi, xi] = alpha * blend + (1 - alpha) * orig
+                blend_rgb = np.array([r_val, 0.0, 0.0], dtype=np.float32)
+                canvas[yi, xi] = alpha * blend_rgb + (1 - alpha) * orig
 
-            ax.imshow(canvas[:, :, ::-1].astype(np.uint8), interpolation='nearest')
+            ax.imshow(canvas.astype(np.uint8), interpolation='nearest')
             ax.set_title(f"z={z}\nN={len(by_z[z]['neg'])} P={len(by_z[z]['pos'])}", fontsize=8)
             ax.axis("off")
 
@@ -949,22 +953,24 @@ class TensorboardVisualizer:
 
     def log_hyperparameters(self, params, pos_weight):
         """log run hyperparameters"""
-        self.writer.add_scalar("Hyperparameters/Tile Size", self.config.data.tile_size)
-        self.writer.add_scalar("Hyperparameters/Depth", self.config.data.depth)
-        self.writer.add_scalar("Hyperparameters/Batch Size", self.config.dl.batch_size)
-        self.writer.add_scalar("Hyperparameters/Num Workers", self.config.dl.num_workers)
-        self.writer.add_scalar("Hyperparameters/Learning Rate", self.config.tra.lr)
-        self.writer.add_scalar("Hyperparameters/Weight Decay", self.config.tra.weight_decay)
-        self.writer.add_scalar("Hyperparameters/L1 Lambda", self.config.tra.l1_lambda)
-        self.writer.add_scalar("Hyperparameters/Conv1 Dropout", self.config.model.conv1_drop)
-        self.writer.add_scalar("Hyperparameters/Conv2 Dropout", self.config.model.conv2_drop)
-        self.writer.add_scalar("Hyperparameters/FC1 Dropout", self.config.model.fc1_drop)
-        self.writer.add_scalar("Hyperparameters/FC2 Dropout", self.config.model.fc2_drop)
-        self.writer.add_scalar("Hyperparameters/Max Grad Norm", self.config.tra.grad_norm)
-        self.writer.add_scalar("Hyperparameters/Patience", self.config.tra.patience)
-        self.writer.add_scalar("Hyperparameters/LR Scheduler Factor", self.config.tra.lr_decay)
+        self.writer.add_scalar("Hyperparameters/Tile Size", self.c.data.tile_size)
+        self.writer.add_scalar("Hyperparameters/Depth", self.c.data.depth)
+        self.writer.add_scalar("Hyperparameters/Batch Size", self.c.dl.batch_size)
+        self.writer.add_scalar("Hyperparameters/Num Workers", self.c.dl.num_workers)
+        self.writer.add_scalar("Hyperparameters/Learning Rate", self.c.tra.lr)
+        self.writer.add_scalar("Hyperparameters/Weight Decay", self.c.tra.weight_decay)
+        self.writer.add_scalar("Hyperparameters/L1 Lambda", self.c.tra.l1_lambda)
+        self.writer.add_scalar("Hyperparameters/Conv1 Dropout", self.c.model.conv1_drop)
+        self.writer.add_scalar("Hyperparameters/Conv2 Dropout", self.c.model.conv2_drop)
+        self.writer.add_scalar("Hyperparameters/FC1 Dropout", self.c.model.fc1_drop)
+        self.writer.add_scalar("Hyperparameters/FC2 Dropout", self.c.model.fc2_drop)
+        self.writer.add_scalar("Hyperparameters/Max Grad Norm", self.c.tra.grad_norm)
+        self.writer.add_scalar("Hyperparameters/Patience", self.c.tra.patience)
+        self.writer.add_scalar("Hyperparameters/LR Scheduler Factor", self.c.tra.lr_decay)
         self.writer.add_scalar("Hyperparameters/Model Complexity", params)
         self.writer.add_scalar("Hyperparameters/Pos Weight", pos_weight)
+        self.writer.add_scalar("Hyperparameters/HN Cutoff", self.c.hm.hn_cutoff)
+        self.writer.add_scalar("Hyperparameters/HP Cutoff", self.c.hm.hp_cutoff)
 
     def close(self):
         """close the tensorboard writer"""
@@ -988,7 +994,7 @@ class TensorboardVisualizer:
             if not (0 <= x_range[0] < x_range[1] <= vol.shape[2]):  # type: ignore
                 issues.append(f"X range {x_range} out of bounds (0,{vol.shape[2]})")
 
-            tile = self.config.data.tile_size
+            tile = self.c.data.tile_size
             if (y_range[0] % tile != 0) or (x_range[0] % tile != 0):
                 issues.append(f"Ranges not tile aligned: y_start%tile={y_range[0]%tile}, x_start%tile={x_range[0]%tile}")
 
