@@ -10,6 +10,7 @@ import re
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from datetime import datetime
@@ -22,6 +23,11 @@ import scipy.ndimage as ndimage
 from .config import Config
 from .dataloader import DataManager
 from .training_utils import calculate_metrics
+
+# Pillow>=10 removed Image.ANTIALIAS, but some torch/tensorboard paths still
+# reference it. Keep a compatibility alias so add_figure/add_image does not fail.
+if not hasattr(Image, "ANTIALIAS") and hasattr(Image, "Resampling"):
+    setattr(Image, "ANTIALIAS", Image.Resampling.LANCZOS)
 
 def group_by_depth(coords):
     """group tile coordinates by their depth offset"""
@@ -813,22 +819,29 @@ class TensorboardVisualizer:
 
     def log_weight_histograms(self, model, epoch):
         """log weight and gradient histograms with guards"""
+        if getattr(self, "_disable_histogram_logging", False):
+            return
+
         for name, p in model.named_parameters():
             if p.requires_grad:
                 data = p.data.detach().cpu().numpy()
                 if data.size > 0 and not np.isnan(data).all():
                     try:
                         self.writer.add_histogram(f"Weights/{name}", data, epoch)
-                    except ValueError as e:
-                        print(f"[WARNING] Could not log histogram for Weights/{name}: {e}")
+                    except Exception as e:
+                        print(f"[WARNING] Disabling histogram logging (Weights/{name}) due to compatibility error: {e}")
+                        self._disable_histogram_logging = True
+                        return
 
                 if p.grad is not None:
                     g = p.grad.detach().cpu().numpy()
                     if g.size > 0 and not np.isnan(g).all() and np.abs(g).sum() > 0:
                         try:
                             self.writer.add_histogram(f"Gradients/{name}", g, epoch)
-                        except ValueError as e:
-                            print(f"[WARNING] Could not log histogram for Gradients/{name}: {e}")
+                        except Exception as e:
+                            print(f"[WARNING] Disabling histogram logging (Gradients/{name}) due to compatibility error: {e}")
+                            self._disable_histogram_logging = True
+                            return
 
     def _create_hard_examples_overlay(self, mining_path):
         """
