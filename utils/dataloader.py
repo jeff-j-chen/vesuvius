@@ -11,22 +11,57 @@ from .config import Config
 import json
 from tqdm import tqdm
 
+UNIFIED_CACHE_PATH = "./norm_cache.json"
+
+
+def _is_norm_stats(entry):
+    return isinstance(entry, dict) and all(k in entry for k in ("mean", "std", "min", "max"))
+
+
+def _load_unified_cache(cache_path=UNIFIED_CACHE_PATH):
+    """loads cache in legacy top-level-by-scroll layout"""
+    try:
+        with open(cache_path, "r") as f:
+            raw = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        raw = {}
+
+    if not isinstance(raw, dict):
+        return {}
+
+    return {k: v for k, v in raw.items() if isinstance(v, dict)}
+
+
+def _save_unified_cache(cache, cache_path=UNIFIED_CACHE_PATH):
+    """saves legacy top-level-by-scroll cache to disk"""
+    payload = cache if isinstance(cache, dict) else {}
+    with open(cache_path, "w") as f:
+        json.dump(payload, f, indent=4)
+
 class Transform:
     """handles data augmentation transforms"""
+    def __init__(self, config: Config):
+        self.channel_mixing_prob = float(getattr(config.dl, "channel_mixing_prob", 0.25))
+        self.rotation_prob = float(getattr(config.dl, "rotation_prob", 0.25))
+        self.flip_prob = float(getattr(config.dl, "flip_prob", 0.25))
+        self.noise_prob = float(getattr(config.dl, "noise_prob", 0.30))
+        self.brightness_prob = float(getattr(config.dl, "brightness_prob", 0.50))
+        self.contrast_prob = float(getattr(config.dl, "contrast_prob", 0.50))
+
     def __call__(self, block):
         """applies a random sequence of transforms to a block"""
         # each transform is applied with a certain probability
-        if random.random() < 0.25: 
+        if random.random() < self.channel_mixing_prob:
             block = self._apply_channel_mixing(block)
-        if random.random() < 0.25: 
+        if random.random() < self.rotation_prob:
             block = self._apply_rotation(block)
-        if random.random() < 0.25: 
+        if random.random() < self.flip_prob:
             block = self._apply_flip(block)
-        if random.random() < 0.30: 
+        if random.random() < self.noise_prob:
             block = self._apply_gaussian_noise(block)
-        if random.random() < 0.50: 
+        if random.random() < self.brightness_prob:
             block = self._apply_brightness_adjustment(block)
-        if random.random() < 0.50: 
+        if random.random() < self.contrast_prob:
             block = self._apply_contrast_adjustment(block)
         # ensure the final result is contiguous to avoid negative strides
         return np.ascontiguousarray(block)
@@ -84,7 +119,7 @@ class InkVolumeDataset(IterableDataset):
         self.apply_transforms = False # controlled by trainer
         self.shuffle = shuffle
         self.norm_stats = norm_stats
-        self.transform = Transform()
+        self.transform = Transform(config)
 
         self.z_start, self.z_end = self.c.data.d_start, self.c.data.d_end
         self.y_start, self.y_end = y_range
@@ -235,12 +270,20 @@ class DataManager:
         labels = cv2.imread(
             f"./eroded_inklabels/{self.c.data.scroll1_id}.png",
             cv2.IMREAD_GRAYSCALE
-        ) / 255.0
+        )
 
         mask = cv2.imread(
             f"./masks/{self.c.data.scroll1_id}.png", 
             cv2.IMREAD_GRAYSCALE
-        ) / 255.0
+        )
+
+        if labels is None:
+            raise FileNotFoundError(f"labels not found for scroll {self.c.data.scroll1_id}")
+        if mask is None:
+            raise FileNotFoundError(f"mask not found for scroll {self.c.data.scroll1_id}")
+
+        labels = labels / 255.0
+        mask = mask / 255.0
         
         # define the working area and split for train/validation
         x_start, x_end = 0, vol.shape[2]
@@ -255,17 +298,14 @@ class DataManager:
 
     def _get_or_compute_norm(self):
         """retrieves or computes normalization statistics"""
-        cache_path = "./norm_cache.json"
         seg_id = str(self.c.data.scroll1_id)
-        
+
         # first, try to load from cache
-        if os.path.exists(cache_path):
-            with open(cache_path, "r") as f:
-                cache = json.load(f)
-            if seg_id in cache:
-                print(f"[info] using cached normalization for segment {seg_id}")
-                stats = cache[seg_id]
-                return stats["mean"], stats["std"], stats["min"], stats["max"]
+        cache = _load_unified_cache()
+        stats = cache.get(seg_id)
+        if isinstance(stats, dict) and _is_norm_stats(stats):
+            print(f"[info] using cached normalization for segment {seg_id}")
+            return stats["mean"], stats["std"], stats["min"], stats["max"]
 
         # if not in cache, compute the statistics
         print(f"[info] computing normalization for segment {seg_id}")
@@ -300,16 +340,18 @@ class DataManager:
             g_max = max(g_max, norm_pixels.max())
 
         stats = {"mean": mean, "std": std, "min": g_min, "max": g_max}
-        
-        # update the cache file
-        try:
-            with open(cache_path, "r") as f: 
-                cache = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            cache = {}
-        cache[seg_id] = stats
-        with open(cache_path, "w") as f: 
-            json.dump(cache, f, indent=4)
+
+        # update unified cache file
+        cache = _load_unified_cache()
+        entry = cache.get(seg_id, {})
+        if not isinstance(entry, dict):
+            entry = {}
+        entry["mean"] = mean
+        entry["std"] = std
+        entry["min"] = g_min
+        entry["max"] = g_max
+        cache[seg_id] = entry
+        _save_unified_cache(cache)
             
         return mean, std, g_min, g_max
 
@@ -351,8 +393,21 @@ def _sample_labels(dataset, sample_size):
             break
     return labels
 
-def calc_class_wgts(train_set, valid_set):
+def calc_class_wgts(train_set, valid_set, scroll_id=None, cache_path=UNIFIED_CACHE_PATH):
     """calculates class weights from dataset samples"""
+    cache_key = str(scroll_id) if scroll_id is not None else None
+    if cache_key is not None:
+        cache = _load_unified_cache(cache_path)
+        cached_entry = cache.get(cache_key, {})
+        cached = cached_entry.get("class_weight") if isinstance(cached_entry, dict) else None
+        if isinstance(cached, dict) and "pos_weight" in cached:
+            if cached["pos_weight"] is None:
+                print(f"using cached class weight result for scroll {cache_key}: no pos_weight")
+                return None
+            cached_w = float(cached["pos_weight"])
+            print(f"using cached pos_weight for scroll {cache_key}: {cached_w:.2f}")
+            return torch.tensor([cached_w], dtype=torch.float32)
+
     print("sampling datasets to calculate average class weights")
     sample_size = 2500
     
@@ -371,9 +426,38 @@ def calc_class_wgts(train_set, valid_set):
 
     # calculate weight for the positive class
     if counts.get(0, 0) > 0 and counts.get(1, 0) > 0:
-        pos_weight = torch.tensor([counts[0] / counts[1]])
+        pos_weight = torch.tensor([counts[0] / counts[1]], dtype=torch.float32)
         print(f"using average pos_weight: {pos_weight.item():.2f}")
+
+        if cache_key is not None:
+            cache = _load_unified_cache(cache_path)
+            entry = cache.get(cache_key, {})
+            if not isinstance(entry, dict):
+                entry = {}
+            entry["class_weight"] = {
+                "pos_weight": float(pos_weight.item()),
+                "counts": {"0": int(counts[0]), "1": int(counts[1])},
+                "samples": int(len(all_labels)),
+            }
+            cache[cache_key] = entry
+            _save_unified_cache(cache, cache_path)
+            print(f"saved pos_weight cache for scroll {cache_key} to {cache_path}")
+
         return pos_weight
     
     print("warning: only one class present in sampled data")
+
+    if cache_key is not None:
+        cache = _load_unified_cache(cache_path)
+        entry = cache.get(cache_key, {})
+        if not isinstance(entry, dict):
+            entry = {}
+        entry["class_weight"] = {
+            "pos_weight": None,
+            "counts": {"0": int(counts.get(0, 0)), "1": int(counts.get(1, 0))},
+            "samples": int(len(all_labels)),
+        }
+        cache[cache_key] = entry
+        _save_unified_cache(cache, cache_path)
+
     return None

@@ -21,6 +21,56 @@ import argparse
 import os
 import random
 
+
+def _apply_cli_overrides(c: Config, args):
+    """apply optional CLI overrides to config"""
+    if args.epochs is not None:
+        c.tra.n_epochs = int(args.epochs)
+    if args.eval_int is not None:
+        c.tra.eval_int = int(args.eval_int)
+    if args.test_int is not None:
+        c.tra.test_int = int(args.test_int)
+    if args.probe_int is not None:
+        c.tra.probe_int = int(args.probe_int)
+
+    if args.scroll_id is not None:
+        c.data.scroll1_id = int(args.scroll_id)
+    if args.scroll4_id is not None:
+        c.data.scroll4_id = int(args.scroll4_id)
+    if args.zarr_path is not None:
+        c.data.zarr_path = args.zarr_path
+
+    if args.batch_size is not None:
+        c.dl.batch_size = int(args.batch_size)
+    if args.num_workers is not None:
+        c.dl.num_workers = int(args.num_workers)
+    if args.data_aug is not None:
+        c.dl.data_aug = bool(int(args.data_aug))
+
+    if args.lr is not None:
+        c.tra.lr = float(args.lr)
+    if args.weight_decay is not None:
+        c.tra.weight_decay = float(args.weight_decay)
+    if args.l1_lambda is not None:
+        c.tra.l1_lambda = float(args.l1_lambda)
+
+    if args.hm_frac is not None:
+        c.hm.hm_frac = float(args.hm_frac)
+    if args.hn_cutoff is not None:
+        c.hm.hn_cutoff = float(args.hn_cutoff)
+    if args.hp_cutoff is not None:
+        c.hm.hp_cutoff = float(args.hp_cutoff)
+
+    if args.channel_mixing_prob is not None:
+        c.dl.channel_mixing_prob = float(args.channel_mixing_prob)
+
+    if args.pooling is not None:
+        c.model.pooling = str(args.pooling)
+    if args.gem_p is not None:
+        c.model.gem_p = float(args.gem_p)
+    if args.conv3_dilation is not None:
+        c.model.conv3_dilation = int(args.conv3_dilation)
+
 def set_seed(seed=42):
     """sets the seed for reproducibility across all relevant libraries"""
     torch.backends.cudnn.deterministic = True
@@ -83,7 +133,7 @@ class Trainer:
         data_manager = DataManager(self.c)
         t_set, v_set = data_manager.get_datasets()
         t_loader, v_loader = get_dataloaders(t_set, v_set, self.c)
-        pos_weight = calc_class_wgts(t_set, v_set)
+        pos_weight = calc_class_wgts(t_set, v_set, scroll_id=self.c.data.scroll1_id)
         
         print(f"Data setup done in {time.time() - start_time:.2f}s")
         return t_set, t_loader, v_loader, pos_weight
@@ -322,12 +372,38 @@ def main():
     """parses arguments, initializes the configuration, and starts training"""
     parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
     parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
+    parser.add_argument("--epochs", type=int, default=None, help="Override number of epochs")
+    parser.add_argument("--eval-int", type=int, default=None, help="Override evaluation interval")
+    parser.add_argument("--test-int", type=int, default=None, help="Override test figure interval")
+    parser.add_argument("--probe-int", type=int, default=None, help="Override probe interval")
+
+    parser.add_argument("--scroll-id", type=int, default=None, help="Scroll id for train/valid")
+    parser.add_argument("--scroll4-id", type=int, default=None, help="Scroll id for scroll4 eval path")
+    parser.add_argument("--zarr-path", type=str, default=None, help="Path to zarr root")
+
+    parser.add_argument("--batch-size", type=int, default=None, help="Dataloader batch size")
+    parser.add_argument("--num-workers", type=int, default=None, help="Dataloader workers")
+    parser.add_argument("--data-aug", type=int, choices=[0, 1], default=None, help="Enable/disable data augmentation")
+
+    parser.add_argument("--lr", type=float, default=None, help="Learning rate")
+    parser.add_argument("--weight-decay", type=float, default=None, help="Weight decay")
+    parser.add_argument("--l1-lambda", type=float, default=None, help="L1 regularization strength")
+
+    parser.add_argument("--hm-frac", type=float, default=None, help="Hard-mining sample fraction")
+    parser.add_argument("--hn-cutoff", type=float, default=None, help="Hard-negative score cutoff")
+    parser.add_argument("--hp-cutoff", type=float, default=None, help="Hard-positive score cutoff")
+
+    parser.add_argument("--channel-mixing-prob", type=float, default=None, help="Depth channel permutation probability")
+    parser.add_argument("--pooling", type=str, choices=["avg", "max", "gem"], default=None, help="Pooling mode")
+    parser.add_argument("--gem-p", type=float, default=None, help="Initial GeM pooling p")
+    parser.add_argument("--conv3-dilation", type=int, default=None, help="Dilation for final conv stage")
     args = parser.parse_args()
     
     # load configuration and optionally override experiment name
     c = Config()
     if args.experiment_name:
         c.exp_name = args.experiment_name
+    _apply_cli_overrides(c, args)
         
     # initialize and run the trainer
     trainer = Trainer(c)

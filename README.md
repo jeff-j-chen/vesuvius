@@ -35,7 +35,7 @@ Current repository state observed during audit:
 
 Configured zarr root in code:
 
-- /media/jeff/SSD_2/ves_zarrs2/
+- ./ves_zarrs2
 
 Present zarrs:
 
@@ -157,6 +157,12 @@ Two modes are embedded in visualizer behavior:
 - Test figures every test_int epochs for:
 	- full test region of scroll1 segment (currently full spatial region)
 	- sliced scroll4 region (y >= 6500, x <= 5000)
+- Fixed readability probe figures every 5 epochs for:
+	- easy ROI on small scroll 1
+	- hard ROI on small scroll 1
+	- target pi ROI on scroll 4
+
+Readability probes are intentionally cheaper than full test inference and are meant to provide earlier qualitative feedback without changing the end-of-training role of `test_int`.
 
 Standalone scroll4 visualization script:
 
@@ -209,8 +215,8 @@ Source: utils/config.py
 	- d_start: 28
 	- d_end: 48
 - Dataloader
-	- batch_size: 64
-	- num_workers: 8
+	- batch_size: 96
+	- num_workers: 2
 	- data_aug: True
 - Training
 	- n_epochs: 50
@@ -267,9 +273,18 @@ Logged classes of signals include:
 - scalar train/valid loss + raw masked loss
 - accuracy, precision, recall, F1, specificity
 - ROC-AUC and PR-AUC
+- readability-oriented scalars under `R_M/*` including:
+	- local contrast
+	- local ranking accuracy
+	- recall and partial AUC in the 1% FPR regime
+	- top-k precision at ink budget
+	- tile ink-fraction correlation
+	- spill ratio and readability composite
 - confusion matrix figures
 - output score histograms
 - radar/bar metric comparisons
+- readability summary figure across depth blocks
+- fixed probe-region figures under `ProbeROIs/*`
 - parameter and gradient histograms
 - hard-mining overlays and mining-file evaluations
 

@@ -2,6 +2,17 @@ import torch
 import torch.nn as nn
 from .config import Config
 
+
+class GeMPool3d(nn.Module):
+    def __init__(self, p=3.0, eps=1e-6):
+        super().__init__()
+        self.p = nn.Parameter(torch.ones(1) * float(p))
+        self.eps = eps
+
+    def forward(self, x):
+        x = x.clamp(min=self.eps)
+        return nn.functional.adaptive_avg_pool3d(x.pow(self.p), 1).pow(1.0 / self.p)
+
 class CBAM3D(nn.Module):
     def __init__(self, channels, reduction=16, kernel_size=3):
         super(CBAM3D, self).__init__()
@@ -46,6 +57,8 @@ class InkDetector(nn.Module):
     def __init__(self, config: Config):
         super(InkDetector, self).__init__()
 
+        conv3_dilation = max(1, int(getattr(config.model, "conv3_dilation", 1)))
+
         self.features = nn.Sequential(
             nn.Conv3d(1, 32, kernel_size=(3, 4, 4), padding=1, bias=False),  # (B, 32, 8, 31, 31)
             nn.BatchNorm3d(32).to(dtype=torch.float32),
@@ -59,15 +72,30 @@ class InkDetector(nn.Module):
             nn.MaxPool3d(kernel_size=(2, 2, 2)),  # (B, 96, 4, 15, 15)
             nn.Dropout3d(config.model.conv1_drop),
 
-            nn.Conv3d(128, 256, kernel_size=(3, 3, 3), padding=1, bias=False),  # (B, 128, 4, 15, 15)
+            nn.Conv3d(
+                128,
+                256,
+                kernel_size=(3, 3, 3),
+                padding=conv3_dilation,
+                dilation=conv3_dilation,
+                bias=False,
+            ),  # (B, 128, 4, 15, 15)
             nn.BatchNorm3d(256).to(dtype=torch.float32),
             nn.ReLU(inplace=True),
             CBAM3D(256),
             nn.MaxPool3d(kernel_size=(2, 2, 2)),  # (B, 128, 2, 7, 7)
             nn.Dropout3d(config.model.conv2_drop),
-
-            nn.AdaptiveAvgPool3d(1)  # (B, 128, 1, 1, 1)
         )
+
+        pool_mode = str(getattr(config.model, "pooling", "avg")).lower()
+        if pool_mode == "avg":
+            self.pool = nn.AdaptiveAvgPool3d(1)
+        elif pool_mode == "max":
+            self.pool = nn.AdaptiveMaxPool3d(1)
+        elif pool_mode == "gem":
+            self.pool = GeMPool3d(p=float(getattr(config.model, "gem_p", 3.0)))
+        else:
+            raise ValueError(f"unsupported pooling mode: {pool_mode}")
 
 
         self.classifier = nn.Sequential(
@@ -103,6 +131,7 @@ class InkDetector(nn.Module):
 
     def forward(self, x):
         x = self.features(x)
+        x = self.pool(x)
         x = self.classifier(x)
         return x
 

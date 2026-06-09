@@ -11,14 +11,17 @@ import cv2
 import numpy as np
 import torch
 from PIL import Image
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, roc_curve
 import seaborn as sns
 import scipy.ndimage as ndimage
+from scipy import stats as scipy_stats
 
 from .config import Config
 from .dataloader import DataManager
@@ -111,14 +114,15 @@ class TensorboardVisualizer:
         """initialize tensorboard visualizer and precompute datasets and stats"""
         self.c = config
         self.mode = mode
+        self.probe_log_interval = max(1, int(getattr(config.tra, "probe_int", 5)))
 
         if config.exp_name is None:
             if self.mode == 'finetune':
-                experiment_name = f"finetune_{datetime.now().strftime('%d.%m_%H:%M:%S')}"
+                experiment_name = f"finetune_{datetime.now().strftime('%d.%m_%H-%M-%S')}"
             else:
-                experiment_name = f"ink_detection_{datetime.now().strftime('%d.%m_%H:%M:%S')}"
+                experiment_name = f"ink_detection_{datetime.now().strftime('%d.%m_%H-%M-%S')}"
         else:
-            experiment_name = config.exp_name + "_" + datetime.now().strftime('%d_%H:%M:%S')
+            experiment_name = config.exp_name + "_" + datetime.now().strftime('%d_%H-%M-%S')
 
         self.log_path = os.path.join(config.tra.log_dir, experiment_name)
 
@@ -145,6 +149,24 @@ class TensorboardVisualizer:
             "AUC_Metrics": {
                 "roc_auc": ["Multiline", ["AUC/ROC_AUC/Train", "AUC/ROC_AUC/Valid"]],
                 "pr_auc": ["Multiline", ["AUC/PR_AUC/Train", "AUC/PR_AUC/Valid"]],
+            },
+            "Readability": {
+                "contrast_ranking": [
+                    "Multiline", [
+                        "R_M/LocalContrast",
+                        "R_M/LocalRanking",
+                        "R_M/TopKPrecision",
+                        "R_M/InkFractionSpearman"
+                    ]
+                ],
+                "low_fpr_spill": [
+                    "Multiline", [
+                        "R_M/RecallAt1PctFPR",
+                        "R_M/PartialAUCAt1PctFPR",
+                        "R_M/SpillRatio",
+                        "R_M/ReadabilityComposite"
+                    ]
+                ],
             },
         }
 
@@ -195,6 +217,8 @@ class TensorboardVisualizer:
             self.scroll4_volume, self.scroll4_mask, str(self.c.data.scroll4_id)
         )
 
+        self._segment_assets = {}
+        self.probe_specs = self._build_probe_specs()
         self._debug_scroll4_ranges_once()
 
     def _get_or_compute_norm(self, vol, mask, seg_id):
@@ -205,7 +229,7 @@ class TensorboardVisualizer:
             try:
                 with open(cache_path, "r") as f:
                     cache = json.load(f)
-                if seg_id in cache:
+                if isinstance(cache, dict) and seg_id in cache:
                     stats = cache[seg_id]
                     return stats["mean"], stats["std"], stats["min"], stats["max"]
             except Exception:
@@ -246,7 +270,19 @@ class TensorboardVisualizer:
                     cache = json.load(f)
             except Exception:
                 cache = {}
-            cache[seg_id] = {"mean": mean, "std": std, "min": g_min, "max": g_max}
+
+            if not isinstance(cache, dict):
+                cache = {}
+
+            entry = cache.get(seg_id, {})
+            if not isinstance(entry, dict):
+                entry = {}
+            entry["mean"] = mean
+            entry["std"] = std
+            entry["min"] = g_min
+            entry["max"] = g_max
+            cache[seg_id] = entry
+
             with open(cache_path, "w") as f:
                 json.dump(cache, f, indent=4)
         except Exception:
@@ -324,6 +360,278 @@ class TensorboardVisualizer:
 
         return vol, mask, y_range, x_range
 
+    def _build_probe_specs(self):
+        """fixed readability probe regions used for qualitative tracking"""
+        return [
+            {
+                "tag": "Easy",
+                "title": "small scroll easy",
+                "segment_id": 20230827161847,
+                "x": 2100,
+                "y": 4370,
+                "size": 608,
+            },
+            {
+                "tag": "Hard",
+                "title": "small scroll hard",
+                "segment_id": 20230827161847,
+                "x": 3744,
+                "y": 3862,
+                "size": 608,
+            },
+            {
+                "tag": "Scroll4_Pi",
+                "title": "scroll4 pi",
+                "segment_id": 20231210132040,
+                "x": 1960,
+                "y": 7968,
+                "size": 608,
+            },
+        ]
+
+    def _load_segment_labels(self, seg_id):
+        """load eroded labels for a segment"""
+        path = f"./eroded_inklabels/{seg_id}.png"
+        labels = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        if labels is None:
+            raise RuntimeError(f"could not read labels at {path}")
+        return labels / 255.0
+
+    def _load_segment_mask(self, seg_id):
+        """load mask for a segment"""
+        path = f"./masks/{seg_id}.png"
+        mask = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise RuntimeError(f"could not read mask at {path}")
+        return mask / 255.0
+
+    def _get_segment_asset(self, seg_id):
+        """return cached volume mask labels and normalization stats for a segment"""
+        if seg_id in self._segment_assets:
+            return self._segment_assets[seg_id]
+
+        if seg_id == self.c.data.scroll1_id:
+            asset = {
+                "volume": self.volume,
+                "mask": self.mask,
+                "labels": self.labels,
+                "norm": (self.global_mean, self.global_std, self.global_min, self.global_max),
+            }
+        elif seg_id == self.c.data.scroll4_id:
+            asset = {
+                "volume": self.scroll4_volume,
+                "mask": self.scroll4_mask,
+                "labels": self._load_segment_labels(seg_id),
+                "norm": (
+                    self.scroll4_global_mean,
+                    self.scroll4_global_std,
+                    self.scroll4_global_min,
+                    self.scroll4_global_max,
+                ),
+            }
+        else:
+            import zarr
+
+            volume = zarr.open(os.path.join(self.c.data.zarr_path, f"{seg_id}.zarr"), mode="r")
+            mask = self._load_segment_mask(seg_id)
+            labels = self._load_segment_labels(seg_id)
+            g_mean, g_std, g_min, g_max = self._get_or_compute_norm(volume, mask, str(seg_id))
+            asset = {
+                "volume": volume,
+                "mask": mask,
+                "labels": labels,
+                "norm": (g_mean, g_std, g_min, g_max),
+            }
+
+        self._segment_assets[seg_id] = asset
+        return asset
+
+    def _compute_tile_maps(self, labels, mask, y_range, x_range):
+        """derive tile-aligned label fraction and validity maps anchored to the eval grid"""
+        tile = self.c.data.tile_size
+        y0, y1 = y_range
+        x0, x1 = x_range
+        h_small = max(0, (y1 - y0) // tile)
+        w_small = max(0, (x1 - x0) // tile)
+
+        label_binary = np.zeros((h_small, w_small), dtype=bool)
+        label_fraction = np.zeros((h_small, w_small), dtype=np.float32)
+        valid_tiles = np.zeros((h_small, w_small), dtype=bool)
+
+        for yi in range(h_small):
+            y = y0 + yi * tile
+            for xi in range(w_small):
+                x = x0 + xi * tile
+                label_tile = labels[y:y + tile, x:x + tile]
+                mask_tile = mask[y:y + tile, x:x + tile]
+                if label_tile.shape != (tile, tile) or mask_tile.shape != (tile, tile):
+                    continue
+                if np.sum(mask_tile) <= 0:
+                    continue
+                ink = label_tile > 0.5
+                valid_tiles[yi, xi] = True
+                label_binary[yi, xi] = bool(np.any(ink))
+                label_fraction[yi, xi] = float(np.mean(ink))
+
+        return label_binary, label_fraction, valid_tiles
+
+    def _compute_local_contrast_metrics(self, pred_map, label_binary, valid_tiles, radius=2):
+        """measure local score separation around positive tiles"""
+        pos_coords = np.argwhere(valid_tiles & label_binary)
+        contrasts = []
+        rankings = []
+
+        for yi, xi in pos_coords:
+            y0 = max(0, yi - radius)
+            y1 = min(pred_map.shape[0], yi + radius + 1)
+            x0 = max(0, xi - radius)
+            x1 = min(pred_map.shape[1], xi + radius + 1)
+
+            local_valid = valid_tiles[y0:y1, x0:x1]
+            local_neg = local_valid & (~label_binary[y0:y1, x0:x1])
+            if not np.any(local_neg):
+                continue
+
+            pos_score = float(pred_map[yi, xi])
+            neg_scores = pred_map[y0:y1, x0:x1][local_neg]
+            if neg_scores.size == 0:
+                continue
+
+            contrasts.append(pos_score - float(np.mean(neg_scores)))
+            rankings.append(float(np.mean(pos_score > neg_scores)))
+
+        if not contrasts:
+            return np.nan, np.nan
+
+        return float(np.mean(contrasts)), float(np.mean(rankings))
+
+    def _compute_low_fpr_metrics(self, scores, labels, max_fpr=0.01):
+        """measure recall and partial auc in the very low-fpr regime"""
+        if scores.size == 0 or len(np.unique(labels)) < 2:
+            return np.nan, np.nan
+
+        fpr, tpr, _ = roc_curve(labels, scores)
+        keep = fpr <= max_fpr
+        if not np.any(keep):
+            return 0.0, 0.0
+
+        recall_at_low_fpr = float(np.max(tpr[keep]))
+        tpr_at_max = float(np.interp(max_fpr, fpr, tpr))
+        fpr_part = fpr[keep]
+        tpr_part = tpr[keep]
+        if fpr_part[-1] < max_fpr:
+            fpr_part = np.concatenate([fpr_part, [max_fpr]])
+            tpr_part = np.concatenate([tpr_part, [tpr_at_max]])
+
+        partial_auc = float(np.trapz(tpr_part, fpr_part) / max_fpr)
+        return recall_at_low_fpr, partial_auc
+
+    def _compute_topk_precision(self, scores, labels):
+        """precision among the top-k scores where k equals positive-tile count"""
+        k = int(np.sum(labels))
+        if k <= 0 or scores.size == 0:
+            return np.nan
+
+        k = min(k, scores.size)
+        top_idx = np.argsort(scores)[::-1][:k]
+        return float(np.mean(labels[top_idx]))
+
+    def _compute_fraction_correlation(self, scores, fractions):
+        """correlation between score and per-tile ink fraction"""
+        if scores.size < 2 or np.std(scores) <= 1e-12 or np.std(fractions) <= 1e-12:
+            return np.nan, np.nan
+
+        pearson = float(np.corrcoef(scores, fractions)[0, 1])
+        spearman = float(scipy_stats.spearmanr(scores, fractions).correlation)
+        return pearson, spearman
+
+    def _compute_spill_metrics(self, pred_map, label_binary, valid_tiles):
+        """measure positive mass spill and binary component structure at ink budget"""
+        valid_scores = pred_map[valid_tiles]
+        if valid_scores.size == 0:
+            return np.nan, np.nan, np.nan
+
+        dilated_gt = ndimage.binary_dilation(label_binary, iterations=1)
+        outside_dilated = valid_tiles & (~dilated_gt)
+        spill_ratio = float(pred_map[outside_dilated].sum() / max(valid_scores.sum(), 1e-8))
+
+        labels_flat = label_binary[valid_tiles].astype(int)
+        k = int(np.sum(labels_flat))
+        if k <= 0:
+            return spill_ratio, np.nan, np.nan
+
+        k = min(k, valid_scores.size)
+        valid_indices = np.argwhere(valid_tiles)
+        top_idx = np.argsort(valid_scores)[::-1][:k]
+        budget_mask = np.zeros_like(pred_map, dtype=np.uint8)
+        for idx in top_idx:
+            yi, xi = valid_indices[idx]
+            budget_mask[yi, xi] = 1
+
+        components, num_components = ndimage.label(budget_mask)
+        if num_components <= 0:
+            return spill_ratio, 0.0, 0.0
+
+        component_sizes = ndimage.sum(np.ones_like(components), components, index=np.arange(1, num_components + 1))
+        mean_component_size = float(np.mean(component_sizes)) if len(component_sizes) > 0 else 0.0
+        return spill_ratio, float(num_components), mean_component_size
+
+    def _compute_readability_metrics(self, pred_map, label_binary, label_fraction, valid_tiles):
+        """compute readability-aligned scalar metrics for a prediction map"""
+        valid_scores = pred_map[valid_tiles]
+        valid_labels = label_binary[valid_tiles].astype(int)
+        valid_fraction = label_fraction[valid_tiles]
+
+        local_contrast, local_ranking = self._compute_local_contrast_metrics(pred_map, label_binary, valid_tiles)
+        recall_at_1pct_fpr, partial_auc_at_1pct_fpr = self._compute_low_fpr_metrics(valid_scores, valid_labels)
+        topk_precision = self._compute_topk_precision(valid_scores, valid_labels)
+        fraction_corr_pearson, fraction_corr_spearman = self._compute_fraction_correlation(valid_scores, valid_fraction)
+        spill_ratio, component_count, mean_component_size = self._compute_spill_metrics(pred_map, label_binary, valid_tiles)
+
+        contrast_norm = np.clip(np.nan_to_num(local_contrast, nan=0.0), 0.0, 1.0)
+        ranking_norm = np.clip(np.nan_to_num(local_ranking, nan=0.0), 0.0, 1.0)
+        recall_norm = np.clip(np.nan_to_num(recall_at_1pct_fpr, nan=0.0), 0.0, 1.0)
+        pauc_norm = np.clip(np.nan_to_num(partial_auc_at_1pct_fpr, nan=0.0), 0.0, 1.0)
+        topk_norm = np.clip(np.nan_to_num(topk_precision, nan=0.0), 0.0, 1.0)
+        corr_norm = np.clip((np.nan_to_num(fraction_corr_spearman, nan=-1.0) + 1.0) / 2.0, 0.0, 1.0)
+        spill_good = np.clip(1.0 - np.nan_to_num(spill_ratio, nan=1.0), 0.0, 1.0)
+
+        readability_composite = float(np.mean([
+            contrast_norm,
+            ranking_norm,
+            recall_norm,
+            pauc_norm,
+            topk_norm,
+            corr_norm,
+            spill_good,
+        ]))
+
+        return {
+            "local_contrast": float(local_contrast),
+            "local_ranking": float(local_ranking),
+            "recall_at_1pct_fpr": float(recall_at_1pct_fpr),
+            "partial_auc_at_1pct_fpr": float(partial_auc_at_1pct_fpr),
+            "topk_precision": float(topk_precision),
+            "ink_fraction_corr_pearson": float(fraction_corr_pearson),
+            "ink_fraction_corr_spearman": float(fraction_corr_spearman),
+            "spill_ratio": float(spill_ratio),
+            "component_count": float(component_count),
+            "mean_component_size": float(mean_component_size),
+            "readability_composite": readability_composite,
+        }
+
+    def _aggregate_metric_dicts(self, metrics_list):
+        """average scalar metrics across depth blocks while ignoring missing values"""
+        if not metrics_list:
+            return {}
+
+        keys = metrics_list[0].keys()
+        aggregate = {}
+        for key in keys:
+            vals = [m[key] for m in metrics_list if np.isfinite(m[key])]
+            aggregate[key] = float(np.mean(vals)) if vals else np.nan
+        return aggregate
+
     def log_epoch_metrics(self, epoch, model, train_metrics, val_metrics, learning_rate, time_elapsed, params, pos_weight):
         """log metrics images and hparams"""
         print(f"Logging metrics for epoch: {epoch+1}")
@@ -370,6 +678,9 @@ class TensorboardVisualizer:
 
         if self.mode == 'train' and (epoch + 1) % self.c.tra.test_int == 0:
             self.add_test_figures(epoch, model)
+
+        if self.mode == 'train' and (epoch + 1) % self.probe_log_interval == 0:
+            self.add_probe_region_figures(epoch, model)
 
         self.writer.flush()
 
@@ -462,28 +773,39 @@ class TensorboardVisualizer:
                              ha='center', va='bottom', fontsize=8)
 
         categories = ['Precision', 'Recall', 'F1-Score', 'Specificity', 'ROC-AUC', 'PR-AUC']
-        angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
-        angles += angles[:1]
-
-        train_vals_r = train_vals + train_vals[:1]
-        val_vals_r = val_vals + val_vals[:1]
-
         radar_ax = fig.add_subplot(1, 2, 2, projection='polar')
-        radar_ax.plot(angles, train_vals_r, 'o-', linewidth=2, label='Train', color='blue')
-        radar_ax.fill(angles, train_vals_r, alpha=0.25, color='blue')
-        radar_ax.plot(angles, val_vals_r, 'o-', linewidth=2, label='Valid', color='red')
-        radar_ax.fill(angles, val_vals_r, alpha=0.25, color='red')
-
-        radar_ax.set_xticks(angles[:-1])
-        radar_ax.set_xticklabels(categories)
-        radar_ax.set_ylim(0, 1)
-        radar_ax.set_title('Performance Radar Chart', y=1.08)
-        radar_ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.0))
-        radar_ax.grid(True)
+        self._plot_radar_chart(
+            radar_ax,
+            categories,
+            [
+                ("Train", train_vals, "blue"),
+                ("Valid", val_vals, "red"),
+            ],
+            title='Performance Radar Chart',
+            ylim=(0, 1),
+        )
 
         plt.tight_layout()
         self.writer.add_figure('Metrics_Comparison', fig, epoch)
         plt.close(fig)
+
+    def _plot_radar_chart(self, ax, categories, series, title, ylim=(0, 1)):
+        """plot one or more normalized series on a radar chart"""
+        angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
+        angles += angles[:1]
+
+        for label, values, color in series:
+            values_c = [float(np.nan_to_num(v, nan=0.0)) for v in values]
+            values_c += values_c[:1]
+            ax.plot(angles, values_c, 'o-', linewidth=2, label=label, color=color)
+            ax.fill(angles, values_c, alpha=0.2, color=color)
+
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(categories)
+        ax.set_ylim(float(ylim[0]), float(ylim[1]))
+        ax.set_title(title, y=1.08)
+        ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.0))
+        ax.grid(True)
 
     def add_evaluation_figures(self, epoch, model):
         """run eval on train and valid splits produce mining and figures"""
@@ -578,13 +900,30 @@ class TensorboardVisualizer:
             plt.close(fig)
 
         if all_pred_data:
-            labels_crop = self.labels[self.y_range[0]:self.y_range[1], self.train_x_range[0]:self.valid_x_range[1]]
+            full_x_range = (self.train_x_range[0], self.valid_x_range[1])
+            label_binary, label_fraction, valid_tiles = self._compute_tile_maps(
+                self.labels,
+                self.mask,
+                self.y_range,
+                full_x_range,
+            )
+            per_depth_metrics = []
+            depth_labels = []
+
             for pred_data in all_pred_data:
                 depth_start = pred_data[2]
                 depth_end = pred_data[3]
-                fig = self._create_evaluation_figure(pred_data, labels_crop)
+                fig = self._create_evaluation_figure(pred_data, label_binary)
                 self.writer.add_figure(f'Evaluation/Depth_Block_{depth_start}-{depth_end}', fig, epoch)
                 plt.close(fig)
+
+                per_depth_metrics.append(
+                    self._compute_readability_metrics(pred_data[0], label_binary, label_fraction, valid_tiles)
+                )
+                depth_labels.append(f"{depth_start}-{depth_end}")
+
+            aggregate_metrics = self._aggregate_metric_dicts(per_depth_metrics)
+            self._log_readability_metrics(epoch, aggregate_metrics, per_depth_metrics, depth_labels)
 
         self._run_and_log_hard_mining_evaluation(epoch, model)
 
@@ -735,16 +1074,11 @@ class TensorboardVisualizer:
             self.writer.add_figure(f'Test/{name}_All_Depth_Blocks', fig, epoch)
             plt.close(fig)
 
-    def _create_evaluation_figure(self, pred_data, labels):
+    def _create_evaluation_figure(self, pred_data, label_binary):
         """create evaluation figure for a single depth block"""
         full_pred, train_pred, d_start, d_end = pred_data
 
         fig, axes = plt.subplots(1, 2, figsize=(15, 9))
-
-        tile = self.c.data.tile_size
-        d_labels = labels[::tile, ::tile]
-
-        scaled_labels = ndimage.zoom(d_labels, 1, order=0)
 
         ax_pred = axes[0]
         im1 = ax_pred.imshow(full_pred, cmap='inferno', vmin=0, vmax=1, aspect='equal')
@@ -758,11 +1092,11 @@ class TensorboardVisualizer:
         ax_overlay.imshow(full_pred, cmap='inferno', vmin=0, vmax=1, aspect='equal')
         ax_overlay.set_title(f'Overlay (Depth {d_start}-{d_end})', fontsize=9)
 
-        if scaled_labels is not None:
+        if label_binary is not None:
             overlay = np.zeros((*full_pred.shape, 4))
-            h = min(scaled_labels.shape[0], overlay.shape[0])
-            w = min(scaled_labels.shape[1], overlay.shape[1])
-            overlay[:h, :w][scaled_labels[:h, :w] > 0.5] = [1, 1, 1, 0.4]
+            h = min(label_binary.shape[0], overlay.shape[0])
+            w = min(label_binary.shape[1], overlay.shape[1])
+            overlay[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
             ax_overlay.imshow(overlay)
 
         ax_overlay.axvline(x=split_pos, color='red', linestyle='--', linewidth=1.2)
@@ -799,6 +1133,434 @@ class TensorboardVisualizer:
             ax.axis('off')
 
         plt.subplots_adjust(wspace=0.05, hspace=0.05, left=0.05, right=0.95, top=0.95, bottom=0.05)
+        return fig
+
+    def _log_readability_metrics(self, epoch, aggregate_metrics, per_depth_metrics, depth_labels):
+        """log readability-aligned scalar and figure summaries"""
+        if not aggregate_metrics:
+            return
+
+        scalar_tags = {
+            "R_M/LocalContrast": aggregate_metrics.get("local_contrast", np.nan),
+            "R_M/LocalRanking": aggregate_metrics.get("local_ranking", np.nan),
+            "R_M/RecallAt1PctFPR": aggregate_metrics.get("recall_at_1pct_fpr", np.nan),
+            "R_M/PartialAUCAt1PctFPR": aggregate_metrics.get("partial_auc_at_1pct_fpr", np.nan),
+            "R_M/TopKPrecision": aggregate_metrics.get("topk_precision", np.nan),
+            "R_M/InkFractionPearson": aggregate_metrics.get("ink_fraction_corr_pearson", np.nan),
+            "R_M/InkFractionSpearman": aggregate_metrics.get("ink_fraction_corr_spearman", np.nan),
+            "R_M/SpillRatio": aggregate_metrics.get("spill_ratio", np.nan),
+            "R_M/ComponentCount": aggregate_metrics.get("component_count", np.nan),
+            "R_M/MeanComponentSize": aggregate_metrics.get("mean_component_size", np.nan),
+            "R_M/ReadabilityComposite": aggregate_metrics.get("readability_composite", np.nan),
+        }
+
+        for tag, value in scalar_tags.items():
+            if np.isfinite(value):
+                self.writer.add_scalar(tag, float(value), epoch)
+
+        fig = self._create_readability_summary_figure(aggregate_metrics, per_depth_metrics, depth_labels)
+        self.writer.add_figure("Readability/Summary", fig, epoch)
+        plt.close(fig)
+
+        fig = self._create_readability_compass_figure(aggregate_metrics, per_depth_metrics, depth_labels)
+        self.writer.add_figure("Readability/Compass", fig, epoch)
+        plt.close(fig)
+
+    def _readability_compass_values(self, metrics):
+        """map raw readability metrics into 0..1 values used by compass plot"""
+        local_contrast = np.clip(np.nan_to_num(metrics.get("local_contrast", np.nan), nan=0.0), 0.0, 1.0)
+        local_ranking = np.clip(np.nan_to_num(metrics.get("local_ranking", np.nan), nan=0.0), 0.0, 1.0)
+        recall_low_fpr = np.clip(np.nan_to_num(metrics.get("recall_at_1pct_fpr", np.nan), nan=0.0), 0.0, 1.0)
+        pauc_low_fpr = np.clip(np.nan_to_num(metrics.get("partial_auc_at_1pct_fpr", np.nan), nan=0.0), 0.0, 1.0)
+        topk = np.clip(np.nan_to_num(metrics.get("topk_precision", np.nan), nan=0.0), 0.0, 1.0)
+        spearman = np.clip((np.nan_to_num(metrics.get("ink_fraction_corr_spearman", np.nan), nan=-1.0) + 1.0) / 2.0, 0.0, 1.0)
+        spill_suppression = np.clip(1.0 - np.nan_to_num(metrics.get("spill_ratio", np.nan), nan=1.0), 0.0, 1.0)
+        composite = np.clip(np.nan_to_num(metrics.get("readability_composite", np.nan), nan=0.0), 0.0, 1.0)
+        return [
+            float(local_contrast),
+            float(local_ranking),
+            float(recall_low_fpr),
+            float(pauc_low_fpr),
+            float(topk),
+            float(spearman),
+            float(spill_suppression),
+            float(composite),
+        ]
+
+    def _readability_good_targets(self):
+        """heuristic target values used as visual reference markers"""
+        return {
+            "local_contrast": 0.20,
+            "local_ranking": 0.80,
+            "recall_at_1pct_fpr": 0.70,
+            "partial_auc_at_1pct_fpr": 0.60,
+            "topk_precision": 0.80,
+            "ink_fraction_corr_spearman": 0.50,
+            "spill_ratio": 0.20,
+            "readability_composite": 0.75,
+        }
+
+    def _create_readability_compass_figure(self, aggregate_metrics, per_depth_metrics, depth_labels):
+        """create a readability-focused radar chart using normalized readability terms"""
+        categories = [
+            "local contrast",
+            "local ranking",
+            "recall@1%fpr",
+            "pauc@1%fpr",
+            "top-k precision",
+            "spearman",
+            "spill suppression",
+            "composite",
+        ]
+
+        fig, ax = plt.subplots(1, 1, figsize=(8, 8), subplot_kw={"projection": "polar"})
+
+        series = [
+            ("aggregate", self._readability_compass_values(aggregate_metrics), "teal"),
+        ]
+
+        best_idx = None
+        best_value = float("-inf")
+        for idx, metrics in enumerate(per_depth_metrics):
+            value = float(np.nan_to_num(metrics.get("readability_composite", np.nan), nan=-1.0))
+            if value > best_value:
+                best_value = value
+                best_idx = idx
+
+        if best_idx is not None:
+            best_label = "best depth"
+            if best_idx < len(depth_labels):
+                best_label = f"best depth ({depth_labels[best_idx]})"
+            series.append((best_label, self._readability_compass_values(per_depth_metrics[best_idx]), "darkorange"))
+
+        self._plot_radar_chart(
+            ax,
+            categories,
+            series,
+            title="Readability Compass",
+            ylim=(0, 1),
+        )
+
+        good_targets = self._readability_good_targets()
+        good_values = self._readability_compass_values(good_targets)
+        angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
+        angles += angles[:1]
+        good_values_c = good_values + good_values[:1]
+        ax.plot(angles, good_values_c, color="red", marker="o", linestyle="None", markersize=3, label="good target")
+        for ang, val in zip(angles[:-1], good_values):
+            ax.text(ang, min(0.99, val + 0.04), f"{val:.2f}", color="red", fontsize=7, ha="center", va="bottom")
+        ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.0))
+
+        return fig
+
+    def _create_readability_summary_figure(self, aggregate_metrics, per_depth_metrics, depth_labels):
+        """create a combined readability dashboard figure"""
+        metric_keys = [
+            ("local_contrast", "local contrast"),
+            ("local_ranking", "ranking"),
+            ("recall_at_1pct_fpr", "recall@1%fpr"),
+            ("partial_auc_at_1pct_fpr", "pauc@1%fpr"),
+            ("topk_precision", "precision@k"),
+            ("ink_fraction_corr_spearman", "fraction corr"),
+            ("spill_ratio", "spill"),
+            ("readability_composite", "composite"),
+        ]
+
+        fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+
+        # left: aggregate bar chart
+        agg_labels = [label for _, label in metric_keys]
+        agg_values = []
+        for key, _ in metric_keys:
+            value = float(np.nan_to_num(aggregate_metrics.get(key, np.nan), nan=0.0))
+            if key == "spill_ratio":
+                value = float(np.clip(1.0 - value, 0.0, 1.0))
+            agg_values.append(value)
+
+        good_targets = self._readability_good_targets()
+        good_values = []
+        for key, _ in metric_keys:
+            target = float(np.nan_to_num(good_targets.get(key, np.nan), nan=0.0))
+            if key == "spill_ratio":
+                target = float(np.clip(1.0 - target, 0.0, 1.0))
+            good_values.append(float(np.clip(target, 0.0, 1.0)))
+
+        axes[0].bar(np.arange(len(agg_values)), agg_values, color="steelblue", alpha=0.85)
+        axes[0].scatter(np.arange(len(good_values)), good_values, color="red", marker="o", s=20, zorder=4, label="good target")
+        axes[0].set_xticks(np.arange(len(agg_values)))
+        axes[0].set_xticklabels(agg_labels, rotation=35, ha="right")
+        axes[0].set_ylim(0, 1)
+        axes[0].set_title("aggregate readability metrics\nspill shown as spill suppression")
+        axes[0].grid(True, alpha=0.3)
+        axes[0].legend(loc="upper right", fontsize=8)
+
+        for idx, value in enumerate(agg_values):
+            axes[0].annotate(f"{value:.3f}", (idx, value), textcoords="offset points", xytext=(0, 4), ha="center", fontsize=8)
+        for idx, value in enumerate(good_values):
+            axes[0].annotate(f"{value:.2f}", (idx, value), textcoords="offset points", xytext=(0, 5), ha="center", fontsize=7, color="red")
+
+        # right: per-depth annotated heatmap
+        raw_matrix = np.array([
+            [float(metric.get(key, np.nan)) for key, _ in metric_keys]
+            for metric in per_depth_metrics
+        ], dtype=np.float32)
+
+        norm_matrix = np.zeros_like(raw_matrix)
+        for col in range(raw_matrix.shape[1]):
+            col_vals = raw_matrix[:, col]
+            finite_mask = np.isfinite(col_vals)
+            if not np.any(finite_mask):
+                continue
+            vmin = float(np.min(col_vals[finite_mask]))
+            vmax = float(np.max(col_vals[finite_mask]))
+            if abs(vmax - vmin) < 1e-12:
+                norm_matrix[finite_mask, col] = 0.5
+            else:
+                norm_matrix[finite_mask, col] = (col_vals[finite_mask] - vmin) / (vmax - vmin)
+
+        annot = np.empty(raw_matrix.shape, dtype=object)
+        for yi in range(raw_matrix.shape[0]):
+            for xi in range(raw_matrix.shape[1]):
+                annot[yi, xi] = "nan" if not np.isfinite(raw_matrix[yi, xi]) else f"{raw_matrix[yi, xi]:.3f}"
+
+        sns.heatmap(
+            norm_matrix,
+            annot=annot,
+            fmt="",
+            cmap="viridis",
+            xticklabels=[label for _, label in metric_keys],
+            yticklabels=depth_labels,
+            ax=axes[1],
+            cbar=False,
+        )
+        axes[1].set_title("per-depth readability summary\ncolumn-normalized colors with raw annotations")
+        axes[1].tick_params(axis="x", rotation=35)
+
+        plt.tight_layout()
+        return fig
+
+    def add_probe_region_figures(self, epoch, model):
+        """log fixed readability probe regions as image panels and scalar scorecards"""
+        print("Logging probe-region figures...")
+        model.eval()
+
+        probe_data_list = []
+        for spec in self.probe_specs:
+            probe_data = self._collect_probe_region_predictions(model, spec)
+            if probe_data is None:
+                continue
+
+            probe_data_list.append(probe_data)
+
+            fig, aggregate_metrics = self._create_probe_region_figure(probe_data)
+            if fig is not None:
+                self.writer.add_figure(f"ProbeROIs/{spec['tag']}", fig, epoch)
+                plt.close(fig)
+
+            if aggregate_metrics:
+                probe_tag = spec["tag"]
+                for key, value in {
+                    f"R_M/Probe/{probe_tag}/LocalContrast": aggregate_metrics.get("local_contrast", np.nan),
+                    f"R_M/Probe/{probe_tag}/TopKPrecision": aggregate_metrics.get("topk_precision", np.nan),
+                    f"R_M/Probe/{probe_tag}/ReadabilityComposite": aggregate_metrics.get("readability_composite", np.nan),
+                }.items():
+                    if np.isfinite(value):
+                        self.writer.add_scalar(key, float(value), epoch)
+
+        if probe_data_list:
+            fig = self._create_combined_probe_depth_figure(probe_data_list)
+            self.writer.add_figure("ProbeROIs/AllPatches_ByDepth", fig, epoch)
+            plt.close(fig)
+
+    def _collect_probe_region_predictions(self, model, spec):
+        """prepare per-depth predictions and readability stats for one fixed probe region"""
+        try:
+            asset = self._get_segment_asset(spec["segment_id"])
+        except Exception as e:
+            print(f"[PROBE] Skipping {spec['tag']} due to asset load error: {e}")
+            return None
+
+        volume = asset["volume"]
+        mask = asset["mask"]
+        labels = asset["labels"]
+        g_mean, g_std, g_min, g_max = asset["norm"]
+
+        x0 = int(spec["x"])
+        y0 = int(spec["y"])
+        size = int(spec["size"])
+        y1 = min(y0 + size, volume.shape[1])
+        x1 = min(x0 + size, volume.shape[2])
+        y_range = (y0, y1)
+        x_range = (x0, x1)
+
+        z_range = (self.c.data.d_start, self.c.data.d_end)
+        coords = self._gen_tile_coords(z_range, y_range, x_range, mask)
+        if not coords:
+            print(f"[PROBE] No valid coords for {spec['tag']}")
+            return None
+
+        grouped = group_by_depth(coords)
+        depth_offsets = sorted(grouped.keys())
+        label_binary, label_fraction, valid_tiles = self._compute_tile_maps(labels, mask, y_range, x_range)
+
+        depth_rows = []
+        for d_off in depth_offsets:
+            depth_start = self.c.data.d_start + d_off
+            depth_end = depth_start + self.c.data.depth
+            pred = predict_tiles(
+                self.c,
+                model,
+                volume,
+                mask,
+                grouped[d_off],
+                y_range,
+                x_range,
+                depth_start,
+                spec["tag"],
+                g_mean,
+                g_std,
+                g_min,
+                g_max,
+            )
+
+            metrics = self._compute_readability_metrics(pred, label_binary, label_fraction, valid_tiles)
+            depth_rows.append(
+                {
+                    "depth_start": depth_start,
+                    "depth_end": depth_end,
+                    "pred": pred,
+                    "metrics": metrics,
+                }
+            )
+
+        aggregate_metrics = self._aggregate_metric_dicts([row["metrics"] for row in depth_rows])
+        return {
+            "spec": spec,
+            "label_binary": label_binary,
+            "depth_rows": depth_rows,
+            "aggregate_metrics": aggregate_metrics,
+            "x0": x0,
+            "y0": y0,
+            "size": size,
+        }
+
+    def _create_probe_region_figure(self, probe_data):
+        """predict a fixed roi across depth blocks and render prediction plus label overlay"""
+        spec = probe_data["spec"]
+        label_binary = probe_data["label_binary"]
+        depth_rows = probe_data["depth_rows"]
+        aggregate_metrics = probe_data["aggregate_metrics"]
+
+        if not depth_rows:
+            return None, None
+
+        fig, axes = plt.subplots(len(depth_rows), 2, figsize=(10, max(4, 4 * len(depth_rows))))
+        axes = np.array(axes).reshape(len(depth_rows), 2)
+
+        for idx, row in enumerate(depth_rows):
+            depth_start = row["depth_start"]
+            depth_end = row["depth_end"]
+            pred = row["pred"]
+            metrics = row["metrics"]
+
+            axes[idx, 0].imshow(pred, cmap="inferno", vmin=0, vmax=1, aspect="equal")
+            axes[idx, 0].set_title(f"pred {depth_start}-{depth_end}", fontsize=9)
+            axes[idx, 0].axis("off")
+
+            overlay = np.zeros((*pred.shape, 4), dtype=np.float32)
+            h = min(label_binary.shape[0], pred.shape[0])
+            w = min(label_binary.shape[1], pred.shape[1])
+            overlay[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
+            axes[idx, 1].imshow(pred, cmap="inferno", vmin=0, vmax=1, aspect="equal")
+            axes[idx, 1].imshow(overlay)
+            axes[idx, 1].set_title(
+                f"overlay {depth_start}-{depth_end}\nC={np.nan_to_num(metrics['local_contrast'], nan=0.0):.3f} P@K={np.nan_to_num(metrics['topk_precision'], nan=0.0):.3f}",
+                fontsize=9,
+            )
+            axes[idx, 1].axis("off")
+
+        x0 = probe_data["x0"]
+        y0 = probe_data["y0"]
+        size = probe_data["size"]
+        fig.suptitle(
+            f"{spec['title']} | seg={spec['segment_id']} | x={x0}, y={y0}, size={size} | composite={np.nan_to_num(aggregate_metrics.get('readability_composite', np.nan), nan=0.0):.3f}",
+            fontsize=11,
+        )
+        plt.tight_layout(rect=[0, 0, 1, 0.97])
+        return fig, aggregate_metrics
+
+    def _create_combined_probe_depth_figure(self, probe_data_list):
+        """render easy/hard/scroll4 probes side-by-side per depth with pred and overlay"""
+        depth_values = sorted({
+            row["depth_start"]
+            for probe_data in probe_data_list
+            for row in probe_data["depth_rows"]
+        })
+
+        rows = max(1, len(depth_values))
+        cols = 2 * len(probe_data_list)
+        fig_w = max(14, 4 * len(probe_data_list))
+        fig_h = max(4, 3 * rows)
+        fig, axes = plt.subplots(rows, cols, figsize=(fig_w, fig_h))
+        axes = np.array(axes).reshape(rows, cols)
+
+        for row_idx, depth_start in enumerate(depth_values):
+            for probe_idx, probe_data in enumerate(probe_data_list):
+                spec = probe_data["spec"]
+                label_binary = probe_data["label_binary"]
+                by_depth = {row["depth_start"]: row for row in probe_data["depth_rows"]}
+                pred_ax = axes[row_idx, 2 * probe_idx]
+                ov_ax = axes[row_idx, 2 * probe_idx + 1]
+
+                if depth_start not in by_depth:
+                    pred_ax.axis("off")
+                    ov_ax.axis("off")
+                    continue
+
+                row = by_depth[depth_start]
+                depth_end = row["depth_end"]
+                pred = row["pred"]
+                metrics = row["metrics"]
+
+                pred_ax.imshow(pred, cmap="inferno", vmin=0, vmax=1, aspect="equal")
+                pred_ax.axis("off")
+
+                ov_ax.imshow(pred, cmap="inferno", vmin=0, vmax=1, aspect="equal")
+                overlay = np.zeros((*pred.shape, 4), dtype=np.float32)
+                h = min(label_binary.shape[0], pred.shape[0])
+                w = min(label_binary.shape[1], pred.shape[1])
+                overlay[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
+                ov_ax.imshow(overlay)
+                ov_ax.axis("off")
+
+                if row_idx == 0:
+                    pred_ax.set_title(f"{spec['tag']} pred", fontsize=9)
+                    ov_ax.set_title(f"{spec['tag']} overlay", fontsize=9)
+
+                if probe_idx == 0:
+                    pred_ax.text(
+                        -0.03,
+                        0.5,
+                        f"{depth_start}-{depth_end}",
+                        transform=pred_ax.transAxes,
+                        rotation=90,
+                        va="center",
+                        ha="right",
+                        fontsize=8,
+                    )
+
+                ov_ax.text(
+                    0.02,
+                    0.02,
+                    f"C {np.nan_to_num(metrics['local_contrast'], nan=0.0):.2f} | P@K {np.nan_to_num(metrics['topk_precision'], nan=0.0):.2f}",
+                    transform=ov_ax.transAxes,
+                    fontsize=7,
+                    color="white",
+                    bbox=dict(facecolor="black", alpha=0.45, edgecolor="none", pad=1.5),
+                )
+
+        fig.suptitle("Probe patches by depth: easy | hard | scroll4", fontsize=11)
+        plt.tight_layout(rect=[0, 0, 1, 0.97])
         return fig
 
     def log_model_graph(self, model, example_input):
@@ -980,6 +1742,7 @@ class TensorboardVisualizer:
         self.writer.add_scalar("Hyperparameters/Max Grad Norm", self.c.tra.grad_norm)
         self.writer.add_scalar("Hyperparameters/Patience", self.c.tra.patience)
         self.writer.add_scalar("Hyperparameters/LR Scheduler Factor", self.c.tra.lr_decay)
+        self.writer.add_scalar("Hyperparameters/Probe Interval", self.c.tra.probe_int)
         self.writer.add_scalar("Hyperparameters/Model Complexity", params)
         self.writer.add_scalar("Hyperparameters/Pos Weight", pos_weight)
         self.writer.add_scalar("Hyperparameters/HN Cutoff", self.c.hm.hn_cutoff)

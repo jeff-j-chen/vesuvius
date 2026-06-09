@@ -1,6 +1,11 @@
 *.pth
 *.npz
 .venv
+__pycache__/
+*.pyc
 *.tar
+ves_3zars.tar
 ves_zarrs2/
+runs_old/
+runs/
 .vscode/

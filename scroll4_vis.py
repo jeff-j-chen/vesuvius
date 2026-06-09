@@ -32,7 +32,7 @@ def get_or_compute_norm(vol, mask, seg_id: str):
         try:
             with open(cache_path, "r") as f:
                 cache = json.load(f)
-            if seg_id in cache:
+            if isinstance(cache, dict) and seg_id in cache:
                 s = cache[seg_id]
                 return s["mean"], s["std"], s["min"], s["max"]
         except Exception:
@@ -68,7 +68,19 @@ def get_or_compute_norm(vol, mask, seg_id: str):
                 cache = json.load(f)
         except Exception:
             cache = {}
-        cache[seg_id] = {"mean": mean, "std": std, "min": g_min, "max": g_max}
+
+        if not isinstance(cache, dict):
+            cache = {}
+
+        entry = cache.get(seg_id, {})
+        if not isinstance(entry, dict):
+            entry = {}
+        entry["mean"] = mean
+        entry["std"] = std
+        entry["min"] = g_min
+        entry["max"] = g_max
+        cache[seg_id] = entry
+
         with open(cache_path, "w") as f:
             json.dump(cache, f, indent=4)
     except Exception:
