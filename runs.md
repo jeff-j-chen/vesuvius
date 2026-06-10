@@ -191,19 +191,25 @@ Each test entry includes what changed, why, expected result, observed result, an
 - next_planned_based_on_results: 03:t03_low_channel_mix
 
 
-### Test 03: cmp_readability_2026_06_08_t03_low_channel_mix
-- started_at: 2026-06-09 15:10:45 UTC
-- status: aborted before restart
-- changed: epochs=30, scroll-id=20230827161847, scroll4-id=20230827161847, batch-size=96, num-workers=2, probe-int=1, eval-int=10, test-int=30, channel-mixing-prob=0.1
-- why: test partial channel mixing as lighter regularization
-- expected: middle ground between baseline and no channel mixing
-- next_planned_based_on_results: restarted with corrected scroll4-id
-
 
 ### Test 03: cmp_readability_2026_06_08_t03_low_channel_mix
-- started_at: 2026-06-09 15:22:34 UTC
+- started_at: 2026-06-09 19:40:55 UTC
 - status: started
 - changed: epochs=30, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=1, eval-int=10, test-int=30, channel-mixing-prob=0.1
 - why: test partial channel mixing as lighter regularization
 - expected: middle ground between baseline and no channel mixing
+- next_planned_based_on_results: pending completion
+
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t03_low_channel_mix_09_12-41-12
+- results: valid_f1_last=0.24227124452590942, readability_last=0.3582670986652374, probe_easy_last=0.5383473038673401, probe_hard_last=0.3090948462486267
+- next_planned_based_on_results: 04:t04_pool_max
+
+
+### Test 04: cmp_readability_2026_06_08_t04_pool_max
+- started_at: 2026-06-10 00:31:01 UTC
+- status: started
+- changed: epochs=30, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=1, eval-int=10, test-int=30, pooling=max
+- why: test sparse-evidence pooling instead of averaging
+- expected: sharper positives and stronger local ranking
 - next_planned_based_on_results: pending completion

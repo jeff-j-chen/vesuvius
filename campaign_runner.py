@@ -11,6 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# reduce tensorflow/tensorboard startup noise in runner and children
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+
 try:
     from tensorboard.backend.event_processing import event_accumulator
 except Exception:
@@ -31,12 +35,12 @@ SMALL_SCROLL_ID = 20230827161847
 SCROLL4_ID = 20231210132040
 
 BASE_OVERRIDES: Dict[str, Any] = {
-    "epochs": 30,
+    "epochs": 20,
     "scroll-id": SMALL_SCROLL_ID,
     "scroll4-id": SCROLL4_ID,
     "batch-size": 96,
     "num-workers": 2,
-    "probe-int": 1,
+    "probe-int": 5,
     "eval-int": 10,
     "test-int": 30,
 }
@@ -400,6 +404,8 @@ def main():
         start_ts = time.time()
         env = os.environ.copy()
         env["MPLBACKEND"] = "Agg"
+        env["TF_ENABLE_ONEDNN_OPTS"] = "0"
+        env["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
         if args.dry_run:
             rc = 0

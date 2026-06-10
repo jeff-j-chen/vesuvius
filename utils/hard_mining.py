@@ -89,6 +89,8 @@ class HardMiningInjector:
 
 class HardMiningManager:
     """handles reading mined examples via reservoir sampling"""
+    def __init__(self, hm_dir="./hard_negs"):
+        self.hm_dir = hm_dir
     
     def _epoch_file(self, epoch):
         """returns the filename for a given epoch's hard mining data"""
@@ -100,7 +102,7 @@ class HardMiningManager:
             return []
         
         filename = self._epoch_file(prev_epoch)
-        path = os.path.join("./hard_negs", filename)
+        path = os.path.join(self.hm_dir, filename)
 
         if not os.path.exists(path):
             print(f"[error] mining file not found at '{path}'")

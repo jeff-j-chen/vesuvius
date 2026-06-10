@@ -1,3 +1,9 @@
+import os
+
+# keep tensorboard/tensorflow startup noise low and deterministic across windows workers
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+
 from utils.config import Config
 from utils.visualizer import TensorboardVisualizer
 from utils.hard_mining import HardMiningManager, HardMiningInjector
@@ -18,7 +24,6 @@ from torch.cuda.amp.grad_scaler import GradScaler
 from tqdm import tqdm
 import time
 import argparse
-import os
 import random
 
 
@@ -60,6 +65,8 @@ def _apply_cli_overrides(c: Config, args):
         c.hm.hn_cutoff = float(args.hn_cutoff)
     if args.hp_cutoff is not None:
         c.hm.hp_cutoff = float(args.hp_cutoff)
+    if args.hm_dir is not None:
+        c.hm.dir = args.hm_dir
 
     if args.channel_mixing_prob is not None:
         c.dl.channel_mixing_prob = float(args.channel_mixing_prob)
@@ -106,7 +113,7 @@ class Trainer:
         
         # initialize training components
         self.scaler = GradScaler()
-        self.hard_manager = HardMiningManager()
+        self.hard_manager = HardMiningManager(self.c.hm.dir)
         self.hard_samples = []
         
         # initialize tracking variables for best model saving
@@ -392,6 +399,7 @@ def main():
     parser.add_argument("--hm-frac", type=float, default=None, help="Hard-mining sample fraction")
     parser.add_argument("--hn-cutoff", type=float, default=None, help="Hard-negative score cutoff")
     parser.add_argument("--hp-cutoff", type=float, default=None, help="Hard-positive score cutoff")
+    parser.add_argument("--hm-dir", type=str, default=None, help="Hard-mining directory")
 
     parser.add_argument("--channel-mixing-prob", type=float, default=None, help="Depth channel permutation probability")
     parser.add_argument("--pooling", type=str, choices=["avg", "max", "gem"], default=None, help="Pooling mode")
@@ -404,6 +412,17 @@ def main():
     if args.experiment_name:
         c.exp_name = args.experiment_name
     _apply_cli_overrides(c, args)
+
+    repo_root = os.path.dirname(os.path.abspath(__file__))
+    if c.exp_name:
+        c.hm.dir = os.path.join(c.hm.dir, c.exp_name)
+
+    if not os.path.isabs(c.tra.log_dir):
+        c.tra.log_dir = os.path.normpath(os.path.join(repo_root, c.tra.log_dir))
+    if not os.path.isabs(c.hm.dir):
+        c.hm.dir = os.path.normpath(os.path.join(repo_root, c.hm.dir))
+    if not os.path.isabs(c.model_dir):
+        c.model_dir = os.path.normpath(os.path.join(repo_root, c.model_dir))
         
     # initialize and run the trainer
     trainer = Trainer(c)

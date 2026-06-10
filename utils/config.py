@@ -28,7 +28,7 @@ class DataloaderConfig:
 
 @dataclass
 class TrainingConfig:
-    n_epochs: int = 30
+    n_epochs: int = 20
     lr: float = 1e-4
     weight_decay: float = 0
     # l1_lambda: float = 0
@@ -66,6 +66,7 @@ class HardMining:
     hn_cutoff: float = 0.8
     hp_cutoff: float = 0.45
     hm_frac: float = 0.1
+    dir: str = './hard_negs'
 
 @dataclass
 class Config:

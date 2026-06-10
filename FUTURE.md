@@ -1024,3 +1024,5 @@ than from simply training longer, mining harder, or adding more scalar metrics.
 - 2026-06-09 09:24:44 UTC | test 01 t01_baseline_probe1 | readability_last=0.3715526759624481 | probe_easy=0.5491999983787537 | probe_hard=0.35394230484962463 | next=02:t02_no_channel_mix
 
 - 2026-06-09 15:04:55 UTC | test 02 t02_no_channel_mix | readability_last=0.39386186003685 | probe_easy=0.5472447872161865 | probe_hard=0.34306973218917847 | next=03:t03_low_channel_mix
+
+- 2026-06-10 00:31:01 UTC | test 03 t03_low_channel_mix | readability_last=0.3582670986652374 | probe_easy=0.5383473038673401 | probe_hard=0.3090948462486267 | next=04:t04_pool_max

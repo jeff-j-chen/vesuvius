@@ -3,6 +3,9 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $repo
 
+$env:TF_ENABLE_ONEDNN_OPTS = "0"
+$env:TF_CPP_MIN_LOG_LEVEL = "3"
+
 $python = ".\.venv\Scripts\python.exe"
 if (-not (Test-Path $python)) {
     $python = "python"

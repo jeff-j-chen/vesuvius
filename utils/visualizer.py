@@ -807,6 +807,10 @@ class TensorboardVisualizer:
         ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.0))
         ax.grid(True)
 
+    def _hard_mining_dir(self):
+        """return hard-mining directory for the current experiment"""
+        return getattr(self.c.hm, "dir", "./hard_negs")
+
     def add_evaluation_figures(self, epoch, model):
         """run eval on train and valid splits produce mining and figures"""
         print("Starting evaluation figure generation...")
@@ -822,8 +826,9 @@ class TensorboardVisualizer:
         depth_offsets = sorted(set(train_grouped.keys()) | set(valid_grouped.keys()))
         all_pred_data = []
 
-        os.makedirs("hard_negs", exist_ok=True)
-        mining_path = os.path.join("hard_negs", f"hard_mining_epoch_{epoch}.jsonl")
+        hm_dir = self._hard_mining_dir()
+        os.makedirs(hm_dir, exist_ok=True)
+        mining_path = os.path.join(hm_dir, f"hard_mining_epoch_{epoch}.jsonl")
         mining_f = open(mining_path, "w")
         print(f"[HARD][Eval] Writing mining file to: {mining_path}")
         hn_cut = self.c.hm.hn_cutoff
@@ -931,7 +936,7 @@ class TensorboardVisualizer:
         """evaluate previously mined files and log metrics"""
         print("Starting hard-mining file evaluation...")
         try:
-            hm_dir = "./hard_negs"
+            hm_dir = self._hard_mining_dir()
             if not os.path.isdir(hm_dir):
                 print("No hard-mining directory found")
                 return
@@ -946,6 +951,9 @@ class TensorboardVisualizer:
                 if not m:
                     continue
                 source_epoch = int(m.group(1))
+                if source_epoch > current_epoch:
+                    print(f"Skipping future mining file: {hm_file}")
+                    continue
 
                 file_path = os.path.join(hm_dir, hm_file)
                 print(f"Evaluating hard-mining file: {hm_file}")
@@ -1794,7 +1802,7 @@ class TensorboardVisualizer:
 
     def _load_existing_mined_keys(self):
         """scan all existing mining files and return a set of keys (z y x label) to prevent duplicates"""
-        hm_dir = "./hard_negs"
+        hm_dir = self._hard_mining_dir()
         keys = set()
         try:
             if not os.path.isdir(hm_dir):
