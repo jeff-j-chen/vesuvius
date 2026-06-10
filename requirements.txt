@@ -11,3 +11,4 @@ tensorflow
 tensorboard
 numpy==1.26.4
 vesuvius
+ipykernel

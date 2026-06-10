@@ -13,13 +13,16 @@ class DataConfig:
     depth: int = 8
     d_start: int = 28
     d_end: int = 48
+    # training-only depth window; inference still uses d_start/d_end
+    train_d_start: int = 32
+    train_d_end: int = 40
 
 @dataclass
 class DataloaderConfig:
     batch_size: int = 96
     num_workers: int = 2
     data_aug: bool = True
-    channel_mixing_prob: float = 0.25
+    channel_mixing_prob: float = 0.0
     rotation_prob: float = 0.25
     flip_prob: float = 0.25
     noise_prob: float = 0.30
@@ -31,7 +34,6 @@ class TrainingConfig:
     n_epochs: int = 20
     lr: float = 1e-4
     weight_decay: float = 0
-    # l1_lambda: float = 0
     l1_lambda: float = 7e-6
     grad_norm: float = 0.5
     patience: int = 5
@@ -41,6 +43,7 @@ class TrainingConfig:
     eval_int: int = 10
     test_int: int = 30
     probe_int: int = 5
+    eval_aggregate: bool = True  # show one aggregated (depth-averaged) eval figure in addition to per-depth
 
 @dataclass
 class FinetuneConfig:
@@ -60,9 +63,11 @@ class ModelConfig:
     pooling: str = "avg"
     gem_p: float = 3.0
     conv3_dilation: int = 1
+    arch: str = "v1"
 
 @dataclass
 class HardMining:
+    enabled: bool = True
     hn_cutoff: float = 0.8
     hp_cutoff: float = 0.45
     hm_frac: float = 0.1

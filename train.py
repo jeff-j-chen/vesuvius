@@ -59,6 +59,8 @@ def _apply_cli_overrides(c: Config, args):
     if args.l1_lambda is not None:
         c.tra.l1_lambda = float(args.l1_lambda)
 
+    if args.no_hard_mining:
+        c.hm.enabled = False
     if args.hm_frac is not None:
         c.hm.hm_frac = float(args.hm_frac)
     if args.hn_cutoff is not None:
@@ -77,6 +79,16 @@ def _apply_cli_overrides(c: Config, args):
         c.model.gem_p = float(args.gem_p)
     if args.conv3_dilation is not None:
         c.model.conv3_dilation = int(args.conv3_dilation)
+    if args.arch is not None:
+        c.model.arch = str(args.arch)
+    if args.conv1_drop is not None:
+        c.model.conv1_drop = float(args.conv1_drop)
+    if args.conv2_drop is not None:
+        c.model.conv2_drop = float(args.conv2_drop)
+    if args.fc1_drop is not None:
+        c.model.fc1_drop = float(args.fc1_drop)
+    if args.fc2_drop is not None:
+        c.model.fc2_drop = float(args.fc2_drop)
 
 def set_seed(seed=42):
     """sets the seed for reproducibility across all relevant libraries"""
@@ -319,6 +331,8 @@ class Trainer:
 
     def _update_hard_mining_samples(self, epoch):
         """checks for and loads new hard-mined samples at specified intervals"""
+        if not self.c.hm.enabled:
+            return
         # periodically check for new hard mining data
         if epoch % self.c.tra.eval_int == 0 and epoch > 5:
             target_hard = int(self.c.hm.hm_frac * len(self.train_dataset))
@@ -355,7 +369,7 @@ class Trainer:
             
             # create a new injector for the epoch if hard samples are available
             hard_injector = None
-            if self.hard_samples:
+            if self.hard_samples and self.c.hm.enabled:
                 hard_injector = HardMiningInjector(self.hard_samples, self.train_dataset)
                 if (epoch % self.c.tra.eval_int) == 0:
                     self.vis.writer.add_scalar("HardMining/InjectedSamplesPlanned", len(self.hard_samples), epoch)
@@ -396,6 +410,7 @@ def main():
     parser.add_argument("--weight-decay", type=float, default=None, help="Weight decay")
     parser.add_argument("--l1-lambda", type=float, default=None, help="L1 regularization strength")
 
+    parser.add_argument("--no-hard-mining", action="store_true", help="Disable hard mining entirely")
     parser.add_argument("--hm-frac", type=float, default=None, help="Hard-mining sample fraction")
     parser.add_argument("--hn-cutoff", type=float, default=None, help="Hard-negative score cutoff")
     parser.add_argument("--hp-cutoff", type=float, default=None, help="Hard-positive score cutoff")
@@ -405,6 +420,11 @@ def main():
     parser.add_argument("--pooling", type=str, choices=["avg", "max", "gem"], default=None, help="Pooling mode")
     parser.add_argument("--gem-p", type=float, default=None, help="Initial GeM pooling p")
     parser.add_argument("--conv3-dilation", type=int, default=None, help="Dilation for final conv stage")
+    parser.add_argument("--arch", type=str, default=None, help="Model architecture variant (v1, v2_slim_head, ...)")    
+    parser.add_argument("--conv1-drop", type=float, default=None, help="Dropout after first conv block")
+    parser.add_argument("--conv2-drop", type=float, default=None, help="Dropout after second conv block")
+    parser.add_argument("--fc1-drop", type=float, default=None, help="Dropout on first FC layers")
+    parser.add_argument("--fc2-drop", type=float, default=None, help="Dropout on final FC layer")
     args = parser.parse_args()
     
     # load configuration and optionally override experiment name

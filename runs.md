@@ -1,6 +1,6 @@
 # Run History and Timing Notes
 
-Last updated: 2026-06-08
+Last updated: 2026-06-10
 
 ## Windows Dataloader Benchmark Notes (2026-06-08)
 
@@ -160,6 +160,17 @@ Interpretation:
 This section is auto-updated by campaign_runner.py.
 Each test entry includes what changed, why, expected result, observed result, and next planned run based on results.
 
+### Campaign Check-in (2026-06-10)
+- latest active test: 14:t14_hp_cut_035 (running, reached epoch 20 evaluation stage)
+- completed tests so far: 8
+- failed tests so far: 3
+- top readability_last among completed tests:
+  - 02:t02_no_channel_mix = 0.3938618600
+  - 13:t13_hn_cut_070 = 0.3760392964
+  - 01:t01_baseline_probe1 = 0.3715526760
+  - 10:t10_hm_off = 0.3670495152
+  - 12:t12_hn_cut_090 = 0.3634460568
+
 
 ### Test 01: cmp_readability_2026_06_08_t01_baseline_probe1
 - started_at: 2026-06-09 05:39:56 UTC
@@ -208,8 +219,315 @@ Each test entry includes what changed, why, expected result, observed result, an
 
 ### Test 04: cmp_readability_2026_06_08_t04_pool_max
 - started_at: 2026-06-10 00:31:01 UTC
-- status: started
+- status: aborted before fast-config relaunch
 - changed: epochs=30, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=1, eval-int=10, test-int=30, pooling=max
 - why: test sparse-evidence pooling instead of averaging
 - expected: sharper positives and stronger local ranking
+- next_planned_based_on_results: relaunched with epochs=20 probe_int=5 hm_frac=0.05 baseline
+
+
+### Test 04: cmp_readability_2026_06_08_t04_pool_max
+- started_at: 2026-06-10 01:07:32 UTC
+- status: started
+- changed: epochs=20, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=5, eval-int=10, test-int=30, hm-frac=0.05, pooling=max
+- why: test sparse-evidence pooling instead of averaging
+- expected: sharper positives and stronger local ranking
 - next_planned_based_on_results: pending completion
+
+- status: failed
+- return_code: 1
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t04_pool_max_09_18-07-45
+- results: valid_f1_last=0.29089611768722534, readability_last=NA, probe_easy_last=0.46842440962791443, probe_hard_last=0.36106640100479126
+- next_planned_based_on_results: 05:t05_pool_gem_p3
+
+
+### Test 05: cmp_readability_2026_06_08_t05_pool_gem_p3
+- started_at: 2026-06-10 01:38:16 UTC
+- status: started
+- changed: epochs=20, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=5, eval-int=10, test-int=30, hm-frac=0.05, pooling=gem, gem-p=3.0
+- why: test soft sparse pooling with learnable GeM behavior
+- expected: improved readability composite with controlled spill
+- next_planned_based_on_results: pending completion
+
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t05_pool_gem_p3_09_18-38-32
+- results: valid_f1_last=0.2290782332420349, readability_last=0.34783729910850525, probe_easy_last=0.5326962471008301, probe_hard_last=0.31150734424591064
+- next_planned_based_on_results: 07:t07_no_mix_gem
+
+
+### Test 07: cmp_readability_2026_06_08_t07_no_mix_gem
+- started_at: 2026-06-10 03:33:19 UTC
+- status: started
+- changed: epochs=20, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=5, eval-int=10, test-int=30, hm-frac=0.05, channel-mixing-prob=0.0, pooling=gem, gem-p=3.0
+- why: combine top two structural hypotheses from FUTURE notes
+- expected: best readability among early tests if hypotheses are right
+- next_planned_based_on_results: pending completion
+
+- status: failed
+- return_code: 1
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t07_no_mix_gem_09_20-33-33
+- results: valid_f1_last=0.25412121415138245, readability_last=0.362748384475708, probe_easy_last=0.5310966968536377, probe_hard_last=0.39271029829978943
+- next_planned_based_on_results: 08:t08_conv3_dil2
+
+
+### Test 08: cmp_readability_2026_06_08_t08_conv3_dil2
+- started_at: 2026-06-10 04:39:40 UTC
+- status: started
+- changed: epochs=20, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=5, eval-int=10, test-int=30, hm-frac=0.05, conv3-dilation=2
+- why: increase within-tile receptive field while keeping 32x32 input
+- expected: better weak-stroke coverage with similar compute
+- next_planned_based_on_results: pending completion
+
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t08_conv3_dil2_09_21-39-54
+- results: valid_f1_last=0.2260216474533081, readability_last=0.35754403471946716, probe_easy_last=0.5450989007949829, probe_hard_last=0.3685373067855835
+- next_planned_based_on_results: 10:t10_hm_off
+
+
+### Test 10: cmp_readability_2026_06_08_t10_hm_off
+- started_at: 2026-06-10 06:30:05 UTC
+- status: started
+- changed: epochs=20, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=5, eval-int=10, test-int=30, hm-frac=0.0
+- why: test whether hard mining currently reinforces spill behavior
+- expected: potentially cleaner maps with lower aggressive positives
+- next_planned_based_on_results: pending completion
+
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t10_hm_off_09_23-30-20
+- results: valid_f1_last=0.30076348781585693, readability_last=0.36704951524734497, probe_easy_last=0.5684111714363098, probe_hard_last=0.39762693643569946
+- next_planned_based_on_results: 11:t11_hm_frac_002
+
+
+### Test 11: cmp_readability_2026_06_08_t11_hm_frac_002
+- started_at: 2026-06-10 08:16:14 UTC
+- status: started
+- changed: epochs=20, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=5, eval-int=10, test-int=30, hm-frac=0.02
+- why: aggressively reduce hard-mined sample pressure
+- expected: less over-brightening and less mining-induced drift
+- next_planned_based_on_results: pending completion
+
+- status: failed
+- return_code: 1
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t11_hm_frac_002_10_01-16-30
+- results: valid_f1_last=0.23727825284004211, readability_last=0.3230254650115967, probe_easy_last=0.45377397537231445, probe_hard_last=0.32680103182792664
+- next_planned_based_on_results: 09:t09_conv3_dil2_gem
+
+
+### Test 12: cmp_readability_2026_06_08_t12_hn_cut_090
+- started_at: 2026-06-10 09:06:52 UTC
+- status: started
+- changed: epochs=20, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=5, eval-int=10, test-int=30, hm-frac=0.02, hn-cutoff=0.9
+- why: mine only very confident hard negatives
+- expected: fewer but cleaner hard negatives and more stable training
+- next_planned_based_on_results: pending completion
+
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t12_hn_cut_090_10_02-07-06
+- results: valid_f1_last=0.2642786204814911, readability_last=0.36344605684280396, probe_easy_last=0.563590943813324, probe_hard_last=0.3597739040851593
+- next_planned_based_on_results: 13:t13_hn_cut_070
+
+
+### Test 13: cmp_readability_2026_06_08_t13_hn_cut_070
+- started_at: 2026-06-10 10:50:32 UTC
+- status: started
+- changed: epochs=20, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=5, eval-int=10, test-int=30, hm-frac=0.02, hn-cutoff=0.7
+- why: mine broader hard-negative set for stronger suppression
+- expected: higher background suppression with possible recall hit
+- next_planned_based_on_results: pending completion
+
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t13_hn_cut_070_10_03-50-45
+- results: valid_f1_last=0.29098865389823914, readability_last=0.3760392963886261, probe_easy_last=0.5590817928314209, probe_hard_last=0.380943238735199
+- next_planned_based_on_results: 14:t14_hp_cut_035
+
+
+### Test 14: cmp_readability_2026_06_08_t14_hp_cut_035
+- started_at: 2026-06-10 12:29:23 UTC
+- status: started
+- changed: epochs=20, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=5, eval-int=10, test-int=30, hm-frac=0.02, hp-cutoff=0.35
+- why: focus hard-positive mining on severe misses only
+- expected: less noisy hard-positive injection
+- next_planned_based_on_results: pending completion
+- live_progress: epoch 20 reached; evaluation/hard-mining logging in progress
+
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t14_hp_cut_035_10_05-29-37
+- results: valid_f1_last=0.3159053325653076, readability_last=0.3688986599445343, probe_easy_last=0.5684157013893127, probe_hard_last=0.3556252121925354
+- next_planned_based_on_results: 15:t15_hp_cut_055
+
+
+### Test 15: cmp_readability_2026_06_08_t15_hp_cut_055
+- started_at: 2026-06-10 14:17:51 UTC
+- status: started
+- changed: epochs=20, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=5, eval-int=10, test-int=30, hm-frac=0.02, hp-cutoff=0.55
+- why: mine broader hard-positive errors to boost weak recall
+- expected: higher weak recall with spill risk
+- next_planned_based_on_results: pending completion
+
+
+## Automated Campaign arch_search_2026_06_10
+
+architecture search campaign — 20 variants, all other settings fixed.
+channel-mixing-prob=0.0 throughout (confirmed best from campaign 1).
+
+
+### Test 01: cmp_arch_search_2026_06_10_t01_slim_head
+- started_at: 2026-06-10 15:09:06 UTC
+- status: started
+- arch: v2_slim_head
+- axis: head
+- why: replace 5-layer MLP head with 2-layer (256→64→1); deep heads may memorize
+- expected: comparable F1, improved readability from less head overfitting
+
+
+### Test 01: cmp_arch_search_2026_06_10_t01_slim_head
+- started_at: 2026-06-10 15:16:54 UTC
+- status: started
+- arch: v2_slim_head
+- axis: head
+- why: replace 5-layer MLP head with 2-layer (256→64→1); deep heads may memorize
+- expected: comparable F1, improved readability from less head overfitting
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 02:t02_no_cbam
+
+
+### Test 02: cmp_arch_search_2026_06_10_t02_no_cbam
+- started_at: 2026-06-10 15:40:46 UTC
+- status: started
+- arch: v2_no_cbam
+- axis: attention
+- why: remove CBAM entirely; test if attention actually helps on 32×32 tiles
+- expected: faster training, potentially cleaner features without attention noise
+
+
+### Test 01: cmp_arch_search_2026_06_10_t01_slim_head
+- started_at: 2026-06-10 15:41:55 UTC
+- status: started
+- arch: v2_slim_head
+- axis: head
+- why: replace 5-layer MLP head with 2-layer (256→64→1); deep heads may memorize
+- expected: comparable F1, improved readability from less head overfitting
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t01_slim_head_10_08-42-12
+- results: valid_f1_last=0.3480885326862335, readability_last=0.3325617015361786, probe_easy_last=0.46673303842544556, probe_hard_last=0.3117430508136749
+- next_planned_based_on_results: 02:t02_no_cbam
+
+
+### Test 02: cmp_arch_search_2026_06_10_t02_no_cbam
+- started_at: 2026-06-10 16:22:08 UTC
+- status: started
+- arch: v2_no_cbam
+- axis: attention
+- why: remove CBAM entirely; test if attention actually helps on 32×32 tiles
+- expected: faster training, potentially cleaner features without attention noise
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t02_no_cbam_10_09-22-19
+- results: valid_f1_last=0.2308793067932129, readability_last=0.3180636167526245, probe_easy_last=0.44113242626190186, probe_hard_last=0.327772855758667
+- next_planned_based_on_results: 05:t05_residual
+
+
+### Test 05: cmp_arch_search_2026_06_10_t05_residual
+- started_at: 2026-06-10 16:56:00 UTC
+- status: started
+- arch: v2_residual
+- axis: skip_conn
+- why: add ResBlock3D after each CBAM conv stage; identity bypass for gradient flow
+- expected: more stable training curves, potentially better readability
+
+
+### Test 05: cmp_arch_search_2026_06_10_t05_residual
+- started_at: 2026-06-10 17:05:20 UTC
+- status: started
+- arch: v2_residual
+- axis: skip_conn
+- why: add ResBlock3D after each CBAM conv stage; identity bypass for gradient flow
+- expected: more stable training curves, potentially better readability
+
+
+### Test 01: cmp_arch_search_2026_06_10_t01_slim_head
+- started_at: 2026-06-10 17:13:28 UTC
+- status: started
+- arch: v2_slim_head
+- axis: head
+- why: replace 5-layer MLP head with 2-layer (256→64→1); deep heads may memorize
+- expected: comparable F1, improved readability from less head overfitting
+
+
+### Test 01: cmp_arch_search_2026_06_10_t01_slim_head
+- started_at: 2026-06-10 17:15:16 UTC
+- status: started
+- arch: v2_slim_head
+- axis: head
+- why: replace 5-layer MLP head with 2-layer (256→64→1); deep heads may memorize
+- expected: comparable F1, improved readability from less head overfitting
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t01_slim_head_10_10-15-26
+- results: valid_f1_last=0.3819354772567749, readability_last=0.36123529076576233, probe_easy_last=0.516002893447876, probe_hard_last=0.30766424536705017
+- next_planned_based_on_results: 02:t02_no_cbam
+
+
+### Test 02: cmp_arch_search_2026_06_10_t02_no_cbam
+- started_at: 2026-06-10 17:59:10 UTC
+- status: started
+- arch: v2_no_cbam
+- axis: attention
+- why: remove CBAM entirely; test if attention actually helps on 32×32 tiles
+- expected: faster training, potentially cleaner features without attention noise
+
+
+### Test 01: cmp_arch_search_2026_06_10_t01_slim_head
+- started_at: 2026-06-10 18:08:22 UTC
+- status: started
+- arch: v2_slim_head
+- axis: head
+- why: replace 5-layer MLP head with 2-layer (256→64→1); deep heads may memorize
+- expected: comparable F1, improved readability from less head overfitting
+
+
+### Test 01: cmp_arch_search_2026_06_10_t01_slim_head
+- started_at: 2026-06-10 18:09:30 UTC
+- status: started
+- arch: v2_slim_head
+- axis: head
+- why: replace 5-layer MLP head with 2-layer (256→64→1); deep heads may memorize
+- expected: comparable F1, improved readability from less head overfitting
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t01_slim_head_10_11-09-42
+- results: valid_f1_last=0.3452593982219696, readability_last=0.3583658039569855, probe_easy_last=0.5033379793167114, probe_hard_last=0.32816827297210693
+- next_planned_based_on_results: 02:t02_no_cbam
+
+
+### Test 02: cmp_arch_search_2026_06_10_t02_no_cbam
+- started_at: 2026-06-10 19:00:40 UTC
+- status: started
+- arch: v2_no_cbam
+- axis: attention
+- why: remove CBAM entirely; test if attention actually helps on 32×32 tiles
+- expected: faster training, potentially cleaner features without attention noise
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t02_no_cbam_10_12-00-53
+- results: valid_f1_last=0.2661503851413727, readability_last=0.3439983129501343, probe_easy_last=0.45745721459388733, probe_hard_last=0.33790063858032227
+- next_planned_based_on_results: 05:t05_residual
+
+
+### Test 05: cmp_arch_search_2026_06_10_t05_residual
+- started_at: 2026-06-10 19:25:39 UTC
+- status: started
+- arch: v2_residual
+- axis: skip_conn
+- why: add ResBlock3D after each CBAM conv stage; identity bypass for gradient flow
+- expected: more stable training curves, potentially better readability
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t05_residual_10_12-25-55
+- results: valid_f1_last=0.3362068831920624, readability_last=0.3671565353870392, probe_easy_last=0.538194477558136, probe_hard_last=0.33517420291900635
+- next_planned_based_on_results: 06:t06_residual_no_cbam
+
+
+### Test 06: cmp_arch_search_2026_06_10_t06_residual_no_cbam
+- started_at: 2026-06-10 21:33:19 UTC
+- status: started
+- arch: v2_residual_no_cbam
+- axis: skip_conn
+- why: pure residual backbone with no attention; isolates residual benefit
+- expected: separates skip-connection effect from attention effect

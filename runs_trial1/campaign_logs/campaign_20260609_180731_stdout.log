@@ -1,0 +1,1009 @@
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll4_id=20231210132040, tile_size=32, depth=8, d_start=28, d_end=48)
+dl: DataloaderConfig(batch_size=96, num_workers=2, data_aug=True, channel_mixing_prob=0.25, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=20, lr=0.0001, weight_decay=0, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs', eval_int=10, test_int=30, probe_int=5)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='max', gem_p=3.0, conv3_dilation=1)
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.05, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_readability_2026_06_08_t04_pool_max')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_readability_2026_06_08_t04_pool_max
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+using cached pos_weight for scroll 20230827161847: 7.66
+Data setup done in 1.30s
+Creating model and loss... l1 lambda 7e-06... Model parameters: 1,315,401
+ done in 2.95s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t04_pool_max_09_18-07-45
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs
+
+--- Epoch 1/20 ---
+New best F1 model saved! Val F1: 0.2123
+New best loss model saved! Val Loss: 1.1863
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/20 ---
+New best F1 model saved! Val F1: 0.2177
+New best loss model saved! Val Loss: 1.1623
+Logging metrics for epoch: 2
+
+--- Epoch 3/20 ---
+New best F1 model saved! Val F1: 0.2641
+New best loss model saved! Val Loss: 1.1014
+Logging metrics for epoch: 3
+
+--- Epoch 4/20 ---
+New best F1 model saved! Val F1: 0.2708
+Logging metrics for epoch: 4
+
+--- Epoch 5/20 ---
+New best F1 model saved! Val F1: 0.2909
+New best loss model saved! Val Loss: 1.0644
+Logging metrics for epoch: 5
+Logging probe-region figures...
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll4_id=20231210132040, tile_size=32, depth=8, d_start=28, d_end=48)
+dl: DataloaderConfig(batch_size=96, num_workers=2, data_aug=True, channel_mixing_prob=0.25, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=20, lr=0.0001, weight_decay=0, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs', eval_int=10, test_int=30, probe_int=5)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='gem', gem_p=3.0, conv3_dilation=1)
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.05, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_readability_2026_06_08_t05_pool_gem_p3')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_readability_2026_06_08_t05_pool_gem_p3
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+using cached pos_weight for scroll 20230827161847: 7.66
+Data setup done in 1.42s
+Creating model and loss... l1 lambda 7e-06... Model parameters: 1,315,402
+ done in 4.12s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t05_pool_gem_p3_09_18-38-32
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs
+
+--- Epoch 1/20 ---
+New best F1 model saved! Val F1: 0.2089
+New best loss model saved! Val Loss: 1.1793
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/20 ---
+New best F1 model saved! Val F1: 0.2287
+New best loss model saved! Val Loss: 1.1522
+Logging metrics for epoch: 2
+
+--- Epoch 3/20 ---
+New best F1 model saved! Val F1: 0.2768
+New best loss model saved! Val Loss: 1.1142
+Logging metrics for epoch: 3
+
+--- Epoch 4/20 ---
+Logging metrics for epoch: 4
+
+--- Epoch 5/20 ---
+New best F1 model saved! Val F1: 0.3115
+New best loss model saved! Val Loss: 1.0591
+Logging metrics for epoch: 5
+Logging probe-region figures...
+
+--- Epoch 6/20 ---
+Logging metrics for epoch: 6
+
+--- Epoch 7/20 ---
+New best loss model saved! Val Loss: 1.0539
+Logging metrics for epoch: 7
+
+--- Epoch 8/20 ---
+Logging metrics for epoch: 8
+
+--- Epoch 9/20 ---
+Logging metrics for epoch: 9
+
+--- Epoch 10/20 ---
+New best F1 model saved! Val F1: 0.3177
+New best loss model saved! Val Loss: 1.0455
+Logging metrics for epoch: 10
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t05_pool_gem_p3\hard_mining_epoch_9.jsonl
+[HARD][Eval] Finished mining epoch 9: neg=781 pos=2245
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 9. F1: 0.0000
+Logging probe-region figures...
+
+--- Epoch 11/20 ---
+loaded mining file 'C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t05_pool_gem_p3\hard_mining_epoch_9.jsonl' unique_scanned=3026 target=5026 sampled=3026
+[HARD][Epoch 10] Added 3026 new hard samples. Total is now 3026.
+[HARD][Epoch Summary] injected=3026 injector_used=3026 injector_skipped=0
+Logging metrics for epoch: 11
+
+--- Epoch 12/20 ---
+[HARD][Epoch Summary] injected=3026 injector_used=3026 injector_skipped=0
+Logging metrics for epoch: 12
+
+--- Epoch 13/20 ---
+[HARD][Epoch Summary] injected=3026 injector_used=3026 injector_skipped=0
+Logging metrics for epoch: 13
+
+--- Epoch 14/20 ---
+[HARD][Epoch Summary] injected=3026 injector_used=3026 injector_skipped=0
+Logging metrics for epoch: 14
+
+--- Epoch 15/20 ---
+[HARD][Epoch Summary] injected=3026 injector_used=3026 injector_skipped=0
+Logging metrics for epoch: 15
+Logging probe-region figures...
+
+--- Epoch 16/20 ---
+[HARD][Epoch Summary] injected=3026 injector_used=3026 injector_skipped=0
+Logging metrics for epoch: 16
+
+--- Epoch 17/20 ---
+[HARD][Epoch Summary] injected=3026 injector_used=3026 injector_skipped=0
+Logging metrics for epoch: 17
+
+--- Epoch 18/20 ---
+[HARD][Epoch Summary] injected=3026 injector_used=3026 injector_skipped=0
+Logging metrics for epoch: 18
+
+--- Epoch 19/20 ---
+[HARD][Epoch Summary] injected=3026 injector_used=3026 injector_skipped=0
+Logging metrics for epoch: 19
+
+--- Epoch 20/20 ---
+[HARD][Epoch Summary] injected=3026 injector_used=3026 injector_skipped=0
+Logging metrics for epoch: 20
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t05_pool_gem_p3\hard_mining_epoch_19.jsonl
+[HARD][Eval] Finished mining epoch 19: neg=4570 pos=127
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_19.jsonl
+Logged metrics for HM from epoch 19 at eval epoch 19. F1: 0.0000
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 19. F1: 0.8129
+Logging probe-region figures...
+TensorBoard logs saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t05_pool_gem_p3_09_18-38-32
+Training completed.
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll4_id=20231210132040, tile_size=32, depth=8, d_start=28, d_end=48)
+dl: DataloaderConfig(batch_size=96, num_workers=2, data_aug=True, channel_mixing_prob=0.0, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=20, lr=0.0001, weight_decay=0, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs', eval_int=10, test_int=30, probe_int=5)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='gem', gem_p=3.0, conv3_dilation=1)
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.05, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_readability_2026_06_08_t07_no_mix_gem')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_readability_2026_06_08_t07_no_mix_gem
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+using cached pos_weight for scroll 20230827161847: 7.66
+Data setup done in 1.60s
+Creating model and loss... l1 lambda 7e-06... Model parameters: 1,315,402
+ done in 4.01s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t07_no_mix_gem_09_20-33-33
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs
+
+--- Epoch 1/20 ---
+New best F1 model saved! Val F1: 0.2096
+New best loss model saved! Val Loss: 1.1778
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/20 ---
+New best F1 model saved! Val F1: 0.2204
+New best loss model saved! Val Loss: 1.1617
+Logging metrics for epoch: 2
+
+--- Epoch 3/20 ---
+New best F1 model saved! Val F1: 0.2653
+New best loss model saved! Val Loss: 1.1103
+Logging metrics for epoch: 3
+
+--- Epoch 4/20 ---
+New best F1 model saved! Val F1: 0.2810
+New best loss model saved! Val Loss: 1.1102
+Logging metrics for epoch: 4
+
+--- Epoch 5/20 ---
+Logging metrics for epoch: 5
+Logging probe-region figures...
+
+--- Epoch 6/20 ---
+New best F1 model saved! Val F1: 0.2876
+New best loss model saved! Val Loss: 1.0764
+Logging metrics for epoch: 6
+
+--- Epoch 7/20 ---
+New best loss model saved! Val Loss: 1.0598
+Logging metrics for epoch: 7
+
+--- Epoch 8/20 ---
+Logging metrics for epoch: 8
+
+--- Epoch 9/20 ---
+New best F1 model saved! Val F1: 0.2967
+New best loss model saved! Val Loss: 1.0453
+Logging metrics for epoch: 9
+
+--- Epoch 10/20 ---
+New best F1 model saved! Val F1: 0.2974
+New best loss model saved! Val Loss: 1.0420
+Logging metrics for epoch: 10
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t07_no_mix_gem\hard_mining_epoch_9.jsonl
+[HARD][Eval] Finished mining epoch 9: neg=1289 pos=1663
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 9. F1: 0.0000
+Logging probe-region figures...
+
+--- Epoch 11/20 ---
+loaded mining file 'C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t07_no_mix_gem\hard_mining_epoch_9.jsonl' unique_scanned=2952 target=5026 sampled=2952
+[HARD][Epoch 10] Added 2952 new hard samples. Total is now 2952.
+[HARD][Epoch Summary] injected=2952 injector_used=2952 injector_skipped=0
+Logging metrics for epoch: 11
+
+--- Epoch 12/20 ---
+[HARD][Epoch Summary] injected=2952 injector_used=2952 injector_skipped=0
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll4_id=20231210132040, tile_size=32, depth=8, d_start=28, d_end=48)
+dl: DataloaderConfig(batch_size=96, num_workers=2, data_aug=True, channel_mixing_prob=0.25, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=20, lr=0.0001, weight_decay=0, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs', eval_int=10, test_int=30, probe_int=5)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='avg', gem_p=3.0, conv3_dilation=2)
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.05, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_readability_2026_06_08_t08_conv3_dil2')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_readability_2026_06_08_t08_conv3_dil2
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+using cached pos_weight for scroll 20230827161847: 7.66
+Data setup done in 1.80s
+Creating model and loss... l1 lambda 7e-06... Model parameters: 1,315,401
+ done in 3.50s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t08_conv3_dil2_09_21-39-54
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs
+
+--- Epoch 1/20 ---
+New best F1 model saved! Val F1: 0.2094
+New best loss model saved! Val Loss: 1.1825
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/20 ---
+New best F1 model saved! Val F1: 0.2265
+New best loss model saved! Val Loss: 1.1643
+Logging metrics for epoch: 2
+
+--- Epoch 3/20 ---
+New best F1 model saved! Val F1: 0.2813
+New best loss model saved! Val Loss: 1.1093
+Logging metrics for epoch: 3
+
+--- Epoch 4/20 ---
+New best loss model saved! Val Loss: 1.1064
+Logging metrics for epoch: 4
+
+--- Epoch 5/20 ---
+Logging metrics for epoch: 5
+Logging probe-region figures...
+
+--- Epoch 6/20 ---
+Logging metrics for epoch: 6
+
+--- Epoch 7/20 ---
+Logging metrics for epoch: 7
+
+--- Epoch 8/20 ---
+New best F1 model saved! Val F1: 0.2840
+New best loss model saved! Val Loss: 1.0961
+Logging metrics for epoch: 8
+
+--- Epoch 9/20 ---
+New best loss model saved! Val Loss: 1.0814
+Logging metrics for epoch: 9
+
+--- Epoch 10/20 ---
+New best F1 model saved! Val F1: 0.2876
+New best loss model saved! Val Loss: 1.0717
+Logging metrics for epoch: 10
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t08_conv3_dil2\hard_mining_epoch_9.jsonl
+[HARD][Eval] Finished mining epoch 9: neg=924 pos=1619
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 9. F1: 0.0000
+Logging probe-region figures...
+
+--- Epoch 11/20 ---
+loaded mining file 'C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t08_conv3_dil2\hard_mining_epoch_9.jsonl' unique_scanned=2543 target=5026 sampled=2543
+[HARD][Epoch 10] Added 2543 new hard samples. Total is now 2543.
+[HARD][Epoch Summary] injected=2543 injector_used=2543 injector_skipped=0
+Logging metrics for epoch: 11
+
+--- Epoch 12/20 ---
+[HARD][Epoch Summary] injected=2543 injector_used=2543 injector_skipped=0
+Logging metrics for epoch: 12
+
+--- Epoch 13/20 ---
+[HARD][Epoch Summary] injected=2543 injector_used=2543 injector_skipped=0
+Logging metrics for epoch: 13
+
+--- Epoch 14/20 ---
+[HARD][Epoch Summary] injected=2543 injector_used=2543 injector_skipped=0
+Logging metrics for epoch: 14
+
+--- Epoch 15/20 ---
+[HARD][Epoch Summary] injected=2543 injector_used=2543 injector_skipped=0
+Logging metrics for epoch: 15
+Logging probe-region figures...
+
+--- Epoch 16/20 ---
+[HARD][Epoch Summary] injected=2543 injector_used=2543 injector_skipped=0
+Logging metrics for epoch: 16
+
+--- Epoch 17/20 ---
+[HARD][Epoch Summary] injected=2543 injector_used=2543 injector_skipped=0
+Logging metrics for epoch: 17
+
+--- Epoch 18/20 ---
+[HARD][Epoch Summary] injected=2543 injector_used=2543 injector_skipped=0
+Logging metrics for epoch: 18
+
+--- Epoch 19/20 ---
+[HARD][Epoch Summary] injected=2543 injector_used=2543 injector_skipped=0
+Logging metrics for epoch: 19
+
+--- Epoch 20/20 ---
+[HARD][Epoch Summary] injected=2543 injector_used=2543 injector_skipped=0
+Logging metrics for epoch: 20
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t08_conv3_dil2\hard_mining_epoch_19.jsonl
+[HARD][Eval] Finished mining epoch 19: neg=2656 pos=440
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_19.jsonl
+Logged metrics for HM from epoch 19 at eval epoch 19. F1: 0.0000
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 19. F1: 0.7198
+Logging probe-region figures...
+TensorBoard logs saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t08_conv3_dil2_09_21-39-54
+Training completed.
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll4_id=20231210132040, tile_size=32, depth=8, d_start=28, d_end=48)
+dl: DataloaderConfig(batch_size=96, num_workers=2, data_aug=True, channel_mixing_prob=0.25, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=20, lr=0.0001, weight_decay=0, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs', eval_int=10, test_int=30, probe_int=5)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='avg', gem_p=3.0, conv3_dilation=1)
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.0, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_readability_2026_06_08_t10_hm_off')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_readability_2026_06_08_t10_hm_off
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+using cached pos_weight for scroll 20230827161847: 7.66
+Data setup done in 1.89s
+Creating model and loss... l1 lambda 7e-06... Model parameters: 1,315,401
+ done in 3.97s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t10_hm_off_09_23-30-20
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs
+
+--- Epoch 1/20 ---
+New best F1 model saved! Val F1: 0.2066
+New best loss model saved! Val Loss: 1.1820
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/20 ---
+New best F1 model saved! Val F1: 0.2256
+New best loss model saved! Val Loss: 1.1626
+Logging metrics for epoch: 2
+
+--- Epoch 3/20 ---
+New best F1 model saved! Val F1: 0.2802
+New best loss model saved! Val Loss: 1.1090
+Logging metrics for epoch: 3
+
+--- Epoch 4/20 ---
+Logging metrics for epoch: 4
+
+--- Epoch 5/20 ---
+Logging metrics for epoch: 5
+Logging probe-region figures...
+
+--- Epoch 6/20 ---
+Logging metrics for epoch: 6
+
+--- Epoch 7/20 ---
+New best loss model saved! Val Loss: 1.1012
+Logging metrics for epoch: 7
+
+--- Epoch 8/20 ---
+New best F1 model saved! Val F1: 0.2835
+New best loss model saved! Val Loss: 1.0681
+Logging metrics for epoch: 8
+
+--- Epoch 9/20 ---
+Logging metrics for epoch: 9
+
+--- Epoch 10/20 ---
+New best F1 model saved! Val F1: 0.2951
+New best loss model saved! Val Loss: 1.0586
+Logging metrics for epoch: 10
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t10_hm_off\hard_mining_epoch_9.jsonl
+[HARD][Eval] Finished mining epoch 9: neg=692 pos=1791
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 9. F1: 0.0000
+Logging probe-region figures...
+
+--- Epoch 11/20 ---
+[HARD][Epoch 10] Mining file processed but no new samples were added.
+Logging metrics for epoch: 11
+
+--- Epoch 12/20 ---
+Logging metrics for epoch: 12
+
+--- Epoch 13/20 ---
+New best F1 model saved! Val F1: 0.3399
+Logging metrics for epoch: 13
+
+--- Epoch 14/20 ---
+New best loss model saved! Val Loss: 1.0398
+Logging metrics for epoch: 14
+
+--- Epoch 15/20 ---
+Logging metrics for epoch: 15
+Logging probe-region figures...
+
+--- Epoch 16/20 ---
+New best loss model saved! Val Loss: 1.0358
+Logging metrics for epoch: 16
+
+--- Epoch 17/20 ---
+Logging metrics for epoch: 17
+
+--- Epoch 18/20 ---
+Logging metrics for epoch: 18
+
+--- Epoch 19/20 ---
+Logging metrics for epoch: 19
+
+--- Epoch 20/20 ---
+Logging metrics for epoch: 20
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t10_hm_off\hard_mining_epoch_19.jsonl
+[HARD][Eval] Finished mining epoch 19: neg=1174 pos=1401
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_19.jsonl
+Logged metrics for HM from epoch 19 at eval epoch 19. F1: 0.0000
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 19. F1: 0.1809
+Logging probe-region figures...
+TensorBoard logs saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t10_hm_off_09_23-30-20
+Training completed.
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll4_id=20231210132040, tile_size=32, depth=8, d_start=28, d_end=48)
+dl: DataloaderConfig(batch_size=96, num_workers=2, data_aug=True, channel_mixing_prob=0.25, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=20, lr=0.0001, weight_decay=0, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs', eval_int=10, test_int=30, probe_int=5)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='avg', gem_p=3.0, conv3_dilation=1)
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.02, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_readability_2026_06_08_t11_hm_frac_002')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_readability_2026_06_08_t11_hm_frac_002
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+using cached pos_weight for scroll 20230827161847: 7.66
+Data setup done in 1.50s
+Creating model and loss... l1 lambda 7e-06... Model parameters: 1,315,401
+ done in 4.30s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t11_hm_frac_002_10_01-16-30
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs
+
+--- Epoch 1/20 ---
+New best F1 model saved! Val F1: 0.2160
+New best loss model saved! Val Loss: 1.1689
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/20 ---
+New best F1 model saved! Val F1: 0.2335
+New best loss model saved! Val Loss: 1.1583
+Logging metrics for epoch: 2
+
+--- Epoch 3/20 ---
+New best F1 model saved! Val F1: 0.2729
+New best loss model saved! Val Loss: 1.1230
+Logging metrics for epoch: 3
+
+--- Epoch 4/20 ---
+New best F1 model saved! Val F1: 0.2830
+New best loss model saved! Val Loss: 1.0982
+Logging metrics for epoch: 4
+
+--- Epoch 5/20 ---
+Logging metrics for epoch: 5
+Logging probe-region figures...
+
+--- Epoch 6/20 ---
+Logging metrics for epoch: 6
+
+--- Epoch 7/20 ---
+Logging metrics for epoch: 7
+
+--- Epoch 8/20 ---
+New best F1 model saved! Val F1: 0.3071
+New best loss model saved! Val Loss: 1.0622
+Logging metrics for epoch: 8
+
+--- Epoch 9/20 ---
+Logging metrics for epoch: 9
+
+--- Epoch 10/20 ---
+Logging metrics for epoch: 10
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t11_hm_frac_002\hard_mining_epoch_9.jsonl
+[HARD][Eval] Finished mining epoch 9: neg=4743 pos=468
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 9. F1: 0.0000
+Logging probe-region figures...
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll4_id=20231210132040, tile_size=32, depth=8, d_start=28, d_end=48)
+dl: DataloaderConfig(batch_size=96, num_workers=2, data_aug=True, channel_mixing_prob=0.25, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=20, lr=0.0001, weight_decay=0, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs', eval_int=10, test_int=30, probe_int=5)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='avg', gem_p=3.0, conv3_dilation=1)
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(hn_cutoff=0.9, hp_cutoff=0.45, hm_frac=0.02, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_readability_2026_06_08_t12_hn_cut_090')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_readability_2026_06_08_t12_hn_cut_090
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+using cached pos_weight for scroll 20230827161847: 7.66
+Data setup done in 1.50s
+Creating model and loss... l1 lambda 7e-06... Model parameters: 1,315,401
+ done in 3.38s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t12_hn_cut_090_10_02-07-06
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs
+
+--- Epoch 1/20 ---
+New best F1 model saved! Val F1: 0.2157
+New best loss model saved! Val Loss: 1.1788
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/20 ---
+New best F1 model saved! Val F1: 0.2278
+New best loss model saved! Val Loss: 1.1558
+Logging metrics for epoch: 2
+
+--- Epoch 3/20 ---
+New best F1 model saved! Val F1: 0.2771
+New best loss model saved! Val Loss: 1.0964
+Logging metrics for epoch: 3
+
+--- Epoch 4/20 ---
+Logging metrics for epoch: 4
+
+--- Epoch 5/20 ---
+Logging metrics for epoch: 5
+Logging probe-region figures...
+
+--- Epoch 6/20 ---
+Logging metrics for epoch: 6
+
+--- Epoch 7/20 ---
+New best loss model saved! Val Loss: 1.0837
+Logging metrics for epoch: 7
+
+--- Epoch 8/20 ---
+Logging metrics for epoch: 8
+
+--- Epoch 9/20 ---
+Logging metrics for epoch: 9
+
+--- Epoch 10/20 ---
+New best F1 model saved! Val F1: 0.2933
+New best loss model saved! Val Loss: 1.0609
+Logging metrics for epoch: 10
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t12_hn_cut_090\hard_mining_epoch_9.jsonl
+[HARD][Eval] Finished mining epoch 9: neg=260 pos=2503
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 9. F1: 0.0000
+Logging probe-region figures...
+
+--- Epoch 11/20 ---
+loaded mining file 'C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t12_hn_cut_090\hard_mining_epoch_9.jsonl' unique_scanned=2763 target=2010 sampled=2010
+[HARD][Epoch 10] Added 2010 new hard samples. Total is now 2010.
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 11
+
+--- Epoch 12/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 12
+
+--- Epoch 13/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+New best F1 model saved! Val F1: 0.3157
+Logging metrics for epoch: 13
+
+--- Epoch 14/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 14
+
+--- Epoch 15/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 15
+Logging probe-region figures...
+
+--- Epoch 16/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 16
+
+--- Epoch 17/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 17
+
+--- Epoch 18/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 18
+
+--- Epoch 19/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 19
+
+--- Epoch 20/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 20
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t12_hn_cut_090\hard_mining_epoch_19.jsonl
+[HARD][Eval] Finished mining epoch 19: neg=408 pos=486
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_19.jsonl
+Logged metrics for HM from epoch 19 at eval epoch 19. F1: 0.0000
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 19. F1: 0.8111
+Logging probe-region figures...
+TensorBoard logs saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t12_hn_cut_090_10_02-07-06
+Training completed.
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll4_id=20231210132040, tile_size=32, depth=8, d_start=28, d_end=48)
+dl: DataloaderConfig(batch_size=96, num_workers=2, data_aug=True, channel_mixing_prob=0.25, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=20, lr=0.0001, weight_decay=0, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs', eval_int=10, test_int=30, probe_int=5)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='avg', gem_p=3.0, conv3_dilation=1)
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(hn_cutoff=0.7, hp_cutoff=0.45, hm_frac=0.02, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_readability_2026_06_08_t13_hn_cut_070')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_readability_2026_06_08_t13_hn_cut_070
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+using cached pos_weight for scroll 20230827161847: 7.66
+Data setup done in 1.08s
+Creating model and loss... l1 lambda 7e-06... Model parameters: 1,315,401
+ done in 3.77s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t13_hn_cut_070_10_03-50-45
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs
+
+--- Epoch 1/20 ---
+New best F1 model saved! Val F1: 0.2275
+New best loss model saved! Val Loss: 1.1626
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/20 ---
+New best F1 model saved! Val F1: 0.2305
+New best loss model saved! Val Loss: 1.1600
+Logging metrics for epoch: 2
+
+--- Epoch 3/20 ---
+New best F1 model saved! Val F1: 0.2840
+New best loss model saved! Val Loss: 1.1148
+Logging metrics for epoch: 3
+
+--- Epoch 4/20 ---
+New best loss model saved! Val Loss: 1.1045
+Logging metrics for epoch: 4
+
+--- Epoch 5/20 ---
+Logging metrics for epoch: 5
+Logging probe-region figures...
+
+--- Epoch 6/20 ---
+Logging metrics for epoch: 6
+
+--- Epoch 7/20 ---
+New best loss model saved! Val Loss: 1.0834
+Logging metrics for epoch: 7
+
+--- Epoch 8/20 ---
+New best F1 model saved! Val F1: 0.3225
+New best loss model saved! Val Loss: 1.0529
+Logging metrics for epoch: 8
+
+--- Epoch 9/20 ---
+Logging metrics for epoch: 9
+
+--- Epoch 10/20 ---
+Logging metrics for epoch: 10
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t13_hn_cut_070\hard_mining_epoch_9.jsonl
+[HARD][Eval] Finished mining epoch 9: neg=3305 pos=1323
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 9. F1: 0.0000
+Logging probe-region figures...
+
+--- Epoch 11/20 ---
+loaded mining file 'C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t13_hn_cut_070\hard_mining_epoch_9.jsonl' unique_scanned=4628 target=2010 sampled=2010
+[HARD][Epoch 10] Added 2010 new hard samples. Total is now 2010.
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 11
+
+--- Epoch 12/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 12
+
+--- Epoch 13/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 13
+
+--- Epoch 14/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 14
+
+--- Epoch 15/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 15
+Logging probe-region figures...
+
+--- Epoch 16/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 16
+
+--- Epoch 17/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 17
+
+--- Epoch 18/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+New best loss model saved! Val Loss: 1.0415
+Logging metrics for epoch: 18
+
+--- Epoch 19/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 19
+
+--- Epoch 20/20 ---
+[HARD][Epoch Summary] injected=2010 injector_used=2010 injector_skipped=0
+Logging metrics for epoch: 20
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t13_hn_cut_070\hard_mining_epoch_19.jsonl
+[HARD][Eval] Finished mining epoch 19: neg=1356 pos=1191
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_19.jsonl
+Logged metrics for HM from epoch 19 at eval epoch 19. F1: 0.0000
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 19. F1: 0.1388
+Logging probe-region figures...
+TensorBoard logs saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t13_hn_cut_070_10_03-50-45
+Training completed.
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll4_id=20231210132040, tile_size=32, depth=8, d_start=28, d_end=48)
+dl: DataloaderConfig(batch_size=96, num_workers=2, data_aug=True, channel_mixing_prob=0.25, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=20, lr=0.0001, weight_decay=0, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs', eval_int=10, test_int=30, probe_int=5)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='avg', gem_p=3.0, conv3_dilation=1)
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(hn_cutoff=0.8, hp_cutoff=0.35, hm_frac=0.02, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_readability_2026_06_08_t14_hp_cut_035')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_readability_2026_06_08_t14_hp_cut_035
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+using cached pos_weight for scroll 20230827161847: 7.66
+Data setup done in 1.32s
+Creating model and loss... l1 lambda 7e-06... Model parameters: 1,315,401
+ done in 4.28s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t14_hp_cut_035_10_05-29-37
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs
+
+--- Epoch 1/20 ---
+New best F1 model saved! Val F1: 0.2065
+New best loss model saved! Val Loss: 1.2135
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/20 ---
+New best F1 model saved! Val F1: 0.2406
+New best loss model saved! Val Loss: 1.1418
+Logging metrics for epoch: 2
+
+--- Epoch 3/20 ---
+New best F1 model saved! Val F1: 0.2497
+New best loss model saved! Val Loss: 1.1391
+Logging metrics for epoch: 3
+
+--- Epoch 4/20 ---
+New best F1 model saved! Val F1: 0.2628
+New best loss model saved! Val Loss: 1.1255
+Logging metrics for epoch: 4
+
+--- Epoch 5/20 ---
+New best F1 model saved! Val F1: 0.2732
+Logging metrics for epoch: 5
+Logging probe-region figures...
+
+--- Epoch 6/20 ---
+New best loss model saved! Val Loss: 1.1056
+Logging metrics for epoch: 6
+
+--- Epoch 7/20 ---
+New best F1 model saved! Val F1: 0.3089
+New best loss model saved! Val Loss: 1.0892
+Logging metrics for epoch: 7
+
+--- Epoch 8/20 ---
+Logging metrics for epoch: 8
+
+--- Epoch 9/20 ---
+New best loss model saved! Val Loss: 1.0853
+Logging metrics for epoch: 9
+
+--- Epoch 10/20 ---
+New best loss model saved! Val Loss: 1.0622
+Logging metrics for epoch: 10
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t14_hp_cut_035\hard_mining_epoch_9.jsonl
+[HARD][Eval] Finished mining epoch 9: neg=1537 pos=469
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 9. F1: 0.0000
+Logging probe-region figures...
+
+--- Epoch 11/20 ---
+loaded mining file 'C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t14_hp_cut_035\hard_mining_epoch_9.jsonl' unique_scanned=2006 target=2010 sampled=2006
+[HARD][Epoch 10] Added 2006 new hard samples. Total is now 2006.
+[HARD][Epoch Summary] injected=2006 injector_used=2006 injector_skipped=0
+Logging metrics for epoch: 11
+
+--- Epoch 12/20 ---
+[HARD][Epoch Summary] injected=2006 injector_used=2006 injector_skipped=0
+New best F1 model saved! Val F1: 0.3310
+New best loss model saved! Val Loss: 1.0436
+Logging metrics for epoch: 12
+
+--- Epoch 13/20 ---
+[HARD][Epoch Summary] injected=2006 injector_used=2006 injector_skipped=0
+New best F1 model saved! Val F1: 0.3317
+Logging metrics for epoch: 13
+
+--- Epoch 14/20 ---
+[HARD][Epoch Summary] injected=2006 injector_used=2006 injector_skipped=0
+Logging metrics for epoch: 14
+
+--- Epoch 15/20 ---
+[HARD][Epoch Summary] injected=2006 injector_used=2006 injector_skipped=0
+Logging metrics for epoch: 15
+Logging probe-region figures...
+
+--- Epoch 16/20 ---
+[HARD][Epoch Summary] injected=2006 injector_used=2006 injector_skipped=0
+Logging metrics for epoch: 16
+
+--- Epoch 17/20 ---
+[HARD][Epoch Summary] injected=2006 injector_used=2006 injector_skipped=0
+Logging metrics for epoch: 17
+
+--- Epoch 18/20 ---
+[HARD][Epoch Summary] injected=2006 injector_used=2006 injector_skipped=0
+Logging metrics for epoch: 18
+
+--- Epoch 19/20 ---
+[HARD][Epoch Summary] injected=2006 injector_used=2006 injector_skipped=0
+Logging metrics for epoch: 19
+
+--- Epoch 20/20 ---
+[HARD][Epoch Summary] injected=2006 injector_used=2006 injector_skipped=0
+New best loss model saved! Val Loss: 1.0427
+Logging metrics for epoch: 20
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: C:\Users\ChenJeff\Documents\vesuvius\hard_negs\cmp_readability_2026_06_08_t14_hp_cut_035\hard_mining_epoch_19.jsonl
+[HARD][Eval] Finished mining epoch 19: neg=259 pos=698
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_19.jsonl
+Logged metrics for HM from epoch 19 at eval epoch 19. F1: 0.0000
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 19. F1: 0.0591
+Logging probe-region figures...
+TensorBoard logs saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t14_hp_cut_035_10_05-29-37
+Training completed.
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll4_id=20231210132040, tile_size=32, depth=8, d_start=28, d_end=48)
+dl: DataloaderConfig(batch_size=96, num_workers=2, data_aug=True, channel_mixing_prob=0.25, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=20, lr=0.0001, weight_decay=0, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs', eval_int=10, test_int=30, probe_int=5)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='avg', gem_p=3.0, conv3_dilation=1)
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(hn_cutoff=0.8, hp_cutoff=0.55, hm_frac=0.02, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_readability_2026_06_08_t15_hp_cut_055')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_readability_2026_06_08_t15_hp_cut_055
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+using cached pos_weight for scroll 20230827161847: 7.66
+Data setup done in 2.14s
+Creating model and loss... l1 lambda 7e-06... Model parameters: 1,315,401
+ done in 5.14s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_readability_2026_06_08_t15_hp_cut_055_10_07-18-08
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs
+
+--- Epoch 1/20 ---
+New best F1 model saved! Val F1: 0.2222
+New best loss model saved! Val Loss: 1.1578
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/20 ---

@@ -121,7 +121,8 @@ class InkVolumeDataset(IterableDataset):
         self.norm_stats = norm_stats
         self.transform = Transform(config)
 
-        self.z_start, self.z_end = self.c.data.d_start, self.c.data.d_end
+        self.z_start = getattr(self.c.data, "train_d_start", self.c.data.d_start)
+        self.z_end   = getattr(self.c.data, "train_d_end",   self.c.data.d_end)
         self.y_start, self.y_end = y_range
         self.x_start, self.x_end = x_range
         
@@ -368,6 +369,8 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
         batch_size=config.dl.batch_size,
         num_workers=config.dl.num_workers,
         pin_memory=True,
+        persistent_workers=config.dl.num_workers > 0,
+        prefetch_factor=2 if config.dl.num_workers > 0 else None,
     )
     
     valid_loader = DataLoader(
@@ -375,6 +378,8 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
         batch_size=config.dl.batch_size,
         num_workers=config.dl.num_workers,
         pin_memory=True,
+        persistent_workers=config.dl.num_workers > 0,
+        prefetch_factor=2 if config.dl.num_workers > 0 else None,
     )
     
     return train_loader, valid_loader

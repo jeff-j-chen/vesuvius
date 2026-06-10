@@ -1026,3 +1026,33 @@ than from simply training longer, mining harder, or adding more scalar metrics.
 - 2026-06-09 15:04:55 UTC | test 02 t02_no_channel_mix | readability_last=0.39386186003685 | probe_easy=0.5472447872161865 | probe_hard=0.34306973218917847 | next=03:t03_low_channel_mix
 
 - 2026-06-10 00:31:01 UTC | test 03 t03_low_channel_mix | readability_last=0.3582670986652374 | probe_easy=0.5383473038673401 | probe_hard=0.3090948462486267 | next=04:t04_pool_max
+
+- 2026-06-10 01:38:16 UTC | test 04 t04_pool_max failed rc=1 | next=05:t05_pool_gem_p3
+
+- 2026-06-10 03:33:19 UTC | test 05 t05_pool_gem_p3 | readability_last=0.34783729910850525 | probe_easy=0.5326962471008301 | probe_hard=0.31150734424591064 | next=07:t07_no_mix_gem
+
+- 2026-06-10 04:39:40 UTC | test 07 t07_no_mix_gem failed rc=1 | next=08:t08_conv3_dil2
+
+- 2026-06-10 06:30:05 UTC | test 08 t08_conv3_dil2 | readability_last=0.35754403471946716 | probe_easy=0.5450989007949829 | probe_hard=0.3685373067855835 | next=10:t10_hm_off
+
+- 2026-06-10 08:16:14 UTC | test 10 t10_hm_off | readability_last=0.36704951524734497 | probe_easy=0.5684111714363098 | probe_hard=0.39762693643569946 | next=11:t11_hm_frac_002
+
+- 2026-06-10 09:06:52 UTC | test 11 t11_hm_frac_002 failed rc=1 | next=09:t09_conv3_dil2_gem
+
+- 2026-06-10 10:50:32 UTC | test 12 t12_hn_cut_090 | readability_last=0.36344605684280396 | probe_easy=0.563590943813324 | probe_hard=0.3597739040851593 | next=13:t13_hn_cut_070
+
+- 2026-06-10 12:29:23 UTC | test 13 t13_hn_cut_070 | readability_last=0.3760392963886261 | probe_easy=0.5590817928314209 | probe_hard=0.380943238735199 | next=14:t14_hp_cut_035
+
+- 2026-06-10 14:17:51 UTC | test 14 t14_hp_cut_035 | readability_last=0.3688986599445343 | probe_easy=0.5684157013893127 | probe_hard=0.3556252121925354 | next=15:t15_hp_cut_055
+
+
+## ## Automated Campaign Log (arch_search_2026_06_10)
+
+- architecture search campaign started
+- 2026-06-10 15:40:46 UTC | arch=v2_slim_head failed rc=1 | next=02:t02_no_cbam
+- 2026-06-10 16:22:08 UTC | arch=v2_slim_head | readability_last=0.3325617015361786 | probe_easy=0.46673303842544556 | probe_hard=0.3117430508136749 | next=02:t02_no_cbam
+- 2026-06-10 16:56:00 UTC | arch=v2_no_cbam | readability_last=0.3180636167526245 | probe_easy=0.44113242626190186 | probe_hard=0.327772855758667 | next=05:t05_residual
+- 2026-06-10 17:59:10 UTC | arch=v2_slim_head | readability_last=0.36123529076576233 | probe_easy=0.516002893447876 | probe_hard=0.30766424536705017 | next=02:t02_no_cbam
+- 2026-06-10 19:00:40 UTC | arch=v2_slim_head | readability_last=0.3583658039569855 | probe_easy=0.5033379793167114 | probe_hard=0.32816827297210693 | next=02:t02_no_cbam
+- 2026-06-10 19:25:39 UTC | arch=v2_no_cbam | readability_last=0.3439983129501343 | probe_easy=0.45745721459388733 | probe_hard=0.33790063858032227 | next=05:t05_residual
+- 2026-06-10 21:33:19 UTC | arch=v2_residual | readability_last=0.3671565353870392 | probe_easy=0.538194477558136 | probe_hard=0.33517420291900635 | next=06:t06_residual_no_cbam

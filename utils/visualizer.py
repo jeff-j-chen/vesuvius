@@ -40,68 +40,71 @@ def group_by_depth(coords):
     return grouped
 
 def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max):
-    """run batched prediction over given coords returning downsampled map"""
-    tile = config.data.tile_size
+    """run batched prediction over given coords returning downsampled map.
 
+    zarr reads dominate inference time and are IO-bound; they release the GIL so
+    ThreadPoolExecutor parallelises them effectively on windows without spawn overhead.
+    all tiles are read in parallel first, then sent to the gpu in large batches.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    tile  = config.data.tile_size
+    depth = config.data.depth
     H = y_range[1] - y_range[0]
     W = x_range[1] - x_range[0]
-
     h_small = H // tile
     w_small = W // tile
     pmap = np.zeros((h_small, w_small), dtype=np.float32)
 
-    bs = config.dl.batch_size
+    # inference has no gradient overhead so use a much larger batch than training
+    infer_bs = max(config.dl.batch_size * 8, 512)
     device = config.device if torch.cuda.is_available() else "cpu"
 
-    tiles = []
-    for _, y_off, x_off in coords:
-        # each call to predict_tiles targets a single depth window [depth_start, depth_start + depth)
-        d = depth_start
-        y = y_range[0] + y_off
-        x = x_range[0] + x_off
-        tiles.append((d, y, x, y_off, x_off))
+    tile_list = [
+        (depth_start, y_range[0] + y_off, x_range[0] + x_off, y_off, x_off)
+        for _, y_off, x_off in coords
+    ]
+
+    def _read_one(args):
+        d, y, x, y_off, x_off = args
+        if d + depth > vol.shape[0]:
+            return None, y_off, x_off
+        blk = np.array(vol[d:d + depth, y:y + tile, x:x + tile]).astype(np.float32)
+        blk = (blk - g_mean) / g_std
+        if blk.ndim == 3 and mask.ndim == 2:
+            m_tile = mask[y:y + tile, x:x + tile]
+            m_bin  = (m_tile > 0).astype(np.uint8)
+            blk[np.broadcast_to(np.expand_dims(m_bin, 0), blk.shape) == 0] = 0
+        blk = np.clip((blk - g_min) / (g_max - g_min + 1e-12), 0, 1)
+        if blk.shape != (depth, tile, tile):
+            return None, y_off, x_off
+        return blk, y_off, x_off
+
+    # read tiles in parallel; threads release GIL during zarr/numcodecs decompression
+    n_workers = min(8, max(1, len(tile_list)))
+    print(f"[predict] reading {len(tile_list)} tiles with {n_workers} threads...")
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        results = list(tqdm(pool.map(_read_one, tile_list),
+                            total=len(tile_list),
+                            desc=f"Read {volume_name}", leave=False))
+
+    valid = [(blk, y_off, x_off) for blk, y_off, x_off in results if blk is not None]
 
     with torch.no_grad():
-        for i in tqdm(range(0, len(tiles), bs), desc=f"Predict {volume_name}", leave=True):
-            batch = tiles[i:i + bs]
-            b_blocks = []
-            b_idx = []
-            for d, y, x, y_off, x_off in batch:
-                if d + config.data.depth > vol.shape[0]:
-                    continue
+        for i in tqdm(range(0, len(valid), infer_bs), desc=f"Predict {volume_name}", leave=True):
+            chunk   = valid[i:i + infer_bs]
+            b_blocks = [b for b, _, _ in chunk]
+            b_idx    = [(yo, xo) for _, yo, xo in chunk]
 
-                blk = np.array(vol[d:d + config.data.depth, y:y + tile, x:x + tile]).astype(np.float32)
-
-                blk = (blk - g_mean) / g_std
-
-                if blk.ndim == 3 and mask.ndim == 2:
-                    m_tile = mask[y:y + tile, x:x + tile]
-                    m_bin = (m_tile > 0).astype(np.uint8)
-                    m_exp = np.broadcast_to(np.expand_dims(m_bin, axis=0), blk.shape)
-                    blk[m_exp == 0] = 0
-
-                blk = (blk - g_min) / (g_max - g_min + 1e-12)
-                blk = np.clip(blk, 0, 1)
-
-                if blk.shape != (config.data.depth, tile, tile):
-                    continue
-
-                b_blocks.append(blk)
-                b_idx.append((y_off, x_off))
-
-            if not b_blocks:
-                continue
-
-            bt = torch.from_numpy(np.stack(b_blocks)).float().unsqueeze(1).to(device)
+            bt     = torch.from_numpy(np.stack(b_blocks)).float().unsqueeze(1).to(device)
             logits = model(bt)
-            preds = torch.sigmoid(logits).cpu().numpy().flatten()
+            preds  = torch.sigmoid(logits).cpu().numpy().flatten()
 
             for (y_off, x_off), pred in zip(b_idx, preds):
                 yi = y_off // tile
                 xi = x_off // tile
                 if 0 <= yi < h_small and 0 <= xi < w_small:
                     pmap[yi, xi] = float(pred)
-
             del bt
 
     if torch.cuda.is_available():
@@ -827,17 +830,24 @@ class TensorboardVisualizer:
         all_pred_data = []
 
         hm_dir = self._hard_mining_dir()
-        os.makedirs(hm_dir, exist_ok=True)
-        mining_path = os.path.join(hm_dir, f"hard_mining_epoch_{epoch}.jsonl")
-        mining_f = open(mining_path, "w")
-        print(f"[HARD][Eval] Writing mining file to: {mining_path}")
+        hm_enabled = getattr(self.c.hm, "enabled", True)
+
+        if hm_enabled:
+            os.makedirs(hm_dir, exist_ok=True)
+            mining_path = os.path.join(hm_dir, f"hard_mining_epoch_{epoch}.jsonl")
+            mining_f = open(mining_path, "w")
+            print(f"[HARD][Eval] Writing mining file to: {mining_path}")
+        else:
+            mining_path = None
+            mining_f = None
+
         hn_cut = self.c.hm.hn_cutoff
         hp_cut = self.c.hm.hp_cutoff
         hn_cnt = 0
         hp_cnt = 0
 
         # load a set of existing mined keys across all previous files to prevent duplicates
-        existing_keys = self._load_existing_mined_keys()
+        existing_keys = self._load_existing_mined_keys() if hm_enabled else set()
         # also track keys added in this epoch to avoid intra epoch duplicates
         new_keys = set()
 
@@ -880,26 +890,31 @@ class TensorboardVisualizer:
 
                 if has_ink == 0 and score >= hn_cut:
                     if key not in existing_keys and key not in new_keys:
-                        mining_f.write(json.dumps({"z": z_global, "y": y_global, "x": x_global, "score": score, "label": 0}) + "\n")
+                        if mining_f is not None:
+                            mining_f.write(json.dumps({"z": z_global, "y": y_global, "x": x_global, "score": score, "label": 0}) + "\n")
                         new_keys.add(key)
                         hn_cnt += 1
                 elif has_ink == 1 and score <= hp_cut:
                     if key not in existing_keys and key not in new_keys:
-                        mining_f.write(json.dumps({"z": z_global, "y": y_global, "x": x_global, "score": score, "label": 1}) + "\n")
+                        if mining_f is not None:
+                            mining_f.write(json.dumps({"z": z_global, "y": y_global, "x": x_global, "score": score, "label": 1}) + "\n")
                         new_keys.add(key)
                         hp_cnt += 1
 
             full_pred = np.concatenate([t_pred, v_pred], axis=1)
             all_pred_data.append((full_pred, t_pred, depth_start, depth_end))
 
-        mining_f.write(json.dumps({"_type": "meta", "hard_negatives": hn_cnt, "hard_positives": hp_cnt}) + "\n")
-        mining_f.close()
-        print(f"[HARD][Eval] Finished mining epoch {epoch}: neg={hn_cnt} pos={hp_cnt}")
+        if mining_f is not None:
+            mining_f.write(json.dumps({"_type": "meta", "hard_negatives": hn_cnt, "hard_positives": hp_cnt}) + "\n")
+            mining_f.close()
+            print(f"[HARD][Eval] Finished mining epoch {epoch}: neg={hn_cnt} pos={hp_cnt}")
+        else:
+            print("[HARD][Eval] mining disabled, skipping file write")
 
         self.writer.add_scalar("HardMining/HardNegatives", hn_cnt, epoch)
         self.writer.add_scalar("HardMining/HardPositives", hp_cnt, epoch)
 
-        fig = self._create_hard_examples_overlay(mining_path)
+        fig = self._create_hard_examples_overlay(mining_path) if mining_path else None
         if fig is not None:
             self.writer.add_figure(f"HardMined/Overlay", fig, epoch)
             plt.close(fig)
@@ -918,9 +933,6 @@ class TensorboardVisualizer:
             for pred_data in all_pred_data:
                 depth_start = pred_data[2]
                 depth_end = pred_data[3]
-                fig = self._create_evaluation_figure(pred_data, label_binary)
-                self.writer.add_figure(f'Evaluation/Depth_Block_{depth_start}-{depth_end}', fig, epoch)
-                plt.close(fig)
 
                 per_depth_metrics.append(
                     self._compute_readability_metrics(pred_data[0], label_binary, label_fraction, valid_tiles)
@@ -930,10 +942,19 @@ class TensorboardVisualizer:
             aggregate_metrics = self._aggregate_metric_dicts(per_depth_metrics)
             self._log_readability_metrics(epoch, aggregate_metrics, per_depth_metrics, depth_labels)
 
+            if getattr(self.c.tra, "eval_aggregate", True):
+                # width of the train portion in tile units (used to draw the split line)
+                train_split_w = (self.train_x_range[1] - self.train_x_range[0]) // self.c.data.tile_size
+                fig = self._create_aggregate_eval_figure(all_pred_data, train_split_w, label_binary)
+                self.writer.add_figure('Evaluation/Aggregated', fig, epoch)
+                plt.close(fig)
+
         self._run_and_log_hard_mining_evaluation(epoch, model)
 
     def _run_and_log_hard_mining_evaluation(self, current_epoch, model):
         """evaluate previously mined files and log metrics"""
+        if not getattr(self.c.hm, "enabled", True):
+            return
         print("Starting hard-mining file evaluation...")
         try:
             hm_dir = self._hard_mining_dir()
@@ -1111,6 +1132,61 @@ class TensorboardVisualizer:
         ax_overlay.axis('off')
 
         plt.subplots_adjust(wspace=0.05, hspace=0.05, left=0.05, right=0.95, top=0.95, bottom=0.05)
+        return fig
+
+    def _create_aggregate_eval_figure(self, all_pred_data, train_split_w, label_binary):
+        """n_blocks-row × 2-col figure: left col = predictions, right col = overlay with inklabels.
+
+        figure size adapts to the map's tile dimensions and aspect ratio so the image
+        is never distorted regardless of scroll geometry.
+        """
+        n_blocks = len(all_pred_data)
+        if n_blocks == 0:
+            return None
+
+        # derive panel size from the actual tile-unit dimensions of the first map
+        sample_pred = all_pred_data[0][0]
+        h_tiles, w_tiles = sample_pred.shape
+        aspect = w_tiles / max(h_tiles, 1)      # width / height of one panel
+
+        # target a panel width of ~0.06 in per tile column, capped [6, 16] in
+        panel_w = max(6.0, min(16.0, w_tiles * 0.06))
+        panel_h = max(2.0, min(12.0, panel_w / aspect))
+        # recompute panel_w in case panel_h was clamped
+        panel_w = panel_h * aspect
+
+        fig_w = panel_w * 2 + 0.3           # two columns + small gap
+        fig_h = panel_h * n_blocks + 0.4    # one row per depth block + title margin
+
+        fig, axes = plt.subplots(n_blocks, 2, figsize=(fig_w, fig_h),
+                                 squeeze=False)
+
+        split_pos = train_split_w - 0.5
+
+        for row, (full_pred, train_pred, d_start, d_end) in enumerate(all_pred_data):
+            # left: raw prediction
+            ax_pred = axes[row, 0]
+            ax_pred.imshow(full_pred, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+            ax_pred.set_title(f'Depth {d_start}-{d_end}', fontsize=8)
+            ax_pred.axvline(x=split_pos, color='red', linestyle='--', linewidth=0.8)
+            ax_pred.axis('off')
+
+            # right: same prediction + inklabel overlay
+            ax_ov = axes[row, 1]
+            ax_ov.imshow(full_pred, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+            ax_ov.set_title(f'Overlay {d_start}-{d_end}', fontsize=8)
+            if label_binary is not None:
+                ov = np.zeros((*full_pred.shape, 4))
+                h = min(label_binary.shape[0], ov.shape[0])
+                w = min(label_binary.shape[1], ov.shape[1])
+                ov[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
+                ax_ov.imshow(ov)
+            ax_ov.axvline(x=split_pos, color='red', linestyle='--', linewidth=0.8)
+            ax_ov.axis('off')
+
+        plt.subplots_adjust(wspace=0.04, hspace=0.12,
+                            left=0.01, right=0.99,
+                            top=0.98, bottom=0.01)
         return fig
 
     def _create_combined_test_figure(self, all_data, n_blocks, test_type):
@@ -1360,10 +1436,7 @@ class TensorboardVisualizer:
 
             probe_data_list.append(probe_data)
 
-            fig, aggregate_metrics = self._create_probe_region_figure(probe_data)
-            if fig is not None:
-                self.writer.add_figure(f"ProbeROIs/{spec['tag']}", fig, epoch)
-                plt.close(fig)
+            _, aggregate_metrics = self._create_probe_region_figure(probe_data)
 
             if aggregate_metrics:
                 probe_tag = spec["tag"]

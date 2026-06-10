@@ -1,0 +1,443 @@
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll4_id=20230827161847, tile_size=32, depth=8, d_start=28, d_end=48, channel_mixing_prob=0.25, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+dl: DataloaderConfig(batch_size=96, num_workers=2, data_aug=True)
+tra: TrainingConfig(n_epochs=30, lr=0.0001, weight_decay=0, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='./runs', eval_int=10, test_int=30, probe_int=1)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='avg', gem_p=3.0, conv3_dilation=1)
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1)
+device: cuda
+model_dir: models
+exp_name: cmp_readability_2026_06_08_t01_baseline_probe1
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+using cached pos_weight for scroll 20230827161847: 7.66
+Data setup done in 2.24s
+Creating model and loss... l1 lambda 7e-06... Model parameters: 1,315,401
+ done in 5.58s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.5277
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: ./runs\cmp_readability_2026_06_08_t01_baseline_probe1_08_22-40-20
+To view, run: tensorboard --logdir=./runs
+
+--- Epoch 1/30 ---
+New best F1 model saved! Val F1: 0.2109
+New best loss model saved! Val Loss: 1.1727
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+Logging probe-region figures...
+
+--- Epoch 2/30 ---
+New best F1 model saved! Val F1: 0.2260
+New best loss model saved! Val Loss: 1.1601
+Logging metrics for epoch: 2
+Logging probe-region figures...
+
+--- Epoch 3/30 ---
+New best F1 model saved! Val F1: 0.2808
+New best loss model saved! Val Loss: 1.1080
+Logging metrics for epoch: 3
+Logging probe-region figures...
+
+--- Epoch 4/30 ---
+Logging metrics for epoch: 4
+Logging probe-region figures...
+
+--- Epoch 5/30 ---
+Logging metrics for epoch: 5
+Logging probe-region figures...
+
+--- Epoch 6/30 ---
+Logging metrics for epoch: 6
+Logging probe-region figures...
+
+--- Epoch 7/30 ---
+New best loss model saved! Val Loss: 1.0845
+Logging metrics for epoch: 7
+Logging probe-region figures...
+
+--- Epoch 8/30 ---
+New best F1 model saved! Val F1: 0.2956
+New best loss model saved! Val Loss: 1.0816
+Logging metrics for epoch: 8
+Logging probe-region figures...
+
+--- Epoch 9/30 ---
+Logging metrics for epoch: 9
+Logging probe-region figures...
+
+--- Epoch 10/30 ---
+New best loss model saved! Val Loss: 1.0623
+Logging metrics for epoch: 10
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: hard_negs\hard_mining_epoch_9.jsonl
+[HARD][Eval] Finished mining epoch 9: neg=481 pos=282
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_19.jsonl
+Logged metrics for HM from epoch 19 at eval epoch 9. F1: 0.2502
+Evaluating hard-mining file: hard_mining_epoch_39.jsonl
+Logged metrics for HM from epoch 39 at eval epoch 9. F1: 0.2048
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 9. F1: 0.0000
+Logging probe-region figures...
+
+--- Epoch 11/30 ---
+loaded mining file './hard_negs\hard_mining_epoch_9.jsonl' unique_scanned=763 target=10052 sampled=763
+[HARD][Epoch 10] Added 763 new hard samples. Total is now 763.
+[HARD][Epoch Summary] injected=763 injector_used=763 injector_skipped=0
+New best F1 model saved! Val F1: 0.2958
+New best loss model saved! Val Loss: 1.0550
+Logging metrics for epoch: 11
+Logging probe-region figures...
+
+--- Epoch 12/30 ---
+[HARD][Epoch Summary] injected=763 injector_used=763 injector_skipped=0
+New best F1 model saved! Val F1: 0.3251
+New best loss model saved! Val Loss: 1.0369
+Logging metrics for epoch: 12
+Logging probe-region figures...
+
+--- Epoch 13/30 ---
+[HARD][Epoch Summary] injected=763 injector_used=763 injector_skipped=0
+New best F1 model saved! Val F1: 0.3255
+Logging metrics for epoch: 13
+Logging probe-region figures...
+
+--- Epoch 14/30 ---
+[HARD][Epoch Summary] injected=763 injector_used=763 injector_skipped=0
+Logging metrics for epoch: 14
+Logging probe-region figures...
+
+--- Epoch 15/30 ---
+[HARD][Epoch Summary] injected=763 injector_used=763 injector_skipped=0
+Logging metrics for epoch: 15
+Logging probe-region figures...
+
+--- Epoch 16/30 ---
+[HARD][Epoch Summary] injected=763 injector_used=763 injector_skipped=0
+Logging metrics for epoch: 16
+Logging probe-region figures...
+
+--- Epoch 17/30 ---
+[HARD][Epoch Summary] injected=763 injector_used=763 injector_skipped=0
+Logging metrics for epoch: 17
+Logging probe-region figures...
+
+--- Epoch 18/30 ---
+[HARD][Epoch Summary] injected=763 injector_used=763 injector_skipped=0
+Logging metrics for epoch: 18
+Logging probe-region figures...
+
+--- Epoch 19/30 ---
+[HARD][Epoch Summary] injected=763 injector_used=763 injector_skipped=0
+New best loss model saved! Val Loss: 1.0320
+Logging metrics for epoch: 19
+Logging probe-region figures...
+
+--- Epoch 20/30 ---
+[HARD][Epoch Summary] injected=763 injector_used=763 injector_skipped=0
+New best loss model saved! Val Loss: 1.0293
+Logging metrics for epoch: 20
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: hard_negs\hard_mining_epoch_19.jsonl
+[HARD][Eval] Finished mining epoch 19: neg=878 pos=1882
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_19.jsonl
+Logged metrics for HM from epoch 19 at eval epoch 19. F1: 0.0000
+Evaluating hard-mining file: hard_mining_epoch_39.jsonl
+Logged metrics for HM from epoch 39 at eval epoch 19. F1: 0.1071
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 19. F1: 0.3492
+Logging probe-region figures...
+
+--- Epoch 21/30 ---
+loaded mining file './hard_negs\hard_mining_epoch_19.jsonl' unique_scanned=2760 target=10052 sampled=2760
+[HARD][Epoch 20] Added 2760 new hard samples. Total is now 3523.
+[HARD][Epoch Summary] injected=3523 injector_used=3523 injector_skipped=0
+Logging metrics for epoch: 21
+Logging probe-region figures...
+
+--- Epoch 22/30 ---
+[HARD][Epoch Summary] injected=3523 injector_used=3523 injector_skipped=0
+Logging metrics for epoch: 22
+Logging probe-region figures...
+
+--- Epoch 23/30 ---
+[HARD][Epoch Summary] injected=3523 injector_used=3523 injector_skipped=0
+Logging metrics for epoch: 23
+Logging probe-region figures...
+
+--- Epoch 24/30 ---
+[HARD][Epoch Summary] injected=3523 injector_used=3523 injector_skipped=0
+Logging metrics for epoch: 24
+Logging probe-region figures...
+
+--- Epoch 25/30 ---
+[HARD][Epoch Summary] injected=3523 injector_used=3523 injector_skipped=0
+Logging metrics for epoch: 25
+Logging probe-region figures...
+
+--- Epoch 26/30 ---
+[HARD][Epoch Summary] injected=3523 injector_used=3523 injector_skipped=0
+Logging metrics for epoch: 26
+Logging probe-region figures...
+
+--- Epoch 27/30 ---
+[HARD][Epoch Summary] injected=3523 injector_used=3523 injector_skipped=0
+Logging metrics for epoch: 27
+Logging probe-region figures...
+
+--- Epoch 28/30 ---
+[HARD][Epoch Summary] injected=3523 injector_used=3523 injector_skipped=0
+Logging metrics for epoch: 28
+Logging probe-region figures...
+
+--- Epoch 29/30 ---
+[HARD][Epoch Summary] injected=3523 injector_used=3523 injector_skipped=0
+Logging metrics for epoch: 29
+Logging probe-region figures...
+
+--- Epoch 30/30 ---
+[HARD][Epoch Summary] injected=3523 injector_used=3523 injector_skipped=0
+Logging metrics for epoch: 30
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: hard_negs\hard_mining_epoch_29.jsonl
+[HARD][Eval] Finished mining epoch 29: neg=1405 pos=40
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_19.jsonl
+Logged metrics for HM from epoch 19 at eval epoch 29. F1: 0.7287
+Evaluating hard-mining file: hard_mining_epoch_29.jsonl
+Logged metrics for HM from epoch 29 at eval epoch 29. F1: 0.0000
+Evaluating hard-mining file: hard_mining_epoch_39.jsonl
+Logged metrics for HM from epoch 39 at eval epoch 29. F1: 0.1945
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 29. F1: 0.5723
+Starting test figure generation...
+Logging probe-region figures...
+TensorBoard logs saved to: ./runs\cmp_readability_2026_06_08_t01_baseline_probe1_08_22-40-20
+Training completed.
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll4_id=20230827161847, tile_size=32, depth=8, d_start=28, d_end=48, channel_mixing_prob=0.0, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+dl: DataloaderConfig(batch_size=96, num_workers=2, data_aug=True)
+tra: TrainingConfig(n_epochs=30, lr=0.0001, weight_decay=0, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='./runs', eval_int=10, test_int=30, probe_int=1)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='avg', gem_p=3.0, conv3_dilation=1)
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1)
+device: cuda
+model_dir: models
+exp_name: cmp_readability_2026_06_08_t02_no_channel_mix
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+using cached pos_weight for scroll 20230827161847: 7.66
+Data setup done in 2.06s
+Creating model and loss... l1 lambda 7e-06... Model parameters: 1,315,401
+ done in 4.70s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.5277
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: ./runs\cmp_readability_2026_06_08_t02_no_channel_mix_09_04-25-07
+To view, run: tensorboard --logdir=./runs
+
+--- Epoch 1/30 ---
+New best F1 model saved! Val F1: 0.2086
+New best loss model saved! Val Loss: 1.1709
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+Logging probe-region figures...
+
+--- Epoch 2/30 ---
+New best F1 model saved! Val F1: 0.2326
+New best loss model saved! Val Loss: 1.1551
+Logging metrics for epoch: 2
+Logging probe-region figures...
+
+--- Epoch 3/30 ---
+New best F1 model saved! Val F1: 0.2817
+New best loss model saved! Val Loss: 1.1111
+Logging metrics for epoch: 3
+Logging probe-region figures...
+
+--- Epoch 4/30 ---
+New best loss model saved! Val Loss: 1.1091
+Logging metrics for epoch: 4
+Logging probe-region figures...
+
+--- Epoch 5/30 ---
+Logging metrics for epoch: 5
+Logging probe-region figures...
+
+--- Epoch 6/30 ---
+Logging metrics for epoch: 6
+Logging probe-region figures...
+
+--- Epoch 7/30 ---
+New best F1 model saved! Val F1: 0.2834
+New best loss model saved! Val Loss: 1.0829
+Logging metrics for epoch: 7
+Logging probe-region figures...
+
+--- Epoch 8/30 ---
+New best loss model saved! Val Loss: 1.0819
+Logging metrics for epoch: 8
+Logging probe-region figures...
+
+--- Epoch 9/30 ---
+Logging metrics for epoch: 9
+Logging probe-region figures...
+
+--- Epoch 10/30 ---
+New best F1 model saved! Val F1: 0.2950
+New best loss model saved! Val Loss: 1.0434
+Logging metrics for epoch: 10
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: hard_negs\hard_mining_epoch_9.jsonl
+[HARD][Eval] Finished mining epoch 9: neg=1006 pos=489
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_19.jsonl
+Logged metrics for HM from epoch 19 at eval epoch 9. F1: 0.2744
+Evaluating hard-mining file: hard_mining_epoch_29.jsonl
+Logged metrics for HM from epoch 29 at eval epoch 9. F1: 0.0486
+Evaluating hard-mining file: hard_mining_epoch_39.jsonl
+Logged metrics for HM from epoch 39 at eval epoch 9. F1: 0.2024
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 9. F1: 0.0000
+Logging probe-region figures...
+
+--- Epoch 11/30 ---
+loaded mining file './hard_negs\hard_mining_epoch_9.jsonl' unique_scanned=1495 target=10052 sampled=1495
+[HARD][Epoch 10] Added 1495 new hard samples. Total is now 1495.
+[HARD][Epoch Summary] injected=1495 injector_used=1495 injector_skipped=0
+Logging metrics for epoch: 11
+Logging probe-region figures...
+
+--- Epoch 12/30 ---
+[HARD][Epoch Summary] injected=1495 injector_used=1495 injector_skipped=0
+Logging metrics for epoch: 12
+Logging probe-region figures...
+
+--- Epoch 13/30 ---
+[HARD][Epoch Summary] injected=1495 injector_used=1495 injector_skipped=0
+New best F1 model saved! Val F1: 0.3343
+Logging metrics for epoch: 13
+Logging probe-region figures...
+
+--- Epoch 14/30 ---
+[HARD][Epoch Summary] injected=1495 injector_used=1495 injector_skipped=0
+Logging metrics for epoch: 14
+Logging probe-region figures...
+
+--- Epoch 15/30 ---
+[HARD][Epoch Summary] injected=1495 injector_used=1495 injector_skipped=0
+New best loss model saved! Val Loss: 1.0356
+Logging metrics for epoch: 15
+Logging probe-region figures...
+
+--- Epoch 16/30 ---
+[HARD][Epoch Summary] injected=1495 injector_used=1495 injector_skipped=0
+Logging metrics for epoch: 16
+Logging probe-region figures...
+
+--- Epoch 17/30 ---
+[HARD][Epoch Summary] injected=1495 injector_used=1495 injector_skipped=0
+Logging metrics for epoch: 17
+Logging probe-region figures...
+
+--- Epoch 18/30 ---
+[HARD][Epoch Summary] injected=1495 injector_used=1495 injector_skipped=0
+Logging metrics for epoch: 18
+Logging probe-region figures...
+
+--- Epoch 19/30 ---
+[HARD][Epoch Summary] injected=1495 injector_used=1495 injector_skipped=0
+Logging metrics for epoch: 19
+Logging probe-region figures...
+
+--- Epoch 20/30 ---
+[HARD][Epoch Summary] injected=1495 injector_used=1495 injector_skipped=0
+Logging metrics for epoch: 20
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: hard_negs\hard_mining_epoch_19.jsonl
+[HARD][Eval] Finished mining epoch 19: neg=1067 pos=1256
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_19.jsonl
+Logged metrics for HM from epoch 19 at eval epoch 19. F1: 0.0000
+Evaluating hard-mining file: hard_mining_epoch_29.jsonl
+Logged metrics for HM from epoch 29 at eval epoch 19. F1: 0.0251
+Evaluating hard-mining file: hard_mining_epoch_39.jsonl
+Logged metrics for HM from epoch 39 at eval epoch 19. F1: 0.1452
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 19. F1: 0.4335
+Logging probe-region figures...
+
+--- Epoch 21/30 ---
+loaded mining file './hard_negs\hard_mining_epoch_19.jsonl' unique_scanned=2323 target=10052 sampled=2323
+[HARD][Epoch 20] Added 2323 new hard samples. Total is now 3818.
+[HARD][Epoch Summary] injected=3818 injector_used=3818 injector_skipped=0
+Logging metrics for epoch: 21
+Logging probe-region figures...
+
+--- Epoch 22/30 ---
+[HARD][Epoch Summary] injected=3818 injector_used=3818 injector_skipped=0
+Logging metrics for epoch: 22
+Logging probe-region figures...
+
+--- Epoch 23/30 ---
+[HARD][Epoch Summary] injected=3818 injector_used=3818 injector_skipped=0
+Logging metrics for epoch: 23
+Logging probe-region figures...
+
+--- Epoch 24/30 ---
+[HARD][Epoch Summary] injected=3818 injector_used=3818 injector_skipped=0
+Logging metrics for epoch: 24
+Logging probe-region figures...
+
+--- Epoch 25/30 ---
+[HARD][Epoch Summary] injected=3818 injector_used=3818 injector_skipped=0
+Logging metrics for epoch: 25
+Logging probe-region figures...
+
+--- Epoch 26/30 ---
+[HARD][Epoch Summary] injected=3818 injector_used=3818 injector_skipped=0
+Logging metrics for epoch: 26
+Logging probe-region figures...
+
+--- Epoch 27/30 ---
+[HARD][Epoch Summary] injected=3818 injector_used=3818 injector_skipped=0
+Logging metrics for epoch: 27
+Logging probe-region figures...
+
+--- Epoch 28/30 ---
+[HARD][Epoch Summary] injected=3818 injector_used=3818 injector_skipped=0
+Logging metrics for epoch: 28
+Logging probe-region figures...
+
+--- Epoch 29/30 ---
+[HARD][Epoch Summary] injected=3818 injector_used=3818 injector_skipped=0
+Logging metrics for epoch: 29
+Logging probe-region figures...
+
+--- Epoch 30/30 ---
+[HARD][Epoch Summary] injected=3818 injector_used=3818 injector_skipped=0
+Logging metrics for epoch: 30
+Starting evaluation figure generation...
+[HARD][Eval] Writing mining file to: hard_negs\hard_mining_epoch_29.jsonl
+[HARD][Eval] Finished mining epoch 29: neg=882 pos=489
+Starting hard-mining file evaluation...
+Evaluating hard-mining file: hard_mining_epoch_19.jsonl
+Logged metrics for HM from epoch 19 at eval epoch 29. F1: 0.5914
+Evaluating hard-mining file: hard_mining_epoch_29.jsonl
+Logged metrics for HM from epoch 29 at eval epoch 29. F1: 0.0000
+Evaluating hard-mining file: hard_mining_epoch_39.jsonl
+Logged metrics for HM from epoch 39 at eval epoch 29. F1: 0.0811
+Evaluating hard-mining file: hard_mining_epoch_9.jsonl
+Logged metrics for HM from epoch 9 at eval epoch 29. F1: 0.6211
+Starting test figure generation...
+Logging probe-region figures...
+TensorBoard logs saved to: ./runs\cmp_readability_2026_06_08_t02_no_channel_mix_09_04-25-07
+Training completed.
