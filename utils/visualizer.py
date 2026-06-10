@@ -220,6 +220,12 @@ class TensorboardVisualizer:
             self.scroll4_volume, self.scroll4_mask, str(self.c.data.scroll4_id)
         )
 
+        # scroll2 is always loaded — probe ROIs always include it regardless of test_on_scroll4
+        self.scroll2_volume, self.scroll2_mask, self.scroll2_y_range, self.scroll2_x_range = self._load_scroll2_region()
+        self.scroll2_global_mean, self.scroll2_global_std, self.scroll2_global_min, self.scroll2_global_max = self._get_or_compute_norm(
+            self.scroll2_volume, self.scroll2_mask, str(self.c.data.scroll2_id)
+        )
+
         self._segment_assets = {}
         self.probe_specs = self._build_probe_specs()
         self._debug_scroll4_ranges_once()
@@ -363,6 +369,25 @@ class TensorboardVisualizer:
 
         return vol, mask, y_range, x_range
 
+    def _load_scroll2_region(self):
+        """load scroll2 region: 2048×1024 window at x=3080, y=748"""
+        sid = self.c.data.scroll2_id
+        zarr_path = os.path.join(self.c.data.zarr_path, f"{sid}.zarr")
+        try:
+            import zarr
+            vol = zarr.open(zarr_path, mode='r')
+        except Exception as e:
+            raise RuntimeError(f"could not open zarr at {zarr_path}: {e}")
+
+        mask_path = f"./masks/{sid}.png"
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) / 255.0
+
+        # fixed 2048 (width) × 1024 (height) window starting at x=3080, y=748
+        y_range = (748, 748 + 1024)
+        x_range = (3080, 3080 + 2048)
+
+        return vol, mask, y_range, x_range
+
     def _build_probe_specs(self):
         """fixed readability probe regions used for qualitative tracking"""
         return [
@@ -388,6 +413,14 @@ class TensorboardVisualizer:
                 "segment_id": 20231210132040,
                 "x": 1960,
                 "y": 7968,
+                "size": 608,
+            },
+            {
+                "tag": "Scroll2",
+                "title": "scroll2",
+                "segment_id": 20230709155141,
+                "x": 3080,
+                "y": 748,
                 "size": 608,
             },
         ]
@@ -431,6 +464,16 @@ class TensorboardVisualizer:
                     self.scroll4_global_min,
                     self.scroll4_global_max,
                 ),
+            }
+        elif seg_id == self.c.data.scroll2_id:
+            # scroll2 has no ink labels — substitute zeros so overlay is prediction-only
+            labels = np.zeros(self.scroll2_mask.shape, dtype=np.float32)
+            asset = {
+                "volume": self.scroll2_volume,
+                "mask": self.scroll2_mask,
+                "labels": labels,
+                "norm": (self.scroll2_global_mean, self.scroll2_global_std,
+                         self.scroll2_global_min, self.scroll2_global_max),
             }
         else:
             import zarr
@@ -1071,13 +1114,16 @@ class TensorboardVisualizer:
         print(f"Logged metrics for HM from epoch {source_epoch} at eval epoch {current_epoch}. F1: {metrics['f1']:.4f}")
 
     def add_test_figures(self, epoch, model):
-        """add test figures for test and scroll4 data"""
+        """add test figures for test scroll and the active secondary target (scroll2 or scroll4)"""
         print("Starting test figure generation...")
         model.eval()
 
         self._add_single_test_figure(epoch, model, self.test_volume, self.test_mask, self.test_y_range, self.test_x_range, self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max, "Test")
-        
-        self._add_single_test_figure(epoch, model, self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range, self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max, "Scroll4")
+
+        if self.c.data.test_on_scroll4:
+            self._add_single_test_figure(epoch, model, self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range, self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max, "Scroll4")
+        else:
+            self._add_single_test_figure(epoch, model, self.scroll2_volume, self.scroll2_mask, self.scroll2_y_range, self.scroll2_x_range, self.scroll2_global_mean, self.scroll2_global_std, self.scroll2_global_min, self.scroll2_global_max, "Scroll2")
 
     def _add_single_test_figure(self, epoch, model, vol, mask, y_range, x_range, g_mean, g_std, g_min, g_max, name):
         """predict per depth and create a mosaic figure for a test dataset"""

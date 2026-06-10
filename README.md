@@ -33,15 +33,20 @@ Current repository state observed during audit:
 
 ### 2.1 Active local zarrs
 
-Configured zarr root in code:
+Training zarr root (SSD, fast I/O):
 
-- ./ves_zarrs2
+- /media/jeff/SSD_2/ves_zarrs2/
+
+Additional zarr storage (Seagate, larger capacity):
+
+- /media/jeff/Seagate/ves_zarrs2/
 
 Present zarrs:
 
-- 20230702185753.zarr
-- 20230827161847.zarr
-- 20231210132040.zarr
+- 20230702185753.zarr  (SSD)
+- 20230827161847.zarr  (SSD)
+- 20231210132040.zarr  (SSD)
+- 20230709155141.zarr  (Seagate)
 
 Observed zarr metadata:
 
@@ -57,6 +62,11 @@ Observed zarr metadata:
 	- shape: (64, 8790, 12122)
 	- chunks: (8, 32, 32)
 	- dtype: uint16
+- 20230709155141.zarr  (Scroll 2 segment)
+	- shape: (64, 2806, 8499)
+	- chunks: (8, 32, 32)
+	- dtype: uint16
+	- source: paths/20230709155141/layers/ (surface-extracted segment, 65 TIF layers)
 
 ### 2.2 Segment notes (human strategy context)
 
@@ -70,6 +80,10 @@ Observed zarr metadata:
 - 20231210132040
 	- small scroll 4 section, 7.91um, 53keV, 8.98639 cm^2
 	- high-value target region (bottom-left focus, possible pi character hypothesis)
+- 20230709155141
+	- Scroll 2 (PHercParis3) surface-extracted segment, 7.91um, 54keV
+	- 64 depth layers, spatial area 2806 × 8499
+	- no ink labels yet; use as inference/exploration target
 
 ### 2.3 Labels and masks
 
@@ -104,9 +118,73 @@ Normalization cache currently includes:
 
 File: norm_cache.json
 
-## 3) End-to-End Workflow in This Repo
+## 3) Data Acquisition Pipeline
 
-### 3.1 Prepare labels (optional but standard here)
+This describes how to go from a remote Vesuvius scroll URL to a locally usable zarr.
+
+### 3.1 Find the right source endpoint
+
+Each volpkg on dl.ash2txt.org exposes two kinds of data:
+
+- `volumes/` — raw CT scan slices, thousands of layers spanning the entire scan depth
+  (NOT what the training pipeline uses — these are the vertical cross-sections of the scroll)
+- `paths/` — surface-extracted segments (~65 layers, the ~0.5mm depth window of unwrapped papyrus)
+  (THIS is the correct source for training and inference)
+
+Browse available segments:
+
+```bash
+curl https://dl.ash2txt.org/full-scrolls/Scroll2/PHercParis3.volpkg/paths/
+```
+
+Check layer count for a specific segment before downloading:
+
+```bash
+curl https://dl.ash2txt.org/.../paths/<segment_id>/layers/ | grep -c '\.tif'
+```
+
+Expect ~65 TIF files (00.tif through 64.tif).
+
+### 3.2 Download the layer TIFs
+
+```bash
+mkdir -p /path/to/raw_<segment_id>/layers
+cd /path/to/raw_<segment_id>/layers
+wget -r -np -nd -A "*.tif" \
+    "https://dl.ash2txt.org/.../paths/<segment_id>/layers/"
+```
+
+### 3.3 Convert TIFs to zarr
+
+Use the 3dstreamer converter with the same chunk sizes as all existing zarrs:
+
+```bash
+cd /media/jeff/Seagate/vesuvius-3dstreamer
+python tools/converter.py \
+    /path/to/raw_<segment_id>/layers \
+    /path/to/ves_zarrs2/<segment_id> \
+    --z_chunksize 8 --y_chunksize 32 --x_chunksize 32 --max_workers 4 --verify
+```
+
+This produces `<segment_id>.zarr` with:
+- shape `(64, H, W)` — 64 depth slices, full spatial extent of the segment
+- chunks `(8, 32, 32)` — matches tile_size=32, depth=8 in config
+- dtype `uint16`
+
+Delete the raw TIF folder after successful conversion.
+
+### 3.4 Register the new segment
+
+After creating the zarr:
+
+1. update `utils/config.py` to add the new scroll ID (e.g. `scroll2_id`)
+2. if labels and masks exist, add PNGs to `inklabels/`, `eroded_inklabels/`, `masks/`
+3. if no labels exist, the segment is inference-only; wire it into a visualizer path
+4. normalization is computed automatically on first run and cached in `norm_cache.json`
+
+## 4) End-to-End Workflow in This Repo
+
+### 4.1 Prepare labels (optional but standard here)
 
 Script: ink_shrinker.py
 
@@ -121,7 +199,7 @@ Why erosion is used here:
 - erosion reduces border spill and over-positive supervision pressure
 - helps align objective with your detection strategy
 
-### 3.2 Train tile classifier
+### 4.2 Train tile classifier
 
 Script: train.py
 
@@ -149,7 +227,7 @@ TensorBoard:
 tensorboard --logdir=./runs
 ```
 
-### 3.3 Evaluate and visualize predictions
+### 4.3 Evaluate and visualize predictions
 
 Two modes are embedded in visualizer behavior:
 
@@ -170,7 +248,7 @@ Standalone scroll4 visualization script:
 python scroll4_vis.py -m models/best_model_f1.pth
 ```
 
-### 3.4 Hard mining loop
+### 4.4 Hard mining loop
 
 Hard mining flow is split across visualizer + trainer + hard_mining manager/injector:
 
@@ -200,9 +278,9 @@ Interpretation:
 
 - by epoch 39, model appears much more over-confident on negatives (lots of false positive confidence), while hard positives shrink
 
-## 4) Model and Training Details
+## 5) Model and Training Details
 
-### 4.1 Core config defaults
+### 5.1 Core config defaults
 
 Source: utils/config.py
 
@@ -233,7 +311,7 @@ Source: utils/config.py
 	- hp_cutoff: 0.45
 	- hm_frac: 0.1
 
-### 4.2 Architecture
+### 5.2 Architecture
 
 Source: utils/model.py
 
@@ -242,7 +320,7 @@ Source: utils/model.py
 - global pooling + MLP classifier down to single logit
 - final objective: BCEWithLogitsLoss (with optional pos_weight)
 
-### 4.3 Data augmentation
+### 5.3 Data augmentation
 
 Source: utils/dataloader.py Transform
 
@@ -254,7 +332,7 @@ Source: utils/dataloader.py Transform
 
 Augmentation activates after epoch 5 in trainer when config.dl.data_aug is true.
 
-### 4.4 Labeling objective mismatch caveat
+### 5.4 Labeling objective mismatch caveat
 
 By design, supervision is tile-level binary (any ink in tile), not pixel-level segmentation.
 
@@ -266,7 +344,7 @@ This means:
 
 This is consistent with your observed pain point.
 
-## 5) TensorBoard Logging and What It Means
+## 6) TensorBoard Logging and What It Means
 
 Logged classes of signals include:
 
@@ -294,9 +372,9 @@ Important interpretation detail:
 - they are not direct character readability metrics
 - for your goal, visual readability and high-confidence regional precision should be tracked separately
 
-## 6) Known Issues (Important)
+## 7) Known Issues (Important)
 
-### 6.1 vis.ipynb is broken for multiple reasons
+### 7.1 vis.ipynb is broken for multiple reasons
 
 1. Notebook JSON is malformed
 	 - raw file contains stray tokens like d_start and tra_id embedded in JSON
@@ -313,7 +391,7 @@ Important interpretation detail:
 3. There is no vis.py file in repo root
 	 - current script is scroll4_vis.py
 
-### 6.2 finetune path is stale/broken
+### 7.2 finetune path is stale/broken
 
 Files: finetune.py, utils/finetune_dataloader.py
 
@@ -332,11 +410,11 @@ Conclusion:
 
 - fine-tuning code appears from an older API generation and is not runnable without refactor
 
-### 6.3 get_data.sh has command typo
+### 7.3 get_data.sh has command typo
 
 File content ends with a stray backtick after tar extraction command.
 
-### 6.4 Seed config contradiction
+### 7.4 Seed config contradiction
 
 In train.py set_seed sets:
 
@@ -345,7 +423,7 @@ In train.py set_seed sets:
 
 These settings push in opposite directions for strict reproducibility/performance behavior.
 
-## 7) File-by-File Purpose Map
+## 8) File-by-File Purpose Map
 
 - train.py
 	- primary training entrypoint
@@ -377,9 +455,9 @@ These settings push in opposite directions for strict reproducibility/performanc
 - visualize_hard_examples.ipynb
 	- mined hard example overlays by depth
 
-## 8) Existing Experiment Artifacts
+## 9) Existing Experiment Artifacts
 
-### 8.1 Checkpoints in models/
+### 9.1 Checkpoints in models/
 
 - best_model_f1.pth
 - best_model_loss.pth
@@ -390,7 +468,7 @@ Note:
 - checkpoints up to epoch 100 exist even though default n_epochs in config is 50
 - at least one run used different epoch settings
 
-### 8.2 TensorBoard run folders
+### 9.2 TensorBoard run folders
 
 - runs/20230702185753/
 - runs/20230827161847/
@@ -399,7 +477,7 @@ Note:
 
 Each contains event files for retrospective metric inspection.
 
-## 9) External Helper Repos (Quick Audit)
+## 10) External Helper Repos (Quick Audit)
 
 You referenced these helper repos:
 
@@ -407,21 +485,21 @@ You referenced these helper repos:
 - /media/jeff/Seagate/vesuvius-3dstreamer
 - /media/jeff/Seagate/vesuvius-zarrs
 
-### 9.1 vesuvius-docker
+### 10.1 vesuvius-docker
 
 - Dockerfile uses runpod/pytorch:2.1.0 CUDA 11.8 base
 - clones this repo to /vesuvius
 - installs requirements, accepts terms, sets git identity
 - command currently keeps container alive
 
-### 9.2 vesuvius-3dstreamer
+### 10.2 vesuvius-3dstreamer
 
 - includes VesuviusStream iterable dataset for sampling 3D chunks
 - supports multi-zarr / ndarray sources
 - includes multithreaded TIFF->zarr converter with memory controls
 - contains conversion command examples in all.sh
 
-### 9.3 vesuvius-zarrs
+### 10.3 vesuvius-zarrs
 
 - includes PNG/TIF stack download/build helpers
 - contains multiple prebuilt .npz stacks (large)
@@ -429,7 +507,7 @@ You referenced these helper repos:
 - frag/ contains 00.png..65.png
 - file named full is a grayscale PNG image (not a directory)
 
-## 10) Practical Notes for Future Iteration
+## 11) Practical Notes for Future Iteration
 
 The major pain point described (metrics move, readability does not) fits this setup's objective/aggregation behavior.
 
@@ -442,7 +520,7 @@ In this codebase, readability depends heavily on:
 
 Given your stated goals (especially text discovery in unannotated regions), treat visual separability metrics as first-class outputs in addition to standard classification metrics.
 
-## 11) Minimal Runbook
+## 12) Minimal Runbook
 
 ### Environment
 
@@ -475,7 +553,7 @@ python scroll4_vis.py -m models/best_model_f1.pth
 python ink_shrinker.py
 ```
 
-## 12) Agent Handoff Notes
+## 13) Agent Handoff Notes
 
 If an agent opens this repo cold, top priorities are:
 
@@ -485,5 +563,11 @@ If an agent opens this repo cold, top priorities are:
 4. Use train.py + scroll4_vis.py as current canonical executable paths
 5. Interpret metric gains against visual readability, not alone
 6. Inspect hard_negs/*.jsonl trend to understand failure mode shifts
+7. For adding new scroll/fragment data, follow section 3 (Data Acquisition Pipeline)
+
+New zarr locations to be aware of:
+
+- /media/jeff/Seagate/ves_zarrs2/20230709155141.zarr (Scroll 2 segment, no labels)
+  source: paths/20230709155141/layers/, 64 depth slices, 2806 × 8499 spatial
 
 This README is intended to be updated as the process evolves, especially when strategy changes around scroll4 targeting and tile objective calibration.
