@@ -531,3 +531,12 @@ channel-mixing-prob=0.0 throughout (confirmed best from campaign 1).
 - axis: skip_conn
 - why: pure residual backbone with no attention; isolates residual benefit
 - expected: separates skip-connection effect from attention effect
+
+
+### Test 06: cmp_arch_search_2026_06_10_t06_residual_no_cbam
+- started_at: 2026-06-10 21:52:31 UTC
+- status: started
+- arch: v2_residual_no_cbam
+- axis: skip_conn
+- why: pure residual backbone with no attention; isolates residual benefit
+- expected: separates skip-connection effect from attention effect

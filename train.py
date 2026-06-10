@@ -92,8 +92,11 @@ def _apply_cli_overrides(c: Config, args):
 
 def set_seed(seed=42):
     """sets the seed for reproducibility across all relevant libraries"""
-    torch.backends.cudnn.deterministic = True
+    # benchmark=True: cuDNN profiles algorithms on the first batch and caches the winner
+    # deterministic=True would conflict — it prevents caching, causing re-benchmarking
+    # on every forward pass and growing cuDNN workspace memory until OOM
     torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = False
     torch.cuda.manual_seed_all(seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
