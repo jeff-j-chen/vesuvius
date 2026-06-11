@@ -1056,3 +1056,106 @@ than from simply training longer, mining harder, or adding more scalar metrics.
 - 2026-06-10 19:00:40 UTC | arch=v2_slim_head | readability_last=0.3583658039569855 | probe_easy=0.5033379793167114 | probe_hard=0.32816827297210693 | next=02:t02_no_cbam
 - 2026-06-10 19:25:39 UTC | arch=v2_no_cbam | readability_last=0.3439983129501343 | probe_easy=0.45745721459388733 | probe_hard=0.33790063858032227 | next=05:t05_residual
 - 2026-06-10 21:33:19 UTC | arch=v2_residual | readability_last=0.3671565353870392 | probe_easy=0.538194477558136 | probe_hard=0.33517420291900635 | next=06:t06_residual_no_cbam
+- 2026-06-11 00:25:59 UTC | arch=v2_residual_no_cbam | readability_last=0.38947218656539917 | probe_easy=0.533713698387146 | probe_hard=0.327567458152771 | next=07:t07_bottleneck
+- 2026-06-11 01:00:28 UTC | arch=v2_bottleneck | readability_last=0.3672417104244232 | probe_easy=0.5214803814888 | probe_hard=0.2905004918575287 | next=08:t08_preact_res
+- 2026-06-11 01:49:38 UTC | arch=v2_preact_res | readability_last=0.39589226245880127 | probe_easy=0.5143392086029053 | probe_hard=0.331453800201416 | next=09:t09_wider_shallow
+- 2026-06-11 03:07:28 UTC | arch=v2_wider_shallow failed rc=1 | next=10:t10_slim_all
+- 2026-06-11 03:10:07 UTC | arch=v2_slim_all failed rc=1 | next=11:t11_deeper
+- 2026-06-11 03:38:11 UTC | arch=v2_deeper | readability_last=0.3658023774623871 | probe_easy=0.5286292433738708 | probe_hard=0.3292204439640045 | next=12:t12_factorized_depth
+- 2026-06-11 03:38:41 UTC | arch=v2_factorized_depth failed rc=1 | next=13:t13_asymmetric_first
+- 2026-06-11 04:05:01 UTC | arch=v2_asymmetric_first | readability_last=0.3522029221057892 | probe_easy=0.5046372413635254 | probe_hard=0.319334477186203 | next=14:t14_strided_conv
+- 2026-06-11 04:08:43 UTC | arch=v2_strided_conv failed rc=1 | next=15:t15_dual_pool
+- 2026-06-11 04:39:38 UTC | arch=v2_dual_pool failed rc=1 | next=16:t16_group_norm
+- 2026-06-11 05:00:37 UTC | arch=v2_group_norm | readability_last=0.3136395514011383 | probe_easy=0.43343716859817505 | probe_hard=0.33525943756103516 | next=18:t18_depth_project
+- 2026-06-11 05:20:08 UTC | arch=v2_depth_project | readability_last=0.32897841930389404 | probe_easy=0.4560369849205017 | probe_hard=0.34989169239997864 | next=03:t03_se_only
+- 2026-06-11 05:37:47 UTC | arch=v2_se_only | readability_last=0.3516099154949188 | probe_easy=0.5106854438781738 | probe_hard=0.3324577808380127 | next=04:t04_eca
+- 2026-06-11 05:59:13 UTC | arch=v2_eca | readability_last=0.36237865686416626 | probe_easy=0.4989055097103119 | probe_hard=0.36170288920402527 | next=19:t19_two_stream
+
+
+## ## Automated Campaign Log (arch_search3_2026_06_10)
+
+- campaign 3 started
+- 2026-06-11 06:12:50 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=02:t02_preact_deep
+- 2026-06-11 06:12:50 UTC | arch=v3_preact_deep | readability_last=None | probe_hard=None | next=03:t03_res_no_cbam_deep
+- 2026-06-11 06:12:50 UTC | arch=v3_res_no_cbam_deep | readability_last=None | probe_hard=None | next=04:t04_deeper_no_cbam
+- 2026-06-11 06:12:50 UTC | arch=v3_deeper_no_cbam | readability_last=None | probe_hard=None | next=05:t05_preact_deep_3pool
+- 2026-06-11 06:12:50 UTC | arch=v3_preact_deep_3pool | readability_last=None | probe_hard=None | next=06:t06_depth_attn
+- 2026-06-11 06:12:50 UTC | arch=v3_depth_attn | readability_last=None | probe_hard=None | next=07:t07_depth_squeeze
+- 2026-06-11 06:12:50 UTC | arch=v3_depth_squeeze | readability_last=None | probe_hard=None | next=08:t08_fpn
+- 2026-06-11 06:12:50 UTC | arch=v3_fpn | readability_last=None | probe_hard=None | next=09:t09_multiscale_pool
+- 2026-06-11 06:12:50 UTC | arch=v3_multiscale_pool | readability_last=None | probe_hard=None | next=10:t10_nonlocal
+- 2026-06-11 06:12:50 UTC | arch=v3_nonlocal | readability_last=None | probe_hard=None | next=11:t11_spatial_attn_pool
+- 2026-06-11 06:12:50 UTC | arch=v3_spatial_attn_pool | readability_last=None | probe_hard=None | next=12:t12_preact_gem
+- 2026-06-11 06:12:50 UTC | arch=v3_preact_gem | readability_last=None | probe_hard=None | next=13:t13_preact_dual_pool
+- 2026-06-11 06:12:50 UTC | arch=v3_preact_dual_pool | readability_last=None | probe_hard=None | next=14:t14_preact_asym
+- 2026-06-11 06:12:50 UTC | arch=v3_preact_asym | readability_last=None | probe_hard=None | next=15:t15_dilated_preact
+- 2026-06-11 06:12:50 UTC | arch=v3_dilated_preact | readability_last=None | probe_hard=None | next=16:t16_preact_bottleneck
+- 2026-06-11 06:12:50 UTC | arch=v3_preact_bottleneck | readability_last=None | probe_hard=None | next=17:t17_preact_eca
+- 2026-06-11 06:12:50 UTC | arch=v3_preact_eca | readability_last=None | probe_hard=None | next=18:t18_instance_norm
+- 2026-06-11 06:12:50 UTC | arch=v3_instance_norm | readability_last=None | probe_hard=None | next=19:t19_preact_wide
+- 2026-06-11 06:12:50 UTC | arch=v3_preact_wide | readability_last=None | probe_hard=None | next=20:t20_res_no_cbam_v2_clean
+- 2026-06-11 06:12:50 UTC | arch=v2_residual_no_cbam | readability_last=None | probe_hard=None | next=none
+- 2026-06-11 06:16:16 UTC | arch=v2_two_stream | readability_last=0.2875801920890808 | probe_easy=0.41064974665641785 | probe_hard=0.30742567777633667 | next=17:t17_no_norm_drop
+- 2026-06-11 06:16:50 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=02:t02_preact_deep
+- 2026-06-11 06:16:50 UTC | arch=v3_preact_deep | readability_last=None | probe_hard=None | next=03:t03_res_no_cbam_deep
+- 2026-06-11 06:16:50 UTC | arch=v3_res_no_cbam_deep | readability_last=None | probe_hard=None | next=04:t04_deeper_no_cbam
+- 2026-06-11 06:16:50 UTC | arch=v3_deeper_no_cbam | readability_last=None | probe_hard=None | next=05:t05_preact_deep_3pool
+- 2026-06-11 06:16:50 UTC | arch=v3_preact_deep_3pool | readability_last=None | probe_hard=None | next=06:t06_depth_attn
+- 2026-06-11 06:16:50 UTC | arch=v3_depth_attn | readability_last=None | probe_hard=None | next=07:t07_depth_squeeze
+- 2026-06-11 06:16:50 UTC | arch=v3_depth_squeeze | readability_last=None | probe_hard=None | next=08:t08_fpn
+- 2026-06-11 06:16:50 UTC | arch=v3_fpn | readability_last=None | probe_hard=None | next=09:t09_multiscale_pool
+- 2026-06-11 06:16:50 UTC | arch=v3_multiscale_pool | readability_last=None | probe_hard=None | next=10:t10_nonlocal
+- 2026-06-11 06:16:50 UTC | arch=v3_nonlocal | readability_last=None | probe_hard=None | next=11:t11_spatial_attn_pool
+- 2026-06-11 06:16:50 UTC | arch=v3_spatial_attn_pool | readability_last=None | probe_hard=None | next=12:t12_preact_gem
+- 2026-06-11 06:16:50 UTC | arch=v3_preact_gem | readability_last=None | probe_hard=None | next=13:t13_preact_dual_pool
+- 2026-06-11 06:16:50 UTC | arch=v3_preact_dual_pool | readability_last=None | probe_hard=None | next=14:t14_preact_asym
+- 2026-06-11 06:16:50 UTC | arch=v3_preact_asym | readability_last=None | probe_hard=None | next=15:t15_dilated_preact
+- 2026-06-11 06:16:50 UTC | arch=v3_dilated_preact | readability_last=None | probe_hard=None | next=16:t16_preact_bottleneck
+- 2026-06-11 06:16:50 UTC | arch=v3_preact_bottleneck | readability_last=None | probe_hard=None | next=17:t17_preact_eca
+- 2026-06-11 06:16:50 UTC | arch=v3_preact_eca | readability_last=None | probe_hard=None | next=18:t18_focal_gamma1
+- 2026-06-11 06:16:50 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=19:t19_focal_gamma2
+- 2026-06-11 06:16:50 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=20:t20_focal_gamma3
+- 2026-06-11 06:16:50 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=none
+- 2026-06-11 06:29:25 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=02:t02_linear_head
+- 2026-06-11 06:29:25 UTC | arch=v3_linear_head | readability_last=None | probe_hard=None | next=03:t03_depth_project_deep
+- 2026-06-11 06:29:25 UTC | arch=v3_depth_project_deep | readability_last=None | probe_hard=None | next=04:t04_smooth_sigma1
+- 2026-06-11 06:29:25 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=05:t05_smooth_sigma2
+- 2026-06-11 06:29:25 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=06:t06_depth_attn
+- 2026-06-11 06:29:25 UTC | arch=v3_depth_attn | readability_last=None | probe_hard=None | next=07:t07_depth_squeeze
+- 2026-06-11 06:29:25 UTC | arch=v3_depth_squeeze | readability_last=None | probe_hard=None | next=08:t08_fpn
+- 2026-06-11 06:29:25 UTC | arch=v3_fpn | readability_last=None | probe_hard=None | next=09:t09_multiscale_pool
+- 2026-06-11 06:29:25 UTC | arch=v3_multiscale_pool | readability_last=None | probe_hard=None | next=10:t10_nonlocal
+- 2026-06-11 06:29:25 UTC | arch=v3_nonlocal | readability_last=None | probe_hard=None | next=11:t11_spatial_attn_pool
+- 2026-06-11 06:29:25 UTC | arch=v3_spatial_attn_pool | readability_last=None | probe_hard=None | next=12:t12_preact_gem
+- 2026-06-11 06:29:25 UTC | arch=v3_preact_gem | readability_last=None | probe_hard=None | next=13:t13_preact_dual_pool
+- 2026-06-11 06:29:25 UTC | arch=v3_preact_dual_pool | readability_last=None | probe_hard=None | next=14:t14_preact_asym
+- 2026-06-11 06:29:25 UTC | arch=v3_preact_asym | readability_last=None | probe_hard=None | next=15:t15_dilated_preact
+- 2026-06-11 06:29:25 UTC | arch=v3_dilated_preact | readability_last=None | probe_hard=None | next=16:t16_preact_bottleneck
+- 2026-06-11 06:29:25 UTC | arch=v3_preact_bottleneck | readability_last=None | probe_hard=None | next=17:t17_preact_eca
+- 2026-06-11 06:29:25 UTC | arch=v3_preact_eca | readability_last=None | probe_hard=None | next=18:t18_focal_gamma1
+- 2026-06-11 06:29:25 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=19:t19_focal_gamma2
+- 2026-06-11 06:29:25 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=20:t20_focal_gamma3
+- 2026-06-11 06:29:25 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=none
+- 2026-06-11 06:52:46 UTC | arch=v3_preact_baseline failed rc=1 | next=02:t02_linear_head
+- 2026-06-11 06:53:26 UTC | arch=v3_linear_head failed rc=1 | next=03:t03_depth_project_deep
+- 2026-06-11 06:54:06 UTC | arch=v3_depth_project_deep failed rc=1 | next=04:t04_smooth_sigma1
+- 2026-06-11 06:54:45 UTC | arch=v3_preact_baseline failed rc=1 | next=05:t05_smooth_sigma2
+- 2026-06-11 06:55:26 UTC | arch=v3_preact_baseline failed rc=1 | next=06:t06_depth_attn
+- 2026-06-11 06:56:08 UTC | arch=v3_depth_attn failed rc=1 | next=07:t07_depth_squeeze
+- 2026-06-11 06:56:48 UTC | arch=v3_depth_squeeze failed rc=1 | next=08:t08_fpn
+- 2026-06-11 06:57:30 UTC | arch=v3_fpn failed rc=1 | next=09:t09_multiscale_pool
+- 2026-06-11 06:58:15 UTC | arch=v3_multiscale_pool failed rc=1 | next=10:t10_nonlocal
+- 2026-06-11 06:58:59 UTC | arch=v3_nonlocal failed rc=1 | next=11:t11_spatial_attn_pool
+- 2026-06-11 07:47:51 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=02:t02_linear_head
+- 2026-06-11 08:24:45 UTC | arch=v3_linear_head | readability_last=None | probe_hard=None | next=03:t03_depth_project_deep
+- 2026-06-11 08:37:43 UTC | arch=v3_depth_project_deep failed rc=1 | next=04:t04_smooth_sigma1
+- 2026-06-11 09:10:06 UTC | arch=v3_preact_baseline failed rc=1 | next=05:t05_smooth_sigma2
+- 2026-06-11 09:47:42 UTC | arch=v3_preact_baseline | readability_last=None | probe_hard=None | next=06:t06_depth_attn
+- 2026-06-11 10:23:32 UTC | arch=v3_depth_attn | readability_last=None | probe_hard=None | next=07:t07_depth_squeeze
+- 2026-06-11 10:46:59 UTC | arch=v3_depth_squeeze | readability_last=None | probe_hard=None | next=08:t08_fpn
+- 2026-06-11 11:22:26 UTC | arch=v3_fpn | readability_last=None | probe_hard=None | next=09:t09_multiscale_pool
+- 2026-06-11 11:59:55 UTC | arch=v3_multiscale_pool | readability_last=None | probe_hard=None | next=10:t10_nonlocal
+- 2026-06-11 12:49:04 UTC | arch=v3_nonlocal | readability_last=None | probe_hard=None | next=11:t11_spatial_attn_pool
+- 2026-06-11 13:35:03 UTC | arch=v3_spatial_attn_pool | readability_last=None | probe_hard=None | next=12:t12_preact_gem
+- 2026-06-11 14:17:21 UTC | arch=v3_preact_gem | readability_last=None | probe_hard=None | next=13:t13_preact_dual_pool
+- 2026-06-11 14:54:12 UTC | arch=v3_preact_dual_pool | readability_last=None | probe_hard=None | next=14:t14_preact_asym

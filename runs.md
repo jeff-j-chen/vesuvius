@@ -540,3 +540,1301 @@ channel-mixing-prob=0.0 throughout (confirmed best from campaign 1).
 - axis: skip_conn
 - why: pure residual backbone with no attention; isolates residual benefit
 - expected: separates skip-connection effect from attention effect
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t06_residual_no_cbam_10_14-52-44
+- results: valid_f1_last=0.38814643025398254, readability_last=0.38947218656539917, probe_easy_last=0.533713698387146, probe_hard_last=0.327567458152771
+- next_planned_based_on_results: 07:t07_bottleneck
+
+
+### Test 07: cmp_arch_search_2026_06_10_t07_bottleneck
+- started_at: 2026-06-11 00:25:59 UTC
+- status: started
+- arch: v2_bottleneck
+- axis: skip_conn
+- why: bottleneck residual (1×1 reduce→3×3→1×1 expand + skip); ResNet-50 style
+- expected: parameter efficiency with residual flow; less overfitting
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t07_bottleneck_10_17-26-15
+- results: valid_f1_last=0.23493975400924683, readability_last=0.3672417104244232, probe_easy_last=0.5214803814888, probe_hard_last=0.2905004918575287
+- next_planned_based_on_results: 08:t08_preact_res
+
+
+### Test 08: cmp_arch_search_2026_06_10_t08_preact_res
+- started_at: 2026-06-11 01:00:28 UTC
+- status: started
+- arch: v2_preact_res
+- axis: skip_conn
+- why: pre-activation residual (BN→ReLU→conv + skip); ResNet-v2 style
+- expected: cleaner skip-path gradient; better generalization in deeper nets
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t08_preact_res_10_18-00-44
+- results: valid_f1_last=0.33447566628456116, readability_last=0.39589226245880127, probe_easy_last=0.5143392086029053, probe_hard_last=0.331453800201416
+- next_planned_based_on_results: 09:t09_wider_shallow
+
+
+### Test 09: cmp_arch_search_2026_06_10_t09_wider_shallow
+- started_at: 2026-06-11 01:49:38 UTC
+- status: started
+- arch: v2_wider_shallow
+- axis: depth_width
+- why: 2 conv blocks (1→64→256), fewer abstraction levels; less spatial compression
+- expected: better readability if 3 pooling stages over-compresses 32×32 input
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 10:t10_slim_all
+
+
+### Test 10: cmp_arch_search_2026_06_10_t10_slim_all
+- started_at: 2026-06-11 03:07:28 UTC
+- status: started
+- arch: v2_slim_all
+- axis: depth_width
+- why: narrow backbone (1→16→64→128) + slim head; tests overparameterization
+- expected: less overfitting; improved probe scores if model is too large
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 11:t11_deeper
+
+
+### Test 11: cmp_arch_search_2026_06_10_t11_deeper
+- started_at: 2026-06-11 03:10:07 UTC
+- status: started
+- arch: v2_deeper
+- axis: depth_width
+- why: 4-block backbone (32→128→256→384) with 3 MaxPool stages
+- expected: more abstraction capacity; useful if current 3-level model under-fits
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t11_deeper_10_20-10-19
+- results: valid_f1_last=0.3493708372116089, readability_last=0.3658023774623871, probe_easy_last=0.5286292433738708, probe_hard_last=0.3292204439640045
+- next_planned_based_on_results: 12:t12_factorized_depth
+
+
+### Test 12: cmp_arch_search_2026_06_10_t12_factorized_depth
+- started_at: 2026-06-11 03:38:11 UTC
+- status: started
+- arch: v2_factorized_depth
+- axis: factorized
+- why: each conv block replaced by (3,1,1) depth-conv + (1,3,3) spatial-conv in sequence; models depth and spatial axes independently; matches the depth-ordering insight
+- expected: improved readability by respecting scroll geometry structure
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 13:t13_asymmetric_first
+
+
+### Test 13: cmp_arch_search_2026_06_10_t13_asymmetric_first
+- started_at: 2026-06-11 03:38:41 UTC
+- status: started
+- arch: v2_asymmetric_first
+- axis: factorized
+- why: first conv is (1,3,3) — spatial only, no depth mixing; depth mixing begins at layer 2; delays depth-spatial coupling
+- expected: cleaner first-layer spatial features before depth integration
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t13_asymmetric_first_10_20-38-54
+- results: valid_f1_last=0.3698113262653351, readability_last=0.3522029221057892, probe_easy_last=0.5046372413635254, probe_hard_last=0.319334477186203
+- next_planned_based_on_results: 14:t14_strided_conv
+
+
+### Test 14: cmp_arch_search_2026_06_10_t14_strided_conv
+- started_at: 2026-06-11 04:05:01 UTC
+- status: started
+- arch: v2_strided_conv
+- axis: pooling
+- why: replace MaxPool3d with strided Conv3d; learnable downsampling may preserve weak ink signals that max-pool discards
+- expected: better weak-signal retention; improved hard-probe scores
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 15:t15_dual_pool
+
+
+### Test 15: cmp_arch_search_2026_06_10_t15_dual_pool
+- started_at: 2026-06-11 04:08:43 UTC
+- status: started
+- arch: v2_dual_pool
+- axis: pooling
+- why: concat global avg + global max pool (512-dim input to head); avg captures mean activation, max captures peak ink evidence
+- expected: complementary pooling signals; improved score separation
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 16:t16_group_norm
+
+
+### Test 16: cmp_arch_search_2026_06_10_t16_group_norm
+- started_at: 2026-06-11 04:39:38 UTC
+- status: started
+- arch: v2_group_norm
+- axis: normalization
+- why: GroupNorm(8, ch) instead of BatchNorm3d; batch-size independent statistics; more stable with highly variable ink/background ratio per batch
+- expected: more consistent training, better cross-scroll generalization
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t16_group_norm_10_21-39-57
+- results: valid_f1_last=0.2790810167789459, readability_last=0.3136395514011383, probe_easy_last=0.43343716859817505, probe_hard_last=0.33525943756103516
+- next_planned_based_on_results: 18:t18_depth_project
+
+
+### Test 18: cmp_arch_search_2026_06_10_t18_depth_project
+- started_at: 2026-06-11 05:00:37 UTC
+- status: started
+- arch: v2_depth_project
+- axis: architecture
+- why: reshape (B,1,D,H,W)→(B,D,H,W) and use a 2D CNN; treats 8 depth slices as independent channels (like RGB); removes depth-spatial entanglement entirely
+- expected: different failure modes; worth inspecting depth-channel weight patterns
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t18_depth_project_10_22-00-55
+- results: valid_f1_last=0.29936710000038147, readability_last=0.32897841930389404, probe_easy_last=0.4560369849205017, probe_hard_last=0.34989169239997864
+- next_planned_based_on_results: 03:t03_se_only
+
+
+### Test 03: cmp_arch_search_2026_06_10_t03_se_only
+- started_at: 2026-06-11 05:20:08 UTC
+- status: started
+- arch: v2_se_only
+- axis: attention
+- why: SE blocks (channel-only attention); removes spatial CBAM component
+- expected: lighter attention with channel recalibration; simpler than CBAM
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t03_se_only_10_22-20-22
+- results: valid_f1_last=0.3326771557331085, readability_last=0.3516099154949188, probe_easy_last=0.5106854438781738, probe_hard_last=0.3324577808380127
+- next_planned_based_on_results: 04:t04_eca
+
+
+### Test 04: cmp_arch_search_2026_06_10_t04_eca
+- started_at: 2026-06-11 05:37:47 UTC
+- status: started
+- arch: v2_eca
+- axis: attention
+- why: efficient channel attention (1D conv over channels, zero FC overhead)
+- expected: minimal parameter overhead with cross-channel recalibration
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t04_eca_10_22-38-00
+- results: valid_f1_last=0.28619447350502014, readability_last=0.36237865686416626, probe_easy_last=0.4989055097103119, probe_hard_last=0.36170288920402527
+- next_planned_based_on_results: 19:t19_two_stream
+
+
+### Test 19: cmp_arch_search_2026_06_10_t19_two_stream
+- started_at: 2026-06-11 05:59:13 UTC
+- status: started
+- arch: v2_two_stream
+- axis: architecture
+- why: parallel depth-stream (1D conv on spatial-averaged signal) + spatial-stream (2D conv on depth-averaged signal), merged before head; explicit decomposition of depth profile vs spatial texture
+- expected: each stream specializes; merged representation may be more discriminative
+
+
+## Automated Campaign arch_search3_2026_06_10
+
+arcitecture search campaign 3 — builds on preact_res and residual_no_cbam.
+
+
+### Test 01: cmp_arch_search3_2026_06_10_t01_preact_baseline
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: preact_scale
+- why: clean re-run of campaign 2 winner with all bug fixes (no hooks, correct cuDNN); establishes true control
+- expected: improved readability scores vs campaign 2 t08 due to bug fixes
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 02:t02_preact_deep
+
+
+### Test 02: cmp_arch_search3_2026_06_10_t02_preact_deep
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_preact_deep
+- axis: preact_scale
+- why: 5 preact residual blocks (2+2+1); campaign 2 showed deeper=better for hard probe
+- expected: best hard probe score in campaign; improved recall@1%fpr
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 03:t03_res_no_cbam_deep
+
+
+### Test 03: cmp_arch_search3_2026_06_10_t03_res_no_cbam_deep
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_res_no_cbam_deep
+- axis: preact_scale
+- why: 4-block plain residual (no cbam) — campaign 2 t06 readability winner made deeper
+- expected: top readability composite; hard probe competitive with t02
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 04:t04_deeper_no_cbam
+
+
+### Test 04: cmp_arch_search3_2026_06_10_t04_deeper_no_cbam
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_deeper_no_cbam
+- axis: preact_scale
+- why: 4-block post-act residual without attention — direct deeper version of t06 baseline
+- expected: readability scores similar to t03; shows whether preact or plain residual matters more at 4 blocks
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 05:t05_preact_deep_3pool
+
+
+### Test 05: cmp_arch_search3_2026_06_10_t05_preact_deep_3pool
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_preact_deep_3pool
+- axis: preact_scale
+- why: preact backbone with 4 blocks and 3 maxpool stages — mirrors t11_deeper topology with preact
+- expected: best hard probe if depth of abstraction drives hard-region sensitivity
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 06:t06_depth_attn
+
+
+### Test 06: cmp_arch_search3_2026_06_10_t06_depth_attn
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_depth_attn
+- axis: depth_axis
+- why: 1D attention over depth slices before second pool; learns which depth windows carry ink signal
+- expected: improved hard probe; more stable across depth-variable scrolls
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 07:t07_depth_squeeze
+
+
+### Test 07: cmp_arch_search3_2026_06_10_t07_depth_squeeze
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_depth_squeeze
+- axis: depth_axis
+- why: compress depth axis first via learned conv, then process spatially with 2D CNN; explicit separation: which depth has ink, then what does ink look like spatially
+- expected: different failure modes; may capture depth profile better than joint 3D conv
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 08:t08_fpn
+
+
+### Test 08: cmp_arch_search3_2026_06_10_t08_fpn
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_fpn
+- axis: multiscale
+- why: feature pyramid: pool features from stride-1, -2, -4 and concat; ink may be easier to detect at a different scale depending on region
+- expected: improved hard probe if hard-region ink appears at a different spatial frequency
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 09:t09_multiscale_pool
+
+
+### Test 09: cmp_arch_search3_2026_06_10_t09_multiscale_pool
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_multiscale_pool
+- axis: multiscale
+- why: spatial pyramid pooling (1x1, 2x2, 4x4); retains some spatial layout info lost by global pool
+- expected: complementary to fpn; preserves coarse spatial positions which global pool discards
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 10:t10_nonlocal
+
+
+### Test 10: cmp_arch_search3_2026_06_10_t10_nonlocal
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_nonlocal
+- axis: multiscale
+- why: non-local means block for long-range spatial context; an ink tile near other ink tiles should score higher — conv alone cannot capture this
+- expected: improved local contrast metric; may help hard probe if hard ink is clustered
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 11:t11_spatial_attn_pool
+
+
+### Test 11: cmp_arch_search3_2026_06_10_t11_spatial_attn_pool
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_spatial_attn_pool
+- axis: pooling
+- why: learned spatial attention weight map for global pooling instead of uniform average; in hard regions ink is spatially localized — uniform avg dilutes it
+- expected: improved hard probe precision; sharper response on ink-tile locations
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 12:t12_preact_gem
+
+
+### Test 12: cmp_arch_search3_2026_06_10_t12_preact_gem
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_preact_gem
+- axis: pooling
+- why: preact backbone + geometric mean pooling; emphasizes peak responses over uniform average
+- expected: better at detecting sparse/faint ink signal than avg pool
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 13:t13_preact_dual_pool
+
+
+### Test 13: cmp_arch_search3_2026_06_10_t13_preact_dual_pool
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_preact_dual_pool
+- axis: pooling
+- why: concat avg+max pool; avg captures mean level, max captures peak signal — both useful for faint ink
+- expected: improved score separation between hard-positive and hard-negative tiles
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 14:t14_preact_asym
+
+
+### Test 14: cmp_arch_search3_2026_06_10_t14_preact_asym
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_preact_asym
+- axis: structural
+- why: preact backbone + (1,3,3) first conv (spatial before depth coupling); t13 in campaign 2 showed this helps — now combined with proven preact backbone
+- expected: improved spatial feature quality; marginal readability improvement
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 15:t15_dilated_preact
+
+
+### Test 15: cmp_arch_search3_2026_06_10_t15_dilated_preact
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_dilated_preact
+- axis: structural
+- why: dilation=2 in 3rd conv block; larger receptive field without extra parameters; faint/diffuse ink patterns may be better captured at larger scale
+- expected: improved recall@1%fpr; better at diffuse low-contrast ink
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 16:t16_preact_bottleneck
+
+
+### Test 16: cmp_arch_search3_2026_06_10_t16_preact_bottleneck
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_preact_bottleneck
+- axis: structural
+- why: preact with bottleneck residuals (1x1→3x3→1x1); more layers at same cost → richer hierarchy
+- expected: competitive with preact_baseline with lower parameter count
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 17:t17_preact_eca
+
+
+### Test 17: cmp_arch_search3_2026_06_10_t17_preact_eca
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_preact_eca
+- axis: attention
+- why: preact residuals + ECA channel attention after each block; ECA was least harmful in campaign 2 — does it help on top of preact?
+- expected: marginal improvement over preact_baseline; ECA adds minimal overhead
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 18:t18_instance_norm
+
+
+### Test 18: cmp_arch_search3_2026_06_10_t18_instance_norm
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_instance_norm
+- axis: normalization
+- why: instance norm: each sample normalized independently — no batch coupling; batch norm statistics dominated by easy tiles may suppress hard tile gradients
+- expected: more uniform gradient signal; possibly improved hard probe at cost of easy
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 19:t19_preact_wide
+
+
+### Test 19: cmp_arch_search3_2026_06_10_t19_preact_wide
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v3_preact_wide
+- axis: preact_scale
+- why: 1→64→256→512 channels with preact residuals; tests capacity limit — is hard-region failure a capacity problem or a representation problem?
+- expected: if hard probe improves substantially: capacity was the bottleneck. if not: the failure is representational/distributional
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 20:t20_res_no_cbam_v2_clean
+
+
+### Test 20: cmp_arch_search3_2026_06_10_t20_res_no_cbam_v2_clean
+- started_at: 2026-06-11 06:12:50 UTC
+- status: started
+- arch: v2_residual_no_cbam
+- axis: preact_scale
+- why: campaign 2 t06 was best on readability composite but ran with hooks+cuDNN bugs; clean rerun establishes its true baseline for direct comparison
+- expected: better than its campaign 2 score; comparable to v3_preact_baseline
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: none
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs\cmp_arch_search_2026_06_10_t19_two_stream_10_22-59-28
+- results: valid_f1_last=0.2687224745750427, readability_last=0.2875801920890808, probe_easy_last=0.41064974665641785, probe_hard_last=0.30742567777633667
+- next_planned_based_on_results: 17:t17_no_norm_drop
+
+
+### Test 17: cmp_arch_search_2026_06_10_t17_no_norm_drop
+- started_at: 2026-06-11 06:16:16 UTC
+- status: started
+- arch: v2_no_norm_drop
+- axis: normalization
+- why: no BatchNorm at all, heavier dropout instead; BN creates statistical coupling between samples that may hurt generalization
+- expected: interesting baseline; slower convergence but possibly better calibration
+
+
+### Test 01: cmp_arch_search3_2026_06_10_t01_preact_baseline
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: preact_scale
+- why: clean re-run of campaign 2 winner with all bug fixes (no hooks, correct cuDNN); establishes true control
+- expected: improved readability scores vs campaign 2 t08 due to bug fixes
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 02:t02_preact_deep
+
+
+### Test 02: cmp_arch_search3_2026_06_10_t02_preact_deep
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_preact_deep
+- axis: preact_scale
+- why: 5 preact residual blocks (2+2+1); campaign 2 showed deeper=better for hard probe
+- expected: best hard probe score in campaign; improved recall@1%fpr
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 03:t03_res_no_cbam_deep
+
+
+### Test 03: cmp_arch_search3_2026_06_10_t03_res_no_cbam_deep
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_res_no_cbam_deep
+- axis: preact_scale
+- why: 4-block plain residual (no cbam) — campaign 2 t06 readability winner made deeper
+- expected: top readability composite; hard probe competitive with t02
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 04:t04_deeper_no_cbam
+
+
+### Test 04: cmp_arch_search3_2026_06_10_t04_deeper_no_cbam
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_deeper_no_cbam
+- axis: preact_scale
+- why: 4-block post-act residual without attention — direct deeper version of t06 baseline
+- expected: readability scores similar to t03; shows whether preact or plain residual matters more at 4 blocks
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 05:t05_preact_deep_3pool
+
+
+### Test 05: cmp_arch_search3_2026_06_10_t05_preact_deep_3pool
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_preact_deep_3pool
+- axis: preact_scale
+- why: preact backbone with 4 blocks and 3 maxpool stages — mirrors t11_deeper topology with preact
+- expected: best hard probe if depth of abstraction drives hard-region sensitivity
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 06:t06_depth_attn
+
+
+### Test 06: cmp_arch_search3_2026_06_10_t06_depth_attn
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_depth_attn
+- axis: depth_axis
+- why: 1D attention over depth slices before second pool; learns which depth windows carry ink signal
+- expected: improved hard probe; more stable across depth-variable scrolls
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 07:t07_depth_squeeze
+
+
+### Test 07: cmp_arch_search3_2026_06_10_t07_depth_squeeze
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_depth_squeeze
+- axis: depth_axis
+- why: compress depth axis first via learned conv, then process spatially with 2D CNN; explicit separation: which depth has ink, then what does ink look like spatially
+- expected: different failure modes; may capture depth profile better than joint 3D conv
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 08:t08_fpn
+
+
+### Test 08: cmp_arch_search3_2026_06_10_t08_fpn
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_fpn
+- axis: multiscale
+- why: feature pyramid: pool features from stride-1, -2, -4 and concat; ink may be easier to detect at a different scale depending on region
+- expected: improved hard probe if hard-region ink appears at a different spatial frequency
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 09:t09_multiscale_pool
+
+
+### Test 09: cmp_arch_search3_2026_06_10_t09_multiscale_pool
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_multiscale_pool
+- axis: multiscale
+- why: spatial pyramid pooling (1x1, 2x2, 4x4); retains some spatial layout info lost by global pool
+- expected: complementary to fpn; preserves coarse spatial positions which global pool discards
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 10:t10_nonlocal
+
+
+### Test 10: cmp_arch_search3_2026_06_10_t10_nonlocal
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_nonlocal
+- axis: multiscale
+- why: non-local means block for long-range spatial context; an ink tile near other ink tiles should score higher — conv alone cannot capture this
+- expected: improved local contrast metric; may help hard probe if hard ink is clustered
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 11:t11_spatial_attn_pool
+
+
+### Test 11: cmp_arch_search3_2026_06_10_t11_spatial_attn_pool
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_spatial_attn_pool
+- axis: pooling
+- why: learned spatial attention weight map for global pooling instead of uniform average; in hard regions ink is spatially localized — uniform avg dilutes it
+- expected: improved hard probe precision; sharper response on ink-tile locations
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 12:t12_preact_gem
+
+
+### Test 12: cmp_arch_search3_2026_06_10_t12_preact_gem
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_preact_gem
+- axis: pooling
+- why: preact backbone + geometric mean pooling; emphasizes peak responses over uniform average
+- expected: better at detecting sparse/faint ink signal than avg pool
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 13:t13_preact_dual_pool
+
+
+### Test 13: cmp_arch_search3_2026_06_10_t13_preact_dual_pool
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_preact_dual_pool
+- axis: pooling
+- why: concat avg+max pool; avg captures mean level, max captures peak signal — both useful for faint ink
+- expected: improved score separation between hard-positive and hard-negative tiles
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 14:t14_preact_asym
+
+
+### Test 14: cmp_arch_search3_2026_06_10_t14_preact_asym
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_preact_asym
+- axis: structural
+- why: preact backbone + (1,3,3) first conv (spatial before depth coupling); t13 in campaign 2 showed this helps — now combined with proven preact backbone
+- expected: improved spatial feature quality; marginal readability improvement
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 15:t15_dilated_preact
+
+
+### Test 15: cmp_arch_search3_2026_06_10_t15_dilated_preact
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_dilated_preact
+- axis: structural
+- why: dilation=2 in 3rd conv block; larger receptive field without extra parameters; faint/diffuse ink patterns may be better captured at larger scale
+- expected: improved recall@1%fpr; better at diffuse low-contrast ink
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 16:t16_preact_bottleneck
+
+
+### Test 16: cmp_arch_search3_2026_06_10_t16_preact_bottleneck
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_preact_bottleneck
+- axis: structural
+- why: preact with bottleneck residuals (1x1→3x3→1x1); more layers at same cost → richer hierarchy
+- expected: competitive with preact_baseline with lower parameter count
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 17:t17_preact_eca
+
+
+### Test 17: cmp_arch_search3_2026_06_10_t17_preact_eca
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_preact_eca
+- axis: attention
+- why: preact residuals + ECA channel attention after each block; ECA was least harmful in campaign 2 — does it help on top of preact?
+- expected: marginal improvement over preact_baseline; ECA adds minimal overhead
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 18:t18_focal_gamma1
+
+
+### Test 18: cmp_arch_search3_2026_06_10_t18_focal_gamma1
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: focal
+- why: focal loss gamma=1 on preact baseline; mild down-weighting of easy background tiles; directly tests whether the training signal (not architecture) is the bottleneck for hard ROI
+- expected: lower overall F1 but improved hard probe; broader, less conservative predictions
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 19:t19_focal_gamma2
+
+
+### Test 19: cmp_arch_search3_2026_06_10_t19_focal_gamma2
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: focal
+- why: focal loss gamma=2 (standard focal loss setting); stronger suppression of easy negatives; classic medical imaging setting for rare/subtle positive detection
+- expected: further improvement in hard probe recall; possible F1 drop as model becomes more sensitive
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 20:t20_focal_gamma3
+
+
+### Test 20: cmp_arch_search3_2026_06_10_t20_focal_gamma3
+- started_at: 2026-06-11 06:16:50 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: focal
+- why: focal loss gamma=3; aggressive suppression of easy negatives; tests whether even stronger focus on hard examples improves hard ROI at cost of easy metrics
+- expected: highest hard probe recall if focal down-weighting is the key; may degrade easy ROI significantly
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: none
+
+
+### Test 01: cmp_arch_search3_2026_06_10_t01_preact_baseline
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: preact_scale
+- why: clean re-run of campaign 2 winner with all bug fixes (no hooks, correct cuDNN); establishes true control
+- expected: improved readability scores vs campaign 2 t08 due to bug fixes
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 02:t02_linear_head
+
+
+### Test 02: cmp_arch_search3_2026_06_10_t02_linear_head
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_linear_head
+- axis: simplification
+- why: most aggressive head simplification: pool → single Linear(256,1), no intermediate layers; t01_slim_head (2-layer) was visually best in campaign 2 — does 1-layer go further? fewer head parameters = less per-tile discrimination = coarser, more coherent outputs
+- expected: lower F1 but improved coherence score; prediction map looks less scattered
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 03:t03_depth_project_deep
+
+
+### Test 03: cmp_arch_search3_2026_06_10_t03_depth_project_deep
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_depth_project_deep
+- axis: simplification
+- why: deeper 2D CNN treating depth as channels (64→256→512→512, 3rd conv block); t18_depth_project was 2nd best visually in campaign 2 — adding depth may help further; fully decouples depth selection from spatial pattern recognition
+- expected: best visual coherence in the campaign; improved coverage_recall
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 04:t04_smooth_sigma1
+
+
+### Test 04: cmp_arch_search3_2026_06_10_t04_smooth_sigma1
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: smoothing
+- why: test-time Gaussian blur (sigma=1 tile) on prediction maps; no training change; directly tests whether scattered predictions are inherently coherent but display as noise; if coherence metric improves substantially: the model already knows the right regions
+- expected: improved coherence and visual readability; slight loss of topk precision
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 05:t05_smooth_sigma2
+
+
+### Test 05: cmp_arch_search3_2026_06_10_t05_smooth_sigma2
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: smoothing
+- why: stronger Gaussian blur (sigma=2 tiles); tests how much spatial integration helps; if sigma=1 improves hard ROI more than sigma=2: predictions are locally structured but not globally structured — different conclusion than sigma=1 < sigma=2
+- expected: higher coherence than t04 but possible loss of local contrast
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 06:t06_depth_attn
+
+
+### Test 06: cmp_arch_search3_2026_06_10_t06_depth_attn
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_depth_attn
+- axis: depth_axis
+- why: 1D attention over depth slices before second pool; learns which depth windows carry ink signal
+- expected: improved hard probe; more stable across depth-variable scrolls
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 07:t07_depth_squeeze
+
+
+### Test 07: cmp_arch_search3_2026_06_10_t07_depth_squeeze
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_depth_squeeze
+- axis: depth_axis
+- why: compress depth axis first via learned conv, then process spatially with 2D CNN; explicit separation: which depth has ink, then what does ink look like spatially
+- expected: different failure modes; may capture depth profile better than joint 3D conv
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 08:t08_fpn
+
+
+### Test 08: cmp_arch_search3_2026_06_10_t08_fpn
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_fpn
+- axis: multiscale
+- why: feature pyramid: pool features from stride-1, -2, -4 and concat; ink may be easier to detect at a different scale depending on region
+- expected: improved hard probe if hard-region ink appears at a different spatial frequency
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 09:t09_multiscale_pool
+
+
+### Test 09: cmp_arch_search3_2026_06_10_t09_multiscale_pool
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_multiscale_pool
+- axis: multiscale
+- why: spatial pyramid pooling (1x1, 2x2, 4x4); retains some spatial layout info lost by global pool
+- expected: complementary to fpn; preserves coarse spatial positions which global pool discards
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 10:t10_nonlocal
+
+
+### Test 10: cmp_arch_search3_2026_06_10_t10_nonlocal
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_nonlocal
+- axis: multiscale
+- why: non-local means block for long-range spatial context; an ink tile near other ink tiles should score higher — conv alone cannot capture this
+- expected: improved local contrast metric; may help hard probe if hard ink is clustered
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 11:t11_spatial_attn_pool
+
+
+### Test 11: cmp_arch_search3_2026_06_10_t11_spatial_attn_pool
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_spatial_attn_pool
+- axis: pooling
+- why: learned spatial attention weight map for global pooling instead of uniform average; in hard regions ink is spatially localized — uniform avg dilutes it
+- expected: improved hard probe precision; sharper response on ink-tile locations
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 12:t12_preact_gem
+
+
+### Test 12: cmp_arch_search3_2026_06_10_t12_preact_gem
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_preact_gem
+- axis: pooling
+- why: preact backbone + geometric mean pooling; emphasizes peak responses over uniform average
+- expected: better at detecting sparse/faint ink signal than avg pool
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 13:t13_preact_dual_pool
+
+
+### Test 13: cmp_arch_search3_2026_06_10_t13_preact_dual_pool
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_preact_dual_pool
+- axis: pooling
+- why: concat avg+max pool; avg captures mean level, max captures peak signal — both useful for faint ink
+- expected: improved score separation between hard-positive and hard-negative tiles
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 14:t14_preact_asym
+
+
+### Test 14: cmp_arch_search3_2026_06_10_t14_preact_asym
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_preact_asym
+- axis: structural
+- why: preact backbone + (1,3,3) first conv (spatial before depth coupling); t13 in campaign 2 showed this helps — now combined with proven preact backbone
+- expected: improved spatial feature quality; marginal readability improvement
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 15:t15_dilated_preact
+
+
+### Test 15: cmp_arch_search3_2026_06_10_t15_dilated_preact
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_dilated_preact
+- axis: structural
+- why: dilation=2 in 3rd conv block; larger receptive field without extra parameters; faint/diffuse ink patterns may be better captured at larger scale
+- expected: improved recall@1%fpr; better at diffuse low-contrast ink
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 16:t16_preact_bottleneck
+
+
+### Test 16: cmp_arch_search3_2026_06_10_t16_preact_bottleneck
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_preact_bottleneck
+- axis: structural
+- why: preact with bottleneck residuals (1x1→3x3→1x1); more layers at same cost → richer hierarchy
+- expected: competitive with preact_baseline with lower parameter count
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 17:t17_preact_eca
+
+
+### Test 17: cmp_arch_search3_2026_06_10_t17_preact_eca
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_preact_eca
+- axis: attention
+- why: preact residuals + ECA channel attention after each block; ECA was least harmful in campaign 2 — does it help on top of preact?
+- expected: marginal improvement over preact_baseline; ECA adds minimal overhead
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 18:t18_focal_gamma1
+
+
+### Test 18: cmp_arch_search3_2026_06_10_t18_focal_gamma1
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: focal
+- why: focal loss gamma=1 on preact baseline; mild down-weighting of easy background tiles; directly tests whether the training signal (not architecture) is the bottleneck for hard ROI
+- expected: lower overall F1 but improved hard probe; broader, less conservative predictions
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 19:t19_focal_gamma2
+
+
+### Test 19: cmp_arch_search3_2026_06_10_t19_focal_gamma2
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: focal
+- why: focal loss gamma=2 (standard focal loss setting); stronger suppression of easy negatives; classic medical imaging setting for rare/subtle positive detection
+- expected: further improvement in hard probe recall; possible F1 drop as model becomes more sensitive
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 20:t20_focal_gamma3
+
+
+### Test 20: cmp_arch_search3_2026_06_10_t20_focal_gamma3
+- started_at: 2026-06-11 06:29:25 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: focal
+- why: focal loss gamma=3; aggressive suppression of easy negatives; tests whether even stronger focus on hard examples improves hard ROI at cost of easy metrics
+- expected: highest hard probe recall if focal down-weighting is the key; may degrade easy ROI significantly
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: none
+
+
+### Test 01: cmp_arch_search3_2026_06_10_t01_preact_baseline
+- started_at: 2026-06-11 06:31:19 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: preact_scale
+- why: clean re-run of campaign 2 winner with all bug fixes (no hooks, correct cuDNN); establishes true control
+- expected: improved readability scores vs campaign 2 t08 due to bug fixes
+
+
+### Test 01: cmp_arch_search3_2026_06_10_t01_preact_baseline
+- started_at: 2026-06-11 06:32:19 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: preact_scale
+- why: clean re-run of campaign 2 winner with all bug fixes (no hooks, correct cuDNN); establishes true control
+- expected: improved readability scores vs campaign 2 t08 due to bug fixes
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 02:t02_linear_head
+
+
+### Test 02: cmp_arch_search3_2026_06_10_t02_linear_head
+- started_at: 2026-06-11 06:52:46 UTC
+- status: started
+- arch: v3_linear_head
+- axis: simplification
+- why: most aggressive head simplification: pool → single Linear(256,1), no intermediate layers; t01_slim_head (2-layer) was visually best in campaign 2 — does 1-layer go further? fewer head parameters = less per-tile discrimination = coarser, more coherent outputs
+- expected: lower F1 but improved coherence score; prediction map looks less scattered
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 03:t03_depth_project_deep
+
+
+### Test 03: cmp_arch_search3_2026_06_10_t03_depth_project_deep
+- started_at: 2026-06-11 06:53:26 UTC
+- status: started
+- arch: v3_depth_project_deep
+- axis: simplification
+- why: deeper 2D CNN treating depth as channels (64→256→512→512, 3rd conv block); t18_depth_project was 2nd best visually in campaign 2 — adding depth may help further; fully decouples depth selection from spatial pattern recognition
+- expected: best visual coherence in the campaign; improved coverage_recall
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 04:t04_smooth_sigma1
+
+
+### Test 04: cmp_arch_search3_2026_06_10_t04_smooth_sigma1
+- started_at: 2026-06-11 06:54:06 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: smoothing
+- why: test-time Gaussian blur (sigma=1 tile) on prediction maps; no training change; directly tests whether scattered predictions are inherently coherent but display as noise; if coherence metric improves substantially: the model already knows the right regions
+- expected: improved coherence and visual readability; slight loss of topk precision
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 05:t05_smooth_sigma2
+
+
+### Test 05: cmp_arch_search3_2026_06_10_t05_smooth_sigma2
+- started_at: 2026-06-11 06:54:45 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: smoothing
+- why: stronger Gaussian blur (sigma=2 tiles); tests how much spatial integration helps; if sigma=1 improves hard ROI more than sigma=2: predictions are locally structured but not globally structured — different conclusion than sigma=1 < sigma=2
+- expected: higher coherence than t04 but possible loss of local contrast
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 06:t06_depth_attn
+
+
+### Test 06: cmp_arch_search3_2026_06_10_t06_depth_attn
+- started_at: 2026-06-11 06:55:26 UTC
+- status: started
+- arch: v3_depth_attn
+- axis: depth_axis
+- why: 1D attention over depth slices before second pool; learns which depth windows carry ink signal
+- expected: improved hard probe; more stable across depth-variable scrolls
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 07:t07_depth_squeeze
+
+
+### Test 07: cmp_arch_search3_2026_06_10_t07_depth_squeeze
+- started_at: 2026-06-11 06:56:08 UTC
+- status: started
+- arch: v3_depth_squeeze
+- axis: depth_axis
+- why: compress depth axis first via learned conv, then process spatially with 2D CNN; explicit separation: which depth has ink, then what does ink look like spatially
+- expected: different failure modes; may capture depth profile better than joint 3D conv
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 08:t08_fpn
+
+
+### Test 08: cmp_arch_search3_2026_06_10_t08_fpn
+- started_at: 2026-06-11 06:56:48 UTC
+- status: started
+- arch: v3_fpn
+- axis: multiscale
+- why: feature pyramid: pool features from stride-1, -2, -4 and concat; ink may be easier to detect at a different scale depending on region
+- expected: improved hard probe if hard-region ink appears at a different spatial frequency
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 09:t09_multiscale_pool
+
+
+### Test 09: cmp_arch_search3_2026_06_10_t09_multiscale_pool
+- started_at: 2026-06-11 06:57:30 UTC
+- status: started
+- arch: v3_multiscale_pool
+- axis: multiscale
+- why: spatial pyramid pooling (1x1, 2x2, 4x4); retains some spatial layout info lost by global pool
+- expected: complementary to fpn; preserves coarse spatial positions which global pool discards
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 10:t10_nonlocal
+
+
+### Test 10: cmp_arch_search3_2026_06_10_t10_nonlocal
+- started_at: 2026-06-11 06:58:15 UTC
+- status: started
+- arch: v3_nonlocal
+- axis: multiscale
+- why: non-local means block for long-range spatial context; an ink tile near other ink tiles should score higher — conv alone cannot capture this
+- expected: improved local contrast metric; may help hard probe if hard ink is clustered
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 11:t11_spatial_attn_pool
+
+
+### Test 11: cmp_arch_search3_2026_06_10_t11_spatial_attn_pool
+- started_at: 2026-06-11 06:58:59 UTC
+- status: started
+- arch: v3_spatial_attn_pool
+- axis: pooling
+- why: learned spatial attention weight map for global pooling instead of uniform average; in hard regions ink is spatially localized — uniform avg dilutes it
+- expected: improved hard probe precision; sharper response on ink-tile locations
+
+
+### Test 01: cmp_arch_search3_2026_06_10_t01_preact_baseline
+- started_at: 2026-06-11 07:00:11 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: preact_scale
+- why: clean re-run of campaign 2 winner with all bug fixes (no hooks, correct cuDNN); establishes true control
+- expected: improved readability scores vs campaign 2 t08 due to bug fixes
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 02:t02_linear_head
+
+
+### Test 02: cmp_arch_search3_2026_06_10_t02_linear_head
+- started_at: 2026-06-11 07:47:51 UTC
+- status: started
+- arch: v3_linear_head
+- axis: simplification
+- why: most aggressive head simplification: pool → single Linear(256,1), no intermediate layers; t01_slim_head (2-layer) was visually best in campaign 2 — does 1-layer go further? fewer head parameters = less per-tile discrimination = coarser, more coherent outputs
+- expected: lower F1 but improved coherence score; prediction map looks less scattered
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 03:t03_depth_project_deep
+
+
+### Test 03: cmp_arch_search3_2026_06_10_t03_depth_project_deep
+- started_at: 2026-06-11 08:24:45 UTC
+- status: started
+- arch: v3_depth_project_deep
+- axis: simplification
+- why: deeper 2D CNN treating depth as channels (64→256→512→512, 3rd conv block); t18_depth_project was 2nd best visually in campaign 2 — adding depth may help further; fully decouples depth selection from spatial pattern recognition
+- expected: best visual coherence in the campaign; improved coverage_recall
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 04:t04_smooth_sigma1
+
+
+### Test 04: cmp_arch_search3_2026_06_10_t04_smooth_sigma1
+- started_at: 2026-06-11 08:37:43 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: smoothing
+- why: test-time Gaussian blur (sigma=1 tile) on prediction maps; no training change; directly tests whether scattered predictions are inherently coherent but display as noise; if coherence metric improves substantially: the model already knows the right regions
+- expected: improved coherence and visual readability; slight loss of topk precision
+- status: failed
+- return_code: 1
+- next_planned_based_on_results: 05:t05_smooth_sigma2
+
+
+### Test 05: cmp_arch_search3_2026_06_10_t05_smooth_sigma2
+- started_at: 2026-06-11 09:10:06 UTC
+- status: started
+- arch: v3_preact_baseline
+- axis: smoothing
+- why: stronger Gaussian blur (sigma=2 tiles); tests how much spatial integration helps; if sigma=1 improves hard ROI more than sigma=2: predictions are locally structured but not globally structured — different conclusion than sigma=1 < sigma=2
+- expected: higher coherence than t04 but possible loss of local contrast
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 06:t06_depth_attn
+
+
+### Test 06: cmp_arch_search3_2026_06_10_t06_depth_attn
+- started_at: 2026-06-11 09:47:42 UTC
+- status: started
+- arch: v3_depth_attn
+- axis: depth_axis
+- why: 1D attention over depth slices before second pool; learns which depth windows carry ink signal
+- expected: improved hard probe; more stable across depth-variable scrolls
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 07:t07_depth_squeeze
+
+
+### Test 07: cmp_arch_search3_2026_06_10_t07_depth_squeeze
+- started_at: 2026-06-11 10:23:32 UTC
+- status: started
+- arch: v3_depth_squeeze
+- axis: depth_axis
+- why: compress depth axis first via learned conv, then process spatially with 2D CNN; explicit separation: which depth has ink, then what does ink look like spatially
+- expected: different failure modes; may capture depth profile better than joint 3D conv
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 08:t08_fpn
+
+
+### Test 08: cmp_arch_search3_2026_06_10_t08_fpn
+- started_at: 2026-06-11 10:46:59 UTC
+- status: started
+- arch: v3_fpn
+- axis: multiscale
+- why: feature pyramid: pool features from stride-1, -2, -4 and concat; ink may be easier to detect at a different scale depending on region
+- expected: improved hard probe if hard-region ink appears at a different spatial frequency
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 09:t09_multiscale_pool
+
+
+### Test 09: cmp_arch_search3_2026_06_10_t09_multiscale_pool
+- started_at: 2026-06-11 11:22:26 UTC
+- status: started
+- arch: v3_multiscale_pool
+- axis: multiscale
+- why: spatial pyramid pooling (1x1, 2x2, 4x4); retains some spatial layout info lost by global pool
+- expected: complementary to fpn; preserves coarse spatial positions which global pool discards
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 10:t10_nonlocal
+
+
+### Test 10: cmp_arch_search3_2026_06_10_t10_nonlocal
+- started_at: 2026-06-11 11:59:55 UTC
+- status: started
+- arch: v3_nonlocal
+- axis: multiscale
+- why: non-local means block for long-range spatial context; an ink tile near other ink tiles should score higher — conv alone cannot capture this
+- expected: improved local contrast metric; may help hard probe if hard ink is clustered
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 11:t11_spatial_attn_pool
+
+
+### Test 11: cmp_arch_search3_2026_06_10_t11_spatial_attn_pool
+- started_at: 2026-06-11 12:49:04 UTC
+- status: started
+- arch: v3_spatial_attn_pool
+- axis: pooling
+- why: learned spatial attention weight map for global pooling instead of uniform average; in hard regions ink is spatially localized — uniform avg dilutes it
+- expected: improved hard probe precision; sharper response on ink-tile locations
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 12:t12_preact_gem
+
+
+### Test 12: cmp_arch_search3_2026_06_10_t12_preact_gem
+- started_at: 2026-06-11 13:35:03 UTC
+- status: started
+- arch: v3_preact_gem
+- axis: pooling
+- why: preact backbone + geometric mean pooling; emphasizes peak responses over uniform average
+- expected: better at detecting sparse/faint ink signal than avg pool
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 13:t13_preact_dual_pool
+
+
+### Test 13: cmp_arch_search3_2026_06_10_t13_preact_dual_pool
+- started_at: 2026-06-11 14:17:21 UTC
+- status: started
+- arch: v3_preact_dual_pool
+- axis: pooling
+- why: concat avg+max pool; avg captures mean level, max captures peak signal — both useful for faint ink
+- expected: improved score separation between hard-positive and hard-negative tiles
+- status: completed
+- run_dir: None
+- results: valid_f1_last=None, readability_last=None, probe_easy_last=None, probe_hard_last=None
+- next_planned_based_on_results: 14:t14_preact_asym
+
+
+### Test 14: cmp_arch_search3_2026_06_10_t14_preact_asym
+- started_at: 2026-06-11 14:54:12 UTC
+- status: started
+- arch: v3_preact_asym
+- axis: structural
+- why: preact backbone + (1,3,3) first conv (spatial before depth coupling); t13 in campaign 2 showed this helps — now combined with proven preact backbone
+- expected: improved spatial feature quality; marginal readability improvement
+
+
+### Test 03: cmp_arch_search3_2026_06_10_t03_depth_project_deep
+- started_at: 2026-06-11 15:23:18 UTC
+- status: started
+- arch: v3_depth_project_deep
+- axis: simplification
+- why: deeper 2D CNN treating depth as channels (64→256→512→512, 3rd conv block); t18_depth_project was 2nd best visually in campaign 2 — adding depth may help further; fully decouples depth selection from spatial pattern recognition
+- expected: best visual coherence in the campaign; improved coverage_recall

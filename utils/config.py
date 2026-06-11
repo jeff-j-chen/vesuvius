@@ -19,6 +19,9 @@ class DataConfig:
     # training-only depth window; inference still uses d_start/d_end
     train_d_start: int = 32
     train_d_end: int = 40
+    # gaussian blur applied to prediction maps at inference time (0 = off)
+    # promotes spatial coherence without changing what the model learns
+    smooth_sigma: float = 0.0
 
 @dataclass
 class DataloaderConfig:
@@ -42,11 +45,12 @@ class TrainingConfig:
     patience: int = 5
     lr_decay: float = 0.5
     save_int: int = 10
-    log_dir: str = './runs'
+    log_dir: str = './runs_campaign3'
     eval_int: int = 10
     test_int: int = 30
     probe_int: int = 5
     eval_aggregate: bool = True  # show one aggregated (depth-averaged) eval figure in addition to per-depth
+    focal_gamma: float = 0.0   # >0 activates focal loss: down-weights easy negatives, pushes gradient toward hard tiles
 
 @dataclass
 class FinetuneConfig:

@@ -61,6 +61,8 @@ def _apply_cli_overrides(c: Config, args):
 
     if args.no_hard_mining:
         c.hm.enabled = False
+    if args.focal_gamma is not None:
+        c.tra.focal_gamma = float(args.focal_gamma)
     if args.hm_frac is not None:
         c.hm.hm_frac = float(args.hm_frac)
     if args.hn_cutoff is not None:
@@ -81,6 +83,8 @@ def _apply_cli_overrides(c: Config, args):
         c.model.conv3_dilation = int(args.conv3_dilation)
     if args.arch is not None:
         c.model.arch = str(args.arch)
+    if args.smooth_sigma is not None:
+        c.data.smooth_sigma = float(args.smooth_sigma)
     if args.conv1_drop is not None:
         c.model.conv1_drop = float(args.conv1_drop)
     if args.conv2_drop is not None:
@@ -176,7 +180,8 @@ class Trainer:
         """trains the model on a single batch of data"""
         b_imgs = b_imgs.to(self.c.device)
         b_labels = b_labels.to(self.c.device).view(-1, 1)
-        mask = mask.to(self.c.device).view(-1, 1)
+        # mask is (B, 32, 32) per-pixel; collapse to per-tile (B, 1): tile is valid if any pixel is valid
+        mask = (mask.to(self.c.device).view(b_imgs.size(0), -1).sum(dim=1) > 0).float().unsqueeze(1)
 
         self.optimizer.zero_grad()
 
@@ -285,13 +290,14 @@ class Trainer:
         
         with torch.no_grad(), autocast(self.c.device):
             for b_imgs, b_labels, mask in tqdm(self.valid_loader, desc="Validating"):
-                if mask.sum() <= 0:
+                if mask.view(mask.size(0), -1).sum() <= 0:
                     print("[ERROR] Encountered batch with mask sum == 0 in validation. This block should not be loaded!")
                     continue
 
                 b_imgs = b_imgs.to(self.c.device)
                 b_labels = b_labels.to(self.c.device).view(-1, 1)
-                mask = mask.to(self.c.device).view(-1, 1)
+                # collapse per-pixel mask to per-tile (B, 1)
+                mask = (mask.to(self.c.device).view(b_imgs.size(0), -1).sum(dim=1) > 0).float().unsqueeze(1)
 
                 # forward pass
                 outputs = self.model(b_imgs)
@@ -355,7 +361,8 @@ class Trainer:
         current_lr = self.optimizer.param_groups[0]['lr']
         
         self.vis.log_epoch_metrics(epoch, self.model, train_metrics, val_metrics, current_lr, time_elapsed, self.params, self.pos_weight)
-        self.vis.writer.add_scalar("HardMining/Injected", train_metrics.get('hard_injected', 0), epoch)
+        if self.c.hm.enabled:
+            self.vis.writer.add_scalar("HardMining/Injected", train_metrics.get('hard_injected', 0), epoch)
 
     def run(self):
         """executes the main training loop for all epochs"""
@@ -414,6 +421,7 @@ def main():
     parser.add_argument("--l1-lambda", type=float, default=None, help="L1 regularization strength")
 
     parser.add_argument("--no-hard-mining", action="store_true", help="Disable hard mining entirely")
+    parser.add_argument("--focal-gamma", type=float, default=None, help="Focal loss gamma (0=BCE, 2.0=standard focal)")
     parser.add_argument("--hm-frac", type=float, default=None, help="Hard-mining sample fraction")
     parser.add_argument("--hn-cutoff", type=float, default=None, help="Hard-negative score cutoff")
     parser.add_argument("--hp-cutoff", type=float, default=None, help="Hard-positive score cutoff")
@@ -424,6 +432,7 @@ def main():
     parser.add_argument("--gem-p", type=float, default=None, help="Initial GeM pooling p")
     parser.add_argument("--conv3-dilation", type=int, default=None, help="Dilation for final conv stage")
     parser.add_argument("--arch", type=str, default=None, help="Model architecture variant (v1, v2_slim_head, ...)")    
+    parser.add_argument("--smooth-sigma", type=float, default=None, help="Gaussian blur sigma applied to inference prediction maps (0=off)")
     parser.add_argument("--conv1-drop", type=float, default=None, help="Dropout after first conv block")
     parser.add_argument("--conv2-drop", type=float, default=None, help="Dropout after second conv block")
     parser.add_argument("--fc1-drop", type=float, default=None, help="Dropout on first FC layers")

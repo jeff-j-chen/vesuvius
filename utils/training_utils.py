@@ -54,11 +54,30 @@ def create_optimizer_and_scheduler(model, config: Config):
     
     return optimizer, scheduler
 
+class FocalBCELoss(nn.Module):
+    """focal loss wrapper around BCE: (1-p_t)^gamma * BCE.
+    gamma=0 reduces to standard BCE; gamma>0 down-weights easy examples
+    so the gradient is dominated by hard-to-classify tiles."""
+    def __init__(self, pos_weight=None, gamma=2.0):
+        super().__init__()
+        self.gamma = gamma
+        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction='none')
+
+    def forward(self, logits, targets):
+        bce_loss = self.bce(logits, targets)
+        p_t = torch.exp(-bce_loss)              # probability of correct class
+        focal_weight = (1 - p_t) ** self.gamma
+        return focal_weight * bce_loss          # same shape as input; caller handles masking/reduction
+
+
 def create_loss_function(pos_weight, config: Config):
-    """creates the loss function, optionally with positional weights"""
-    return nn.BCEWithLogitsLoss(
-        pos_weight=pos_weight.to(config.device) if pos_weight is not None else None
-    )
+    """creates the loss function; focal loss when focal_gamma > 0"""
+    gamma = float(getattr(config.tra, 'focal_gamma', 0.0))
+    pw = pos_weight.to(config.device) if pos_weight is not None else None
+    if gamma > 0:
+        print(f"using focal loss with gamma={gamma}")
+        return FocalBCELoss(pos_weight=pw, gamma=gamma)
+    return nn.BCEWithLogitsLoss(pos_weight=pw, reduction='none')
 
 def calculate_metrics(y_true, y_pred, y_scores):
     """calculates comprehensive metrics for binary classification"""

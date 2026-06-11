@@ -32,6 +32,13 @@ from .training_utils import calculate_metrics
 if not hasattr(Image, "ANTIALIAS") and hasattr(Image, "Resampling"):
     setattr(Image, "ANTIALIAS", Image.Resampling.LANCZOS)
 
+# NaN tiles (outside mask) render as mid-gray instead of black-zero so the
+# train/valid split line is not confused with actual low-confidence predictions
+import copy as _copy
+_inferno_nan = _copy.copy(plt.cm.inferno)
+_inferno_nan.set_bad(color=(0.45, 0.45, 0.45, 1.0))
+plt.cm.register_cmap(name='inferno_nan', cmap=_inferno_nan)
+
 def group_by_depth(coords):
     """group tile coordinates by their depth offset"""
     grouped = defaultdict(list)
@@ -54,7 +61,7 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     W = x_range[1] - x_range[0]
     h_small = H // tile
     w_small = W // tile
-    pmap = np.zeros((h_small, w_small), dtype=np.float32)
+    pmap = np.full((h_small, w_small), np.nan, dtype=np.float32)
 
     # inference has no gradient overhead so use a much larger batch than training
     infer_bs = max(config.dl.batch_size * 8, 512)
@@ -109,6 +116,18 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+    # optional post-hoc spatial smoothing — only applied to valid (non-NaN) tiles
+    sigma = float(getattr(config.data, "smooth_sigma", 0.0))
+    if sigma > 0:
+        valid_mask = np.isfinite(pmap)
+        filled = np.where(valid_mask, pmap, 0.0)
+        filled = ndimage.gaussian_filter(filled, sigma=sigma)
+        weight = ndimage.gaussian_filter(valid_mask.astype(np.float32), sigma=sigma)
+        # normalize by the contribution of valid neighbors; leave NaN positions as NaN
+        with np.errstate(invalid='ignore'):
+            smoothed = np.where(weight > 0, filled / weight, np.nan)
+        pmap = np.clip(smoothed, 0.0, 1.0)
 
     return pmap
 
@@ -623,47 +642,64 @@ class TensorboardVisualizer:
         return spill_ratio, float(num_components), mean_component_size
 
     def _compute_readability_metrics(self, pred_map, label_binary, label_fraction, valid_tiles):
-        """compute readability-aligned scalar metrics for a prediction map"""
+        """compute readability-aligned scalar metrics for a prediction map.
+
+        composite redesigned to favour COVERAGE and SPATIAL COHERENCE over precision:
+          - removed: topk_precision, spill_good  (both reward high-precision / conservative abstention)
+          - added:   recall@5%fpr, pauc@5%fpr   (broader recall budget)
+          - added:   coverage_recall             (fraction of labeled ink tiles with score > 0.3)
+          - added:   coherence                   (mean_component_size, normalised)
+        """
         valid_scores = pred_map[valid_tiles]
         valid_labels = label_binary[valid_tiles].astype(int)
         valid_fraction = label_fraction[valid_tiles]
 
         local_contrast, local_ranking = self._compute_local_contrast_metrics(pred_map, label_binary, valid_tiles)
-        recall_at_1pct_fpr, partial_auc_at_1pct_fpr = self._compute_low_fpr_metrics(valid_scores, valid_labels)
+        recall_at_1pct_fpr, partial_auc_at_1pct_fpr = self._compute_low_fpr_metrics(valid_scores, valid_labels, max_fpr=0.01)
+        recall_at_5pct_fpr, partial_auc_at_5pct_fpr = self._compute_low_fpr_metrics(valid_scores, valid_labels, max_fpr=0.05)
         topk_precision = self._compute_topk_precision(valid_scores, valid_labels)
         fraction_corr_pearson, fraction_corr_spearman = self._compute_fraction_correlation(valid_scores, valid_fraction)
         spill_ratio, component_count, mean_component_size = self._compute_spill_metrics(pred_map, label_binary, valid_tiles)
 
-        contrast_norm = np.clip(np.nan_to_num(local_contrast, nan=0.0), 0.0, 1.0)
-        ranking_norm = np.clip(np.nan_to_num(local_ranking, nan=0.0), 0.0, 1.0)
-        recall_norm = np.clip(np.nan_to_num(recall_at_1pct_fpr, nan=0.0), 0.0, 1.0)
-        pauc_norm = np.clip(np.nan_to_num(partial_auc_at_1pct_fpr, nan=0.0), 0.0, 1.0)
-        topk_norm = np.clip(np.nan_to_num(topk_precision, nan=0.0), 0.0, 1.0)
-        corr_norm = np.clip((np.nan_to_num(fraction_corr_spearman, nan=-1.0) + 1.0) / 2.0, 0.0, 1.0)
-        spill_good = np.clip(1.0 - np.nan_to_num(spill_ratio, nan=1.0), 0.0, 1.0)
+        # coverage: fraction of labeled positive tiles that score above a moderate threshold
+        # measures whether the model is FINDING most of the ink, not just the easiest ink
+        COVERAGE_THRESHOLD = 0.3
+        pos_scores = pred_map[valid_tiles & label_binary]
+        coverage_recall = float(np.mean(pos_scores > COVERAGE_THRESHOLD)) if pos_scores.size > 0 else np.nan
 
-        readability_composite = float(np.mean([
-            contrast_norm,
-            ranking_norm,
-            recall_norm,
-            pauc_norm,
-            topk_norm,
-            corr_norm,
-            spill_good,
-        ]))
+        # coherence: normalise mean_component_size — larger blobs = more letter-like structure
+        # cap at 20 tiles (a reasonable stroke width in tile units); values above are noise
+        coherence = np.clip(np.nan_to_num(mean_component_size, nan=0.0) / 20.0, 0.0, 1.0)
+
+        contrast_norm   = np.clip(np.nan_to_num(local_contrast, nan=0.0), 0.0, 1.0)
+        ranking_norm    = np.clip(np.nan_to_num(local_ranking, nan=0.0), 0.0, 1.0)
+        # 1%fpr metrics still logged but excluded from composite (too strict, rewards abstention)
+        recall5_norm    = np.clip(np.nan_to_num(recall_at_5pct_fpr, nan=0.0), 0.0, 1.0)
+        pauc5_norm      = np.clip(np.nan_to_num(partial_auc_at_5pct_fpr, nan=0.0), 0.0, 1.0)
+        coverage_norm   = np.clip(np.nan_to_num(coverage_recall, nan=0.0), 0.0, 1.0)
+        corr_norm       = np.clip((np.nan_to_num(fraction_corr_spearman, nan=-1.0) + 1.0) / 2.0, 0.0, 1.0)
+
+        # weighted composite: coverage and coherence get 1.5× because they most directly
+        # capture whether a human would see readable structure in the prediction map
+        weights = [1.0, 1.0, 1.0, 1.0, 1.5, 1.0, 1.5]
+        terms   = [contrast_norm, ranking_norm, recall5_norm, pauc5_norm, coverage_norm, corr_norm, coherence]
+        readability_composite = float(np.average(terms, weights=weights))
 
         return {
-            "local_contrast": float(local_contrast),
-            "local_ranking": float(local_ranking),
-            "recall_at_1pct_fpr": float(recall_at_1pct_fpr),
-            "partial_auc_at_1pct_fpr": float(partial_auc_at_1pct_fpr),
-            "topk_precision": float(topk_precision),
+            "local_contrast":           float(local_contrast),
+            "local_ranking":            float(local_ranking),
+            "recall_at_1pct_fpr":       float(recall_at_1pct_fpr),
+            "partial_auc_at_1pct_fpr":  float(partial_auc_at_1pct_fpr),
+            "recall_at_5pct_fpr":       float(recall_at_5pct_fpr),
+            "partial_auc_at_5pct_fpr":  float(partial_auc_at_5pct_fpr),
+            "coverage_recall":          float(coverage_recall),
+            "topk_precision":           float(topk_precision),
             "ink_fraction_corr_pearson": float(fraction_corr_pearson),
             "ink_fraction_corr_spearman": float(fraction_corr_spearman),
-            "spill_ratio": float(spill_ratio),
-            "component_count": float(component_count),
-            "mean_component_size": float(mean_component_size),
-            "readability_composite": readability_composite,
+            "spill_ratio":              float(spill_ratio),
+            "component_count":          float(component_count),
+            "mean_component_size":      float(mean_component_size),
+            "readability_composite":    readability_composite,
         }
 
     def _aggregate_metric_dicts(self, metrics_list):
@@ -720,13 +756,25 @@ class TensorboardVisualizer:
             self.log_hyperparameters(params, pos_weight)
 
         if self.mode == 'train' and (epoch + 1) % self.c.tra.eval_int == 0:
-            self.add_evaluation_figures(epoch, model)
+            try:
+                self.add_evaluation_figures(epoch, model)
+            except Exception as e:
+                print(f"[ERROR] add_evaluation_figures failed at epoch {epoch}: {e}")
+                import traceback; traceback.print_exc()
 
         if self.mode == 'train' and (epoch + 1) % self.c.tra.test_int == 0:
-            self.add_test_figures(epoch, model)
+            try:
+                self.add_test_figures(epoch, model)
+            except Exception as e:
+                print(f"[ERROR] add_test_figures failed at epoch {epoch}: {e}")
+                import traceback; traceback.print_exc()
 
         if self.mode == 'train' and (epoch + 1) % self.probe_log_interval == 0:
-            self.add_probe_region_figures(epoch, model)
+            try:
+                self.add_probe_region_figures(epoch, model)
+            except Exception as e:
+                print(f"[ERROR] add_probe_region_figures failed at epoch {epoch}: {e}")
+                import traceback; traceback.print_exc()
 
         self.writer.flush()
 
@@ -954,8 +1002,9 @@ class TensorboardVisualizer:
         else:
             print("[HARD][Eval] mining disabled, skipping file write")
 
-        self.writer.add_scalar("HardMining/HardNegatives", hn_cnt, epoch)
-        self.writer.add_scalar("HardMining/HardPositives", hp_cnt, epoch)
+        if hm_enabled:
+            self.writer.add_scalar("HardMining/HardNegatives", hn_cnt, epoch)
+            self.writer.add_scalar("HardMining/HardPositives", hp_cnt, epoch)
 
         fig = self._create_hard_examples_overlay(mining_path) if mining_path else None
         if fig is not None:
@@ -1156,7 +1205,7 @@ class TensorboardVisualizer:
         fig, axes = plt.subplots(1, 2, figsize=(15, 9))
 
         ax_pred = axes[0]
-        im1 = ax_pred.imshow(full_pred, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+        im1 = ax_pred.imshow(full_pred, cmap='inferno_nan', vmin=0, vmax=1, aspect='equal')
         ax_pred.set_title(f'Predictions (Depth {d_start}-{d_end})', fontsize=9)
 
         split_pos = train_pred.shape[1] - 0.5
@@ -1164,7 +1213,7 @@ class TensorboardVisualizer:
         ax_pred.axis('off')
 
         ax_overlay = axes[1]
-        ax_overlay.imshow(full_pred, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+        ax_overlay.imshow(full_pred, cmap='inferno_nan', vmin=0, vmax=1, aspect='equal')
         ax_overlay.set_title(f'Overlay (Depth {d_start}-{d_end})', fontsize=9)
 
         if label_binary is not None:
@@ -1212,14 +1261,14 @@ class TensorboardVisualizer:
         for row, (full_pred, train_pred, d_start, d_end) in enumerate(all_pred_data):
             # left: raw prediction
             ax_pred = axes[row, 0]
-            ax_pred.imshow(full_pred, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+            ax_pred.imshow(full_pred, cmap='inferno_nan', vmin=0, vmax=1, aspect='equal')
             ax_pred.set_title(f'Depth {d_start}-{d_end}', fontsize=8)
             ax_pred.axvline(x=split_pos, color='red', linestyle='--', linewidth=0.8)
             ax_pred.axis('off')
 
             # right: same prediction + inklabel overlay
             ax_ov = axes[row, 1]
-            ax_ov.imshow(full_pred, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+            ax_ov.imshow(full_pred, cmap='inferno_nan', vmin=0, vmax=1, aspect='equal')
             ax_ov.set_title(f'Overlay {d_start}-{d_end}', fontsize=8)
             if label_binary is not None:
                 ov = np.zeros((*full_pred.shape, 4))
@@ -1254,7 +1303,7 @@ class TensorboardVisualizer:
 
         for idx, (pred, d_start, d_end) in enumerate(all_data):
             ax = axes[idx // cols, idx % cols]
-            im = ax.imshow(pred, cmap='inferno', vmin=0, vmax=1, aspect='equal')
+            im = ax.imshow(pred, cmap='inferno_nan', vmin=0, vmax=1, aspect='equal')
             ax.set_title(f'Depth Block {d_start}-{d_end}', fontsize=9)
             ax.axis('off')
 
@@ -1271,17 +1320,19 @@ class TensorboardVisualizer:
             return
 
         scalar_tags = {
-            "R_M/LocalContrast": aggregate_metrics.get("local_contrast", np.nan),
-            "R_M/LocalRanking": aggregate_metrics.get("local_ranking", np.nan),
-            "R_M/RecallAt1PctFPR": aggregate_metrics.get("recall_at_1pct_fpr", np.nan),
-            "R_M/PartialAUCAt1PctFPR": aggregate_metrics.get("partial_auc_at_1pct_fpr", np.nan),
-            "R_M/TopKPrecision": aggregate_metrics.get("topk_precision", np.nan),
-            "R_M/InkFractionPearson": aggregate_metrics.get("ink_fraction_corr_pearson", np.nan),
-            "R_M/InkFractionSpearman": aggregate_metrics.get("ink_fraction_corr_spearman", np.nan),
-            "R_M/SpillRatio": aggregate_metrics.get("spill_ratio", np.nan),
-            "R_M/ComponentCount": aggregate_metrics.get("component_count", np.nan),
-            "R_M/MeanComponentSize": aggregate_metrics.get("mean_component_size", np.nan),
-            "R_M/ReadabilityComposite": aggregate_metrics.get("readability_composite", np.nan),
+            "R_M/LocalContrast":            aggregate_metrics.get("local_contrast", np.nan),
+            "R_M/LocalRanking":             aggregate_metrics.get("local_ranking", np.nan),
+            "R_M/RecallAt1PctFPR":          aggregate_metrics.get("recall_at_1pct_fpr", np.nan),
+            "R_M/PartialAUCAt1PctFPR":      aggregate_metrics.get("partial_auc_at_1pct_fpr", np.nan),
+            "R_M/RecallAt5PctFPR":          aggregate_metrics.get("recall_at_5pct_fpr", np.nan),
+            "R_M/PartialAUCAt5PctFPR":      aggregate_metrics.get("partial_auc_at_5pct_fpr", np.nan),
+            "R_M/CoverageRecall":           aggregate_metrics.get("coverage_recall", np.nan),
+            "R_M/TopKPrecision":            aggregate_metrics.get("topk_precision", np.nan),
+            "R_M/InkFractionSpearman":      aggregate_metrics.get("ink_fraction_corr_spearman", np.nan),
+            "R_M/SpillRatio":               aggregate_metrics.get("spill_ratio", np.nan),
+            "R_M/ComponentCount":           aggregate_metrics.get("component_count", np.nan),
+            "R_M/MeanComponentSize":        aggregate_metrics.get("mean_component_size", np.nan),
+            "R_M/ReadabilityComposite":     aggregate_metrics.get("readability_composite", np.nan),
         }
 
         for tag, value in scalar_tags.items():
@@ -1300,34 +1351,36 @@ class TensorboardVisualizer:
         """map raw readability metrics into 0..1 values used by compass plot"""
         local_contrast = np.clip(np.nan_to_num(metrics.get("local_contrast", np.nan), nan=0.0), 0.0, 1.0)
         local_ranking = np.clip(np.nan_to_num(metrics.get("local_ranking", np.nan), nan=0.0), 0.0, 1.0)
-        recall_low_fpr = np.clip(np.nan_to_num(metrics.get("recall_at_1pct_fpr", np.nan), nan=0.0), 0.0, 1.0)
-        pauc_low_fpr = np.clip(np.nan_to_num(metrics.get("partial_auc_at_1pct_fpr", np.nan), nan=0.0), 0.0, 1.0)
-        topk = np.clip(np.nan_to_num(metrics.get("topk_precision", np.nan), nan=0.0), 0.0, 1.0)
-        spearman = np.clip((np.nan_to_num(metrics.get("ink_fraction_corr_spearman", np.nan), nan=-1.0) + 1.0) / 2.0, 0.0, 1.0)
-        spill_suppression = np.clip(1.0 - np.nan_to_num(metrics.get("spill_ratio", np.nan), nan=1.0), 0.0, 1.0)
-        composite = np.clip(np.nan_to_num(metrics.get("readability_composite", np.nan), nan=0.0), 0.0, 1.0)
+        local_contrast = np.clip(np.nan_to_num(metrics.get("local_contrast", np.nan), nan=0.0), 0.0, 1.0)
+        local_ranking  = np.clip(np.nan_to_num(metrics.get("local_ranking", np.nan), nan=0.0), 0.0, 1.0)
+        recall_5pct    = np.clip(np.nan_to_num(metrics.get("recall_at_5pct_fpr", np.nan), nan=0.0), 0.0, 1.0)
+        pauc_5pct      = np.clip(np.nan_to_num(metrics.get("partial_auc_at_5pct_fpr", np.nan), nan=0.0), 0.0, 1.0)
+        coverage       = np.clip(np.nan_to_num(metrics.get("coverage_recall", np.nan), nan=0.0), 0.0, 1.0)
+        spearman       = np.clip((np.nan_to_num(metrics.get("ink_fraction_corr_spearman", np.nan), nan=-1.0) + 1.0) / 2.0, 0.0, 1.0)
+        coherence      = np.clip(np.nan_to_num(metrics.get("mean_component_size", np.nan), nan=0.0) / 20.0, 0.0, 1.0)
+        composite      = np.clip(np.nan_to_num(metrics.get("readability_composite", np.nan), nan=0.0), 0.0, 1.0)
         return [
             float(local_contrast),
             float(local_ranking),
-            float(recall_low_fpr),
-            float(pauc_low_fpr),
-            float(topk),
+            float(recall_5pct),
+            float(pauc_5pct),
+            float(coverage),
             float(spearman),
-            float(spill_suppression),
+            float(coherence),
             float(composite),
         ]
 
     def _readability_good_targets(self):
-        """heuristic target values used as visual reference markers"""
+        """heuristic target values used as visual reference markers (updated for coverage focus)"""
         return {
-            "local_contrast": 0.20,
-            "local_ranking": 0.80,
-            "recall_at_1pct_fpr": 0.70,
-            "partial_auc_at_1pct_fpr": 0.60,
-            "topk_precision": 0.80,
-            "ink_fraction_corr_spearman": 0.50,
-            "spill_ratio": 0.20,
-            "readability_composite": 0.75,
+            "local_contrast":             0.15,
+            "local_ranking":              0.70,
+            "recall_at_5pct_fpr":         0.50,
+            "partial_auc_at_5pct_fpr":    0.40,
+            "coverage_recall":            0.40,
+            "ink_fraction_corr_spearman": 0.40,
+            "mean_component_size":        8.0,   # raw tile units; normalised by /20 in compass
+            "readability_composite":      0.60,
         }
 
     def _create_readability_compass_figure(self, aggregate_metrics, per_depth_metrics, depth_labels):
@@ -1335,11 +1388,11 @@ class TensorboardVisualizer:
         categories = [
             "local contrast",
             "local ranking",
-            "recall@1%fpr",
-            "pauc@1%fpr",
-            "top-k precision",
+            "recall@5%fpr",
+            "pauc@5%fpr",
+            "coverage@0.3",
             "spearman",
-            "spill suppression",
+            "coherence",
             "composite",
         ]
 
@@ -1386,33 +1439,33 @@ class TensorboardVisualizer:
     def _create_readability_summary_figure(self, aggregate_metrics, per_depth_metrics, depth_labels):
         """create a combined readability dashboard figure"""
         metric_keys = [
-            ("local_contrast", "local contrast"),
-            ("local_ranking", "ranking"),
-            ("recall_at_1pct_fpr", "recall@1%fpr"),
-            ("partial_auc_at_1pct_fpr", "pauc@1%fpr"),
-            ("topk_precision", "precision@k"),
-            ("ink_fraction_corr_spearman", "fraction corr"),
-            ("spill_ratio", "spill"),
-            ("readability_composite", "composite"),
+            ("local_contrast",            "local contrast"),
+            ("local_ranking",             "ranking"),
+            ("recall_at_5pct_fpr",        "recall@5%fpr"),
+            ("partial_auc_at_5pct_fpr",   "pauc@5%fpr"),
+            ("coverage_recall",           "coverage@0.3"),
+            ("ink_fraction_corr_spearman","fraction corr"),
+            ("mean_component_size",       "coherence"),
+            ("readability_composite",     "composite"),
         ]
 
         fig, axes = plt.subplots(1, 2, figsize=(18, 7))
 
-        # left: aggregate bar chart
         agg_labels = [label for _, label in metric_keys]
         agg_values = []
         for key, _ in metric_keys:
             value = float(np.nan_to_num(aggregate_metrics.get(key, np.nan), nan=0.0))
-            if key == "spill_ratio":
-                value = float(np.clip(1.0 - value, 0.0, 1.0))
+            # normalise coherence (mean_component_size) same way as composite: /20
+            if key == "mean_component_size":
+                value = float(np.clip(value / 20.0, 0.0, 1.0))
             agg_values.append(value)
 
         good_targets = self._readability_good_targets()
         good_values = []
         for key, _ in metric_keys:
             target = float(np.nan_to_num(good_targets.get(key, np.nan), nan=0.0))
-            if key == "spill_ratio":
-                target = float(np.clip(1.0 - target, 0.0, 1.0))
+            if key == "mean_component_size":
+                target = float(np.clip(target / 20.0, 0.0, 1.0))
             good_values.append(float(np.clip(target, 0.0, 1.0)))
 
         axes[0].bar(np.arange(len(agg_values)), agg_values, color="steelblue", alpha=0.85)
@@ -1420,7 +1473,7 @@ class TensorboardVisualizer:
         axes[0].set_xticks(np.arange(len(agg_values)))
         axes[0].set_xticklabels(agg_labels, rotation=35, ha="right")
         axes[0].set_ylim(0, 1)
-        axes[0].set_title("aggregate readability metrics\nspill shown as spill suppression")
+        axes[0].set_title("aggregate readability metrics (coverage + coherence focused)")
         axes[0].grid(True, alpha=0.3)
         axes[0].legend(loc="upper right", fontsize=8)
 
@@ -1487,8 +1540,9 @@ class TensorboardVisualizer:
             if aggregate_metrics:
                 probe_tag = spec["tag"]
                 for key, value in {
-                    f"R_M/Probe/{probe_tag}/LocalContrast": aggregate_metrics.get("local_contrast", np.nan),
-                    f"R_M/Probe/{probe_tag}/TopKPrecision": aggregate_metrics.get("topk_precision", np.nan),
+                    f"R_M/Probe/{probe_tag}/LocalContrast":        aggregate_metrics.get("local_contrast", np.nan),
+                    f"R_M/Probe/{probe_tag}/CoverageRecall":       aggregate_metrics.get("coverage_recall", np.nan),
+                    f"R_M/Probe/{probe_tag}/RecallAt5PctFPR":      aggregate_metrics.get("recall_at_5pct_fpr", np.nan),
                     f"R_M/Probe/{probe_tag}/ReadabilityComposite": aggregate_metrics.get("readability_composite", np.nan),
                 }.items():
                     if np.isfinite(value):

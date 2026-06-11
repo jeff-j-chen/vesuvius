@@ -844,28 +844,722 @@ class InkDetectorNoNorm(nn.Module):
         return self.classifier(self.pool(self.features(x)))
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# v3 architectures — campaign 3
+# design principles: build on preact_res + residual_no_cbam as proven base;
+# explore depth-axis specialization, multi-scale pooling, and attention pooling
+# to improve sensitivity to faint/subtle ink signals in hard regions
+#
+# NEW for revised campaign 3:
+#   v3_linear_head      — maximum simplification: pool + single linear layer
+#   v3_depth_project_deep — deeper 2D CNN (builds on t18 which was 2nd visually)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class InkDetectorLinearHead(nn.Module):
+    """v3_linear_head: preact backbone + single linear layer (pool → Linear(256,1)).
+    most aggressive simplification of the head possible while keeping the backbone.
+    if t01_slim_head (2-layer) was visually better than 5-layer, does 1-layer go further?
+    coarser head = fewer degrees of freedom = spatially smoother, more coherent outputs."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            PreActResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = _pool_layer(config)
+        # single linear: no intermediate projections, no non-linearity
+        self.classifier = nn.Sequential(nn.Flatten(), nn.Linear(256, 1))
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorDepthProjectDeep(nn.Module):
+    """v3_depth_project_deep: deeper 2D CNN treating depth as channels.
+    t18_depth_project (64→256→512, 2 maxpool) was 2nd best visually in campaign 2.
+    this version adds a 3rd conv block for more spatial abstraction depth.
+    depth-as-channels = decoupled depth selection + rich spatial processing."""
+    def __init__(self, config):
+        super().__init__()
+        depth = config.data.depth
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv2d(depth, 64, 3, padding=1, bias=False),
+            nn.BatchNorm2d(64).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.Conv2d(64, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.MaxPool2d(2), nn.Dropout2d(d1),
+            nn.Conv2d(256, 512, 3, padding=1, bias=False),
+            nn.BatchNorm2d(512).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.MaxPool2d(2), nn.Dropout2d(d2),
+            nn.Conv2d(512, 512, 3, padding=1, bias=False),
+            nn.BatchNorm2d(512).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.classifier = _slim_head(512, config.model.fc1_drop)
+
+    def forward(self, x):
+        x = x.squeeze(1)    # (B, 1, D, H, W) → (B, D, H, W)
+        return self.classifier(self.pool(self.features(x)))
+
+class DepthAttention1D(nn.Module):
+    """1D attention over the depth axis: learn which depth slices matter most.
+    applied after spatial global-avg-pool, before 3D pool — selects the ink-bearing depth."""
+    def __init__(self, depth):
+        super().__init__()
+        self.attn = nn.Sequential(
+            nn.Linear(depth, depth, bias=False),
+            nn.Tanh(),
+            nn.Linear(depth, depth, bias=False),
+            nn.Softmax(dim=-1),
+        )
+
+    def forward(self, x):
+        # x: (B, C, D, H, W) → spatial avg → (B, C, D) → per-depth weights
+        b, c, d, h, w = x.shape
+        spatial_avg = x.mean(dim=[3, 4])             # (B, C, D)
+        channel_avg = spatial_avg.mean(dim=1)        # (B, D)
+        weights = self.attn(channel_avg)             # (B, D)
+        weights = weights.view(b, 1, d, 1, 1)
+        return x * weights
+
+
+class SpatialAttnPool3d(nn.Module):
+    """learn a spatial attention map over (H,W), then use it to weight the global pool.
+    instead of uniform average, focuses pool on the most ink-relevant spatial locations."""
+    def __init__(self, channels):
+        super().__init__()
+        self.score = nn.Sequential(
+            nn.Conv3d(channels, 1, kernel_size=1, bias=False),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        # (B, C, D, H, W) → attention weights → weighted sum → (B, C, 1, 1, 1)
+        w = self.score(x)              # (B, 1, D, H, W)
+        return (x * w).sum(dim=[2, 3, 4], keepdim=True) / (w.sum(dim=[2, 3, 4], keepdim=True) + 1e-8)
+
+
+class NonLocal3D(nn.Module):
+    """non-local means block: each position attends to all others (embedded gaussian).
+    captures long-range spatial context — ink tiles near other ink tiles get stronger signal."""
+    def __init__(self, channels):
+        super().__init__()
+        mid = max(1, channels // 2)
+        self.theta = nn.Conv3d(channels, mid, 1, bias=False)
+        self.phi   = nn.Conv3d(channels, mid, 1, bias=False)
+        self.g     = nn.Conv3d(channels, mid, 1, bias=False)
+        self.out   = nn.Conv3d(mid, channels, 1, bias=False)
+        self.bn    = nn.BatchNorm3d(channels).to(dtype=torch.float32)
+
+    def forward(self, x):
+        b, c, d, h, w = x.shape
+        n = d * h * w
+        theta = self.theta(x).view(b, -1, n).permute(0, 2, 1)   # (B, N, C/2)
+        phi   = self.phi(x).view(b, -1, n)                       # (B, C/2, N)
+        attn  = torch.softmax(torch.bmm(theta, phi), dim=-1)     # (B, N, N)
+        g     = self.g(x).view(b, -1, n).permute(0, 2, 1)       # (B, N, C/2)
+        y     = torch.bmm(attn, g).permute(0, 2, 1).view(b, -1, d, h, w)
+        return x + self.bn(self.out(y))
+
+
+class InkDetectorPreActBaseline(nn.Module):
+    """v3_preact_baseline: clean re-run of v2_preact_res with all bug fixes applied.
+    establishes a fair control for campaign 3 without hook/cuDNN/OOM confounds."""
+    def __init__(self, config):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            PreActResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(config.model.conv1_drop),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(config.model.conv2_drop),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(256, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorPreActDeep(nn.Module):
+    """v3_preact_deep: 5 preact residual blocks (32→128→256→256, 3 maxpools).
+    hypothesis: t11_deeper had best hard probe; deeper preact may combine both strengths."""
+    def __init__(self, config):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            PreActResBlock3D(32), PreActResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128), PreActResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(config.model.conv1_drop),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(config.model.conv2_drop),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(256, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorPreActWide(nn.Module):
+    """v3_preact_wide: preact residuals with 1→64→256→512 channels.
+    more capacity in each layer; tests if width or depth is the key factor."""
+    def __init__(self, config):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 64, 3, padding=1, bias=False),
+            PreActResBlock3D(64),
+            nn.Conv3d(64, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(config.model.conv1_drop),
+            nn.Conv3d(256, 512, 3, padding=1, bias=False),
+            PreActResBlock3D(512),
+            nn.MaxPool3d(2), nn.Dropout3d(config.model.conv2_drop),
+            nn.BatchNorm3d(512).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(512, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorResNoCBAMDeep(nn.Module):
+    """v3_res_no_cbam_deep: residual_no_cbam (campaign 2 readability winner) made deeper.
+    t06 had the best readability; add a 4th block to push further."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            nn.BatchNorm3d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            ResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            nn.BatchNorm3d(128).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            ResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            ResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.Conv3d(256, 384, 3, padding=1, bias=False),
+            nn.BatchNorm3d(384).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.MaxPool3d(2),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(384, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorDepthAttn(nn.Module):
+    """v3_depth_attn: preact backbone + explicit 1D attention over depth slices.
+    ink appears at specific depth windows; learning which depths matter most should
+    help generalize from easy (clear-depth) to hard (ambiguous-depth) regions."""
+    def __init__(self, config):
+        super().__init__()
+        depth = config.data.depth
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.stem = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            PreActResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+        )
+        # depth attention before the second maxpool compresses the depth axis
+        self.depth_attn = DepthAttention1D(depth // 2)
+        self.late = nn.Sequential(
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(256, config.model.fc1_drop)
+
+    def forward(self, x):
+        x = self.stem(x)
+        x = self.depth_attn(x)
+        x = self.late(x)
+        return self.classifier(self.pool(x))
+
+
+class InkDetectorSpatialAttnPool(nn.Module):
+    """v3_spatial_attn_pool: preact backbone, replace global avg pool with spatial attention pool.
+    instead of uniform averaging, learns to weight spatial positions by ink relevance.
+    hypothesis: in hard regions the ink is spatially localized; uniform avg dilutes it."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            PreActResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = SpatialAttnPool3d(256)
+        self.classifier = _slim_head(256, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorNonLocal(nn.Module):
+    """v3_nonlocal: preact backbone with non-local means block at mid-level features.
+    long-range context: an ink tile surrounded by other ink tiles should score higher;
+    standard conv only has local receptive field at 32x32 scale."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.early = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            PreActResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+        )
+        self.nonlocal_block = NonLocal3D(128)
+        self.late = nn.Sequential(
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(256, config.model.fc1_drop)
+
+    def forward(self, x):
+        x = self.early(x)
+        x = self.nonlocal_block(x)
+        x = self.late(x)
+        return self.classifier(self.pool(x))
+
+
+class InkDetectorFPN(nn.Module):
+    """v3_fpn: feature pyramid network — merge features from stride-1, stride-2, stride-4.
+    coarser scales capture global context; finer scales capture local texture.
+    multi-scale fusion may help when ink signal strength varies across spatial frequency."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+
+        self.p1 = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            nn.BatchNorm3d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            ResBlock3D(32),
+        )
+        self.p2 = nn.Sequential(
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            nn.BatchNorm3d(128).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            ResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+        )
+        self.p3 = nn.Sequential(
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            ResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+        )
+
+        # lateral 1×1 projections to 64-channel for all levels
+        self.lat1 = nn.Conv3d(32, 64, 1, bias=False)
+        self.lat2 = nn.Conv3d(128, 64, 1, bias=False)
+        self.lat3 = nn.Conv3d(256, 64, 1, bias=False)
+
+        self.pool = nn.AdaptiveAvgPool3d(1)
+        # 3 levels × 64 ch = 192
+        self.classifier = _slim_head(192, config.model.fc1_drop)
+
+    def forward(self, x):
+        f1 = self.p1(x)
+        f2 = self.p2(f1)
+        f3 = self.p3(f2)
+        # pool each level to scalar then concat
+        v1 = self.pool(self.lat1(f1)).flatten(1)
+        v2 = self.pool(self.lat2(f2)).flatten(1)
+        v3 = self.pool(self.lat3(f3)).flatten(1)
+        return self.classifier(torch.cat([v1, v2, v3], dim=1))
+
+
+class InkDetectorMultiScalePool(nn.Module):
+    """v3_multiscale_pool: adaptive pool to 1×1, 2×2, 4×4 grids, then concat and classify.
+    spatial pyramid pooling captures both global and local response patterns.
+    the 4×4 grid preserves some spatial layout info lost by global pooling."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            PreActResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        # spatial dims after 2×maxpool on 32→8; depth 8→2
+        # adaptive_avg_pool3d output sizes: (1,1,1), (1,2,2), (1,4,4)
+        # → 256 + 256*4 + 256*16 = 256+1024+4096 too big; use depth-collapsed 2D pools instead
+        self.pool1 = nn.AdaptiveAvgPool3d((1, 1, 1))
+        self.pool2 = nn.AdaptiveAvgPool3d((1, 2, 2))
+        self.pool4 = nn.AdaptiveAvgPool3d((1, 4, 4))
+        # 256*(1 + 4 + 16) = 5376 — project down first
+        self.proj = nn.Linear(256 * (1 + 4 + 16), 256, bias=False)
+        self.classifier = _slim_head(256, config.model.fc1_drop)
+
+    def forward(self, x):
+        x = self.features(x)
+        v1 = self.pool1(x).flatten(1)    # 256
+        v2 = self.pool2(x).flatten(1)    # 256*4
+        v4 = self.pool4(x).flatten(1)    # 256*16
+        v = torch.relu(self.proj(torch.cat([v1, v2, v4], dim=1)))
+        return self.classifier(v)
+
+
+class InkDetectorInstanceNorm(nn.Module):
+    """v3_instance_norm: instance norm throughout instead of batch norm.
+    each sample normalized independently — no coupling between easy and hard tiles in a batch.
+    hypothesis: batch norm's mean is dominated by easy tiles, suppressing hard tile gradients."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+
+        def _block(in_ch, out_ch):
+            return nn.Sequential(
+                nn.Conv3d(in_ch, out_ch, 3, padding=1, bias=True),
+                nn.InstanceNorm3d(out_ch, affine=True),
+                nn.ReLU(inplace=True),
+            )
+
+        self.features = nn.Sequential(
+            _block(1, 32),
+            _block(32, 128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            _block(128, 256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(256, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorPreActECA(nn.Module):
+    """v3_preact_eca: preact residuals + ECA channel attention after each block.
+    ECA was the least harmful attention in campaign 2; combining with preact skip paths
+    may let attention help without corrupting gradient flow."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            PreActResBlock3D(32), ECA3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128), ECA3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256), ECA3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(256, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorPreActGeMPool(nn.Module):
+    """v3_preact_gem: preact backbone + GeM pooling (learnable p).
+    geometric mean pool emphasizes peak responses; may better capture sparse ink signal
+    vs global avg which is diluted by surrounding background voxels."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            PreActResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = GeMPool3d(p=float(getattr(config.model, "gem_p", 3.0)))
+        self.classifier = _slim_head(256, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorPreActDualPool(nn.Module):
+    """v3_preact_dual_pool: preact backbone + concat(avg_pool, max_pool).
+    avg captures background level; max captures peak ink signal.
+    both signals together may better separate faint ink from background than either alone."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            PreActResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.avg_pool = nn.AdaptiveAvgPool3d(1)
+        self.max_pool = nn.AdaptiveMaxPool3d(1)
+        self.classifier = _slim_head(512, config.model.fc1_drop)
+
+    def forward(self, x):
+        x = self.features(x)
+        return self.classifier(torch.cat([self.avg_pool(x).flatten(1),
+                                          self.max_pool(x).flatten(1)], dim=1))
+
+
+class InkDetectorPreActAsym(nn.Module):
+    """v3_preact_asym_first: preact backbone + asymmetric (1,3,3) first conv.
+    learn spatial features before coupling depth; campaign 2 showed this helps slightly.
+    combines the t13 structural insight with the proven preact backbone."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, (1, 3, 3), padding=(0, 1, 1), bias=False),
+            PreActResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(256, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorPreActBottleneck(nn.Module):
+    """v3_preact_bottleneck: preact backbone with bottleneck residuals (1×1→3×3→1×1).
+    fewer 3×3 operations → more layers at same compute cost → richer feature hierarchy."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            BottleneckBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            BottleneckBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            BottleneckBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(256, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorDeeperNoCBAM(nn.Module):
+    """v3_deeper_no_cbam: 4-block plain residual backbone (no attention anywhere).
+    t11_deeper had best hard probe; t06 (no CBAM) had best readability; combine both."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            nn.BatchNorm3d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            ResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            nn.BatchNorm3d(128).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            ResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            ResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.Conv3d(256, 384, 3, padding=1, bias=False),
+            nn.BatchNorm3d(384).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.MaxPool3d(2),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(384, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorPreActDeep3Pool(nn.Module):
+    """v3_preact_deep_3pool: preact + 3 maxpool stages (32→128→256→384).
+    matches t11_deeper topology but with preact residuals instead of plain CBAM conv.
+    direct test of whether preact gradient flow helps in the 4-block deep regime."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            PreActResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            nn.Conv3d(128, 256, 3, padding=1, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.Conv3d(256, 384, 3, padding=1, bias=False),
+            PreActResBlock3D(384),
+            nn.MaxPool3d(2),
+            nn.BatchNorm3d(384).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(384, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
+class InkDetectorDepthSqueeze(nn.Module):
+    """v3_depth_squeeze: collapse depth axis first via learned 1D conv → 2D spatial CNN.
+    explicitly separates depth selection from spatial pattern recognition.
+    if ink appears only at specific depths, learning which depth to select first is optimal."""
+    def __init__(self, config):
+        super().__init__()
+        depth = config.data.depth
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+
+        # learn to compress depth from D slices to 1 per channel (B,1,D,H,W) → (B,8,1,H,W)
+        self.depth_conv = nn.Sequential(
+            nn.Conv3d(1, depth, (depth, 1, 1), bias=False),
+            nn.BatchNorm3d(depth).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        # now treat result as (B, depth, 1, H, W); squeeze depth dim → 2D
+        # use 2D convolutions on (B, depth, H, W)
+        self.spatial = nn.Sequential(
+            nn.Conv2d(depth, 64, 3, padding=1, bias=False),
+            nn.BatchNorm2d(64).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.Conv2d(64, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.MaxPool2d(2), nn.Dropout2d(d1),
+            nn.Conv2d(256, 512, 3, padding=1, bias=False),
+            nn.BatchNorm2d(512).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.MaxPool2d(2), nn.Dropout2d(d2),
+        )
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.classifier = _slim_head(512, config.model.fc1_drop)
+
+    def forward(self, x):
+        x = self.depth_conv(x).squeeze(2)   # (B, depth, H, W)
+        x = self.spatial(x)
+        return self.classifier(self.pool(x))
+
+
+class InkDetectorDilatedPreAct(nn.Module):
+    """v3_dilated_preact: preact backbone with dilation=2 in the 3rd conv block.
+    larger receptive field at the deepest level captures more spatial context
+    without adding parameters; may detect diffuse/faint ink patterns better."""
+    def __init__(self, config):
+        super().__init__()
+        d1, d2 = config.model.conv1_drop, config.model.conv2_drop
+        self.features = nn.Sequential(
+            nn.Conv3d(1, 32, 3, padding=1, bias=False),
+            PreActResBlock3D(32),
+            nn.Conv3d(32, 128, 3, padding=1, bias=False),
+            PreActResBlock3D(128),
+            nn.MaxPool3d(2), nn.Dropout3d(d1),
+            # dilation=2 at this stage: receptive field doubled in each spatial dim
+            nn.Conv3d(128, 256, 3, padding=2, dilation=2, bias=False),
+            PreActResBlock3D(256),
+            nn.MaxPool3d(2), nn.Dropout3d(d2),
+            nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pool = _pool_layer(config)
+        self.classifier = _slim_head(256, config.model.fc1_drop)
+
+    def forward(self, x):
+        return self.classifier(self.pool(self.features(x)))
+
+
 _ARCH_MAP = {
-    "v1":                   InkDetector,
-    "v2_slim_head":         InkDetectorSlimHead,
-    "v2_no_cbam":           InkDetectorNoCBAM,
-    "v2_se_only":           InkDetectorSEOnly,
-    "v2_eca":               InkDetectorECA,
-    "v2_residual":          InkDetectorResidual,
-    "v2_residual_no_cbam":  InkDetectorResidualNoCBAM,
-    "v2_wider_shallow":     InkDetectorWiderShallow,
-    "v2_slim_all":          InkDetectorSlimAll,
-    "v2_factorized_depth":  InkDetectorFactorized,
-    "v2_asymmetric_first":  InkDetectorAsymFirst,
-    "v2_strided_conv":      InkDetectorStridedConv,
-    "v2_dual_pool":         InkDetectorDualPool,
-    "v2_group_norm":        InkDetectorGroupNorm,
-    "v2_depth_project":     InkDetectorDepthProject,
-    "v2_two_stream":        InkDetectorTwoStream,
-    "v2_inception_first":   InkDetectorInceptionFirst,
-    "v2_deeper":            InkDetectorDeeper,
-    "v2_bottleneck":        InkDetectorBottleneck,
-    "v2_preact_res":        InkDetectorPreActRes,
-    "v2_no_norm_drop":      InkDetectorNoNorm,
+    "v1":                       InkDetector,
+    "v2_slim_head":             InkDetectorSlimHead,
+    "v2_no_cbam":               InkDetectorNoCBAM,
+    "v2_se_only":               InkDetectorSEOnly,
+    "v2_eca":                   InkDetectorECA,
+    "v2_residual":              InkDetectorResidual,
+    "v2_residual_no_cbam":      InkDetectorResidualNoCBAM,
+    "v2_wider_shallow":         InkDetectorWiderShallow,
+    "v2_slim_all":              InkDetectorSlimAll,
+    "v2_factorized_depth":      InkDetectorFactorized,
+    "v2_asymmetric_first":      InkDetectorAsymFirst,
+    "v2_strided_conv":          InkDetectorStridedConv,
+    "v2_dual_pool":             InkDetectorDualPool,
+    "v2_group_norm":            InkDetectorGroupNorm,
+    "v2_depth_project":         InkDetectorDepthProject,
+    "v2_two_stream":            InkDetectorTwoStream,
+    "v2_inception_first":       InkDetectorInceptionFirst,
+    "v2_deeper":                InkDetectorDeeper,
+    "v2_bottleneck":            InkDetectorBottleneck,
+    "v2_preact_res":            InkDetectorPreActRes,
+    "v2_no_norm_drop":          InkDetectorNoNorm,
+    # v3 — campaign 3
+    "v3_preact_baseline":       InkDetectorPreActBaseline,
+    "v3_linear_head":           InkDetectorLinearHead,
+    "v3_depth_project_deep":    InkDetectorDepthProjectDeep,
+    "v3_preact_deep":           InkDetectorPreActDeep,
+    "v3_preact_wide":           InkDetectorPreActWide,
+    "v3_res_no_cbam_deep":      InkDetectorResNoCBAMDeep,
+    "v3_depth_attn":            InkDetectorDepthAttn,
+    "v3_spatial_attn_pool":     InkDetectorSpatialAttnPool,
+    "v3_nonlocal":              InkDetectorNonLocal,
+    "v3_fpn":                   InkDetectorFPN,
+    "v3_multiscale_pool":       InkDetectorMultiScalePool,
+    "v3_instance_norm":         InkDetectorInstanceNorm,
+    "v3_preact_eca":            InkDetectorPreActECA,
+    "v3_preact_gem":            InkDetectorPreActGeMPool,
+    "v3_preact_dual_pool":      InkDetectorPreActDualPool,
+    "v3_preact_asym":           InkDetectorPreActAsym,
+    "v3_preact_bottleneck":     InkDetectorPreActBottleneck,
+    "v3_deeper_no_cbam":        InkDetectorDeeperNoCBAM,
+    "v3_preact_deep_3pool":     InkDetectorPreActDeep3Pool,
+    "v3_depth_squeeze":         InkDetectorDepthSqueeze,
+    "v3_dilated_preact":        InkDetectorDilatedPreAct,
+    "v3_preact_eca_deep_3pool": InkDetectorPreActDeep3Pool,  # eca variant shares topology; run with --arch v3_preact_deep_3pool + separate eca run
 }
 
 
