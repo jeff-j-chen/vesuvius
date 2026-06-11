@@ -8,7 +8,10 @@ class DataConfig:
     zarr_path: str = field(default_factory=lambda: os.getenv("VESUVIUS_ZARR_PATH", "C:\\Users\\ChenJeff\\Documents\\ves_zarrs2"))
     scroll1_id: int = 20230827161847
     # scroll1_id: int = 20230702185753
+    scroll2_id: int = 20230709155141
     scroll4_id: int = 20231210132040
+    # when false, 'test' figures use scroll2 instead of scroll4
+    test_on_scroll4: bool = False
     tile_size: int = 32
     depth: int = 8
     d_start: int = 28
