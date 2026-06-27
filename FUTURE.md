@@ -1159,3 +1159,72 @@ than from simply training longer, mining harder, or adding more scalar metrics.
 - 2026-06-11 13:35:03 UTC | arch=v3_spatial_attn_pool | readability_last=None | probe_hard=None | next=12:t12_preact_gem
 - 2026-06-11 14:17:21 UTC | arch=v3_preact_gem | readability_last=None | probe_hard=None | next=13:t13_preact_dual_pool
 - 2026-06-11 14:54:12 UTC | arch=v3_preact_dual_pool | readability_last=None | probe_hard=None | next=14:t14_preact_asym
+
+
+## ## Automated Campaign Log (arch_search4_2026_06_11)
+
+- campaign 4 started
+- 2026-06-11 16:43:36 UTC | t01_diff_input | probe_hard=None | f1=None | next=02:t02_triple_input
+- 2026-06-11 16:43:36 UTC | t02_triple_input | probe_hard=None | f1=None | next=03:t03_diff_sigma15
+- 2026-06-11 16:43:36 UTC | t03_diff_sigma15 | probe_hard=None | f1=None | next=04:t04_triple_sigma15
+- 2026-06-11 16:43:36 UTC | t04_triple_sigma15 | probe_hard=None | f1=None | next=05:t05_diff_depth_project
+- 2026-06-11 16:43:36 UTC | t05_diff_depth_project | probe_hard=None | f1=None | next=06:t06_pretrain5_diff
+- 2026-06-11 16:43:36 UTC | t06_pretrain5_diff | probe_hard=None | f1=None | next=07:t07_ranking_01
+- 2026-06-11 16:43:36 UTC | t07_ranking_01 | probe_hard=None | f1=None | next=08:t08_ranking_03
+- 2026-06-11 16:43:36 UTC | t08_ranking_03 | probe_hard=None | f1=None | next=09:t09_focal2_ranking01
+- 2026-06-11 16:43:36 UTC | t09_focal2_ranking01 | probe_hard=None | f1=None | next=10:t10_diff_ranking01
+- 2026-06-11 16:43:36 UTC | t10_diff_ranking01 | probe_hard=None | f1=None | next=11:t11_diff_focal_ranking
+- 2026-06-11 16:43:36 UTC | t11_diff_focal_ranking | probe_hard=None | f1=None | next=12:t12_soft_labels_03
+- 2026-06-11 16:43:36 UTC | t12_soft_labels_03 | probe_hard=None | f1=None | next=13:t13_soft_labels_01
+- 2026-06-11 16:43:36 UTC | t13_soft_labels_01 | probe_hard=None | f1=None | next=14:t14_diff_soft03
+- 2026-06-11 16:43:36 UTC | t14_diff_soft03 | probe_hard=None | f1=None | next=15:t15_triple_soft03
+- 2026-06-11 16:43:36 UTC | t15_triple_soft03 | probe_hard=None | f1=None | next=16:t16_diff_rank_soft_sig
+- 2026-06-11 16:43:36 UTC | t16_diff_rank_soft_sig | probe_hard=None | f1=None | next=17:t17_triple_rank_soft_sig
+- 2026-06-11 16:43:36 UTC | t17_triple_rank_soft_sig | probe_hard=None | f1=None | next=18:t18_diff_focal_rank_soft_sig
+- 2026-06-11 16:43:36 UTC | t18_diff_focal_rank_soft_sig | probe_hard=None | f1=None | next=19:t19_pretrain_diff_rank_sig
+- 2026-06-11 16:43:36 UTC | t19_pretrain_diff_rank_sig | probe_hard=None | f1=None | next=20:t20_triple_focal_rank_soft_sig
+- 2026-06-11 16:43:36 UTC | t20_triple_focal_rank_soft_sig | probe_hard=None | f1=None | next=none
+- 2026-06-11 16:43:50 UTC | t01_diff_input | probe_hard=None | f1=None | next=02:t02_triple_input
+- 2026-06-11 16:43:50 UTC | t02_triple_input | probe_hard=None | f1=None | next=03:t03_diff_sigma15
+- 2026-06-11 16:43:50 UTC | t03_diff_sigma15 | probe_hard=None | f1=None | next=04:t04_triple_sigma15
+- 2026-06-11 16:43:50 UTC | t04_triple_sigma15 | probe_hard=None | f1=None | next=05:t05_diff_depth_project
+- 2026-06-11 16:43:50 UTC | t05_diff_depth_project | probe_hard=None | f1=None | next=06:t06_pretrain5_diff
+- 2026-06-11 16:43:50 UTC | t06_pretrain5_diff | probe_hard=None | f1=None | next=07:t07_ranking_01
+- 2026-06-11 16:43:50 UTC | t07_ranking_01 | probe_hard=None | f1=None | next=08:t08_ranking_03
+- 2026-06-11 16:43:50 UTC | t08_ranking_03 | probe_hard=None | f1=None | next=09:t09_focal2_ranking01
+- 2026-06-11 16:43:50 UTC | t09_focal2_ranking01 | probe_hard=None | f1=None | next=10:t10_diff_ranking01
+- 2026-06-11 16:43:50 UTC | t10_diff_ranking01 | probe_hard=None | f1=None | next=11:t11_diff_focal_ranking
+- 2026-06-11 16:43:50 UTC | t11_diff_focal_ranking | probe_hard=None | f1=None | next=12:t12_soft_labels_03
+- 2026-06-11 16:43:50 UTC | t12_soft_labels_03 | probe_hard=None | f1=None | next=13:t13_soft_labels_01
+- 2026-06-11 16:43:50 UTC | t13_soft_labels_01 | probe_hard=None | f1=None | next=14:t14_diff_soft03
+- 2026-06-11 16:43:50 UTC | t14_diff_soft03 | probe_hard=None | f1=None | next=15:t15_triple_soft03
+- 2026-06-11 16:43:50 UTC | t15_triple_soft03 | probe_hard=None | f1=None | next=16:t16_diff_rank_soft_sig
+- 2026-06-11 16:43:50 UTC | t16_diff_rank_soft_sig | probe_hard=None | f1=None | next=17:t17_triple_rank_soft_sig
+- 2026-06-11 16:43:50 UTC | t17_triple_rank_soft_sig | probe_hard=None | f1=None | next=18:t18_diff_focal_rank_soft_sig
+- 2026-06-11 16:43:50 UTC | t18_diff_focal_rank_soft_sig | probe_hard=None | f1=None | next=19:t19_pretrain_diff_rank_sig
+- 2026-06-11 16:43:50 UTC | t19_pretrain_diff_rank_sig | probe_hard=None | f1=None | next=20:t20_triple_focal_rank_soft_sig
+- 2026-06-11 16:43:50 UTC | t20_triple_focal_rank_soft_sig | probe_hard=None | f1=None | next=none
+- 2026-06-11 16:49:00 UTC | t01_diff_input failed rc=1 | next=02:t02_triple_input
+- 2026-06-11 16:49:11 UTC | t02_triple_input failed rc=1 | next=03:t03_diff_sigma15
+- 2026-06-11 18:57:14 UTC | t01_diff_input | probe_hard=0.21677160263061523 | f1=0.2009253203868866 | next=02:t02_triple_input
+- 2026-06-11 22:46:59 UTC | t02_triple_input | probe_hard=0.2170095443725586 | f1=0.37142857909202576 | next=03:t03_diff_sigma15
+- 2026-06-11 22:47:34 UTC | t03_diff_sigma15 failed rc=1 | next=04:t04_triple_sigma15
+
+
+## campaign log (c5_2026_06_11)
+
+- campaign 5 started
+- 2026-06-12 00:53:01 UTC | t01_mil_attention | hard=0.23934556543827057 | easy=0.4384549558162689 | f1=0.36219432950019836 | next=02:t02_mil_gated
+- 2026-06-12 01:48:10 UTC | t02_mil_gated | hard=0.19379565119743347 | easy=0.43144917488098145 | f1=0.33478638529777527 | next=07:t07_local_norm_preact
+- 2026-06-12 02:33:14 UTC | t07_local_norm_preact | hard=0.21972593665122986 | easy=0.4566309452056885 | f1=0.34193548560142517 | next=09:t09_depth_profile_1d
+- 2026-06-12 02:54:01 UTC | t09_depth_profile_1d | hard=0.3602401614189148 | easy=0.39098110795021057 | f1=0.22025376558303833 | next=10:t10_depth_transformer
+- 2026-06-12 03:12:33 UTC | t10_depth_transformer | hard=0.3715401589870453 | easy=0.39293089509010315 | f1=0.20854756236076355 | next=11:t11_depth_variance_2d
+- 2026-06-12 03:29:49 UTC | t11_depth_variance_2d | hard=0.3561859428882599 | easy=0.5057175159454346 | f1=0.2767334282398224 | next=12:t12_depth_var_diff
+- 2026-06-12 04:10:38 UTC | t12_depth_var_diff | hard=0.33553817868232727 | easy=0.4190686345100403 | f1=0.21101774275302887 | next=13:t13_spectral_3d
+- 2026-06-12 04:12:38 UTC | t13_spectral_3d FAILED rc=1 | next=14:t14_spectral_diff
+- 2026-06-12 04:14:38 UTC | t14_spectral_diff FAILED rc=1 | next=15:t15_per_voxel_mil
+- 2026-06-12 04:18:08 UTC | t15_per_voxel_mil FAILED rc=1 | next=16:t16_per_voxel_diff
+- 2026-06-12 04:21:23 UTC | t16_per_voxel_diff FAILED rc=1 | next=17:t17_siamese_double
+- 2026-06-12 04:21:39 UTC | t17_siamese_double FAILED rc=2 | next=18:t18_ae_anomaly
+- 2026-06-12 04:38:40 UTC | t18_ae_anomaly | hard=0.18704330921173096 | easy=0.1917802095413208 | f1=0.0 | next=19:t19_best_combo
+- 2026-06-12 05:36:00 UTC | t19_best_combo | hard=0.2025112360715866 | easy=0.2855169475078583 | f1=0.16987179219722748 | next=08:t08_local_norm_diff

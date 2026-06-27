@@ -110,7 +110,20 @@ class InkVolumeDataset(IterableDataset):
     """iterable dataset for ink volume data"""
     def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True):
         """initializes the dataset"""
-        self.vol = volume
+        # store zarr path + segment id instead of the open zarr object so that
+        # the dataset can be safely pickled for multiprocessing workers on Windows;
+        # each worker opens its own zarr handle lazily on first access
+        if hasattr(volume, 'store') and hasattr(volume.store, 'path'):
+            self._zarr_path = str(volume.store.path)
+            # CRITICAL: do NOT store the zarr object — it is not picklable on Windows
+            # and will crash workers with OSError [Errno 22]. workers reopen via _zarr_path
+            self._vol_obj = None
+        else:
+            # numpy array (preloaded) or other picklable type — store directly
+            self._zarr_path = None
+            self._vol_obj = volume
+        self._worker_vol = None         # populated lazily inside worker process
+
         self.mask = mask
         self.labels = labels
         self.c = config
@@ -129,6 +142,24 @@ class InkVolumeDataset(IterableDataset):
         # pre-calculate all valid block coordinates
         self.block_coords = self._gen_tile_coords()
         self.samples_per_epoch = len(self.block_coords)
+
+    @property
+    def vol(self):
+        """return volume; numpy arrays are returned directly (preloaded path);
+        zarr objects are opened lazily inside each worker to avoid pickle errors on Windows"""
+        # fast path: volume already in RAM as numpy array
+        if isinstance(self._vol_obj, np.ndarray):
+            return self._vol_obj
+        if self._worker_vol is not None:
+            return self._worker_vol
+        if self._zarr_path is not None:
+            worker_info = get_worker_info()
+            if worker_info is not None:
+                # we are inside a worker — open a fresh zarr handle
+                import zarr as _zarr
+                self._worker_vol = _zarr.open(self._zarr_path, mode='r')
+                return self._worker_vol
+        return self._vol_obj
 
     def _gen_tile_coords(self):
         """generates all valid (z, y, x) block start coordinates"""
@@ -169,24 +200,81 @@ class InkVolumeDataset(IterableDataset):
         # ensure dtype and contiguity
         return np.ascontiguousarray(np.clip(norm_block, 0, 1).astype(np.float32, copy=False))
 
+    def _fetch_block_at_z(self, z_abs, y_off, x_off):
+        """fetch block starting at absolute z position (used for soft label flanking bands)"""
+        y = self.y_start + y_off
+        x = self.x_start + x_off
+        tile = self.tile_size
+        mode = getattr(self.c.data, "input_mode", "single")
+        # flanking bands always return a single-band block of self.depth slices
+        try:
+            block = np.array(self.vol[z_abs:z_abs+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
+        except Exception:
+            block = np.zeros((self.depth, tile, tile), dtype=np.float32)
+        if block.shape != (self.depth, tile, tile):
+            block = np.zeros((self.depth, tile, tile), dtype=np.float32)
+        # for diff mode, compute flanking - pre (flanking IS the reference, so use zeros)
+        if mode == "diff":
+            block = np.zeros_like(block)  # no ink expected in flanking band, diff ≈ 0
+        return self._normalize_block(block)
+
     def _fetch_block(self, z_off, y_off, x_off):
-        """fetches and normalizes a block from zarr volume"""
+        """fetches and normalizes a block from zarr volume.
+
+        input_mode controls the returned tensor shape:
+          single: (8, 32, 32)  — current behavior
+          diff:   (8, 32, 32)  — ink_band - pre_band (differential absorption)
+          triple: (24, 32, 32) — concat(pre_band, ink_band, post_band)
+        """
         z = self.z_start + z_off
         y = self.y_start + y_off
         x = self.x_start + x_off
-        
-        # slice the block from the zarr volume
-        block = self.vol[z:z+self.depth, y:y+self.tile_size, x:x+self.tile_size]
+        tile = self.tile_size
+        mode = getattr(self.c.data, "input_mode", "single")
+
+        expected_d = {"triple": self.depth * 3, "double": self.depth * 2,
+                      "fulldepth": int(getattr(self.vol, 'shape', [64])[0])}.get(mode, self.depth)
+        try:
+            if mode == "diff":
+                ink  = np.array(self.vol[z:z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
+                pre_z = getattr(self.c.data, "pre_band_start", 20)
+                pre  = np.array(self.vol[pre_z:pre_z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
+                block = np.clip(ink - pre, 0, None)  # take positive part of the delta
+            elif mode == "triple":
+                pre_z  = getattr(self.c.data, "pre_band_start", 20)
+                post_z = getattr(self.c.data, "post_band_start", 40)
+                pre    = np.array(self.vol[pre_z:pre_z+self.depth,  y:y+tile, x:x+tile]).astype(np.float32)
+                ink    = np.array(self.vol[z:z+self.depth,           y:y+tile, x:x+tile]).astype(np.float32)
+                post   = np.array(self.vol[post_z:post_z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
+                block  = np.concatenate([pre, ink, post], axis=0)
+            elif mode == "double":
+                pre_z = getattr(self.c.data, "pre_band_start", 20)
+                ink   = np.array(self.vol[z:z+self.depth,            y:y+tile, x:x+tile]).astype(np.float32)
+                pre   = np.array(self.vol[pre_z:pre_z+self.depth,   y:y+tile, x:x+tile]).astype(np.float32)
+                block = np.concatenate([ink, pre], axis=0)  # (16, H, W) for siamese
+            elif mode == "fulldepth":
+                full_d = int(self.vol.shape[0])
+                block = np.array(self.vol[0:full_d, y:y+tile, x:x+tile]).astype(np.float32)
+            else:
+                block = np.array(self.vol[z:z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
+        except Exception:
+            # any read error (OSError, corrupt chunk, zarr internal error) — return zeros
+            block = np.zeros((expected_d, tile, tile), dtype=np.float32)
+
+        # guard: zarr can silently return wrong shape on Windows under load
+        if block.shape != (expected_d, tile, tile):
+            block = np.zeros((expected_d, tile, tile), dtype=np.float32)
+
         return self._normalize_block(block)
 
-    def _fetch_label(self, y_off, x_off):
-        """fetches a label tile"""
+    def _fetch_label(self, y_off, x_off, soft_override: float = -1.0):
+        """fetches a label tile; soft_override replaces ink label if >= 0"""
         y = self.y_start + y_off
         x = self.x_start + x_off
-        
-        # slice the label tile and check for ink presence
         label_tile = self.labels[y:y+self.tile_size, x:x+self.tile_size]
-        has_ink = np.any(label_tile > 0.5)
+        has_ink = bool(np.any(label_tile > 0.5))
+        if has_ink and soft_override >= 0:
+            return torch.tensor([soft_override], dtype=torch.float32)
         return torch.tensor([float(has_ink)], dtype=torch.float32)
 
     def _fetch_mask(self, y_off, x_off):
@@ -229,8 +317,25 @@ class InkVolumeDataset(IterableDataset):
         
         # fetch data components
         mask = self._fetch_mask(y_off, x_off)
-        block = self._fetch_block(z_off, y_off, x_off)
-        label = self._fetch_label(y_off, x_off)
+
+        # soft depth label: randomly replace ink-band block with flanking band + soft label
+        soft_label_prob  = float(getattr(self.c.data, "soft_label_prob", 0.0))
+        soft_label_value = float(getattr(self.c.data, "soft_label_value", 0.3))
+        use_soft = (soft_label_prob > 0 and random.random() < soft_label_prob)
+
+        if use_soft:
+            # pick pre or post band randomly, fetch from there
+            if random.random() < 0.5:
+                flanking_z = getattr(self.c.data, "pre_band_start", 20)
+            else:
+                flanking_z = getattr(self.c.data, "post_band_start", 40)
+            flanking_off = flanking_z - self.z_start  # adjust to relative offset
+            # clamp in case of underflow; use absolute z in _fetch_block via override
+            block = self._fetch_block_at_z(flanking_z, y_off, x_off)
+            label = self._fetch_label(y_off, x_off, soft_override=soft_label_value)
+        else:
+            block = self._fetch_block(z_off, y_off, x_off)
+            label = self._fetch_label(y_off, x_off)
         
         # apply transforms if enabled
         if self.apply_transforms:
@@ -266,6 +371,27 @@ class DataManager:
             ),
             mode='r'
         )
+
+        # optionally preload the entire volume into RAM so all reads are RAM-speed
+        # keep the zarr object as fallback for large-scale training
+        if getattr(self.c.data, 'preload_to_ram', False):
+            est_gb = (vol.shape[0] * vol.shape[1] * vol.shape[2] * 2) / 1e9
+            # gate on available RAM: need est_gb + ~2GB headroom
+            try:
+                import psutil
+                free_gb = psutil.virtual_memory().available / 1e9
+            except ImportError:
+                free_gb = float('inf')  # can't check; proceed and hope for the best
+            if free_gb < est_gb + 2.0:
+                print(f"[preload] skipping: need {est_gb:.1f} GB but only {free_gb:.1f} GB available")
+            else:
+                print(f"[preload] loading {est_gb:.2f} GB into RAM ({free_gb:.1f} GB available)...")
+                try:
+                    vol = vol[:]   # loads full zarr into a numpy array
+                    print(f"[preload] done — {vol.nbytes / 1e9:.2f} GB in RAM")
+                except Exception as e:
+                    print(f"[preload] FAILED ({e}); falling back to streaming zarr reads")
+                    # vol stays as the zarr object; workers will lazy-open their own handles
         
         # load labels and mask, and normalize to [0, 1]
         labels = cv2.imread(
@@ -358,9 +484,113 @@ class DataManager:
 
     def get_datasets(self):
         """creates train and validation datasets"""
-        train_set = InkVolumeDataset(self.vol, self.mask, self.labels, self.c, self.train_x, self.y_range, self.norm_stats, shuffle=True)
+        train_mask = self._make_ring_mask() if getattr(self.c.data, 'ring_negatives', False) else self.mask
+        train_set = InkVolumeDataset(self.vol, train_mask, self.labels, self.c, self.train_x, self.y_range, self.norm_stats, shuffle=True)
         valid_set = InkVolumeDataset(self.vol, self.mask, self.labels, self.c, self.valid_x, self.y_range, self.norm_stats, shuffle=False)
         return train_set, valid_set
+
+    def _make_ring_mask(self):
+        """build training mask from ring around ink labels, computed at TILE level.
+
+        uses ORIGINAL inklabels (not eroded) to determine which tiles contain ink
+        for the ring boundary. this prevents original-ink boundary tiles from
+        becoming false-negative ring tiles (which was causing 20.9% contamination).
+
+        training POSITIVE labels still come from eroded_inklabels (conservative).
+        ring NEGATIVES are tiles adjacent to original-ink tiles with zero original ink.
+        """
+        h = min(self.labels.shape[0], self.mask.shape[0])
+        w = min(self.labels.shape[1], self.mask.shape[1])
+        labels_crop = self.labels[:h, :w]   # eroded — used for positive tile detection
+        mask_crop   = self.mask[:h, :w]
+        T = self.c.data.tile_size
+
+        # determine which labels to use for ring boundary computation
+        ring_source = getattr(self.c.data, 'ring_label_source', 'original')
+        if ring_source in ('original', 'closed'):
+            orig_path = f"./inklabels/{self.c.data.scroll1_id}.png"
+            orig_img = cv2.imread(orig_path, cv2.IMREAD_GRAYSCALE)
+            if orig_img is not None:
+                orig_img = (orig_img / 255.0)[:h, :w]
+                ring_labels = orig_img
+            else:
+                print(f"[ring] original inklabels not found at {orig_path}, falling back to eroded")
+                ring_labels = labels_crop
+        else:
+            ring_labels = labels_crop  # 'eroded' — old behavior
+
+        # build tile-level maps using ring_labels for boundary, eroded for positives
+        n_ty = h // T
+        n_tx = w // T
+        # ink_tile: positive training tiles (eroded)
+        ink_tile_eroded = np.zeros((n_ty, n_tx), dtype=np.uint8)
+        # ink_tile for ring boundary (original or eroded depending on ring_source)
+        ink_tile_ring   = np.zeros((n_ty, n_tx), dtype=np.uint8)
+        mask_tile = np.zeros((n_ty, n_tx), dtype=np.uint8)
+        for ty in range(n_ty):
+            for tx in range(n_tx):
+                tile_lbl_ero  = labels_crop[ty*T:(ty+1)*T, tx*T:(tx+1)*T]
+                tile_lbl_ring = ring_labels[ty*T:(ty+1)*T, tx*T:(tx+1)*T]
+                tile_mask     = mask_crop[ty*T:(ty+1)*T, tx*T:(tx+1)*T]
+                if np.any(tile_lbl_ero  > 0.5): ink_tile_eroded[ty, tx] = 1
+                if np.any(tile_lbl_ring > 0.5): ink_tile_ring[ty, tx]   = 1
+                if np.any(tile_mask     > 0.5): mask_tile[ty, tx]        = 1
+
+        # for 'closed': close letter holes then add explicit air gap before ring
+        if ring_source == 'closed':
+            # stage 1: close interior holes in letters (mild closing)
+            CLOSE_R = 3  # tiles
+            k_close = 2 * CLOSE_R + 1
+            kern_close = cv2.getStructuringElement(cv2.MORPH_RECT, (k_close, k_close))
+            ink_tile_ring = cv2.erode(cv2.dilate(ink_tile_ring, kern_close), kern_close) & mask_tile
+            # stage 2: dilate closed region by GAP_R → exclusion zone; ring starts outside this
+            # GAP_R is searched dynamically like other ring sources
+            # we store it in ink_tile_ring as the "exclusion zone" for the binary search below
+            GAP_R = 3  # tiles of air gap between ink edge and ring start
+            k_gap = 2 * GAP_R + 1
+            kern_gap = cv2.getStructuringElement(cv2.MORPH_RECT, (k_gap, k_gap))
+            ink_tile_ring = cv2.dilate(ink_tile_ring, kern_gap) & mask_tile
+            print(f"[ring] closed: CLOSE_R={CLOSE_R} GAP_R={GAP_R} exclusion_tiles={ink_tile_ring.sum()}")
+
+        ink_count = int(ink_tile_eroded.sum())
+        if ink_count == 0:
+            return self.mask
+
+        # dilate ring_labels tile map until ring count >= eroded ink count
+        lo, hi = 1, 50
+        best_r = hi
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            k = 2 * mid + 1
+            kernel  = cv2.getStructuringElement(cv2.MORPH_RECT, (k, k))
+            dilated = cv2.dilate(ink_tile_ring, kernel)
+            # ring: adjacent to ring-source ink, but contains NO ring-source ink
+            ring    = ((dilated - ink_tile_ring) > 0) & (mask_tile > 0)
+            if int(ring.sum()) >= ink_count:
+                best_r = mid
+                hi = mid - 1
+            else:
+                lo = mid + 1
+
+        k       = 2 * best_r + 1
+        kernel  = cv2.getStructuringElement(cv2.MORPH_RECT, (k, k))
+        dilated = cv2.dilate(ink_tile_ring, kernel)
+        ring    = ((dilated - ink_tile_ring) > 0) & (mask_tile > 0)
+
+        ring_count = int(ring.sum())
+        print(f"[ring_negatives] source='{ring_source}' tile_radius={best_r}  "
+              f"ink_tiles={ink_count}  ring_tiles={ring_count}  "
+              f"ratio={ring_count/max(ink_count,1):.2f}")
+
+        # expand back to pixel level: positive = eroded ink, negative = ring
+        train_mask = np.zeros_like(self.mask, dtype=np.float32)
+        for ty in range(n_ty):
+            for tx in range(n_tx):
+                if ink_tile_eroded[ty, tx] or ring[ty, tx]:
+                    y0, x0 = ty*T, tx*T
+                    train_mask[y0:y0+T, x0:x0+T] = 1.0
+
+        return train_mask
 
 def get_dataloaders(train_dataset, valid_dataset, config: Config):
     """creates dataloader objects from datasets"""
@@ -371,17 +601,19 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
         pin_memory=True,
         persistent_workers=config.dl.num_workers > 0,
         prefetch_factor=2 if config.dl.num_workers > 0 else None,
+        drop_last=True,   # prevents trailing batch of 1 from crashing BatchNorm
     )
-    
+
+    # validation always uses 0 workers (main thread only) — on Windows, spawned
+    # worker subprocesses receive CTRL_CLOSE_EVENT from the OS console job object
+    # which kills them unpredictably, causing RuntimeError mid-validation
     valid_loader = DataLoader(
         valid_dataset,
         batch_size=config.dl.batch_size,
-        num_workers=config.dl.num_workers,
-        pin_memory=True,
-        persistent_workers=config.dl.num_workers > 0,
-        prefetch_factor=2 if config.dl.num_workers > 0 else None,
+        num_workers=0,
+        pin_memory=False,
     )
-    
+
     return train_loader, valid_loader
 
 def _sample_labels(dataset, sample_size):

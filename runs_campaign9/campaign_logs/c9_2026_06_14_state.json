@@ -1,0 +1,570 @@
+{
+  "campaign_id": "c9_2026_06_14",
+  "created_at": "2026-06-14 19:13:44 UTC",
+  "completed": [
+    {
+      "run_id": 1,
+      "name": "cmp_c9_2026_06_14_sanity_v1_eroded_ring",
+      "axis": "sanity",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 64,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "ring-negatives": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "arch": "v1",
+        "ring-label-source": "eroded"
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_sanity_v1_eroded_ring_14_12-14-14",
+      "metrics": {
+        "valid_f1_last": 0.3069024384021759,
+        "probe_easy_last": 0.542977511882782,
+        "probe_hard_last": 0.4079867899417877,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-14 19:31:20 UTC"
+    },
+    {
+      "run_id": 2,
+      "name": "cmp_c9_2026_06_14_sanity_v1_original_ring",
+      "axis": "sanity",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 64,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "ring-negatives": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "arch": "v1",
+        "ring-label-source": "original"
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_sanity_v1_original_ring_14_12-31-47",
+      "metrics": {
+        "valid_f1_last": 0.282204270362854,
+        "probe_easy_last": 0.5753414034843445,
+        "probe_hard_last": 0.4363933205604553,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-14 19:53:36 UTC"
+    },
+    {
+      "run_id": 3,
+      "name": "cmp_c9_2026_06_14_sanity_v1_closed_ring",
+      "axis": "sanity",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 64,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "ring-negatives": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "arch": "v1",
+        "ring-label-source": "closed"
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_sanity_v1_closed_ring_14_12-54-11",
+      "metrics": {
+        "valid_f1_last": 0.3052516281604767,
+        "probe_easy_last": 0.5334089398384094,
+        "probe_hard_last": 0.3664701581001282,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-14 20:14:08 UTC"
+    },
+    {
+      "run_id": 9,
+      "name": "cmp_c9_2026_06_14_t06_robust_zscore",
+      "axis": "physics",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 512,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "ring-negatives": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "ring-label-source": "original",
+        "arch": "v8_robust_zscore"
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_t06_robust_zscore_14_13-46-58",
+      "metrics": {
+        "valid_f1_last": 0.1940879076719284,
+        "probe_easy_last": 0.35423555970191956,
+        "probe_hard_last": 0.35844844579696655,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-14 21:04:27 UTC"
+    },
+    {
+      "run_id": 10,
+      "name": "cmp_c9_2026_06_14_t07_absorption_ratio",
+      "axis": "physics",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 512,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "ring-negatives": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "ring-label-source": "original",
+        "arch": "v8_absorption_ratio"
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_t07_absorption_ratio_14_14-04-57",
+      "metrics": {
+        "valid_f1_last": 0.17193500697612762,
+        "probe_easy_last": 0.3625105619430542,
+        "probe_hard_last": 0.3947579860687256,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-14 21:20:14 UTC"
+    },
+    {
+      "run_id": 14,
+      "name": "cmp_c9_2026_06_14_t11_multiscale_percentile",
+      "axis": "spatial_depth",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 512,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "ring-negatives": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "ring-label-source": "original",
+        "arch": "v8_multiscale_percentile"
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_t11_multiscale_percentile_14_15-08-15",
+      "metrics": {
+        "valid_f1_last": 0.18089431524276733,
+        "probe_easy_last": 0.47058364748954773,
+        "probe_hard_last": 0.3816363513469696,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-14 22:23:19 UTC"
+    },
+    {
+      "run_id": 15,
+      "name": "cmp_c9_2026_06_14_t12_residual_spatial_depth",
+      "axis": "spatial_depth",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 512,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "ring-negatives": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "ring-label-source": "original",
+        "arch": "v8_residual_spatial_depth"
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_t12_residual_spatial_depth_14_15-23-47",
+      "metrics": {
+        "valid_f1_last": 0.2175622582435608,
+        "probe_easy_last": 0.5135515332221985,
+        "probe_hard_last": 0.41903969645500183,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-14 22:39:20 UTC"
+    },
+    {
+      "run_id": 19,
+      "name": "cmp_c9_2026_06_14_t16_matched_filter_diff",
+      "axis": "combo",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 512,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "ring-negatives": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "ring-label-source": "original",
+        "arch": "v8_matched_filter",
+        "input-mode": "diff"
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_t16_matched_filter_diff_14_17-04-22",
+      "metrics": {
+        "valid_f1_last": 0.16804635524749756,
+        "probe_easy_last": 0.38985732197761536,
+        "probe_hard_last": 0.4051954746246338,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-15 00:39:59 UTC"
+    },
+    {
+      "run_id": 23,
+      "name": "cmp_c9_2026_06_14_t20_v1_cnn_no_ring",
+      "axis": "baseline",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 64,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "arch": "v1"
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_t20_v1_cnn_no_ring_14_20-11-29",
+      "metrics": {
+        "valid_f1_last": 0.32541489601135254,
+        "probe_easy_last": 0.5613387823104858,
+        "probe_hard_last": 0.3923807442188263,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-15 03:52:15 UTC"
+    },
+    {
+      "run_id": 24,
+      "name": "cmp_c9_2026_06_14_t21_fulldepth_gru_best",
+      "axis": "best_rerun",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 64,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "ring-negatives": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "ring-label-source": "original",
+        "arch": "v6_fulldepth_gru",
+        "input-mode": "fulldepth"
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_t21_fulldepth_gru_best_14_20-53-51",
+      "metrics": {
+        "valid_f1_last": 0.1820307970046997,
+        "probe_easy_last": 0.4538983404636383,
+        "probe_hard_last": 0.37248358130455017,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-15 04:55:19 UTC"
+    },
+    {
+      "run_id": 4,
+      "name": "stub_4",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 5,
+      "name": "stub_5",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 6,
+      "name": "stub_6",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 7,
+      "name": "stub_7",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 8,
+      "name": "stub_8",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 11,
+      "name": "stub_11",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 12,
+      "name": "stub_12",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 13,
+      "name": "stub_13",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 16,
+      "name": "stub_16",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 17,
+      "name": "stub_17",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 18,
+      "name": "stub_18",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 20,
+      "name": "stub_20",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 21,
+      "name": "stub_21",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 22,
+      "name": "stub_22",
+      "axis": "skipped",
+      "overrides": {},
+      "metrics": {},
+      "ended_at": "skipped"
+    },
+    {
+      "run_id": 26,
+      "name": "cmp_c9_2026_06_14_t23_v1_full_depth_original",
+      "axis": "full_depth_ring",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 64,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "ring-negatives": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "ring-label-source": "original",
+        "arch": "v1",
+        "train-d-start": 28,
+        "train-d-end": 48
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_t23_v1_full_depth_original_15_09-37-35",
+      "metrics": {
+        "valid_f1_last": 0.27514269948005676,
+        "probe_easy_last": 0.5992578864097595,
+        "probe_hard_last": 0.40781116485595703,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-15 18:03:20 UTC"
+    },
+    {
+      "run_id": 27,
+      "name": "cmp_c9_2026_06_14_t24_v1_full_depth_closed",
+      "axis": "full_depth_ring",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 64,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "ring-negatives": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "ring-label-source": "closed",
+        "arch": "v1",
+        "train-d-start": 28,
+        "train-d-end": 48
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_t24_v1_full_depth_closed_15_11-03-53",
+      "metrics": {
+        "valid_f1_last": 0.2645767033100128,
+        "probe_easy_last": 0.5879115462303162,
+        "probe_hard_last": 0.45193853974342346,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-15 19:12:26 UTC"
+    }
+  ],
+  "failed": [
+    {
+      "run_id": 25,
+      "name": "cmp_c9_2026_06_14_t22_v1_full_depth_eroded",
+      "axis": "full_depth_ring",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 64,
+        "num-workers": 0,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 45,
+        "no-hard-mining": true,
+        "ring-negatives": true,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9",
+        "ring-label-source": "eroded",
+        "arch": "v1",
+        "train-d-start": 28,
+        "train-d-end": 48
+      },
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9\\cmp_c9_2026_06_14_t22_v1_full_depth_eroded_15_08-24-11",
+      "metrics": {
+        "valid_f1_last": 0.293118417263031,
+        "probe_easy_last": 0.6178569793701172,
+        "probe_hard_last": 0.4405115246772766,
+        "valid_pauc_last": null
+      },
+      "ended_at": "2026-06-15 16:36:14 UTC",
+      "return_code": 1,
+      "crashed_early": true
+    }
+  ]
+}

@@ -22,6 +22,36 @@ class DataConfig:
     # gaussian blur applied to prediction maps at inference time (0 = off)
     # promotes spatial coherence without changing what the model learns
     smooth_sigma: float = 0.0
+    # input representation mode for training
+    #   single: 8-slice ink-band window (current behavior)
+    #   diff:   ink_band - pre_band  (differential absorption = ink signal)
+    #   triple: concat(pre_band, ink_band, post_band) = 24 depth channels
+    input_mode: str = "single"
+    pre_band_start: int = 20   # guaranteed no-ink band before the ink window
+    pre_band_end: int = 28
+    post_band_start: int = 40  # guaranteed no-ink band after the ink window
+    post_band_end: int = 48
+    # when true: load the full zarr volume into a numpy array at startup
+    # makes all reads RAM-speed instead of disk-speed; only viable for small scrolls
+    # set false when training on terabytes of data
+    preload_to_ram: bool = False
+    # when true: restrict training negatives to a ring of dilated-inklabel pixels
+    # eliminates the risk of training on unlabeled ink as negatives; balances to ~1:1
+    ring_negatives: bool = False
+    # which inklabels to use for ring boundary computation:
+    #   'eroded' (old behavior): ring computed from eroded_inklabels/
+    #   'original': ring computed from inklabels/ — no original ink pixel enters ring as negative
+    #   'closed': dilate+erode original labels to close letter holes, add air gap, then ring
+    # training positive labels always come from eroded_inklabels (conservative, clean)
+    ring_label_source: str = 'closed'
+    # alternating ring: on odd epochs use the ring training set, on even epochs use the
+    # full training set. hard mining runs only on ring-epoch data (closer to the decision
+    # boundary). ring set sees ~2x the epochs relative to a pure full-set run.
+    alternating_ring: bool = False
+    # soft depth label sampling: for labeled ink tiles, with prob soft_label_prob
+    # fetch from the flanking band instead and assign label soft_label_value
+    soft_label_prob: float = 0.0
+    soft_label_value: float = 0.3
 
 @dataclass
 class DataloaderConfig:
@@ -45,12 +75,16 @@ class TrainingConfig:
     patience: int = 5
     lr_decay: float = 0.5
     save_int: int = 10
-    log_dir: str = './runs_campaign3'
+    log_dir: str = './runs_campaign4'
     eval_int: int = 10
     test_int: int = 30
     probe_int: int = 5
     eval_aggregate: bool = True  # show one aggregated (depth-averaged) eval figure in addition to per-depth
     focal_gamma: float = 0.0   # >0 activates focal loss: down-weights easy negatives, pushes gradient toward hard tiles
+    ranking_lambda: float = 0.0  # weight of pairwise ranking loss term
+    ranking_margin: float = 0.3  # margin: pos_score must exceed neg_score by at least this
+    pretrain_epochs: int = 0     # epochs of band-identity pretraining before BCE fine-tuning
+    eval_cooldown_secs: int = 0   # sleep this many seconds after probe/eval epochs to let hardware cool
 
 @dataclass
 class FinetuneConfig:

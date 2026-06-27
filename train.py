@@ -12,6 +12,7 @@ from utils.model import create_model
 from utils.training_utils import (
     create_optimizer_and_scheduler, 
     create_loss_function,
+    pairwise_ranking_loss,
     calculate_metrics,
     save_model
 )
@@ -37,6 +38,8 @@ def _apply_cli_overrides(c: Config, args):
         c.tra.test_int = int(args.test_int)
     if args.probe_int is not None:
         c.tra.probe_int = int(args.probe_int)
+    if args.log_dir is not None:
+        c.tra.log_dir = str(args.log_dir)
 
     if args.scroll_id is not None:
         c.data.scroll1_id = int(args.scroll_id)
@@ -85,6 +88,35 @@ def _apply_cli_overrides(c: Config, args):
         c.model.arch = str(args.arch)
     if args.smooth_sigma is not None:
         c.data.smooth_sigma = float(args.smooth_sigma)
+    if args.input_mode is not None:
+        c.data.input_mode = str(args.input_mode)
+    if args.soft_label_prob is not None:
+        c.data.soft_label_prob = float(args.soft_label_prob)
+    if args.soft_label_value is not None:
+        c.data.soft_label_value = float(args.soft_label_value)
+    if args.ranking_lambda is not None:
+        c.tra.ranking_lambda = float(args.ranking_lambda)
+    if args.ranking_margin is not None:
+        c.tra.ranking_margin = float(args.ranking_margin)
+    if args.pretrain_epochs is not None:
+        c.tra.pretrain_epochs = int(args.pretrain_epochs)
+    if args.preload_volume:
+        c.data.preload_to_ram = True
+    if args.ring_negatives:
+        c.data.ring_negatives = True
+    if args.ring_label_source is not None:
+        c.data.ring_label_source = args.ring_label_source
+    if args.alternating_ring:
+        c.data.alternating_ring = True
+    if args.eval_cooldown is not None:
+        c.tra.eval_cooldown_secs = int(args.eval_cooldown)
+    if args.depth is not None:
+        c.data.depth = int(args.depth)
+    if args.train_d_start is not None:
+        c.data.train_d_start = int(args.train_d_start)
+        c.data.train_d_end = c.data.train_d_start + c.data.depth  # default; overridden below if --train-d-end given
+    if args.train_d_end is not None:
+        c.data.train_d_end = int(args.train_d_end)
     if args.conv1_drop is not None:
         c.model.conv1_drop = float(args.conv1_drop)
     if args.conv2_drop is not None:
@@ -155,14 +187,38 @@ class Trainer:
         """loads and prepares the datasets and dataloaders"""
         print("Creating datasets...")
         start_time = time.time()
-        
+
+        alternating = getattr(self.c.data, 'alternating_ring', False)
         data_manager = DataManager(self.c)
-        t_set, v_set = data_manager.get_datasets()
-        t_loader, v_loader = get_dataloaders(t_set, v_set, self.c)
-        pos_weight = calc_class_wgts(t_set, v_set, scroll_id=self.c.data.scroll1_id)
-        
+
+        if alternating:
+            # build both datasets upfront: full-mask set and ring-mask set
+            t_set_full, v_set = data_manager.get_datasets()  # ring_negatives=False path
+            # temporarily enable ring for the ring dataset
+            self.c.data.ring_negatives = True
+            t_set_ring, _ = data_manager.get_datasets()
+            self.c.data.ring_negatives = False
+            # loader defaults to full set; switched per-epoch in run()
+            t_loader, v_loader = get_dataloaders(t_set_full, v_set, self.c)
+            # pos_weight from full scroll distribution (ring epochs re-weight internally)
+            pos_weight = calc_class_wgts(t_set_full, v_set,
+                                         scroll_id=self.c.data.scroll1_id)
+            self._t_set_full = t_set_full
+            self._t_set_ring = t_set_ring
+            print(f"[alternating_ring] full_tiles={len(t_set_full)}  ring_tiles={len(t_set_ring)}")
+        else:
+            t_set_full, v_set = data_manager.get_datasets()
+            t_loader, v_loader = get_dataloaders(t_set_full, v_set, self.c)
+            ring_mode = getattr(self.c.data, 'ring_negatives', False)
+            pos_weight = calc_class_wgts(
+                t_set_full, t_set_full if ring_mode else v_set,
+                scroll_id=None if ring_mode else self.c.data.scroll1_id
+            )
+            self._t_set_full = t_set_full
+            self._t_set_ring = None
+
         print(f"Data setup done in {time.time() - start_time:.2f}s")
-        return t_set, t_loader, v_loader, pos_weight
+        return t_set_full, t_loader, v_loader, pos_weight
 
     def _setup_model_optim(self):
         """creates the model, optimizer, scheduler, and loss function"""
@@ -188,6 +244,9 @@ class Trainer:
         # forward pass with automatic mixed precision
         with autocast(self.c.device):
             outputs = self.model(b_imgs)
+            # per-voxel models return (B,1,H,W) heatmap; apply MIL max for tile-level BCE
+            if outputs.dim() == 4:
+                outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
             raw_loss = self.criterion(outputs, b_labels)
             
             # apply mask to zero out loss in irrelevant regions
@@ -200,6 +259,17 @@ class Trainer:
             raw_loss_val = (raw_loss.sum() / mask.sum()).item()
             l1_loss = sum(p.abs().sum() for p in self.model.parameters())
             loss = (raw_loss.sum() / mask.sum()) + self.c.tra.l1_lambda * l1_loss
+
+            # pairwise ranking loss: positive tiles must score above negatives by >= margin
+            ranking_lambda = float(getattr(self.c.tra, 'ranking_lambda', 0.0))
+            if ranking_lambda > 0:
+                probs = torch.sigmoid(outputs).squeeze(1)
+                labels_flat = b_labels.squeeze(1)
+                rank_loss = pairwise_ranking_loss(
+                    probs, labels_flat,
+                    margin=float(getattr(self.c.tra, 'ranking_margin', 0.3))
+                )
+                loss = loss + ranking_lambda * rank_loss
 
         # backward pass and optimization step
         self.scaler.scale(loss).backward()
@@ -301,6 +371,8 @@ class Trainer:
 
                 # forward pass
                 outputs = self.model(b_imgs)
+                if outputs.dim() == 4:
+                    outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
                 
                 # calculate loss
                 raw_loss = self.criterion(outputs, b_labels)
@@ -364,12 +436,107 @@ class Trainer:
         if self.c.hm.enabled:
             self.vis.writer.add_scalar("HardMining/Injected", train_metrics.get('hard_injected', 0), epoch)
 
+    def _pretrain_epoch(self):
+        """one epoch of band-identity pretraining (self-supervised, no ink labels needed).
+
+        the model learns to distinguish ink_band tiles (label=1) from flanking band tiles (label=0).
+        because ink is the primary feature distinguishing these bands in ink regions, the
+        backbone builds a representation that encodes differential absorption — useful for BCE fine-tuning.
+        """
+        import torch.nn.functional as F
+        self.model.train()
+        total_loss = 0.0
+        n_batches = 0
+        tile = self.c.data.tile_size
+        depth = self.c.data.depth
+        device = self.c.device
+        pre_z  = getattr(self.c.data, "pre_band_start", 20)
+        post_z = getattr(self.c.data, "post_band_start", 40)
+        ink_z  = getattr(self.c.data, "train_d_start", 32)
+        criterion = nn.BCEWithLogitsLoss()
+
+        for batch_idx, (b_imgs, b_labels, mask) in enumerate(tqdm(self.train_loader, desc="Pretrain")):
+            # b_imgs is the normal ink-band batch; we also sample flanking batches
+            # build: half ink-band (label=1), half flanking (label=0)
+            bs = b_imgs.size(0)
+            vol = self.train_dataset.vol
+            y_start = self.train_dataset.y_start
+            x_start = self.train_dataset.x_start
+
+            # collect flanking band blocks for the same (y,x) positions
+            flanking_blocks = []
+            for i in range(bs):
+                # pick pre or post band
+                fz = pre_z if (i % 2 == 0) else post_z
+                # recover approximate (y, x) from batch coords — just use random valid coords
+                idx = self.train_dataset.block_coords[
+                    np.random.randint(len(self.train_dataset.block_coords))
+                ]
+                _, y_off, x_off = idx
+                y = y_start + y_off
+                x = x_start + x_off
+                blk = np.array(vol[fz:fz+depth, y:y+tile, x:x+tile]).astype(np.float32)
+                norm = self.train_dataset._normalize_block(blk)
+                flanking_blocks.append(norm)
+
+            flanking = torch.from_numpy(np.stack(flanking_blocks)).float().unsqueeze(1).to(device)
+            ink_imgs = b_imgs.to(device)
+
+            combined = torch.cat([ink_imgs, flanking], dim=0)
+            band_labels = torch.cat([
+                torch.ones(bs, 1, device=device),
+                torch.zeros(bs, 1, device=device)
+            ], dim=0)
+
+            self.optimizer.zero_grad()
+            with autocast(device):
+                logits = self.model(combined)
+                loss = criterion(logits, band_labels)
+            self.scaler.scale(loss).backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            total_loss += loss.item()
+            n_batches += 1
+
+        return total_loss / max(n_batches, 1)
+
+    def _switch_to_epoch_dataset(self, epoch):
+        """for alternating_ring mode: swap the training loader between full and ring sets.
+        odd epochs use ring (closer to boundary, harder); even epochs use full set.
+        hard mining is only enabled on ring epochs."""
+        alternating = getattr(self.c.data, 'alternating_ring', False)
+        if not alternating or self._t_set_ring is None:
+            return
+        use_ring = (epoch % 2 == 1)  # odd epochs → ring
+        t_set = self._t_set_ring if use_ring else self._t_set_full
+        self.train_dataset = t_set
+        self.train_loader, _ = get_dataloaders(t_set, t_set, self.c)  # v_set unused here
+        # suppress hard mining on full-set epochs to avoid off-boundary injections
+        self._hm_active_this_epoch = use_ring and self.c.hm.enabled
+        label = 'RING' if use_ring else 'FULL'
+        print(f"[alternating_ring] epoch {epoch+1}: {label} set ({len(t_set)} tiles)")
+
     def run(self):
-        """executes the main training loop for all epochs"""
+        """executes the main training loop, with optional pretraining phase"""
+        pretrain_epochs = int(getattr(self.c.tra, "pretrain_epochs", 0))
+        if pretrain_epochs > 0:
+            print(f"\n=== PRETRAINING PHASE ({pretrain_epochs} epochs) ===")
+            for ep in range(pretrain_epochs):
+                pt_loss = self._pretrain_epoch()
+                print(f"  Pretrain epoch {ep+1}/{pretrain_epochs}  loss={pt_loss:.4f}")
+                self.vis.writer.add_scalar("Pretrain/Loss", pt_loss, ep)
+            print("=== PRETRAINING COMPLETE — switching to BCE fine-tuning ===\n")
+            # reset optimizer/scheduler for the fine-tuning phase
+            self.optimizer, self.scheduler = create_optimizer_and_scheduler(self.model, self.c)
+        self._hm_active_this_epoch = self.c.hm.enabled  # default; overridden by alternating
         for epoch in range(self.c.tra.n_epochs):
             print(f"\n--- Epoch {epoch+1}/{self.c.tra.n_epochs} ---")
             start_time = time.time()
-            
+
+            # swap dataset for alternating-ring mode before anything else
+            self._switch_to_epoch_dataset(epoch)
+
             # activate data augmentation after a few initial epochs
             if epoch >= 5 and self.c.dl.data_aug:
                 self.train_dataset.apply_transforms = True
@@ -378,8 +545,9 @@ class Trainer:
             self._update_hard_mining_samples(epoch)
             
             # create a new injector for the epoch if hard samples are available
+            # in alternating-ring mode, only inject on ring epochs
             hard_injector = None
-            if self.hard_samples and self.c.hm.enabled:
+            if self.hard_samples and self._hm_active_this_epoch:
                 hard_injector = HardMiningInjector(self.hard_samples, self.train_dataset)
                 if (epoch % self.c.tra.eval_int) == 0:
                     self.vis.writer.add_scalar("HardMining/InjectedSamplesPlanned", len(self.hard_samples), epoch)
@@ -396,6 +564,15 @@ class Trainer:
             time_elapsed = time.time() - start_time
             self._log_epoch(epoch, train_metrics, val_metrics, time_elapsed)
 
+            # cooldown after heavy inference epochs (probe / eval) to prevent overheating
+            cooldown = int(getattr(self.c.tra, 'eval_cooldown_secs', 0))
+            is_probe_epoch = (epoch + 1) % self.c.tra.probe_int == 0
+            is_eval_epoch  = (epoch + 1) % self.c.tra.eval_int  == 0
+            if cooldown > 0 and (is_probe_epoch or is_eval_epoch):
+                kind = 'eval+probe' if is_eval_epoch and is_probe_epoch else ('eval' if is_eval_epoch else 'probe')
+                print(f"[COOLDOWN] {kind} epoch — sleeping {cooldown}s for hardware to cool...")
+                time.sleep(cooldown)
+
         self.vis.close()
         print("Training completed.")
 
@@ -407,6 +584,7 @@ def main():
     parser.add_argument("--eval-int", type=int, default=None, help="Override evaluation interval")
     parser.add_argument("--test-int", type=int, default=None, help="Override test figure interval")
     parser.add_argument("--probe-int", type=int, default=None, help="Override probe interval")
+    parser.add_argument("--log-dir", type=str, default=None, help="Override TensorBoard log directory")
 
     parser.add_argument("--scroll-id", type=int, default=None, help="Scroll id for train/valid")
     parser.add_argument("--scroll4-id", type=int, default=None, help="Scroll id for scroll4 eval path")
@@ -437,6 +615,35 @@ def main():
     parser.add_argument("--conv2-drop", type=float, default=None, help="Dropout after second conv block")
     parser.add_argument("--fc1-drop", type=float, default=None, help="Dropout on first FC layers")
     parser.add_argument("--fc2-drop", type=float, default=None, help="Dropout on final FC layer")
+    # campaign 4 additions
+    parser.add_argument("--input-mode", type=str, choices=["single","diff","triple","double","fulldepth"], default=None,
+                        help="Input representation mode")
+    parser.add_argument("--soft-label-prob", type=float, default=None,
+                        help="Probability of sampling flanking band with soft label for ink tiles")
+    parser.add_argument("--soft-label-value", type=float, default=None,
+                        help="Label value assigned to flanking-band ink tiles (default 0.3)")
+    parser.add_argument("--ranking-lambda", type=float, default=None,
+                        help="Weight for pairwise ranking loss (0=off)")
+    parser.add_argument("--ranking-margin", type=float, default=None,
+                        help="Margin for pairwise ranking loss (default 0.3)")
+    parser.add_argument("--pretrain-epochs", type=int, default=None,
+                        help="Epochs of self-supervised band-identity pretraining before BCE")
+    parser.add_argument("--preload-volume", action="store_true", default=False,
+                        help="load full zarr into RAM before training; only safe for small scrolls (~10GB free RAM needed)")
+    parser.add_argument("--ring-negatives", action="store_true", default=False,
+                        help="restrict training negatives to a ring around ink labels (~1:1 pos/neg ratio, no unlabeled-ink contamination)")
+    parser.add_argument("--eval-cooldown", type=int, default=None,
+                        help="seconds to sleep after probe/eval epochs to let hardware cool (default 0)")
+    parser.add_argument("--ring-label-source", type=str, default=None, choices=["eroded","original","closed"],
+                        help="which inklabels to use for ring boundary: 'original' (default, safest) or 'eroded'")
+    parser.add_argument("--alternating-ring", action="store_true", default=False,
+                        help="alternate between full dataset (even epochs) and ring dataset (odd epochs); hard mining only on ring epochs")
+    parser.add_argument("--depth", type=int, default=None,
+                        help="number of depth slices per tile (default 8; use 12 for ink band z=28-40)")
+    parser.add_argument("--train-d-start", type=int, default=None,
+                        help="start z-index of training depth window")
+    parser.add_argument("--train-d-end", type=int, default=None,
+                        help="end z-index of training depth window (exclusive); overrides the default train_d_start+depth")
     args = parser.parse_args()
     
     # load configuration and optionally override experiment name

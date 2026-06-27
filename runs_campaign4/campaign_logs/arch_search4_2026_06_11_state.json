@@ -1,0 +1,86 @@
+{
+  "campaign_id": "arch_search4_2026_06_11",
+  "created_at": "2026-06-11 16:48:45 UTC",
+  "completed": [
+    {
+      "run_id": 1,
+      "name": "cmp_arch_search4_2026_06_11_t01_diff_input",
+      "axis": "input",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 96,
+        "num-workers": 2,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 30,
+        "hm-frac": 0.05,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "no-hard-mining": true,
+        "arch": "v3_preact_baseline",
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign4",
+        "input-mode": "diff"
+      },
+      "why": "subtract pre-ink band (20-28) from ink band (32-40); removes baseline scroll absorption, leaving only differential carbon absorption \u2014 the direct physical signature of ink",
+      "expect": "cleaner ink signal without scroll-body noise; improved hard probe if ink features are subtle",
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign4\\cmp_arch_search4_2026_06_11_t01_diff_input_11_10-48-35",
+      "metrics": {
+        "valid_f1_best": 0.2840809226036072,
+        "valid_f1_last": 0.2009253203868866,
+        "readability_best": 0.3665008842945099,
+        "readability_last": 0.3028223216533661,
+        "probe_easy_last": 0.319193571805954,
+        "probe_hard_last": 0.21677160263061523,
+        "probe_scroll4_last": 0.15438924729824066
+      },
+      "ended_at": "2026-06-11 18:57:14 UTC",
+      "next_planned": "02:t02_triple_input"
+    },
+    {
+      "run_id": 2,
+      "name": "cmp_arch_search4_2026_06_11_t02_triple_input",
+      "axis": "input",
+      "overrides": {
+        "epochs": 20,
+        "scroll-id": 20230827161847,
+        "scroll4-id": 20231210132040,
+        "batch-size": 64,
+        "probe-int": 5,
+        "eval-int": 10,
+        "test-int": 30,
+        "hm-frac": 0.05,
+        "channel-mixing-prob": 0.0,
+        "conv1-drop": 0.0,
+        "conv2-drop": 0.0,
+        "fc1-drop": 0.0,
+        "fc2-drop": 0.0,
+        "l1-lambda": 0.0,
+        "no-hard-mining": true,
+        "arch": "v3_preact_baseline",
+        "log-dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign4",
+        "input-mode": "triple"
+      },
+      "why": "concatenate pre(20-28) + ink(32-40) + post(40-48) as 24 depth channels; model sees full band context and must learn the contrast pattern implicitly",
+      "expect": "model learns to compare bands; different failure mode from single-band; may detect faint ink through band-relative comparison",
+      "run_dir": "C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign4\\cmp_arch_search4_2026_06_11_t02_triple_input_11_12-51-04",
+      "metrics": {
+        "valid_f1_best": 0.4108433723449707,
+        "valid_f1_last": 0.37142857909202576,
+        "readability_best": 0.4118708670139313,
+        "readability_last": 0.4118708670139313,
+        "probe_easy_last": 0.5386452078819275,
+        "probe_hard_last": 0.2170095443725586,
+        "probe_scroll4_last": 0.1814795285463333
+      },
+      "ended_at": "2026-06-11 22:46:59 UTC",
+      "next_planned": "03:t03_diff_sigma15"
+    }
+  ],
+  "failed": []
+}

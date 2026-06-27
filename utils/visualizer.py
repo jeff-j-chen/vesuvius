@@ -37,7 +37,12 @@ if not hasattr(Image, "ANTIALIAS") and hasattr(Image, "Resampling"):
 import copy as _copy
 _inferno_nan = _copy.copy(plt.cm.inferno)
 _inferno_nan.set_bad(color=(0.45, 0.45, 0.45, 1.0))
-plt.cm.register_cmap(name='inferno_nan', cmap=_inferno_nan)
+# register_cmap was removed in matplotlib 3.9; use colormaps.register instead
+try:
+    import matplotlib as _mpl
+    _mpl.colormaps.register(_inferno_nan, name='inferno_nan', force=True)
+except Exception:
+    plt.cm.inferno_nan = _inferno_nan  # fallback: attach directly
 
 def group_by_depth(coords):
     """group tile coordinates by their depth offset"""
@@ -49,12 +54,9 @@ def group_by_depth(coords):
 def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max):
     """run batched prediction over given coords returning downsampled map.
 
-    zarr reads dominate inference time and are IO-bound; they release the GIL so
-    ThreadPoolExecutor parallelises them effectively on windows without spawn overhead.
-    all tiles are read in parallel first, then sent to the gpu in large batches.
+    reads tiles sequentially (no ThreadPoolExecutor) to avoid PCIe bus saturation
+    that causes hard system crashes on Blackwell GPUs under concurrent zarr+inference load.
     """
-    from concurrent.futures import ThreadPoolExecutor
-
     tile  = config.data.tile_size
     depth = config.data.depth
     H = y_range[1] - y_range[0]
@@ -63,8 +65,7 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     w_small = W // tile
     pmap = np.full((h_small, w_small), np.nan, dtype=np.float32)
 
-    # inference has no gradient overhead so use a much larger batch than training
-    infer_bs = max(config.dl.batch_size * 8, 512)
+    infer_bs = min(max(config.dl.batch_size * 2, 256), 256)
     device = config.device if torch.cuda.is_available() else "cpu"
 
     tile_list = [
@@ -74,26 +75,70 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
 
     def _read_one(args):
         d, y, x, y_off, x_off = args
-        if d + depth > vol.shape[0]:
-            return None, y_off, x_off
-        blk = np.array(vol[d:d + depth, y:y + tile, x:x + tile]).astype(np.float32)
-        blk = (blk - g_mean) / g_std
-        if blk.ndim == 3 and mask.ndim == 2:
-            m_tile = mask[y:y + tile, x:x + tile]
-            m_bin  = (m_tile > 0).astype(np.uint8)
-            blk[np.broadcast_to(np.expand_dims(m_bin, 0), blk.shape) == 0] = 0
-        blk = np.clip((blk - g_min) / (g_max - g_min + 1e-12), 0, 1)
-        if blk.shape != (depth, tile, tile):
+        mode = getattr(config.data, "input_mode", "single")
+
+        def _fetch(z_start, n_depth):
+            if z_start + n_depth > vol.shape[0]:
+                return None
+            blk = np.array(vol[z_start:z_start + n_depth, y:y + tile, x:x + tile]).astype(np.float32)
+            blk = (blk - g_mean) / g_std
+            if mask.ndim == 2:
+                m_bin = (mask[y:y + tile, x:x + tile] > 0).astype(np.uint8)
+                blk[np.broadcast_to(np.expand_dims(m_bin, 0), blk.shape) == 0] = 0
+            return np.clip((blk - g_min) / (g_max - g_min + 1e-12), 0, 1)
+
+        if mode == "diff":
+            pre_z = getattr(config.data, "pre_band_start", 20)
+            ink = _fetch(d, depth)
+            pre = _fetch(pre_z, depth)
+            if ink is None or pre is None:
+                return None, y_off, x_off
+            blk = np.clip(ink - pre, 0, None)
+            expected = (depth, tile, tile)
+        elif mode == "triple":
+            pre_z  = getattr(config.data, "pre_band_start", 20)
+            post_z = getattr(config.data, "post_band_start", 40)
+            pre  = _fetch(pre_z,  depth)
+            ink  = _fetch(d,      depth)
+            post = _fetch(post_z, depth)
+            if any(b is None for b in (pre, ink, post)):
+                return None, y_off, x_off
+            blk = np.concatenate([pre, ink, post], axis=0)
+            expected = (depth * 3, tile, tile)
+        elif mode == "double":
+            pre_z = getattr(config.data, "pre_band_start", 20)
+            ink = _fetch(d,     depth)
+            pre = _fetch(pre_z, depth)
+            if ink is None or pre is None:
+                return None, y_off, x_off
+            blk = np.concatenate([ink, pre], axis=0)
+            expected = (depth * 2, tile, tile)
+        elif mode == "fulldepth":
+            full_d = int(vol.shape[0])
+            if full_d > vol.shape[0]:
+                return None, y_off, x_off
+            blk_full = np.array(vol[0:full_d, y:y+tile, x:x+tile]).astype(np.float32)
+            blk_full = (blk_full - g_mean) / g_std
+            if mask.ndim == 2:
+                m_bin = (mask[y:y+tile, x:x+tile] > 0).astype(np.uint8)
+                blk_full[np.broadcast_to(np.expand_dims(m_bin, 0), blk_full.shape) == 0] = 0
+            blk = np.clip((blk_full - g_min) / (g_max - g_min + 1e-12), 0, 1)
+            expected = (full_d, tile, tile)
+        else:
+            if d + depth > vol.shape[0]:
+                return None, y_off, x_off
+            blk = _fetch(d, depth)
+            if blk is None:
+                return None, y_off, x_off
+            expected = (depth, tile, tile)
+
+        if blk.shape != expected:
             return None, y_off, x_off
         return blk, y_off, x_off
 
-    # read tiles in parallel; threads release GIL during zarr/numcodecs decompression
-    n_workers = min(8, max(1, len(tile_list)))
-    print(f"[predict] reading {len(tile_list)} tiles with {n_workers} threads...")
-    with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        results = list(tqdm(pool.map(_read_one, tile_list),
-                            total=len(tile_list),
-                            desc=f"Read {volume_name}", leave=False))
+    # read tiles sequentially — avoids concurrent zarr+GPU load that triggers WHEA crashes
+    print(f"[predict] reading {len(tile_list)} tiles sequentially...")
+    results = [_read_one(t) for t in tqdm(tile_list, desc=f"Read {volume_name}", leave=False)]
 
     valid = [(blk, y_off, x_off) for blk, y_off, x_off in results if blk is not None]
 
@@ -105,6 +150,8 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
 
             bt     = torch.from_numpy(np.stack(b_blocks)).float().unsqueeze(1).to(device)
             logits = model(bt)
+            if logits.dim() == 4:
+                logits = logits.flatten(1).max(dim=1, keepdim=True).values
             preds  = torch.sigmoid(logits).cpu().numpy().flatten()
 
             for (y_off, x_off), pred in zip(b_idx, preds):
@@ -211,21 +258,16 @@ class TensorboardVisualizer:
         self.volume = dm.vol
         self.mask = dm.mask
         self.labels = dm.labels
-        # respect original bounds for the main training scroll when applicable
-        if self.c.data.scroll1_id == 20230827161847:
-            # original spatial crop
-            y0, y1 = 200, 5600
-            x0, x1 = 1000, 4600
-            self.y_range = (y0, y1)
-            # split the cropped x-range 75/25 for train/valid to mirror original behavior
-            x_len = x1 - x0
-            split = int(x_len * 0.75)
-            self.train_x_range = (x0, x0 + split)
-            self.valid_x_range = (x0 + split, x1)
-        else:
-            self.train_x_range = dm.train_x
-            self.valid_x_range = dm.valid_x
-            self.y_range = dm.y_range
+        # eval figure uses full papyrus mask — shows entire scroll, not just ring tiles
+        self.eval_mask = self.mask
+        # use the dataloader's coordinate system directly — the old hardcoded crop
+        # (y0=200, x0=1000) was NOT tile-aligned (200%32=8, 1000%32=8), so the eval
+        # figure was evaluating tiles at (200+k*32, 1000+l*32) while training used
+        # (k*32, l*32). these grids never overlap: the eval was always evaluating
+        # untrained background tiles, never the actual ring/ink training tiles.
+        self.train_x_range = dm.train_x
+        self.valid_x_range = dm.valid_x
+        self.y_range = dm.y_range
         self.global_mean, self.global_std, self.global_min, self.global_max = dm.norm_stats
 
         # load test data region and scroll4 data with stats
@@ -408,38 +450,50 @@ class TensorboardVisualizer:
         return vol, mask, y_range, x_range
 
     def _build_probe_specs(self):
-        """fixed readability probe regions used for qualitative tracking"""
+        """fixed readability probe regions used for qualitative tracking.
+        all x/y coordinates are snapped to multiples of tile_size (32) so the
+        probe tile grid is co-aligned with the training tile grid."""
+        T = self.c.data.tile_size  # 32
+        def align(v): return (v // T) * T
         return [
             {
                 "tag": "Easy",
                 "title": "small scroll easy",
                 "segment_id": 20230827161847,
-                "x": 2100,
-                "y": 4370,
+                "x": align(2100),   # 2080
+                "y": align(4370),   # 4352
+                "size": 608,
+            },
+            {
+                "tag": "Medium",
+                "title": "small scroll medium",
+                "segment_id": 20230827161847,
+                "x": align(2578),   # 2560
+                "y": align(948),    # 928
                 "size": 608,
             },
             {
                 "tag": "Hard",
                 "title": "small scroll hard",
                 "segment_id": 20230827161847,
-                "x": 3744,
-                "y": 3862,
+                "x": align(3744),   # 3744 (already aligned)
+                "y": align(3862),   # 3840
                 "size": 608,
             },
             {
                 "tag": "Scroll4_Pi",
                 "title": "scroll4 pi",
                 "segment_id": 20231210132040,
-                "x": 1960,
-                "y": 7968,
+                "x": align(1960),   # 1952
+                "y": align(7968),   # 7968 (already aligned)
                 "size": 608,
             },
             {
                 "tag": "Scroll2",
                 "title": "scroll2",
                 "segment_id": 20230709155141,
-                "x": 3080,
-                "y": 748,
+                "x": align(3080),   # 3072
+                "y": align(748),    # 736
                 "size": 608,
             },
         ]
@@ -558,7 +612,10 @@ class TensorboardVisualizer:
                 continue
 
             pos_score = float(pred_map[yi, xi])
+            if not np.isfinite(pos_score):
+                continue
             neg_scores = pred_map[y0:y1, x0:x1][local_neg]
+            neg_scores = neg_scores[np.isfinite(neg_scores)]
             if neg_scores.size == 0:
                 continue
 
@@ -613,6 +670,7 @@ class TensorboardVisualizer:
     def _compute_spill_metrics(self, pred_map, label_binary, valid_tiles):
         """measure positive mass spill and binary component structure at ink budget"""
         valid_scores = pred_map[valid_tiles]
+        valid_scores = valid_scores[np.isfinite(valid_scores)]  # drop NaN (outside-volume tiles)
         if valid_scores.size == 0:
             return np.nan, np.nan, np.nan
 
@@ -650,9 +708,15 @@ class TensorboardVisualizer:
           - added:   coverage_recall             (fraction of labeled ink tiles with score > 0.3)
           - added:   coherence                   (mean_component_size, normalised)
         """
-        valid_scores = pred_map[valid_tiles]
-        valid_labels = label_binary[valid_tiles].astype(int)
-        valid_fraction = label_fraction[valid_tiles]
+        valid_scores    = pred_map[valid_tiles]
+        valid_labels    = label_binary[valid_tiles].astype(int)
+        valid_fraction  = label_fraction[valid_tiles]
+
+        # drop tiles where the prediction map has NaN (tile outside volume or input-mode failed)
+        finite_mask    = np.isfinite(valid_scores)
+        valid_scores   = valid_scores[finite_mask]
+        valid_labels   = valid_labels[finite_mask]
+        valid_fraction = valid_fraction[finite_mask]
 
         local_contrast, local_ranking = self._compute_local_contrast_metrics(pred_map, label_binary, valid_tiles)
         recall_at_1pct_fpr, partial_auc_at_1pct_fpr = self._compute_low_fpr_metrics(valid_scores, valid_labels, max_fpr=0.01)
@@ -665,6 +729,7 @@ class TensorboardVisualizer:
         # measures whether the model is FINDING most of the ink, not just the easiest ink
         COVERAGE_THRESHOLD = 0.3
         pos_scores = pred_map[valid_tiles & label_binary]
+        pos_scores = pos_scores[np.isfinite(pos_scores)]   # drop NaN before mean
         coverage_recall = float(np.mean(pos_scores > COVERAGE_THRESHOLD)) if pos_scores.size > 0 else np.nan
 
         # coherence: normalise mean_component_size — larger blobs = more letter-like structure
@@ -679,9 +744,11 @@ class TensorboardVisualizer:
         coverage_norm   = np.clip(np.nan_to_num(coverage_recall, nan=0.0), 0.0, 1.0)
         corr_norm       = np.clip((np.nan_to_num(fraction_corr_spearman, nan=-1.0) + 1.0) / 2.0, 0.0, 1.0)
 
-        # weighted composite: coverage and coherence get 1.5× because they most directly
-        # capture whether a human would see readable structure in the prediction map
-        weights = [1.0, 1.0, 1.0, 1.0, 1.5, 1.0, 1.5]
+        # weighted composite: local_contrast is the primary signal — high weight.
+        # coverage is deliberately down-weighted (0.5×): ring-trained models saturate it
+        # at 1.0 trivially (everything fires), making it uninformative for model selection.
+        # coherence up-weighted (2.0×): letter-shaped blobs = meaningful structure.
+        weights = [2.0, 1.0, 1.0, 1.0, 0.5, 1.0, 2.0]
         terms   = [contrast_norm, ranking_norm, recall5_norm, pauc5_norm, coverage_norm, corr_norm, coherence]
         readability_composite = float(np.average(terms, weights=weights))
 
@@ -746,7 +813,8 @@ class TensorboardVisualizer:
         self.log_output_histogram(train_metrics, val_metrics, epoch)
         self.log_metrics_comparison(train_metrics, val_metrics, epoch)
 
-        self.log_weight_histograms(model, epoch)
+        # weight/gradient histogram logging disabled — too expensive on large models
+        # self.log_weight_histograms(model, epoch)
 
         if epoch == 0:
             print("Logging hyperparameters and model graph")
@@ -912,8 +980,12 @@ class TensorboardVisualizer:
 
         z_range = (self.c.data.d_start, self.c.data.d_end)
 
-        train_coords = self._gen_tile_coords(z_range, self.y_range, self.train_x_range, self.mask)
-        valid_coords = self._gen_tile_coords(z_range, self.y_range, self.valid_x_range, self.mask)
+        # use ring mask when ring_negatives=True so the eval figure only renders
+        # ring+ink tiles — everything else stays NaN and renders black, matching
+        # the actual training distribution instead of swamping the signal with OOD noise
+        eval_mask = getattr(self, 'eval_mask', self.mask)
+        train_coords = self._gen_tile_coords(z_range, self.y_range, self.train_x_range, eval_mask)
+        valid_coords = self._gen_tile_coords(z_range, self.y_range, self.valid_x_range, eval_mask)
 
         train_grouped = group_by_depth(train_coords)
         valid_grouped = group_by_depth(valid_coords)
@@ -950,12 +1022,12 @@ class TensorboardVisualizer:
             v_coords = valid_grouped.get(d_off, [])
 
             t_pred = predict_tiles(
-                self.c, model, self.volume, self.mask, t_coords, self.y_range, self.train_x_range,
+                self.c, model, self.volume, eval_mask, t_coords, self.y_range, self.train_x_range,
                 depth_start, "train", self.global_mean, self.global_std, self.global_min, self.global_max
             )
 
             v_pred = predict_tiles(
-                self.c, model, self.volume, self.mask, v_coords, self.y_range, self.valid_x_range,
+                self.c, model, self.volume, eval_mask, v_coords, self.y_range, self.valid_x_range,
                 depth_start, "valid", self.global_mean, self.global_std, self.global_min, self.global_max
             )
 
@@ -999,8 +1071,7 @@ class TensorboardVisualizer:
             mining_f.write(json.dumps({"_type": "meta", "hard_negatives": hn_cnt, "hard_positives": hp_cnt}) + "\n")
             mining_f.close()
             print(f"[HARD][Eval] Finished mining epoch {epoch}: neg={hn_cnt} pos={hp_cnt}")
-        else:
-            print("[HARD][Eval] mining disabled, skipping file write")
+        # no print when disabled — the user already knows
 
         if hm_enabled:
             self.writer.add_scalar("HardMining/HardNegatives", hn_cnt, epoch)
@@ -1134,6 +1205,8 @@ class TensorboardVisualizer:
 
                 bt = torch.from_numpy(np.stack(b_blocks)).float().unsqueeze(1).to(device)
                 logits = model(bt)
+                if logits.dim() == 4:
+                    logits = logits.flatten(1).max(dim=1, keepdim=True).values
                 scores = torch.sigmoid(logits).cpu().numpy().flatten()
 
                 all_scores.extend(scores)
@@ -1740,7 +1813,7 @@ class TensorboardVisualizer:
                     bbox=dict(facecolor="black", alpha=0.45, edgecolor="none", pad=1.5),
                 )
 
-        fig.suptitle("Probe patches by depth: easy | hard | scroll4", fontsize=11)
+        fig.suptitle("Probe patches by depth: easy | medium | hard | scroll4", fontsize=11)
         plt.tight_layout(rect=[0, 0, 1, 0.97])
         return fig
 

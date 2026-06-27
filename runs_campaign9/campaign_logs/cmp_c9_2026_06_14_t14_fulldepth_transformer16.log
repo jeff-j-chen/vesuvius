@@ -1,0 +1,56 @@
+C:\Users\ChenJeff\Documents\vesuvius\train.py:160: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = GradScaler()
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', scroll1_id=20230827161847, scroll2_id=20230709155141, scroll4_id=20231210132040, test_on_scroll4=False, tile_size=32, depth=8, d_start=28, d_end=48, train_d_start=32, train_d_end=40, smooth_sigma=0.0, input_mode='fulldepth', pre_band_start=20, pre_band_end=28, post_band_start=40, post_band_end=48, preload_to_ram=False, ring_negatives=True, ring_label_source='original', soft_label_prob=0.0, soft_label_value=0.3)
+dl: DataloaderConfig(batch_size=64, num_workers=0, data_aug=True, channel_mixing_prob=0.0, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=20, lr=0.0001, weight_decay=0, l1_lambda=0.0, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_campaign9', eval_int=10, test_int=45, probe_int=5, eval_aggregate=True, focal_gamma=0.0, ranking_lambda=0.0, ranking_margin=0.3, pretrain_epochs=0)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.0, fc1_drop=0.0, fc2_drop=0.0, pooling='avg', gem_p=3.0, conv3_dilation=1, arch='v8_fulldepth_transformer16')
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(enabled=False, hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_c9_2026_06_14_t14_fulldepth_transformer16')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_c9_2026_06_14_t14_fulldepth_transformer16
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20230827161847
+[ring_negatives] source='original' tile_radius=2  ink_tiles=3883  ring_tiles=4821  ratio=1.24
+sampling datasets to calculate average class weights
+label distribution (from 7500 samples): Counter({0: 4178, 1: 3322})
+using average pos_weight: 1.26
+Data setup done in 62.98s
+Creating model and loss... l1 lambda 0.0... Model parameters (v8_fulldepth_transformer16): 12,639,489
+ done in 5.54s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20230827161847
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs_campaign9\cmp_c9_2026_06_14_t14_fulldepth_transformer16_14_15-56-41
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs_campaign9
+
+--- Epoch 1/20 ---
+Training:   0%|          | 0/110 [00:00<?, ?it/s]Training:   0%|          | 0/110 [00:00<?, ?it/s]
+Traceback (most recent call last):
+  File "C:\Users\ChenJeff\Documents\vesuvius\train.py", line 613, in <module>
+    main()
+  File "C:\Users\ChenJeff\Documents\vesuvius\train.py", line 610, in main
+    trainer.run()
+  File "C:\Users\ChenJeff\Documents\vesuvius\train.py", line 513, in run
+    train_metrics = self.train_epoch(hard_injector)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ChenJeff\Documents\vesuvius\train.py", line 310, in train_epoch
+    b_scores, b_labels, b_loss, b_raw_loss = self._train_batch(b_imgs, b_labels, mask)
+                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ChenJeff\Documents\vesuvius\train.py", line 224, in _train_batch
+    outputs = self.model(b_imgs)
+              ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ChenJeff\Documents\vesuvius\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ChenJeff\Documents\vesuvius\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ChenJeff\Documents\vesuvius\utils\model.py", line 3366, in forward
+    tokens = self.embed(profile.unsqueeze(-1)) + self.pos
+             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~
+RuntimeError: The size of tensor a (64) must match the size of tensor b (8) at non-singleton dimension 1

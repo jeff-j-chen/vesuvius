@@ -70,6 +70,25 @@ class FocalBCELoss(nn.Module):
         return focal_weight * bce_loss          # same shape as input; caller handles masking/reduction
 
 
+def pairwise_ranking_loss(scores, labels, margin=0.3):
+    """pairwise ranking loss: every positive tile must outscore every negative by >= margin.
+
+    scores: (B,) sigmoid probabilities (detached from main graph is fine)
+    labels: (B,) ground truth in {0, 1} or soft values; treated as pos if > 0.5
+    returns a scalar loss; zero if no positives or no negatives in batch.
+    """
+    pos_mask = labels > 0.5
+    neg_mask = ~pos_mask
+    if not pos_mask.any() or not neg_mask.any():
+        return scores.sum() * 0.0  # zero but gradient-connected
+
+    pos_scores = scores[pos_mask]                          # (n_pos,)
+    neg_scores = scores[neg_mask]                          # (n_neg,)
+    # violation matrix: how much each (pos, neg) pair fails the margin
+    violations = margin - pos_scores.unsqueeze(1) + neg_scores.unsqueeze(0)  # (n_pos, n_neg)
+    return torch.clamp(violations, min=0.0).mean()
+
+
 def create_loss_function(pos_weight, config: Config):
     """creates the loss function; focal loss when focal_gamma > 0"""
     gamma = float(getattr(config.tra, 'focal_gamma', 0.0))

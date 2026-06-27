@@ -1838,3 +1838,780 @@ arcitecture search campaign 3 — builds on preact_res and residual_no_cbam.
 - axis: simplification
 - why: deeper 2D CNN treating depth as channels (64→256→512→512, 3rd conv block); t18_depth_project was 2nd best visually in campaign 2 — adding depth may help further; fully decouples depth selection from spatial pattern recognition
 - expected: best visual coherence in the campaign; improved coverage_recall
+
+
+## Automated Campaign arch_search4_2026_06_11
+
+input/loss redesign — differential absorption + ranking loss + soft labels.
+
+
+### Test 01: cmp_arch_search4_2026_06_11_t01_diff_input
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: input
+- why: subtract pre-ink band (20-28) from ink band (32-40); removes baseline scroll absorption, leaving only differential carbon absorption — the direct physical signature of ink
+- expected: cleaner ink signal without scroll-body noise; improved hard probe if ink features are subtle
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 02:t02_triple_input
+
+
+### Test 02: cmp_arch_search4_2026_06_11_t02_triple_input
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: input
+- why: concatenate pre(20-28) + ink(32-40) + post(40-48) as 24 depth channels; model sees full band context and must learn the contrast pattern implicitly
+- expected: model learns to compare bands; different failure mode from single-band; may detect faint ink through band-relative comparison
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 03:t03_diff_sigma15
+
+
+### Test 03: cmp_arch_search4_2026_06_11_t03_diff_sigma15
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: input
+- why: differential input + spatial smoothing (sigma=1.5, the identified sweet spot from campaign 3); combines better physics encoding with inference-time coherence improvement
+- expected: best hard probe and coherence of the input-only tier
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 04:t04_triple_sigma15
+
+
+### Test 04: cmp_arch_search4_2026_06_11_t04_triple_sigma15
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: input
+- why: triple band + sigma=1.5 smoothing; tests whether 3-band context + coherence fix stack
+- expected: strong if triple input is learning useful cross-band patterns
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 05:t05_diff_depth_project
+
+
+### Test 05: cmp_arch_search4_2026_06_11_t05_diff_depth_project
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: input
+- why: differential input + 2D CNN treating depth as channels; the 2D CNN is well-suited to the 8-channel diff tensor (each channel = one depth-diff slice); was 2nd best visually in campaign 2 (as v2_depth_project)
+- expected: depth_project_deep may be better suited to differential input than 3D conv
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 06:t06_pretrain5_diff
+
+
+### Test 06: cmp_arch_search4_2026_06_11_t06_pretrain5_diff
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: input
+- why: 5 epochs of band-identity pretraining (can model tell ink band from flanking band?) followed by BCE fine-tuning on diff input; backbone learns differential absorption representation before ink classification
+- expected: better generalization to faint ink; contrastive pre-training encodes ink-specific features
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 07:t07_ranking_01
+
+
+### Test 07: cmp_arch_search4_2026_06_11_t07_ranking_01
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: loss
+- why: pairwise ranking loss (lambda=0.1): every positive tile must outscore every negative in the batch by margin=0.3; directly attacks the abstention failure mode — the model cannot minimize loss by predicting everything as background
+- expected: improved recall, broader predictions; score distribution widens
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 08:t08_ranking_03
+
+
+### Test 08: cmp_arch_search4_2026_06_11_t08_ranking_03
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: loss
+- why: stronger ranking pressure (lambda=0.3); tests whether heavier ranking regularization further improves hard probe at cost of easy precision
+- expected: more aggressive recall; may reduce easy ROI performance
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 09:t09_focal2_ranking01
+
+
+### Test 09: cmp_arch_search4_2026_06_11_t09_focal2_ranking01
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: loss
+- why: focal loss (down-weight easy examples) + ranking loss (force separation); focal stops abstention by de-emphasizing confident background tiles, ranking forces positive tiles to stand out — both attack the same problem from different angles
+- expected: strongest improvement in hard probe of the loss-only tier; possible F1 trade-off
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 10:t10_diff_ranking01
+
+
+### Test 10: cmp_arch_search4_2026_06_11_t10_diff_ranking01
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: loss
+- why: better physics encoding (diff input) + training pressure toward separation (ranking); tests whether the two best single-axis improvements stack
+- expected: additive improvement from both; strong hard probe candidate
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 11:t11_diff_focal_ranking
+
+
+### Test 11: cmp_arch_search4_2026_06_11_t11_diff_focal_ranking
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: loss
+- why: triple combination: differential physics encoding + focal down-weighting + ranking pressure
+- expected: potentially best hard probe in the campaign; kitchen sink for loss tier
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 12:t12_soft_labels_03
+
+
+### Test 12: cmp_arch_search4_2026_06_11_t12_soft_labels_03
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: soft_labels
+- why: 30% of the time, labeled ink tiles are sampled from the flanking band instead, with label=0.3 (weak positive); model learns that ink fades gradually at depth edges — teaches it to be less binary at ambiguous depths
+- expected: improved calibration; model less overconfident; may help hard probe indirectly
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 13:t13_soft_labels_01
+
+
+### Test 13: cmp_arch_search4_2026_06_11_t13_soft_labels_01
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: soft_labels
+- why: softer flanking label (0.1 instead of 0.3); very weak signal that the flanking bands contain trace ink; tests sensitivity of the label strength hyperparameter
+- expected: more conservative improvement than t12; calibration effect at flanking depths
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 14:t14_diff_soft03
+
+
+### Test 14: cmp_arch_search4_2026_06_11_t14_diff_soft03
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: soft_labels
+- why: diff input + soft labels; the diff naturally handles depth-band variation but soft labels additionally teach the model that weak differential signals are still ink
+- expected: synergy between physics encoding and label smoothing
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 15:t15_triple_soft03
+
+
+### Test 15: cmp_arch_search4_2026_06_11_t15_triple_soft03
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: soft_labels
+- why: triple input + soft labels; the model sees all three bands and learns that ink tiles in flanking bands should score at 0.3
+- expected: improved hard probe if triple input is learning meaningful cross-band patterns
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 16:t16_diff_rank_soft_sig
+
+
+### Test 16: cmp_arch_search4_2026_06_11_t16_diff_rank_soft_sig
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: combo
+- why: diff input + ranking(0.1) + soft_labels(0.3) + sigma=1.5; stacks input physics, training separation pressure, label smoothing, and inference coherence
+- expected: best hard probe in the campaign if all four axes are complementary
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 17:t17_triple_rank_soft_sig
+
+
+### Test 17: cmp_arch_search4_2026_06_11_t17_triple_rank_soft_sig
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: combo
+- why: same as t16 but with triple input instead of diff; tests whether the implicit cross-band comparison outperforms the explicit diff
+- expected: strong; useful to compare vs t16 to determine best input mode
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 18:t18_diff_focal_rank_soft_sig
+
+
+### Test 18: cmp_arch_search4_2026_06_11_t18_diff_focal_rank_soft_sig
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: combo
+- why: full kitchen sink: diff + focal + ranking + soft labels + smoothing; softer labels (0.1) to avoid conflicting with focal's down-weighting of easy examples
+- expected: highest possible recall; may trade off easy ROI precision
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 19:t19_pretrain_diff_rank_sig
+
+
+### Test 19: cmp_arch_search4_2026_06_11_t19_pretrain_diff_rank_sig
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: combo
+- why: pretraining + diff + ranking + smoothing; tests whether contrastive initialization helps when combined with the best loss and inference fixes
+- expected: improved hard probe from better feature initialization; novel test point
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 20:t20_triple_focal_rank_soft_sig
+
+
+### Test 20: cmp_arch_search4_2026_06_11_t20_triple_focal_rank_soft_sig
+- started_at: 2026-06-11 16:43:36 UTC
+- status: started
+- axis: combo
+- why: triple input kitchen sink: stronger ranking (0.3) to compensate for triple's implicit rather than explicit band comparison; all other improvements stacked
+- expected: complements t18; highest parameter count for ablation purposes
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: none
+
+
+### Test 01: cmp_arch_search4_2026_06_11_t01_diff_input
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: input
+- why: subtract pre-ink band (20-28) from ink band (32-40); removes baseline scroll absorption, leaving only differential carbon absorption — the direct physical signature of ink
+- expected: cleaner ink signal without scroll-body noise; improved hard probe if ink features are subtle
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 02:t02_triple_input
+
+
+### Test 02: cmp_arch_search4_2026_06_11_t02_triple_input
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: input
+- why: concatenate pre(20-28) + ink(32-40) + post(40-48) as 24 depth channels; model sees full band context and must learn the contrast pattern implicitly
+- expected: model learns to compare bands; different failure mode from single-band; may detect faint ink through band-relative comparison
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 03:t03_diff_sigma15
+
+
+### Test 03: cmp_arch_search4_2026_06_11_t03_diff_sigma15
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: input
+- why: differential input + spatial smoothing (sigma=1.5, the identified sweet spot from campaign 3); combines better physics encoding with inference-time coherence improvement
+- expected: best hard probe and coherence of the input-only tier
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 04:t04_triple_sigma15
+
+
+### Test 04: cmp_arch_search4_2026_06_11_t04_triple_sigma15
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: input
+- why: triple band + sigma=1.5 smoothing; tests whether 3-band context + coherence fix stack
+- expected: strong if triple input is learning useful cross-band patterns
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 05:t05_diff_depth_project
+
+
+### Test 05: cmp_arch_search4_2026_06_11_t05_diff_depth_project
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: input
+- why: differential input + 2D CNN treating depth as channels; the 2D CNN is well-suited to the 8-channel diff tensor (each channel = one depth-diff slice); was 2nd best visually in campaign 2 (as v2_depth_project)
+- expected: depth_project_deep may be better suited to differential input than 3D conv
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 06:t06_pretrain5_diff
+
+
+### Test 06: cmp_arch_search4_2026_06_11_t06_pretrain5_diff
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: input
+- why: 5 epochs of band-identity pretraining (can model tell ink band from flanking band?) followed by BCE fine-tuning on diff input; backbone learns differential absorption representation before ink classification
+- expected: better generalization to faint ink; contrastive pre-training encodes ink-specific features
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 07:t07_ranking_01
+
+
+### Test 07: cmp_arch_search4_2026_06_11_t07_ranking_01
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: loss
+- why: pairwise ranking loss (lambda=0.1): every positive tile must outscore every negative in the batch by margin=0.3; directly attacks the abstention failure mode — the model cannot minimize loss by predicting everything as background
+- expected: improved recall, broader predictions; score distribution widens
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 08:t08_ranking_03
+
+
+### Test 08: cmp_arch_search4_2026_06_11_t08_ranking_03
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: loss
+- why: stronger ranking pressure (lambda=0.3); tests whether heavier ranking regularization further improves hard probe at cost of easy precision
+- expected: more aggressive recall; may reduce easy ROI performance
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 09:t09_focal2_ranking01
+
+
+### Test 09: cmp_arch_search4_2026_06_11_t09_focal2_ranking01
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: loss
+- why: focal loss (down-weight easy examples) + ranking loss (force separation); focal stops abstention by de-emphasizing confident background tiles, ranking forces positive tiles to stand out — both attack the same problem from different angles
+- expected: strongest improvement in hard probe of the loss-only tier; possible F1 trade-off
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 10:t10_diff_ranking01
+
+
+### Test 10: cmp_arch_search4_2026_06_11_t10_diff_ranking01
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: loss
+- why: better physics encoding (diff input) + training pressure toward separation (ranking); tests whether the two best single-axis improvements stack
+- expected: additive improvement from both; strong hard probe candidate
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 11:t11_diff_focal_ranking
+
+
+### Test 11: cmp_arch_search4_2026_06_11_t11_diff_focal_ranking
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: loss
+- why: triple combination: differential physics encoding + focal down-weighting + ranking pressure
+- expected: potentially best hard probe in the campaign; kitchen sink for loss tier
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 12:t12_soft_labels_03
+
+
+### Test 12: cmp_arch_search4_2026_06_11_t12_soft_labels_03
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: soft_labels
+- why: 30% of the time, labeled ink tiles are sampled from the flanking band instead, with label=0.3 (weak positive); model learns that ink fades gradually at depth edges — teaches it to be less binary at ambiguous depths
+- expected: improved calibration; model less overconfident; may help hard probe indirectly
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 13:t13_soft_labels_01
+
+
+### Test 13: cmp_arch_search4_2026_06_11_t13_soft_labels_01
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: soft_labels
+- why: softer flanking label (0.1 instead of 0.3); very weak signal that the flanking bands contain trace ink; tests sensitivity of the label strength hyperparameter
+- expected: more conservative improvement than t12; calibration effect at flanking depths
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 14:t14_diff_soft03
+
+
+### Test 14: cmp_arch_search4_2026_06_11_t14_diff_soft03
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: soft_labels
+- why: diff input + soft labels; the diff naturally handles depth-band variation but soft labels additionally teach the model that weak differential signals are still ink
+- expected: synergy between physics encoding and label smoothing
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 15:t15_triple_soft03
+
+
+### Test 15: cmp_arch_search4_2026_06_11_t15_triple_soft03
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: soft_labels
+- why: triple input + soft labels; the model sees all three bands and learns that ink tiles in flanking bands should score at 0.3
+- expected: improved hard probe if triple input is learning meaningful cross-band patterns
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 16:t16_diff_rank_soft_sig
+
+
+### Test 16: cmp_arch_search4_2026_06_11_t16_diff_rank_soft_sig
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: combo
+- why: diff input + ranking(0.1) + soft_labels(0.3) + sigma=1.5; stacks input physics, training separation pressure, label smoothing, and inference coherence
+- expected: best hard probe in the campaign if all four axes are complementary
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 17:t17_triple_rank_soft_sig
+
+
+### Test 17: cmp_arch_search4_2026_06_11_t17_triple_rank_soft_sig
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: combo
+- why: same as t16 but with triple input instead of diff; tests whether the implicit cross-band comparison outperforms the explicit diff
+- expected: strong; useful to compare vs t16 to determine best input mode
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 18:t18_diff_focal_rank_soft_sig
+
+
+### Test 18: cmp_arch_search4_2026_06_11_t18_diff_focal_rank_soft_sig
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: combo
+- why: full kitchen sink: diff + focal + ranking + soft labels + smoothing; softer labels (0.1) to avoid conflicting with focal's down-weighting of easy examples
+- expected: highest possible recall; may trade off easy ROI precision
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 19:t19_pretrain_diff_rank_sig
+
+
+### Test 19: cmp_arch_search4_2026_06_11_t19_pretrain_diff_rank_sig
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: combo
+- why: pretraining + diff + ranking + smoothing; tests whether contrastive initialization helps when combined with the best loss and inference fixes
+- expected: improved hard probe from better feature initialization; novel test point
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: 20:t20_triple_focal_rank_soft_sig
+
+
+### Test 20: cmp_arch_search4_2026_06_11_t20_triple_focal_rank_soft_sig
+- started_at: 2026-06-11 16:43:50 UTC
+- status: started
+- axis: combo
+- why: triple input kitchen sink: stronger ranking (0.3) to compensate for triple's implicit rather than explicit band comparison; all other improvements stacked
+- expected: complements t18; highest parameter count for ablation purposes
+- status: completed
+- run_dir: None
+- results: f1=None, probe_hard=None, probe_easy=None
+- next_planned_based_on_results: none
+
+
+### Test 01: cmp_arch_search4_2026_06_11_t01_diff_input
+- started_at: 2026-06-11 16:48:45 UTC
+- status: started
+- axis: input
+- why: subtract pre-ink band (20-28) from ink band (32-40); removes baseline scroll absorption, leaving only differential carbon absorption — the direct physical signature of ink
+- expected: cleaner ink signal without scroll-body noise; improved hard probe if ink features are subtle
+- status: failed
+- return_code: 1
+- next_planned: 02:t02_triple_input
+
+
+### Test 02: cmp_arch_search4_2026_06_11_t02_triple_input
+- started_at: 2026-06-11 16:49:00 UTC
+- status: started
+- axis: input
+- why: concatenate pre(20-28) + ink(32-40) + post(40-48) as 24 depth channels; model sees full band context and must learn the contrast pattern implicitly
+- expected: model learns to compare bands; different failure mode from single-band; may detect faint ink through band-relative comparison
+- status: failed
+- return_code: 1
+- next_planned: 03:t03_diff_sigma15
+
+
+### Test 03: cmp_arch_search4_2026_06_11_t03_diff_sigma15
+- started_at: 2026-06-11 16:49:11 UTC
+- status: started
+- axis: input
+- why: differential input + spatial smoothing (sigma=1.5, the identified sweet spot from campaign 3); combines better physics encoding with inference-time coherence improvement
+- expected: best hard probe and coherence of the input-only tier
+
+
+### Test 01: cmp_arch_search4_2026_06_11_t01_diff_input
+- started_at: 2026-06-11 16:49:35 UTC
+- status: started
+- axis: input
+- why: subtract pre-ink band (20-28) from ink band (32-40); removes baseline scroll absorption, leaving only differential carbon absorption — the direct physical signature of ink
+- expected: cleaner ink signal without scroll-body noise; improved hard probe if ink features are subtle
+
+
+### Test 01: cmp_arch_search4_2026_06_11_t01_diff_input
+- started_at: 2026-06-11 17:48:16 UTC
+- status: started
+- axis: input
+- why: subtract pre-ink band (20-28) from ink band (32-40); removes baseline scroll absorption, leaving only differential carbon absorption — the direct physical signature of ink
+- expected: cleaner ink signal without scroll-body noise; improved hard probe if ink features are subtle
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs_campaign4\cmp_arch_search4_2026_06_11_t01_diff_input_11_10-48-35
+- results: f1=0.2009253203868866, probe_hard=0.21677160263061523, probe_easy=0.319193571805954
+- next_planned_based_on_results: 02:t02_triple_input
+
+
+### Test 02: cmp_arch_search4_2026_06_11_t02_triple_input
+- started_at: 2026-06-11 18:57:14 UTC
+- status: started
+- axis: input
+- why: concatenate pre(20-28) + ink(32-40) + post(40-48) as 24 depth channels; model sees full band context and must learn the contrast pattern implicitly
+- expected: model learns to compare bands; different failure mode from single-band; may detect faint ink through band-relative comparison
+
+
+### Test 01: cmp_readability_2026_06_08_t01_baseline_probe1
+- started_at: 2026-06-11 19:50:43 UTC
+- status: started
+- changed: epochs=20, scroll-id=20230827161847, scroll4-id=20231210132040, batch-size=96, num-workers=2, probe-int=5, eval-int=10, test-int=30, hm-frac=0.05
+- why: baseline with per-epoch probe metrics for fast readability monitoring
+- expected: stable baseline for readability composite and probe trends
+- next_planned_based_on_results: pending completion
+
+
+### Test 02: cmp_arch_search4_2026_06_11_t02_triple_input
+- started_at: 2026-06-11 19:50:50 UTC
+- status: started
+- axis: input
+- why: concatenate pre(20-28) + ink(32-40) + post(40-48) as 24 depth channels; model sees full band context and must learn the contrast pattern implicitly
+- expected: model learns to compare bands; different failure mode from single-band; may detect faint ink through band-relative comparison
+- status: completed
+- run_dir: C:\Users\ChenJeff\Documents\vesuvius\runs_campaign4\cmp_arch_search4_2026_06_11_t02_triple_input_11_12-51-04
+- results: f1=0.37142857909202576, probe_hard=0.2170095443725586, probe_easy=0.5386452078819275
+- next_planned_based_on_results: 03:t03_diff_sigma15
+
+
+### Test 03: cmp_arch_search4_2026_06_11_t03_diff_sigma15
+- started_at: 2026-06-11 22:46:59 UTC
+- status: started
+- axis: input
+- why: differential input + spatial smoothing (sigma=1.5, the identified sweet spot from campaign 3); combines better physics encoding with inference-time coherence improvement
+- expected: best hard probe and coherence of the input-only tier
+- status: failed
+- return_code: 1
+- next_planned: 04:t04_triple_sigma15
+
+
+### Test 04: cmp_arch_search4_2026_06_11_t04_triple_sigma15
+- started_at: 2026-06-11 22:47:34 UTC
+- status: started
+- axis: input
+- why: triple band + sigma=1.5 smoothing; tests whether 3-band context + coherence fix stack
+- expected: strong if triple input is learning useful cross-band patterns
+
+
+### Test 03: cmp_arch_search4_2026_06_11_t03_diff_sigma15
+- started_at: 2026-06-11 23:04:05 UTC
+- status: started
+- axis: input
+- why: differential input + spatial smoothing (sigma=1.5, the identified sweet spot from campaign 3); combines better physics encoding with inference-time coherence improvement
+- expected: best hard probe and coherence of the input-only tier
+
+
+### Test 03: cmp_arch_search4_2026_06_11_t03_diff_sigma15
+- started_at: 2026-06-11 23:20:08 UTC
+- status: started
+- axis: input
+- why: differential input + spatial smoothing (sigma=1.5, the identified sweet spot from campaign 3); combines better physics encoding with inference-time coherence improvement
+- expected: best hard probe and coherence of the input-only tier
+
+
+## Automated Campaign c5_2026_06_11
+
+campaign 5 — MIL, depth profile, spectral, per-voxel, siamese, AE approaches.
+
+
+### cmp_c5_2026_06_11_t01_mil_attention
+- started_at: 2026-06-11 23:46:02 UTC
+- status: started
+- axis: mil
+- why: MIL attention pooling: weights spatial positions by learned relevance; the ONLY pooling that doesn't dilute a signal occupying <1% of tile volume
+- expected: substantial hard probe improvement vs any campaign 2-4 result
+
+
+### cmp_c5_2026_06_11_t01_mil_attention
+- started_at: 2026-06-11 23:46:18 UTC
+- status: started
+- axis: mil
+- why: MIL attention pooling: weights spatial positions by learned relevance; the ONLY pooling that doesn't dilute a signal occupying <1% of tile volume
+- expected: substantial hard probe improvement vs any campaign 2-4 result
+
+
+### cmp_c5_2026_06_11_t01_mil_attention
+- started_at: 2026-06-12 00:01:19 UTC
+- status: started
+- axis: mil
+- why: MIL attention pooling: weights spatial positions by learned relevance; the ONLY pooling that doesn't dilute a signal occupying <1% of tile volume
+- expected: substantial hard probe improvement vs any campaign 2-4 result
+- status: completed
+- probe_hard=0.23934556543827057  probe_easy=0.4384549558162689  f1=0.36219432950019836
+- next_planned: 02:t02_mil_gated
+
+
+### cmp_c5_2026_06_11_t02_mil_gated
+- started_at: 2026-06-12 00:53:01 UTC
+- status: started
+- axis: mil
+- why: gated MIL (Ilse 2018): two-branch gate prevents attention collapse under class imbalance — more stable training than vanilla MIL attention
+- expected: comparable or better than t01 with more stable training curves
+- status: completed
+- probe_hard=0.19379565119743347  probe_easy=0.43144917488098145  f1=0.33478638529777527
+- next_planned: 07:t07_local_norm_preact
+
+
+### cmp_c5_2026_06_11_t07_local_norm_preact
+- started_at: 2026-06-12 01:48:10 UTC
+- status: started
+- axis: local_norm
+- why: ablation: local norm alone with standard global avg pool; isolates whether the baseline removal helps with standard pooling
+- expected: moderate improvement; not as strong as MIL but a useful ablation
+- status: completed
+- probe_hard=0.21972593665122986  probe_easy=0.4566309452056885  f1=0.34193548560142517
+- next_planned: 09:t09_depth_profile_1d
+
+
+### cmp_c5_2026_06_11_t09_depth_profile_1d
+- started_at: 2026-06-12 02:33:14 UTC
+- status: started
+- axis: depth_profile
+- why: 1D CNN over depth axis after spatial averaging: treat absorption profile as a time-series. ink creates a characteristic bell-shaped absorption peak across depth — this directly classifies the peak shape, not voxel values
+- expected: very different failure mode; may find patterns invisible to 3D conv
+- status: completed
+- probe_hard=0.3602401614189148  probe_easy=0.39098110795021057  f1=0.22025376558303833
+- next_planned: 10:t10_depth_transformer
+
+
+### cmp_c5_2026_06_11_t10_depth_transformer
+- started_at: 2026-06-12 02:54:01 UTC
+- status: started
+- axis: depth_profile
+- why: transformer over depth positions: self-attention learns inter-depth relationships (e.g. absorption rises before depth 36, falls after); more expressive than 1D CNN for asymmetric profiles
+- expected: captures non-local depth patterns; may outperform 1D CNN on hard ROI
+- status: completed
+- probe_hard=0.3715401589870453  probe_easy=0.39293089509010315  f1=0.20854756236076355
+- next_planned: 11:t11_depth_variance_2d
+
+
+### cmp_c5_2026_06_11_t11_depth_variance_2d
+- started_at: 2026-06-12 03:12:33 UTC
+- status: started
+- axis: depth_profile
+- why: depth variance map: at ink positions, absorption varies strongly across depth (rise then fall); background is flat. zero-parameter physics feature — model classifies the variance pattern, not raw voxel values
+- expected: strong for easy ROI; unknown for hard; novel approach worth testing
+- status: completed
+- probe_hard=0.3561859428882599  probe_easy=0.5057175159454346  f1=0.2767334282398224
+- next_planned: 12:t12_depth_var_diff
+
+
+### cmp_c5_2026_06_11_t12_depth_var_diff
+- started_at: 2026-06-12 03:29:49 UTC
+- status: started
+- axis: depth_profile
+- why: depth variance of differential signal: variance of (ink - pre) highlights positions where the ink-to-background contrast varies with depth
+- expected: may capture subtle ink absorption profiles better than single-band variance
+- status: completed
+- probe_hard=0.33553817868232727  probe_easy=0.4190686345100403  f1=0.21101774275302887
+- next_planned: 13:t13_spectral_3d
+
+
+### cmp_c5_2026_06_11_t13_spectral_3d
+- started_at: 2026-06-12 04:10:38 UTC
+- status: started
+- axis: spectral
+- why: FFT magnitude spectrum per depth slice: ink creates characteristic spatial frequency patterns (absorption edges). at 7.91um, ink features below voxel size still show up as elevated high-frequency energy in the FFT
+- expected: different failure mode; may detect sub-voxel ink edge patterns
+- status: failed  rc=1  crashed_early=True
+- next_planned: 14:t14_spectral_diff
+
+
+### cmp_c5_2026_06_11_t14_spectral_diff
+- started_at: 2026-06-12 04:12:38 UTC
+- status: started
+- axis: spectral
+- why: spectral features of differential signal: FFT of (ink - pre) removes low-frequency scroll background; residual high-frequency components = ink edges
+- expected: cleaner spectral features; better signal-to-noise in frequency domain
+- status: failed  rc=1  crashed_early=True
+- next_planned: 15:t15_per_voxel_mil
+
+
+### cmp_c5_2026_06_11_t15_per_voxel_mil
+- started_at: 2026-06-12 04:14:38 UTC
+- status: started
+- axis: per_voxel
+- why: output 32×32 spatial heatmap + MIL max loss: model is explicitly trained to find WHERE in the tile the ink is; max(heatmap) = tile score. gradient flows back to specific voxels, not a tile average
+- expected: forces spatial localization; may find ink positions invisible to global pool
+- status: failed  rc=1  crashed_early=True
+- next_planned: 16:t16_per_voxel_diff
+
+
+### cmp_c5_2026_06_11_t16_per_voxel_diff
+- started_at: 2026-06-12 04:18:08 UTC
+- status: started
+- axis: per_voxel
+- why: per-voxel localization on differential signal: find WHERE the differential absorption is highest, not just whether the overall tile has high diff
+- expected: sharpest spatial localization; most direct at finding ink positions
+- status: failed  rc=1  crashed_early=True
+- next_planned: 17:t17_siamese_double
+
+
+### cmp_c5_2026_06_11_t17_siamese_double
+- started_at: 2026-06-12 04:21:23 UTC
+- status: started
+- axis: siamese
+- why: siamese: encode ink_band and pre_band independently via shared backbone, classify on the embedding DIFFERENCE. learns what makes ink depth different from its reference, bypassing absolute value sensitivity
+- expected: robust to overall brightness variation; novel cross-band comparison
+- status: failed  rc=2  crashed_early=False
+- next_planned: 18:t18_ae_anomaly
+
+
+### cmp_c5_2026_06_11_t18_ae_anomaly
+- started_at: 2026-06-12 04:21:39 UTC
+- status: started
+- axis: anomaly
+- why: autoencoder reconstruction error = ink score: model learns to reconstruct normal scroll patterns well; ink tiles are anomalous and reconstruct poorly. high reconstruction error -> ink. trained end-to-end with BCE on error->logit
+- expected: no reliance on positive label quality; novel signal; may detect faint ink
+- status: completed
+- probe_hard=0.18704330921173096  probe_easy=0.1917802095413208  f1=0.0
+- next_planned: 19:t19_best_combo
+
+
+### cmp_c5_2026_06_11_t19_best_combo
+- started_at: 2026-06-12 04:38:40 UTC
+- status: started
+- axis: combo
+- why: gated MIL + local norm + diff input: stacks all three independent improvements that each address the sub-voxel dilution problem from different angles
+- expected: highest hard probe of the campaign if axes are complementary
+- status: completed
+- probe_hard=0.2025112360715866  probe_easy=0.2855169475078583  f1=0.16987179219722748
+- next_planned: 08:t08_local_norm_diff
+
+
+### cmp_c5_2026_06_11_t08_local_norm_diff
+- started_at: 2026-06-12 05:36:00 UTC
+- status: started
+- axis: local_norm
+- why: local norm applied to differential signal: double detrending (diff removes global scroll baseline, local norm removes local tile baseline)
+- expected: stronger than t07; tests whether double detrending is additive
