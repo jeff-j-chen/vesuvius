@@ -8,10 +8,24 @@ class DataConfig:
     zarr_path: str = field(default_factory=lambda: os.getenv("VESUVIUS_ZARR_PATH", "C:\\Users\\ChenJeff\\Documents\\ves_zarrs2"))
     scroll1_id: int = 20230827161847
     # scroll1_id: int = 20230702185753
+    # scroll1_ids: list of scroll fragments to train on simultaneously (merged batches).
+    # defaults to [scroll1_id]; set via --scroll-ids to add the larger fragment.
+    # each fragment uses the same 75/25 right/left train/valid split.
+    scroll1_ids: list = field(default_factory=lambda: [20230827161847])
+    # subset of scroll1_ids that render EVALUATION figures (and, when hard mining is
+    # on, mine) on each eval step. None = all training scrolls (default, = current
+    # behavior). set via --vis-scroll-ids to watch only some fragments when training
+    # on many. NOTE: test figures are unaffected (they render for every scroll unless
+    # test_scroll2_only); probes are scroll-independent and always render once.
+    vis_scroll_ids: Optional[list] = None
     scroll2_id: int = 20230709155141
     scroll4_id: int = 20231210132040
     # when false, 'test' figures use scroll2 instead of scroll4
     test_on_scroll4: bool = False
+    # when true, the test figure renders ONLY the goal scroll2 fragment (full extent)
+    # and skips the expensive full training-scroll "Test" figure + scroll4.
+    # used to keep end-of-training test inference affordable in campaigns.
+    test_scroll2_only: bool = False
     tile_size: int = 32
     depth: int = 8
     d_start: int = 28
@@ -35,6 +49,12 @@ class DataConfig:
     # makes all reads RAM-speed instead of disk-speed; only viable for small scrolls
     # set false when training on terabytes of data
     preload_to_ram: bool = False
+    # when true: back each dataset's binary mask/labels with an on-disk memmap so
+    # they pickle as a file path (a few bytes) instead of the full array. removes the
+    # per-worker RAM duplication on windows spawn — matters at the 5-10 fragment scale
+    # where N x hundreds-of-MB x num_workers would otherwise balloon. default off so
+    # small/existing runs are unchanged. scratch dir via env VESUVIUS_MMAP_DIR.
+    mask_memmap: bool = False
     # when true: restrict training negatives to a ring of dilated-inklabel pixels
     # eliminates the risk of training on unlabeled ink as negatives; balances to ~1:1
     ring_negatives: bool = False
@@ -83,6 +103,7 @@ class TrainingConfig:
     focal_gamma: float = 0.0   # >0 activates focal loss: down-weights easy negatives, pushes gradient toward hard tiles
     ranking_lambda: float = 0.0  # weight of pairwise ranking loss term
     ranking_margin: float = 0.3  # margin: pos_score must exceed neg_score by at least this
+    ranking_neg_frac: float = 1.0  # partial-AUC: fraction of hardest (top-scoring) negatives to rank against; 1.0=all pairs (full AUC), <1.0 focuses gradient on the low-FPR region
     pretrain_epochs: int = 0     # epochs of band-identity pretraining before BCE fine-tuning
     eval_cooldown_secs: int = 0   # sleep this many seconds after probe/eval epochs to let hardware cool
 

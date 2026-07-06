@@ -6,12 +6,64 @@ import zarr
 import cv2
 import random
 import os
+import uuid
+import atexit
+import tempfile
 from typing import Iterator
 from .config import Config
 import json
 from tqdm import tqdm
 
 UNIFIED_CACHE_PATH = "./norm_cache.json"
+
+
+# ---- memmap scratch backing for mask/labels --------------------------------
+# at the 5-10 fragment scale the per-scroll uint8 mask/labels (hundreds of MB
+# each for the big scroll) get pickled to every spawned DataLoader worker on
+# windows, multiplying RAM by (1 + num_workers) and risking the spawn pickle
+# crash. backing them with an on-disk memmap fixes this: a memmap-backed dataset
+# pickles only the FILE PATH (a few bytes) instead of the array, and every
+# process mmaps the same read-only file so the OS shares one set of pages.
+#
+# NB: a numpy memmap pickled directly would MATERIALIZE its data (defeating the
+# purpose), so the dataset must store the path and exclude the open memmap from
+# its pickled state (see InkVolumeDataset.__getstate__), reopening lazily.
+
+# files created by THIS process, cleaned up at its exit. spawned workers reimport
+# this module fresh (empty list, own pid), so they never delete the creator's files.
+_MMAP_FILES = []
+_MMAP_OWNER_PID = os.getpid()
+
+
+def _mmap_scratch_dir():
+    """scratch directory for memmap backing files (override via VESUVIUS_MMAP_DIR)"""
+    d = os.environ.get("VESUVIUS_MMAP_DIR") or os.path.join(tempfile.gettempdir(), "vesuvius_mmap")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _write_memmap(arr):
+    """persist a (binary uint8) array to a unique .npy and return its path"""
+    path = os.path.join(_mmap_scratch_dir(), f"mm_{os.getpid()}_{uuid.uuid4().hex}.npy")
+    np.save(path, np.ascontiguousarray(arr))
+    _MMAP_FILES.append(path)
+    return path
+
+
+def _cleanup_mmap_files():
+    """remove memmap files at interpreter exit, but only in the creating process.
+    on windows a still-mapped file can refuse deletion; that is non-fatal (the
+    files live in temp), so failures are swallowed."""
+    if os.getpid() != _MMAP_OWNER_PID:
+        return
+    for p in _MMAP_FILES:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+atexit.register(_cleanup_mmap_files)
 
 
 def _is_norm_stats(entry):
@@ -124,8 +176,31 @@ class InkVolumeDataset(IterableDataset):
             self._vol_obj = volume
         self._worker_vol = None         # populated lazily inside worker process
 
-        self.mask = mask
-        self.labels = labels
+        # store mask/labels as uint8 (binary), not float64. the source arrays are
+        # mask/255.0 and labels/255.0 (float64): for the big scroll (13513x17381)
+        # that is ~1.88 GB EACH. when DataLoader spawns workers on Windows, the whole
+        # dataset is pickled to each worker; two float64 full-res arrays (plus a ring
+        # mask) exceed the spawn pickle limit -> OSError [Errno 22] / "pickle data was
+        # truncated". these arrays are only ever used as binary tests (>0.5, sum>0), so
+        # uint8 is exact and 8x smaller, which keeps multiscroll+ring picklable at nw>0.
+        mask_u8 = (np.asarray(mask) > 0.5).astype(np.uint8)
+        labels_u8 = (np.asarray(labels) > 0.5).astype(np.uint8)
+
+        # optionally back the (already tiny, but still N x hundreds-of-MB at the 5-10
+        # fragment scale) binary arrays with an on-disk memmap so they pickle as a path
+        # rather than data. _mask_path/_labels_path is the on-disk source of truth;
+        # _mask_arr/_labels_arr is the per-process handle (real array when not memmapped,
+        # a lazily-opened read-only memmap when memmapped). see the mask/labels properties.
+        if getattr(config.data, "mask_memmap", False):
+            self._mask_path = _write_memmap(mask_u8)
+            self._labels_path = _write_memmap(labels_u8)
+            self._mask_arr = None
+            self._labels_arr = None
+        else:
+            self._mask_path = None
+            self._labels_path = None
+            self._mask_arr = mask_u8
+            self._labels_arr = labels_u8
         self.c = config
         self.tile_size = config.data.tile_size
         self.depth = config.data.depth
@@ -142,6 +217,34 @@ class InkVolumeDataset(IterableDataset):
         # pre-calculate all valid block coordinates
         self.block_coords = self._gen_tile_coords()
         self.samples_per_epoch = len(self.block_coords)
+
+    @property
+    def mask(self):
+        """binary uint8 mask; a real array unless memmapped, in which case the
+        read-only memmap is opened lazily per process (main or worker)."""
+        if self._mask_arr is None and self._mask_path is not None:
+            self._mask_arr = np.load(self._mask_path, mmap_mode='r')
+        return self._mask_arr
+
+    @property
+    def labels(self):
+        """binary uint8 labels; lazily memmapped per process when memmap is enabled."""
+        if self._labels_arr is None and self._labels_path is not None:
+            self._labels_arr = np.load(self._labels_path, mmap_mode='r')
+        return self._labels_arr
+
+    def __getstate__(self):
+        """pickle only the memmap PATHS, never the open memmap. pickling a numpy
+        memmap would copy its full contents into the pickle stream — exactly the
+        windows spawn pickle-size blowup memmap exists to avoid. workers reopen the
+        memmap lazily via the property. (when not memmapped, _mask_arr is a small
+        uint8 array and is pickled normally, preserving prior behavior.)"""
+        state = self.__dict__.copy()
+        if state.get("_mask_path") is not None:
+            state["_mask_arr"] = None
+        if state.get("_labels_path") is not None:
+            state["_labels_arr"] = None
+        return state
 
     @property
     def vol(self):
@@ -350,15 +453,56 @@ class InkVolumeDataset(IterableDataset):
         self.current_idx += 1
         return block_tensor, label, mask
 
+
+class MultiScrollIterableDataset(IterableDataset):
+    """merges several InkVolumeDatasets into one stream so a single epoch sees
+    tiles from every scroll fragment interleaved (batches are integrated, not
+    alternated). each child handles its own per-worker sharding, so worker N
+    receives shard N of every scroll."""
+    def __init__(self, datasets):
+        super().__init__()
+        self.datasets = list(datasets)
+        self._apply_transforms = False
+
+    @property
+    def apply_transforms(self):
+        return self._apply_transforms
+
+    @apply_transforms.setter
+    def apply_transforms(self, value):
+        # propagate to all children so augmentation toggles uniformly
+        self._apply_transforms = value
+        for d in self.datasets:
+            d.apply_transforms = value
+
+    def __len__(self):
+        return sum(len(d) for d in self.datasets)
+
+    def __iter__(self) -> Iterator:
+        # build child iterators (each shards itself by worker), then randomly
+        # interleave samples until every child is exhausted
+        iters = [iter(d) for d in self.datasets]
+        active = list(range(len(iters)))
+        while active:
+            i = random.choice(active)
+            try:
+                yield next(iters[i])
+            except StopIteration:
+                active.remove(i)
+
+
 class DataManager:
     """manages data loading, splitting, and normalization"""
-    def __init__(self, config: Config):
-        """initializes the data manager"""
+    def __init__(self, config: Config, scroll_id=None):
+        """initializes the data manager.
+        scroll_id: which scroll fragment to load; defaults to config.data.scroll1_id.
+        passing it explicitly lets the trainer build one manager per fragment."""
         self.c = config
-        
+        self.scroll_id = int(scroll_id) if scroll_id is not None else int(config.data.scroll1_id)
+
         # load raw data and define splits
         self.vol, self.mask, self.labels, self.train_x, self.valid_x, self.y_range = self._load_raw_data()
-        
+
         # get or compute normalization statistics
         self.norm_stats = self._get_or_compute_norm()
 
@@ -367,7 +511,7 @@ class DataManager:
         # open the zarr volume in read-only mode
         vol = zarr.open(
             os.path.join(
-                self.c.data.zarr_path, f"{self.c.data.scroll1_id}.zarr"
+                self.c.data.zarr_path, f"{self.scroll_id}.zarr"
             ),
             mode='r'
         )
@@ -395,19 +539,19 @@ class DataManager:
         
         # load labels and mask, and normalize to [0, 1]
         labels = cv2.imread(
-            f"./eroded_inklabels/{self.c.data.scroll1_id}.png",
+            f"./eroded_inklabels/{self.scroll_id}.png",
             cv2.IMREAD_GRAYSCALE
         )
 
         mask = cv2.imread(
-            f"./masks/{self.c.data.scroll1_id}.png", 
+            f"./masks/{self.scroll_id}.png", 
             cv2.IMREAD_GRAYSCALE
         )
 
         if labels is None:
-            raise FileNotFoundError(f"labels not found for scroll {self.c.data.scroll1_id}")
+            raise FileNotFoundError(f"labels not found for scroll {self.scroll_id}")
         if mask is None:
-            raise FileNotFoundError(f"mask not found for scroll {self.c.data.scroll1_id}")
+            raise FileNotFoundError(f"mask not found for scroll {self.scroll_id}")
 
         labels = labels / 255.0
         mask = mask / 255.0
@@ -416,7 +560,12 @@ class DataManager:
         x_start, x_end = 0, vol.shape[2]
         y_start, y_end = 0, vol.shape[1]
         
+        # align the 75/25 split to the tile grid. if split_x is not a multiple of
+        # tile_size, floor(train_w/T) + floor(valid_w/T) loses a tile vs floor(full_w/T),
+        # which breaks the eval figure's pred-map vs label-map shape match (off-by-one).
+        T = int(self.c.data.tile_size)
         split_x = int((x_end - x_start) * 0.75) # type: ignore
+        split_x = (split_x // T) * T
         train_x_range = (x_start, x_start + split_x)
         valid_x_range = (x_start + split_x, x_end)
         y_range = (y_start, y_end)
@@ -425,7 +574,7 @@ class DataManager:
 
     def _get_or_compute_norm(self):
         """retrieves or computes normalization statistics"""
-        seg_id = str(self.c.data.scroll1_id)
+        seg_id = str(self.scroll_id)
 
         # first, try to load from cache
         cache = _load_unified_cache()
@@ -487,6 +636,15 @@ class DataManager:
         train_mask = self._make_ring_mask() if getattr(self.c.data, 'ring_negatives', False) else self.mask
         train_set = InkVolumeDataset(self.vol, train_mask, self.labels, self.c, self.train_x, self.y_range, self.norm_stats, shuffle=True)
         valid_set = InkVolumeDataset(self.vol, self.mask, self.labels, self.c, self.valid_x, self.y_range, self.norm_stats, shuffle=False)
+        # the datasets have already copied what they need as uint8. the manager's own
+        # float64 mask/labels (mask/255.0) are not used on the training side afterward
+        # — for the big scroll they are ~1.9 GB EACH, so a many-scroll run would carry
+        # gigabytes of dead float arrays in the main process. downcast to binary uint8
+        # (8x smaller; only ever tested as >0.5 / >0, so exact). idempotent, so the
+        # alternating-ring path's second get_datasets() call is safe. NB: the figure
+        # visualizer keeps its OWN separate float copies and never calls this method.
+        self.mask = (np.asarray(self.mask) > 0.5).astype(np.uint8)
+        self.labels = (np.asarray(self.labels) > 0.5).astype(np.uint8)
         return train_set, valid_set
 
     def _make_ring_mask(self):
@@ -508,7 +666,7 @@ class DataManager:
         # determine which labels to use for ring boundary computation
         ring_source = getattr(self.c.data, 'ring_label_source', 'original')
         if ring_source in ('original', 'closed'):
-            orig_path = f"./inklabels/{self.c.data.scroll1_id}.png"
+            orig_path = f"./inklabels/{self.scroll_id}.png"
             orig_img = cv2.imread(orig_path, cv2.IMREAD_GRAYSCALE)
             if orig_img is not None:
                 orig_img = (orig_img / 255.0)[:h, :w]

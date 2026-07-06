@@ -7,7 +7,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 from utils.config import Config
 from utils.visualizer import TensorboardVisualizer
 from utils.hard_mining import HardMiningManager, HardMiningInjector
-from utils.dataloader import DataManager, get_dataloaders, calc_class_wgts
+from utils.dataloader import DataManager, get_dataloaders, calc_class_wgts, MultiScrollIterableDataset
 from utils.model import create_model
 from utils.training_utils import (
     create_optimizer_and_scheduler, 
@@ -43,6 +43,26 @@ def _apply_cli_overrides(c: Config, args):
 
     if args.scroll_id is not None:
         c.data.scroll1_id = int(args.scroll_id)
+    if getattr(args, "scroll_ids", None):
+        ids = [int(s.strip()) for s in args.scroll_ids.split(",") if s.strip()]
+        if ids:
+            c.data.scroll1_ids = ids
+            # keep scroll1_id as the primary (first) fragment for any single-scroll fallbacks
+            c.data.scroll1_id = ids[0]
+    else:
+        # if only a single scroll id was given (or default), keep the list in sync
+        c.data.scroll1_ids = [int(c.data.scroll1_id)]
+    # resolve which scrolls render evaluation figures (subset of training scrolls).
+    # must run AFTER scroll1_ids is finalized. None => all training scrolls.
+    if getattr(args, "vis_scroll_ids", None):
+        vids = [int(s.strip()) for s in args.vis_scroll_ids.split(",") if s.strip()]
+        unknown = [v for v in vids if v not in c.data.scroll1_ids]
+        if unknown:
+            print(f"[warn] --vis-scroll-ids ids not in --scroll-ids are ignored: {unknown}")
+        kept = [v for v in vids if v in c.data.scroll1_ids]
+        c.data.vis_scroll_ids = kept or None
+    else:
+        c.data.vis_scroll_ids = None
     if args.scroll4_id is not None:
         c.data.scroll4_id = int(args.scroll4_id)
     if args.zarr_path is not None:
@@ -98,12 +118,18 @@ def _apply_cli_overrides(c: Config, args):
         c.tra.ranking_lambda = float(args.ranking_lambda)
     if args.ranking_margin is not None:
         c.tra.ranking_margin = float(args.ranking_margin)
+    if args.ranking_neg_frac is not None:
+        c.tra.ranking_neg_frac = float(args.ranking_neg_frac)
     if args.pretrain_epochs is not None:
         c.tra.pretrain_epochs = int(args.pretrain_epochs)
     if args.preload_volume:
         c.data.preload_to_ram = True
+    if getattr(args, "mask_memmap", False):
+        c.data.mask_memmap = True
     if args.ring_negatives:
         c.data.ring_negatives = True
+    if getattr(args, "test_scroll2_only", False):
+        c.data.test_scroll2_only = True
     if args.ring_label_source is not None:
         c.data.ring_label_source = args.ring_label_source
     if args.alternating_ring:
@@ -160,7 +186,24 @@ class Trainer:
         
         # setup logging and visualization
         print("Initializing Tensorboard...")
-        self.vis = TensorboardVisualizer(self.c)
+        scroll_ids = getattr(self, '_scroll_ids', None) or [self.c.data.scroll1_id]
+        if len(scroll_ids) > 1:
+            # merged training stream: the main visualizer owns the single tensorboard
+            # run folder and logs scalar metrics; one figure-visualizer per scroll
+            # renders its own eval/test figures into that SAME folder, namespacing its
+            # tags with s<sid>/. this keeps the run list at one folder regardless of
+            # scroll count (tag '/' is UI grouping only, not a folder on disk). probe
+            # ROIs stay global (rendered once, unprefixed).
+            self.vis = TensorboardVisualizer(self.c, mode='metrics')
+            self.scroll_vis = {}
+            for sid in scroll_ids:
+                self.scroll_vis[sid] = TensorboardVisualizer(
+                    self.c, mode='train', scroll_id=sid,
+                    shared_writer=self.vis.writer, tag_prefix=f"s{sid}/"
+                )
+        else:
+            self.vis = TensorboardVisualizer(self.c)
+            self.scroll_vis = None
         
         # initialize training components
         self.scaler = GradScaler()
@@ -188,8 +231,50 @@ class Trainer:
         print("Creating datasets...")
         start_time = time.time()
 
+        # resolve the list of scroll fragments to train on. multiple fragments are
+        # merged into a single stream so every epoch sees all of them (integrated
+        # batches). defaults to the single primary scroll for backward compatibility.
+        scroll_ids = [int(s) for s in (getattr(self.c.data, 'scroll1_ids', None) or [self.c.data.scroll1_id])]
+        self._scroll_ids = scroll_ids
+        self._scroll_train_sets = None   # {scroll_id: train_set} in multiscroll, for HM routing
+        multi = len(scroll_ids) > 1
+
         alternating = getattr(self.c.data, 'alternating_ring', False)
-        data_manager = DataManager(self.c)
+
+        if multi:
+            # multi-scroll merged training. alternating-ring is still unsupported here,
+            # but hard mining IS supported: each scroll mines into its own dir and the
+            # injector routes every mined record back to the right scroll volume via its
+            # scroll_id. build a per-scroll train-set map so injection can resolve it.
+            if alternating:
+                print("[multi-scroll] alternating_ring not supported with multiple scrolls; ignoring")
+
+            ring_mode = getattr(self.c.data, 'ring_negatives', False)
+            train_sets, valid_sets = [], []
+            self._scroll_dms = {}
+            self._scroll_train_sets = {}
+            for sid in scroll_ids:
+                dm = DataManager(self.c, scroll_id=sid)
+                t_set, v_set = dm.get_datasets()
+                train_sets.append(t_set)
+                valid_sets.append(v_set)
+                self._scroll_dms[sid] = dm
+                self._scroll_train_sets[int(sid)] = t_set
+                print(f"[multi-scroll] scroll {sid}: train_tiles={len(t_set)} valid_tiles={len(v_set)}")
+
+            t_set_merged = MultiScrollIterableDataset(train_sets)
+            v_set_merged = MultiScrollIterableDataset(valid_sets)
+            t_loader, v_loader = get_dataloaders(t_set_merged, v_set_merged, self.c)
+            # pos_weight from the merged distribution across all fragments
+            pos_weight = calc_class_wgts(t_set_merged, v_set_merged, scroll_id=None)
+            self._t_set_full = t_set_merged
+            self._t_set_ring = None
+            print(f"[multi-scroll] merged train_tiles={len(t_set_merged)} valid_tiles={len(v_set_merged)}")
+            print(f"Data setup done in {time.time() - start_time:.2f}s")
+            return t_set_merged, t_loader, v_loader, pos_weight
+
+        data_manager = DataManager(self.c, scroll_id=scroll_ids[0])
+        self._scroll_dms = {scroll_ids[0]: data_manager}
 
         if alternating:
             # build both datasets upfront: full-mask set and ring-mask set
@@ -267,7 +352,8 @@ class Trainer:
                 labels_flat = b_labels.squeeze(1)
                 rank_loss = pairwise_ranking_loss(
                     probs, labels_flat,
-                    margin=float(getattr(self.c.tra, 'ranking_margin', 0.3))
+                    margin=float(getattr(self.c.tra, 'ranking_margin', 0.3)),
+                    neg_frac=float(getattr(self.c.tra, 'ranking_neg_frac', 1.0))
                 )
                 loss = loss + ranking_lambda * rank_loss
 
@@ -418,8 +504,12 @@ class Trainer:
         if epoch % self.c.tra.eval_int == 0 and epoch > 5:
             target_hard = int(self.c.hm.hm_frac * len(self.train_dataset))
             
-            # attempt to load new samples from the previous epoch's evaluation
-            new_samples = self.hard_manager.sample_for_epoch(epoch - 1, target_hard)
+            # load new samples from the previous epoch's per-scroll mining files.
+            # works for one scroll (list len 1) or many; records are tagged with
+            # scroll_id so the injector routes each to the right volume.
+            new_samples = self.hard_manager.sample_for_epoch_scrolls(
+                epoch - 1, target_hard, self._scroll_ids
+            )
             
             if new_samples:
                 self.hard_samples.extend(new_samples)
@@ -435,6 +525,33 @@ class Trainer:
         self.vis.log_epoch_metrics(epoch, self.model, train_metrics, val_metrics, current_lr, time_elapsed, self.params, self.pos_weight)
         if self.c.hm.enabled:
             self.vis.writer.add_scalar("HardMining/Injected", train_metrics.get('hard_injected', 0), epoch)
+
+        # multi-scroll: the main visualizer logs scalars only; drive per-scroll
+        # eval/test/probe figures here so each fragment gets its own visualizations
+        if getattr(self, 'scroll_vis', None):
+            eval_due  = (epoch + 1) % self.c.tra.eval_int  == 0
+            test_due  = (epoch + 1) % self.c.tra.test_int  == 0
+            probe_due = (epoch + 1) % self.c.tra.probe_int == 0
+            for idx, (sid, svis) in enumerate(self.scroll_vis.items()):
+                if eval_due and getattr(svis, 'eval_enabled', True):
+                    try:
+                        svis.add_evaluation_figures(epoch, self.model)
+                    except Exception as e:
+                        print(f"[ERROR] eval figures failed for scroll {sid}: {e}")
+                        import traceback; traceback.print_exc()
+                if test_due:
+                    try:
+                        svis.add_test_figures(epoch, self.model)
+                    except Exception as e:
+                        print(f"[ERROR] test figures failed for scroll {sid}: {e}")
+                # probe ROIs are fixed (scroll-independent); render once on the primary
+                if probe_due and idx == 0:
+                    try:
+                        svis.add_probe_region_figures(epoch, self.model)
+                    except Exception as e:
+                        print(f"[ERROR] probe figures failed for scroll {sid}: {e}")
+            for svis in self.scroll_vis.values():
+                svis.writer.flush()
 
     def _pretrain_epoch(self):
         """one epoch of band-identity pretraining (self-supervised, no ink labels needed).
@@ -548,7 +665,13 @@ class Trainer:
             # in alternating-ring mode, only inject on ring epochs
             hard_injector = None
             if self.hard_samples and self._hm_active_this_epoch:
-                hard_injector = HardMiningInjector(self.hard_samples, self.train_dataset)
+                # multiscroll: route by scroll_id to per-scroll train sets; single
+                # scroll: wrap the current train dataset (handles alternating swap).
+                if getattr(self, '_scroll_train_sets', None):
+                    ds_arg = self._scroll_train_sets
+                else:
+                    ds_arg = {int(self._scroll_ids[0]): self.train_dataset}
+                hard_injector = HardMiningInjector(self.hard_samples, ds_arg)
                 if (epoch % self.c.tra.eval_int) == 0:
                     self.vis.writer.add_scalar("HardMining/InjectedSamplesPlanned", len(self.hard_samples), epoch)
 
@@ -574,6 +697,9 @@ class Trainer:
                 time.sleep(cooldown)
 
         self.vis.close()
+        if getattr(self, 'scroll_vis', None):
+            for svis in self.scroll_vis.values():
+                svis.close()
         print("Training completed.")
 
 def main():
@@ -587,6 +713,10 @@ def main():
     parser.add_argument("--log-dir", type=str, default=None, help="Override TensorBoard log directory")
 
     parser.add_argument("--scroll-id", type=int, default=None, help="Scroll id for train/valid")
+    parser.add_argument("--scroll-ids", type=str, default=None,
+                        help="Comma-separated scroll fragment ids to train on simultaneously (merged batches), e.g. 20230827161847,20230702185753")
+    parser.add_argument("--vis-scroll-ids", type=str, default=None,
+                        help="Comma-separated subset of --scroll-ids that render EVALUATION figures each eval step (default: all training scrolls). Test figures still render for every scroll unless --test-scroll2-only.")
     parser.add_argument("--scroll4-id", type=int, default=None, help="Scroll id for scroll4 eval path")
     parser.add_argument("--zarr-path", type=str, default=None, help="Path to zarr root")
 
@@ -626,10 +756,14 @@ def main():
                         help="Weight for pairwise ranking loss (0=off)")
     parser.add_argument("--ranking-margin", type=float, default=None,
                         help="Margin for pairwise ranking loss (default 0.3)")
+    parser.add_argument("--ranking-neg-frac", type=float, default=None,
+                        help="Partial-AUC: fraction of hardest negatives to rank against (1.0=all pairs, <1.0 focuses on low-FPR region)")
     parser.add_argument("--pretrain-epochs", type=int, default=None,
                         help="Epochs of self-supervised band-identity pretraining before BCE")
     parser.add_argument("--preload-volume", action="store_true", default=False,
                         help="load full zarr into RAM before training; only safe for small scrolls (~10GB free RAM needed)")
+    parser.add_argument("--mask-memmap", action="store_true", default=False,
+                        help="back each dataset's binary mask/labels with an on-disk memmap so they pickle as a path, not data; avoids per-worker RAM duplication at the 5-10 fragment scale (scratch dir via env VESUVIUS_MMAP_DIR)")
     parser.add_argument("--ring-negatives", action="store_true", default=False,
                         help="restrict training negatives to a ring around ink labels (~1:1 pos/neg ratio, no unlabeled-ink contamination)")
     parser.add_argument("--eval-cooldown", type=int, default=None,
@@ -644,6 +778,8 @@ def main():
                         help="start z-index of training depth window")
     parser.add_argument("--train-d-end", type=int, default=None,
                         help="end z-index of training depth window (exclusive); overrides the default train_d_start+depth")
+    parser.add_argument("--test-scroll2-only", action="store_true", default=False,
+                        help="test figure renders ONLY the full goal scroll2 fragment (skips the expensive training-scroll Test figure + scroll4); use for affordable end-of-training transfer checks")
     args = parser.parse_args()
     
     # load configuration and optionally override experiment name

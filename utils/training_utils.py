@@ -70,11 +70,17 @@ class FocalBCELoss(nn.Module):
         return focal_weight * bce_loss          # same shape as input; caller handles masking/reduction
 
 
-def pairwise_ranking_loss(scores, labels, margin=0.3):
-    """pairwise ranking loss: every positive tile must outscore every negative by >= margin.
+def pairwise_ranking_loss(scores, labels, margin=0.3, neg_frac=1.0):
+    """pairwise ranking loss (AUC / partial-AUC surrogate): positive tiles must
+    outscore negatives by >= margin.
 
     scores: (B,) sigmoid probabilities (detached from main graph is fine)
     labels: (B,) ground truth in {0, 1} or soft values; treated as pos if > 0.5
+    neg_frac: fraction of negatives to keep, selected as the HIGHEST-scoring (hardest)
+        ones. 1.0 -> plain all-pairs ranking (full AUC surrogate). <1.0 -> partial-AUC:
+        only the hardest negatives contribute, so the gradient concentrates on the
+        low-FPR region that the readability metric grades. this is hard-negative mining
+        baked directly into the loss rather than bolted on as a sampling stage.
     returns a scalar loss; zero if no positives or no negatives in batch.
     """
     pos_mask = labels > 0.5
@@ -84,6 +90,10 @@ def pairwise_ranking_loss(scores, labels, margin=0.3):
 
     pos_scores = scores[pos_mask]                          # (n_pos,)
     neg_scores = scores[neg_mask]                          # (n_neg,)
+    # partial-AUC: restrict to the hardest (top-scoring) negatives before pairing
+    if neg_frac < 1.0:
+        k = max(1, int(round(neg_scores.numel() * float(neg_frac))))
+        neg_scores, _ = torch.topk(neg_scores, k)
     # violation matrix: how much each (pos, neg) pair fails the margin
     violations = margin - pos_scores.unsqueeze(1) + neg_scores.unsqueeze(0)  # (n_pos, n_neg)
     return torch.clamp(violations, min=0.0).mean()

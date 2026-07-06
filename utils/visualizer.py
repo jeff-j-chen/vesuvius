@@ -178,11 +178,87 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
 
     return pmap
 
+class _ScopedWriter:
+    """thin proxy over a shared SummaryWriter that namespaces each tag with a per-
+    scroll scope (e.g. 's<scroll_id>'), so multiple per-scroll visualizers can write
+    into ONE tensorboard run without their identical tags colliding.
+
+    the scope is inserted AFTER the top-level category rather than at the root, so
+    tensorboard groups by category first and splits scrolls within each:
+        Test/s<sid>/...   Evaluation/s<sid>/...   R_M/s<sid>/...
+    (not s<sid>/Test/... which would bury every category under the scroll id).
+
+    this consolidates the multi-scroll layout from (1 metrics + N per-scroll)
+    folders down to a single folder. tags listed in global_prefixes are written
+    WITHOUT the scope — used for the probe ROIs, a fixed global set rendered once."""
+    def __init__(self, writer, prefix: str = "", global_prefixes: tuple = ()):
+        self._w = writer
+        # accept either 's<sid>/' (legacy prefix form) or 's<sid>'; store bare scope
+        self._scope = (prefix or "").strip("/")
+        self._global_prefixes = tuple(global_prefixes)
+
+    def _tag(self, tag):
+        tag = str(tag)
+        # leave globally-scoped tags (e.g. probe ROIs) unscoped
+        if not self._scope or any(tag.startswith(g) for g in self._global_prefixes):
+            return tag
+        # insert scope after the first path segment so the category stays on top
+        head, sep, rest = tag.partition("/")
+        return f"{head}/{self._scope}/{rest}" if sep else f"{head}/{self._scope}"
+
+    def add_scalar(self, tag, *a, **k):
+        return self._w.add_scalar(self._tag(tag), *a, **k)
+
+    def add_figure(self, tag, *a, **k):
+        return self._w.add_figure(self._tag(tag), *a, **k)
+
+    def add_images(self, tag, *a, **k):
+        return self._w.add_images(self._tag(tag), *a, **k)
+
+    def add_histogram(self, tag, *a, **k):
+        return self._w.add_histogram(self._tag(tag), *a, **k)
+
+    def add_custom_scalars(self, *a, **k):
+        # layout is applied once by the owning (main) writer; ignore here
+        return None
+
+    def add_graph(self, *a, **k):
+        return self._w.add_graph(*a, **k)
+
+    def flush(self):
+        return self._w.flush()
+
+    def close(self):
+        # the shared writer is owned by the main visualizer; do not close it here
+        return None
+
+    def __getattr__(self, name):
+        # delegate any other attribute/method to the wrapped writer
+        return getattr(self._w, name)
+
+
 class TensorboardVisualizer:
-    def __init__(self, config: Config, mode: str = 'train'):
-        """initialize tensorboard visualizer and precompute datasets and stats"""
+    def __init__(self, config: Config, mode: str = 'train', scroll_id=None, log_suffix: str = None,
+                 shared_writer=None, tag_prefix: str = ""):
+        """initialize tensorboard visualizer and precompute datasets and stats.
+
+        scroll_id: which scroll fragment this visualizer renders figures for;
+            defaults to config.data.scroll1_id. lets the trainer build one
+            figure-visualizer per fragment.
+        mode: 'train' loads figure assets and can render figures; 'metrics' only
+            logs scalar metrics (used for the merged multi-scroll training stream);
+            'finetune' behaves like the legacy finetune path.
+        log_suffix: appended to the run directory name so per-scroll visualizers
+            write to separate tensorboard runs.
+        """
         self.c = config
         self.mode = mode
+        self.scroll1_id = int(scroll_id) if scroll_id is not None else int(config.data.scroll1_id)
+        # whether this scroll renders evaluation figures. vis_scroll_ids=None => all
+        # scrolls render (default); otherwise only listed scrolls do. test/probe
+        # figures are unaffected.
+        _vis_ids = getattr(config.data, "vis_scroll_ids", None)
+        self.eval_enabled = (not _vis_ids) or (int(self.scroll1_id) in [int(v) for v in _vis_ids])
         self.probe_log_interval = max(1, int(getattr(config.tra, "probe_int", 5)))
 
         if config.exp_name is None:
@@ -193,7 +269,11 @@ class TensorboardVisualizer:
         else:
             experiment_name = config.exp_name + "_" + datetime.now().strftime('%d_%H-%M-%S')
 
+        if log_suffix:
+            experiment_name = f"{experiment_name}_{log_suffix}"
+
         self.log_path = os.path.join(config.tra.log_dir, experiment_name)
+
 
         # layout for dashboards unchanged to keep metric names
         self.layout = {
@@ -243,8 +323,15 @@ class TensorboardVisualizer:
         if self.mode == 'train':
             self._init_training_assets()
 
-        self.writer = SummaryWriter(self.log_path)
-        self.writer.add_custom_scalars(self.layout)
+        if shared_writer is not None:
+            # consolidated multi-scroll layout: write into the shared run folder,
+            # namespacing this scroll's tags via tag_prefix. probe ROIs stay global.
+            self.writer = _ScopedWriter(shared_writer, tag_prefix,
+                                        global_prefixes=("ProbeROIs", "R_M/Probe"))
+            self.log_path = getattr(shared_writer, "log_dir", self.log_path)
+        else:
+            self.writer = SummaryWriter(self.log_path)
+            self.writer.add_custom_scalars(self.layout)
 
         print(f"TensorBoard logs will be saved to: {self.log_path}")
         print(f"To view, run: tensorboard --logdir={config.tra.log_dir}")
@@ -252,7 +339,7 @@ class TensorboardVisualizer:
     def _init_training_assets(self):
         """load training and auxiliary datasets and normalization stats"""
         # data manager holds main training volume mask labels and splits
-        dm = DataManager(self.c)
+        dm = DataManager(self.c, scroll_id=self.scroll1_id)
         self.dm = dm
 
         self.volume = dm.vol
@@ -273,7 +360,7 @@ class TensorboardVisualizer:
         # load test data region and scroll4 data with stats
         self.test_volume, self.test_mask, self.test_y_range, self.test_x_range = self._load_test_region()
         self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max = self._get_or_compute_norm(
-            self.test_volume, self.test_mask, str(self.c.data.scroll1_id)
+            self.test_volume, self.test_mask, str(self.scroll1_id)
         )
 
         self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range = self._load_scroll4_region()
@@ -389,7 +476,7 @@ class TensorboardVisualizer:
 
     def _load_test_region(self):
         """load test region based on training segment bottom slice"""
-        sid = self.c.data.scroll1_id
+        sid = self.scroll1_id
         zarr_path = os.path.join(self.c.data.zarr_path, f"{sid}.zarr")
         vol = None
         try:
@@ -431,7 +518,12 @@ class TensorboardVisualizer:
         return vol, mask, y_range, x_range
 
     def _load_scroll2_region(self):
-        """load scroll2 region: 2048×1024 window at x=3080, y=748"""
+        """load the ENTIRE scroll2 fragment as the goal-scroll test region.
+
+        scroll2 is our target scroll: we want to see whether a model trained on the
+        scroll1 fragments transfers any ink signal to it. the test figure renders the
+        full fragment over full depth (tiles outside the papyrus mask are skipped, so
+        cost tracks the actual segment area, not the bounding box)."""
         sid = self.c.data.scroll2_id
         zarr_path = os.path.join(self.c.data.zarr_path, f"{sid}.zarr")
         try:
@@ -443,13 +535,57 @@ class TensorboardVisualizer:
         mask_path = f"./masks/{sid}.png"
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) / 255.0
 
-        # fixed 2048 (width) × 1024 (height) window starting at x=3080, y=748
-        y_range = (748, 748 + 1024)
-        x_range = (3080, 3080 + 2048)
+        # full fragment extent (was a fixed 2048x1024 crop at x=3080,y=748)
+        D, H, W = map(int, vol.shape)
+        y_range = (0, H)
+        x_range = (0, W)
 
         return vol, mask, y_range, x_range
 
     def _build_probe_specs(self):
+        """fixed readability probe regions, generated per active training scroll.
+
+        each training scroll listed in config.data.scroll1_ids contributes its own
+        easy/medium/hard ROIs (when defined below); the standard scroll4 and scroll2
+        transfer checks are always appended. so a big-scroll-only run yields 3 probes +
+        scroll4 + scroll2, while a small+big multiscroll run yields 6 probes + the two
+        standard checks. all x/y snap to a tile multiple so the probe grid is co-aligned
+        with the training tile grid (small-scroll values kept floor-aligned for
+        historical comparability; big-scroll values snap to NEAREST per request)."""
+        T = self.c.data.tile_size  # 32
+        def nearest(v): return int((v + T // 2) // T) * T
+
+        SMALL = 20230827161847
+        BIG   = 20230702185753
+
+        # per-training-scroll ROI definitions (already tile-aligned literals for SMALL)
+        per_scroll = {
+            SMALL: [
+                {"tag": "Easy",   "title": "small scroll easy",   "segment_id": SMALL, "x": 2080, "y": 4352, "size": 608},
+                {"tag": "Medium", "title": "small scroll medium", "segment_id": SMALL, "x": 2560, "y": 928,  "size": 608},
+                {"tag": "Hard",   "title": "small scroll hard",   "segment_id": SMALL, "x": 3744, "y": 3840, "size": 608},
+            ],
+            BIG: [
+                # coords snapped to nearest tile multiple; train/valid notes are the
+                # user's annotations. dataloader splits train=left 75% (split_x=13024),
+                # so easy/medium fall in train and hard (x~13344) is genuinely valid.
+                {"tag": "BigEasy",   "title": "big scroll easy (train)",   "segment_id": BIG, "x": nearest(1728),  "y": nearest(6749),  "size": 608},
+                {"tag": "BigMedium", "title": "big scroll medium (train)", "segment_id": BIG, "x": nearest(6285),  "y": nearest(10429), "size": 608},
+                {"tag": "BigHard",   "title": "big scroll hard (valid)",   "segment_id": BIG, "x": nearest(13349), "y": nearest(6372),  "size": 608},
+            ],
+        }
+
+        train_ids = [int(s) for s in (getattr(self.c.data, "scroll1_ids", None) or [self.c.data.scroll1_id])]
+        specs = []
+        for sid in train_ids:
+            specs.extend(per_scroll.get(sid, []))
+
+        # always-on transfer checks (scroll4 pi region + scroll2 goal scroll)
+        specs.append({"tag": "Scroll4_Pi", "title": "scroll4 pi", "segment_id": self.c.data.scroll4_id, "x": 1952, "y": 7968, "size": 608})
+        specs.append({"tag": "Scroll2",    "title": "scroll2",    "segment_id": self.c.data.scroll2_id, "x": 3072, "y": 736,  "size": 608})
+        return specs
+
+    def _build_probe_specs_legacy(self):
         """fixed readability probe regions used for qualitative tracking.
         all x/y coordinates are snapped to multiples of tile_size (32) so the
         probe tile grid is co-aligned with the training tile grid."""
@@ -519,7 +655,7 @@ class TensorboardVisualizer:
         if seg_id in self._segment_assets:
             return self._segment_assets[seg_id]
 
-        if seg_id == self.c.data.scroll1_id:
+        if seg_id == self.scroll1_id:
             asset = {
                 "volume": self.volume,
                 "mask": self.mask,
@@ -708,6 +844,16 @@ class TensorboardVisualizer:
           - added:   coverage_recall             (fraction of labeled ink tiles with score > 0.3)
           - added:   coherence                   (mean_component_size, normalised)
         """
+        # defensive: crop all maps to a common shape. tile-grid rounding can leave a
+        # one-tile mismatch between the prediction map and the label/valid maps; a hard
+        # crop here prevents a boolean-index crash from killing figure generation.
+        h = min(pred_map.shape[0], label_binary.shape[0], label_fraction.shape[0], valid_tiles.shape[0])
+        w = min(pred_map.shape[1], label_binary.shape[1], label_fraction.shape[1], valid_tiles.shape[1])
+        pred_map       = pred_map[:h, :w]
+        label_binary   = label_binary[:h, :w]
+        label_fraction = label_fraction[:h, :w]
+        valid_tiles    = valid_tiles[:h, :w]
+
         valid_scores    = pred_map[valid_tiles]
         valid_labels    = label_binary[valid_tiles].astype(int)
         valid_fraction  = label_fraction[valid_tiles]
@@ -823,7 +969,7 @@ class TensorboardVisualizer:
             # self.log_model_graph(model, ex)
             self.log_hyperparameters(params, pos_weight)
 
-        if self.mode == 'train' and (epoch + 1) % self.c.tra.eval_int == 0:
+        if self.mode == 'train' and self.eval_enabled and (epoch + 1) % self.c.tra.eval_int == 0:
             try:
                 self.add_evaluation_figures(epoch, model)
             except Exception as e:
@@ -970,8 +1116,12 @@ class TensorboardVisualizer:
         ax.grid(True)
 
     def _hard_mining_dir(self):
-        """return hard-mining directory for the current experiment"""
-        return getattr(self.c.hm, "dir", "./hard_negs")
+        """return hard-mining directory for the current experiment (per scroll fragment)"""
+        base = getattr(self.c.hm, "dir", "./hard_negs")
+        # keep mined files separated per scroll so global (z,y,x) keys never collide
+        if getattr(self, "scroll1_id", None) is not None:
+            return os.path.join(base, f"scroll_{self.scroll1_id}")
+        return base
 
     def add_evaluation_figures(self, epoch, model):
         """run eval on train and valid splits produce mining and figures"""
@@ -1051,16 +1201,19 @@ class TensorboardVisualizer:
                 # dedup key includes z y x and label
                 key = (int(z_global), int(y_global), int(x_global), int(has_ink))
 
+                # scroll_id makes each record self-describing so the injector can
+                # route it back to the correct volume in multi-scroll training
+                sid_rec = int(getattr(self, "scroll1_id", 0) or 0)
                 if has_ink == 0 and score >= hn_cut:
                     if key not in existing_keys and key not in new_keys:
                         if mining_f is not None:
-                            mining_f.write(json.dumps({"z": z_global, "y": y_global, "x": x_global, "score": score, "label": 0}) + "\n")
+                            mining_f.write(json.dumps({"scroll_id": sid_rec, "z": z_global, "y": y_global, "x": x_global, "score": score, "label": 0}) + "\n")
                         new_keys.add(key)
                         hn_cnt += 1
                 elif has_ink == 1 and score <= hp_cut:
                     if key not in existing_keys and key not in new_keys:
                         if mining_f is not None:
-                            mining_f.write(json.dumps({"z": z_global, "y": y_global, "x": x_global, "score": score, "label": 1}) + "\n")
+                            mining_f.write(json.dumps({"scroll_id": sid_rec, "z": z_global, "y": y_global, "x": x_global, "score": score, "label": 1}) + "\n")
                         new_keys.add(key)
                         hp_cnt += 1
 
@@ -1240,12 +1393,31 @@ class TensorboardVisualizer:
         print("Starting test figure generation...")
         model.eval()
 
-        self._add_single_test_figure(epoch, model, self.test_volume, self.test_mask, self.test_y_range, self.test_x_range, self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max, "Test")
+        # cost-control: when test_scroll2_only is set, render ONLY the goal scroll2
+        # fragment. this skips the very expensive full training-scroll "Test" figure
+        # (e.g. the big fragment is ~2.3M tile reads / several hours) so end-of-training
+        # test inference stays affordable across a campaign.
+        scroll2_only = bool(getattr(self.c.data, "test_scroll2_only", False))
 
-        if self.c.data.test_on_scroll4:
-            self._add_single_test_figure(epoch, model, self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range, self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max, "Scroll4")
+        if not scroll2_only:
+            try:
+                self._add_single_test_figure(epoch, model, self.test_volume, self.test_mask, self.test_y_range, self.test_x_range, self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max, "Test")
+            except Exception as e:
+                print(f"[ERROR] Test (training-scroll) figure failed: {e}")
+                import traceback; traceback.print_exc()
+
+        if (not scroll2_only) and self.c.data.test_on_scroll4:
+            try:
+                self._add_single_test_figure(epoch, model, self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range, self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max, "Scroll4")
+            except Exception as e:
+                print(f"[ERROR] Scroll4 test figure failed: {e}")
+                import traceback; traceback.print_exc()
         else:
-            self._add_single_test_figure(epoch, model, self.scroll2_volume, self.scroll2_mask, self.scroll2_y_range, self.scroll2_x_range, self.scroll2_global_mean, self.scroll2_global_std, self.scroll2_global_min, self.scroll2_global_max, "Scroll2")
+            try:
+                self._add_single_test_figure(epoch, model, self.scroll2_volume, self.scroll2_mask, self.scroll2_y_range, self.scroll2_x_range, self.scroll2_global_mean, self.scroll2_global_std, self.scroll2_global_min, self.scroll2_global_max, "Scroll2")
+            except Exception as e:
+                print(f"[ERROR] Scroll2 test figure failed: {e}")
+                import traceback; traceback.print_exc()
 
     def _add_single_test_figure(self, epoch, model, vol, mask, y_range, x_range, g_mean, g_std, g_min, g_max, name):
         """predict per depth and create a mosaic figure for a test dataset"""
@@ -1358,13 +1530,27 @@ class TensorboardVisualizer:
         return fig
 
     def _create_combined_test_figure(self, all_data, n_blocks, test_type):
-        """create combined test figure showing prediction mosaics"""
+        """create combined test figure showing prediction mosaics.
+
+        panel height is derived from the actual tile-grid aspect of the maps so that
+        very wide/flat scrolls (e.g. scroll2) do not waste large vertical whitespace
+        bands around each thin strip. aspect='equal' keeps the image undistorted; the
+        cell is sized to match the image so there is little leftover space."""
         cols = 2
         rows = (n_blocks + cols - 1) // cols
 
-        fig_w = 8
-        h_mult = 7 if test_type == "scroll1" else 3
-        fig_h = h_mult * rows
+        # aspect = width / height of one prediction map, in tile units
+        sample = all_data[0][0]
+        h_tiles, w_tiles = sample.shape
+        aspect = w_tiles / max(h_tiles, 1)
+
+        panel_w = 6.0                                  # inches per column
+        # match cell height to the image aspect so whitespace is minimal; clamp so
+        # extreme aspect ratios stay legible (tall training scroll vs flat scroll2)
+        panel_h = max(1.3, min(7.0, panel_w / max(aspect, 1e-6)))
+
+        fig_w = panel_w * cols
+        fig_h = panel_h * rows + 0.4                   # small margin for titles
 
         fig, axes = plt.subplots(rows, cols, figsize=(fig_w, fig_h))
         if rows == 1 and cols == 1:
@@ -1384,7 +1570,7 @@ class TensorboardVisualizer:
             ax = axes[idx // cols, idx % cols]
             ax.axis('off')
 
-        plt.subplots_adjust(wspace=0.05, hspace=0.05, left=0.05, right=0.95, top=0.95, bottom=0.05)
+        plt.subplots_adjust(wspace=0.05, hspace=0.18, left=0.03, right=0.97, top=0.97, bottom=0.03)
         return fig
 
     def _log_readability_metrics(self, epoch, aggregate_metrics, per_depth_metrics, depth_labels):
@@ -1869,7 +2055,7 @@ class TensorboardVisualizer:
         if not os.path.exists(mining_path):
             return None
 
-        seg_id = self.c.data.scroll1_id
+        seg_id = self.scroll1_id
         label_path = f"./eroded_inklabels/{seg_id}.png"
         if not os.path.exists(label_path):
             return None
