@@ -5,7 +5,11 @@ import torch
 
 @dataclass
 class DataConfig:
-    zarr_path: str = field(default_factory=lambda: os.getenv("VESUVIUS_ZARR_PATH", "C:\\Users\\ChenJeff\\Documents\\ves_zarrs2"))
+    # on linux (remote server) scrolls live on the mounted network volume at /workspace;
+    # on windows fall back to the old local docs path. override via VESUVIUS_ZARR_PATH.
+    zarr_path: str = field(default_factory=lambda: os.getenv(
+        "VESUVIUS_ZARR_PATH",
+        "/workspace/ves_zarrs2" if os.name == "posix" else "C:\\Users\\ChenJeff\\Documents\\ves_zarrs2"))
     # tra_scroll_id / tra_scroll_ids: the scroll fragment(s) we TRAIN on. renamed from
     # scroll1_id to make clear the training set is a distinct (and now switchable) set
     # of scrolls, independent of the goal/test scrolls (scroll2/scroll3/scroll4).

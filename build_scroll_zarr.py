@@ -44,6 +44,7 @@ AFTER BUILDING (big frames): precompute normalization to avoid the slow in-pipel
 from __future__ import annotations
 import argparse
 import os
+import shutil
 import struct
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -53,8 +54,18 @@ import cv2
 
 DEPTH_OUT = 64
 BPP = 2  # uint16 output
-DEFAULT_ZARR = os.getenv("VESUVIUS_ZARR_PATH", r"C:\Users\ChenJeff\Documents\ves_zarrs2")
-DEFAULT_TMP = r"C:\Users\ChenJeff\Documents\_ves_tmp"
+# portable curl: windows ships curl.exe, linux/mac ship curl. pick whatever is on PATH
+CURL = "curl.exe" if shutil.which("curl.exe") else "curl"
+# default output/scratch roots. on linux (remote server) the scrolls live on the mounted
+# network volume at /workspace; on windows fall back to the old local docs path
+_POSIX_DEFAULT_ZARR = "/workspace/ves_zarrs2"
+_POSIX_DEFAULT_TMP = "/workspace/_ves_tmp"
+_WIN_DEFAULT_ZARR = r"C:\Users\ChenJeff\Documents\ves_zarrs2"
+_WIN_DEFAULT_TMP = r"C:\Users\ChenJeff\Documents\_ves_tmp"
+DEFAULT_ZARR = os.getenv("VESUVIUS_ZARR_PATH",
+                         _POSIX_DEFAULT_ZARR if os.name == "posix" else _WIN_DEFAULT_ZARR)
+DEFAULT_TMP = os.getenv("VESUVIUS_TMP_DIR",
+                        _POSIX_DEFAULT_TMP if os.name == "posix" else _WIN_DEFAULT_TMP)
 
 
 # ============================================================================
@@ -79,7 +90,7 @@ def _curl_range(url, start, end, out):
     timeouts + retry are ESSENTIAL: without --max-time a single hung request from the public
     server freezes the whole reconstruction indefinitely (observed repeatedly)."""
     subprocess.run(
-        ["curl.exe", "-s", "--fail",
+        [CURL, "-s", "--fail",
          "--connect-timeout", "20", "--max-time", "180",
          "--retry", "5", "--retry-delay", "2", "--retry-all-errors",
          "-r", f"{start}-{end}", url, "-o", out],
@@ -89,7 +100,7 @@ def _curl_range(url, start, end, out):
 def _curl_head_len(url):
     """return Content-Length for url via a HEAD request, or None if it doesn't exist."""
     try:
-        out = subprocess.run(["curl.exe", "-sI", "--fail", "--connect-timeout", "20", url],
+        out = subprocess.run([CURL, "-sI", "--fail", "--connect-timeout", "20", url],
                              capture_output=True, text=True, check=True).stdout
     except subprocess.CalledProcessError:
         return None
