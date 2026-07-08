@@ -243,7 +243,7 @@ class TensorboardVisualizer:
         """initialize tensorboard visualizer and precompute datasets and stats.
 
         scroll_id: which scroll fragment this visualizer renders figures for;
-            defaults to config.data.scroll1_id. lets the trainer build one
+            defaults to config.data.tra_scroll_id. lets the trainer build one
             figure-visualizer per fragment.
         mode: 'train' loads figure assets and can render figures; 'metrics' only
             logs scalar metrics (used for the merged multi-scroll training stream);
@@ -253,13 +253,16 @@ class TensorboardVisualizer:
         """
         self.c = config
         self.mode = mode
-        self.scroll1_id = int(scroll_id) if scroll_id is not None else int(config.data.scroll1_id)
+        self.scroll1_id = int(scroll_id) if scroll_id is not None else int(config.data.tra_scroll_id)
         # whether this scroll renders evaluation figures. vis_scroll_ids=None => all
         # scrolls render (default); otherwise only listed scrolls do. test/probe
         # figures are unaffected.
         _vis_ids = getattr(config.data, "vis_scroll_ids", None)
         self.eval_enabled = (not _vis_ids) or (int(self.scroll1_id) in [int(v) for v in _vis_ids])
         self.probe_log_interval = max(1, int(getattr(config.tra, "probe_int", 5)))
+        # probe ROIs can be toggled off (default off); when off no specs are built and
+        # no probe figures render
+        self.probe_rois_enabled = bool(getattr(config.tra, "probe_rois_enabled", False))
 
         if config.exp_name is None:
             if self.mode == 'finetune':
@@ -355,6 +358,12 @@ class TensorboardVisualizer:
         self.train_x_range = dm.train_x
         self.valid_x_range = dm.valid_x
         self.y_range = dm.y_range
+        # axis-aware split (see DataManager): 'y' = horizontal (top train / bottom valid),
+        # 'x' = legacy vertical. eval figure composition below branches on this.
+        self.split_axis = getattr(dm, "split_axis", "x")
+        self.train_range = getattr(dm, "train_range", dm.train_x)
+        self.valid_range = getattr(dm, "valid_range", dm.valid_x)
+        self.shared_range = getattr(dm, "shared_range", dm.y_range)
         self.global_mean, self.global_std, self.global_min, self.global_max = dm.norm_stats
 
         # load test data region and scroll4 data with stats
@@ -363,19 +372,58 @@ class TensorboardVisualizer:
             self.test_volume, self.test_mask, str(self.scroll1_id)
         )
 
-        self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range = self._load_scroll4_region()
-        self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max = self._get_or_compute_norm(
-            self.scroll4_volume, self.scroll4_mask, str(self.c.data.scroll4_id)
-        )
+        # scroll4 transfer region: loaded DEFENSIVELY (its zarr/mask may be absent on a minimal
+        # setup that only has the training scroll). on failure -> None, and its test figure is
+        # skipped. the test figure never runs anyway when test_int > epochs.
+        self.scroll4_volume = self.scroll4_mask = None
+        self.scroll4_y_range = self.scroll4_x_range = None
+        self.scroll4_global_mean = self.scroll4_global_std = None
+        self.scroll4_global_min = self.scroll4_global_max = None
+        try:
+            (self.scroll4_volume, self.scroll4_mask,
+             self.scroll4_y_range, self.scroll4_x_range) = self._load_scroll4_region()
+            (self.scroll4_global_mean, self.scroll4_global_std,
+             self.scroll4_global_min, self.scroll4_global_max) = self._get_or_compute_norm(
+                self.scroll4_volume, self.scroll4_mask, str(self.c.data.scroll4_id))
+        except Exception as e:
+            print(f"[scroll4] not available, skipping its test figure ({e})")
+            self.scroll4_volume = None
 
-        # scroll2 is always loaded — probe ROIs always include it regardless of test_on_scroll4
-        self.scroll2_volume, self.scroll2_mask, self.scroll2_y_range, self.scroll2_x_range = self._load_scroll2_region()
-        self.scroll2_global_mean, self.scroll2_global_std, self.scroll2_global_min, self.scroll2_global_max = self._get_or_compute_norm(
-            self.scroll2_volume, self.scroll2_mask, str(self.c.data.scroll2_id)
-        )
+        # scroll2 goal-scroll: also DEFENSIVE. probe ROIs would include it, but probes are gated
+        # on probe_rois_enabled; if scroll2 is missing we skip its figure/probes gracefully.
+        self.scroll2_volume = self.scroll2_mask = None
+        self.scroll2_y_range = self.scroll2_x_range = None
+        self.scroll2_global_mean = self.scroll2_global_std = None
+        self.scroll2_global_min = self.scroll2_global_max = None
+        try:
+            (self.scroll2_volume, self.scroll2_mask,
+             self.scroll2_y_range, self.scroll2_x_range) = self._load_scroll2_region()
+            (self.scroll2_global_mean, self.scroll2_global_std,
+             self.scroll2_global_min, self.scroll2_global_max) = self._get_or_compute_norm(
+                self.scroll2_volume, self.scroll2_mask, str(self.c.data.scroll2_id))
+        except Exception as e:
+            print(f"[scroll2] not available, skipping its test figure ({e})")
+            self.scroll2_volume = None
+
+        # scroll3 goal-scroll: loaded DEFENSIVELY (its zarr/mask may not exist yet, e.g. while
+        # it is still downloading). on any failure we set it to None and simply skip its test
+        # figure — training and the scroll2 figure are unaffected.
+        self.scroll3_volume = self.scroll3_mask = None
+        self.scroll3_y_range = self.scroll3_x_range = None
+        self.scroll3_global_mean = self.scroll3_global_std = None
+        self.scroll3_global_min = self.scroll3_global_max = None
+        try:
+            (self.scroll3_volume, self.scroll3_mask,
+             self.scroll3_y_range, self.scroll3_x_range) = self._load_scroll3_region()
+            (self.scroll3_global_mean, self.scroll3_global_std,
+             self.scroll3_global_min, self.scroll3_global_max) = self._get_or_compute_norm(
+                self.scroll3_volume, self.scroll3_mask, str(self.c.data.scroll3_id))
+        except Exception as e:
+            print(f"[scroll3] not available, skipping its test figure ({e})")
+            self.scroll3_volume = None
 
         self._segment_assets = {}
-        self.probe_specs = self._build_probe_specs()
+        self.probe_specs = self._build_probe_specs() if self.probe_rois_enabled else []
         self._debug_scroll4_ranges_once()
 
     def _get_or_compute_norm(self, vol, mask, seg_id):
@@ -542,10 +590,33 @@ class TensorboardVisualizer:
 
         return vol, mask, y_range, x_range
 
-    def _build_probe_specs(self):
+    def _load_scroll3_region(self):
+        """load the ENTIRE scroll3 fragment as a second goal-scroll test region.
+
+        scroll3 (PHerc332) is the same 7.91um modality as the scroll4 training run — the
+        real transfer target. long-and-skinny fragment; full extent over full depth (tiles
+        outside the papyrus mask are skipped). raises if its zarr/mask are missing so the
+        caller can skip the figure gracefully (it may still be downloading)."""
+        sid = self.c.data.scroll3_id
+        zarr_path = os.path.join(self.c.data.zarr_path, f"{sid}.zarr")
+        import zarr
+        vol = zarr.open(zarr_path, mode='r')
+
+        mask_path = f"./masks/{sid}.png"
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        if mask is None:
+            raise FileNotFoundError(f"scroll3 mask not found at {mask_path}")
+        mask = mask / 255.0
+
+        D, H, W = map(int, vol.shape)
+        y_range = (0, H)
+        x_range = (0, W)
+
+        return vol, mask, y_range, x_range
+
         """fixed readability probe regions, generated per active training scroll.
 
-        each training scroll listed in config.data.scroll1_ids contributes its own
+        each training scroll listed in config.data.tra_scroll_ids contributes its own
         easy/medium/hard ROIs (when defined below); the standard scroll4 and scroll2
         transfer checks are always appended. so a big-scroll-only run yields 3 probes +
         scroll4 + scroll2, while a small+big multiscroll run yields 6 probes + the two
@@ -575,7 +646,7 @@ class TensorboardVisualizer:
             ],
         }
 
-        train_ids = [int(s) for s in (getattr(self.c.data, "scroll1_ids", None) or [self.c.data.scroll1_id])]
+        train_ids = [int(s) for s in (getattr(self.c.data, "tra_scroll_ids", None) or [self.c.data.tra_scroll_id])]
         specs = []
         for sid in train_ids:
             specs.extend(per_scroll.get(sid, []))
@@ -983,7 +1054,7 @@ class TensorboardVisualizer:
                 print(f"[ERROR] add_test_figures failed at epoch {epoch}: {e}")
                 import traceback; traceback.print_exc()
 
-        if self.mode == 'train' and (epoch + 1) % self.probe_log_interval == 0:
+        if self.mode == 'train' and self.probe_rois_enabled and (epoch + 1) % self.probe_log_interval == 0:
             try:
                 self.add_probe_region_figures(epoch, model)
             except Exception as e:
@@ -1134,8 +1205,18 @@ class TensorboardVisualizer:
         # ring+ink tiles — everything else stays NaN and renders black, matching
         # the actual training distribution instead of swamping the signal with OOD noise
         eval_mask = getattr(self, 'eval_mask', self.mask)
-        train_coords = self._gen_tile_coords(z_range, self.y_range, self.train_x_range, eval_mask)
-        valid_coords = self._gen_tile_coords(z_range, self.y_range, self.valid_x_range, eval_mask)
+        # axis-aware split: 'y' -> train=top rows / valid=bottom rows, shared x, stack vertically;
+        # 'x' -> legacy train=left / valid=right, shared y, stack horizontally.
+        if getattr(self, "split_axis", "x") == "y":
+            tr_y, tr_x = self.train_range, self.shared_range
+            va_y, va_x = self.valid_range, self.shared_range
+            concat_axis = 0
+        else:
+            tr_y, tr_x = self.shared_range, self.train_range
+            va_y, va_x = self.shared_range, self.valid_range
+            concat_axis = 1
+        train_coords = self._gen_tile_coords(z_range, tr_y, tr_x, eval_mask)
+        valid_coords = self._gen_tile_coords(z_range, va_y, va_x, eval_mask)
 
         train_grouped = group_by_depth(train_coords)
         valid_grouped = group_by_depth(valid_coords)
@@ -1172,12 +1253,12 @@ class TensorboardVisualizer:
             v_coords = valid_grouped.get(d_off, [])
 
             t_pred = predict_tiles(
-                self.c, model, self.volume, eval_mask, t_coords, self.y_range, self.train_x_range,
+                self.c, model, self.volume, eval_mask, t_coords, tr_y, tr_x,
                 depth_start, "train", self.global_mean, self.global_std, self.global_min, self.global_max
             )
 
             v_pred = predict_tiles(
-                self.c, model, self.volume, eval_mask, v_coords, self.y_range, self.valid_x_range,
+                self.c, model, self.volume, eval_mask, v_coords, va_y, va_x,
                 depth_start, "valid", self.global_mean, self.global_std, self.global_min, self.global_max
             )
 
@@ -1192,8 +1273,8 @@ class TensorboardVisualizer:
                 score = float(t_pred[yi, xi])
 
                 z_global = depth_start
-                y_global = self.y_range[0] + y_off
-                x_global = self.train_x_range[0] + x_off
+                y_global = tr_y[0] + y_off
+                x_global = tr_x[0] + x_off
 
                 l_tile = self.labels[y_global:y_global + tile, x_global:x_global + tile]
                 has_ink = int(np.any(l_tile > 0.5))
@@ -1217,7 +1298,7 @@ class TensorboardVisualizer:
                         new_keys.add(key)
                         hp_cnt += 1
 
-            full_pred = np.concatenate([t_pred, v_pred], axis=1)
+            full_pred = np.concatenate([t_pred, v_pred], axis=concat_axis)
             all_pred_data.append((full_pred, t_pred, depth_start, depth_end))
 
         if mining_f is not None:
@@ -1236,11 +1317,17 @@ class TensorboardVisualizer:
             plt.close(fig)
 
         if all_pred_data:
-            full_x_range = (self.train_x_range[0], self.valid_x_range[1])
+            # label map spans the full split extent along the split axis, shared range on the other
+            if getattr(self, "split_axis", "x") == "y":
+                full_y_range = (self.train_range[0], self.valid_range[1])
+                full_x_range = self.shared_range
+            else:
+                full_y_range = self.shared_range
+                full_x_range = (self.train_range[0], self.valid_range[1])
             label_binary, label_fraction, valid_tiles = self._compute_tile_maps(
                 self.labels,
                 self.mask,
-                self.y_range,
+                full_y_range,
                 full_x_range,
             )
             per_depth_metrics = []
@@ -1259,9 +1346,14 @@ class TensorboardVisualizer:
             self._log_readability_metrics(epoch, aggregate_metrics, per_depth_metrics, depth_labels)
 
             if getattr(self.c.tra, "eval_aggregate", True):
-                # width of the train portion in tile units (used to draw the split line)
-                train_split_w = (self.train_x_range[1] - self.train_x_range[0]) // self.c.data.tile_size
-                fig = self._create_aggregate_eval_figure(all_pred_data, train_split_w, label_binary)
+                # size of the train portion in tile units + orientation of the split line
+                if getattr(self, "split_axis", "x") == "y":
+                    train_split_n = (self.train_range[1] - self.train_range[0]) // self.c.data.tile_size
+                    split_axis = "y"
+                else:
+                    train_split_n = (self.train_range[1] - self.train_range[0]) // self.c.data.tile_size
+                    split_axis = "x"
+                fig = self._create_aggregate_eval_figure(all_pred_data, train_split_n, label_binary, split_axis)
                 self.writer.add_figure('Evaluation/Aggregated', fig, epoch)
                 plt.close(fig)
 
@@ -1407,16 +1499,27 @@ class TensorboardVisualizer:
                 import traceback; traceback.print_exc()
 
         if (not scroll2_only) and self.c.data.test_on_scroll4:
-            try:
-                self._add_single_test_figure(epoch, model, self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range, self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max, "Scroll4")
-            except Exception as e:
-                print(f"[ERROR] Scroll4 test figure failed: {e}")
-                import traceback; traceback.print_exc()
+            if self.scroll4_volume is not None:
+                try:
+                    self._add_single_test_figure(epoch, model, self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range, self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max, "Scroll4")
+                except Exception as e:
+                    print(f"[ERROR] Scroll4 test figure failed: {e}")
+                    import traceback; traceback.print_exc()
         else:
+            if self.scroll2_volume is not None:
+                try:
+                    self._add_single_test_figure(epoch, model, self.scroll2_volume, self.scroll2_mask, self.scroll2_y_range, self.scroll2_x_range, self.scroll2_global_mean, self.scroll2_global_std, self.scroll2_global_min, self.scroll2_global_max, "Scroll2")
+                except Exception as e:
+                    print(f"[ERROR] Scroll2 test figure failed: {e}")
+                    import traceback; traceback.print_exc()
+
+        # scroll3 goal-scroll: its OWN separate figure, always rendered alongside scroll2 when
+        # available. skipped silently if scroll3 data was not loaded (e.g. still downloading).
+        if self.scroll3_volume is not None:
             try:
-                self._add_single_test_figure(epoch, model, self.scroll2_volume, self.scroll2_mask, self.scroll2_y_range, self.scroll2_x_range, self.scroll2_global_mean, self.scroll2_global_std, self.scroll2_global_min, self.scroll2_global_max, "Scroll2")
+                self._add_single_test_figure(epoch, model, self.scroll3_volume, self.scroll3_mask, self.scroll3_y_range, self.scroll3_x_range, self.scroll3_global_mean, self.scroll3_global_std, self.scroll3_global_min, self.scroll3_global_max, "Scroll3")
             except Exception as e:
-                print(f"[ERROR] Scroll2 test figure failed: {e}")
+                print(f"[ERROR] Scroll3 test figure failed: {e}")
                 import traceback; traceback.print_exc()
 
     def _add_single_test_figure(self, epoch, model, vol, mask, y_range, x_range, g_mean, g_std, g_min, g_max, name):
@@ -1474,11 +1577,12 @@ class TensorboardVisualizer:
         plt.subplots_adjust(wspace=0.05, hspace=0.05, left=0.05, right=0.95, top=0.95, bottom=0.05)
         return fig
 
-    def _create_aggregate_eval_figure(self, all_pred_data, train_split_w, label_binary):
+    def _create_aggregate_eval_figure(self, all_pred_data, train_split_n, label_binary, split_axis="x"):
         """n_blocks-row × 2-col figure: left col = predictions, right col = overlay with inklabels.
 
         figure size adapts to the map's tile dimensions and aspect ratio so the image
-        is never distorted regardless of scroll geometry.
+        is never distorted regardless of scroll geometry. split_axis controls whether the
+        train/valid divider is drawn as a vertical (x-split) or horizontal (y-split) line.
         """
         n_blocks = len(all_pred_data)
         if n_blocks == 0:
@@ -1501,14 +1605,20 @@ class TensorboardVisualizer:
         fig, axes = plt.subplots(n_blocks, 2, figsize=(fig_w, fig_h),
                                  squeeze=False)
 
-        split_pos = train_split_w - 0.5
+        split_pos = train_split_n - 0.5
+
+        def _draw_split(ax):
+            if split_axis == "y":
+                ax.axhline(y=split_pos, color='red', linestyle='--', linewidth=0.8)
+            else:
+                ax.axvline(x=split_pos, color='red', linestyle='--', linewidth=0.8)
 
         for row, (full_pred, train_pred, d_start, d_end) in enumerate(all_pred_data):
             # left: raw prediction
             ax_pred = axes[row, 0]
             ax_pred.imshow(full_pred, cmap='inferno_nan', vmin=0, vmax=1, aspect='equal')
             ax_pred.set_title(f'Depth {d_start}-{d_end}', fontsize=8)
-            ax_pred.axvline(x=split_pos, color='red', linestyle='--', linewidth=0.8)
+            _draw_split(ax_pred)
             ax_pred.axis('off')
 
             # right: same prediction + inklabel overlay
@@ -1521,7 +1631,7 @@ class TensorboardVisualizer:
                 w = min(label_binary.shape[1], ov.shape[1])
                 ov[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
                 ax_ov.imshow(ov)
-            ax_ov.axvline(x=split_pos, color='red', linestyle='--', linewidth=0.8)
+            _draw_split(ax_ov)
             ax_ov.axis('off')
 
         plt.subplots_adjust(wspace=0.04, hspace=0.12,
@@ -2195,6 +2305,8 @@ class TensorboardVisualizer:
 
     def _debug_scroll4_ranges_once(self):
         """one time sanity checks for scroll4 alignment"""
+        if getattr(self, "scroll4_volume", None) is None:
+            return  # scroll4 not loaded (minimal setup) — nothing to sanity-check
         try:
             vol = self.scroll4_volume
             mask = self.scroll4_mask

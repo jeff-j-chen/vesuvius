@@ -173,6 +173,56 @@ This produces `<segment_id>.zarr` with:
 
 Delete the raw TIF folder after successful conversion.
 
+### 3.3b Unified builder (recommended): build_scroll_zarr.py
+
+`build_scroll_zarr.py` is the single entry point that replaces the older one-off
+`reconstruct_scroll{3,4}_7um.py` / `reconstruct_scroll4_patch.py` scripts. It streams a scroll
+fragment straight into our zarr format (`(64,H,W)`, chunks `(8,32,32)`, uint16, `zarr_format=2`)
+without ever holding the whole volume in RAM, and writes `masks/<id>.png` alongside it.
+
+It handles two source types:
+
+- **`volpkg`** — a dl.ash2txt surface segment (`paths/<seg>/layers/{00..64}.tif`). Geometry
+  (width, height, data offset) and the layer count are AUTO-DETECTED from the layer-0 TIFF
+  header, so any segment works without editing code. Downloads are hardened (curl
+  `--max-time`/`--retry`), fetch the 65 layers per y-block in parallel, and are RESUMABLE
+  (a `.recon_progress` sidecar + mask checkpoint let a stalled run continue instead of
+  restarting). `--flip` horizontally mirrors the frame when it must match flipped labels.
+- **`s3patch`** — an S3 open-data surface-volume zarr (2.399um) plus its ink-detection
+  prediction tif. Downloads only the chunk files intersecting a bbox, depth-resamples, and
+  (when `--ink-key` is given) bakes `inklabels/` + `eroded_inklabels/` via otsu → close →
+  de-speckle → erode.
+
+```bash
+# named presets (the three fragments already in use)
+python build_scroll_zarr.py preset scroll3            # 7.91um goal scroll (PHerc332)
+python build_scroll_zarr.py preset scroll4-79         # 7.91um scroll4 w023 (flipped)
+python build_scroll_zarr.py preset scroll4-24-patch   # 2.4um scroll4 patch + labels
+
+# ANY volpkg segment — geometry auto-detected, no code edits
+python build_scroll_zarr.py volpkg \
+    --base-url https://dl.ash2txt.org/full-scrolls/Scroll2/PHercParis3.volpkg/paths/<seg>/layers/ \
+    --out-id <seg> [--flip] [--y0 0 --y1 4000] [--workers 8]
+
+# a bbox patch from an S3 surface volume (+ optional ink labels)
+python build_scroll_zarr.py s3patch \
+    --seg PHerc1667/segments/<...>_flatboi \
+    --vol-subpath surface-volumes/<vol>.zarr/0 \
+    --ink-key <...>/ink-detection/<...>.tif \
+    --out-id <id> --y0 0 --y1 9600 --x0 6144 --x1 16384
+```
+
+IMPORTANT — after building a large frame, precompute normalization so the first training run
+does not hit the slow in-pipeline norm loop (it reads full z-slices against `(8,32,32)` chunks,
+re-reading the whole volume ~8x with millions of tiny I/Os — slow enough to look like a hang):
+
+```bash
+python precompute_norm.py --scroll-id <id>   # one chunk-aligned pass -> norm_cache.json[<id>]
+```
+
+Note the visualizer eagerly computes norm for EVERY test region (scroll2/scroll3/scroll4) at
+init, so precompute those ids too before training with them wired in.
+
 ### 3.4 Register the new segment
 
 After creating the zarr:
@@ -181,6 +231,82 @@ After creating the zarr:
 2. if labels and masks exist, add PNGs to `inklabels/`, `eroded_inklabels/`, `masks/`
 3. if no labels exist, the segment is inference-only; wire it into a visualizer path
 4. normalization is computed automatically on first run and cached in `norm_cache.json`
+
+### 3.5 Cross-resolution label transfer (2.4um -> 7.91um dot-warp)
+
+Some scroll4 sheets were scanned at BOTH 2.4um (78keV, where ink is visible -> our label
+source) and 7.91um (53keV, the modality scroll2/scroll3 share, and what we train on). The two
+scans were flattened DIFFERENTLY, so their frames do not line up pixel-for-pixel. We bridge them
+with a hand-anchored **thin-plate-spline (TPS) warp**: mark matching features with colored dots
+on both frames, fit a TPS, and carry the 2.4um ink labels into the 7.91um frame. This has been
+the most reliable alignment method we've found.
+
+The whole flow runs on small downscaled slices, so it's cheap. Steps:
+
+**(a) Grab the two comparison slices efficiently.** You do NOT need the full volumes — just one
+mid-depth surface slice from each scan, downscaled to a common width (we use 6000).
+
+- 2.4um source texture: pull only the SMALL multiscale level (e.g. level 5 = 32x downsampled)
+  of the S3 surface-volume OME-zarr, then take the mid-depth slice. Level 5 is a few hundred MB
+  vs hundreds of GB for level 0.
+
+  ```powershell
+  # download just level 5 of the 2.4um surface volume
+  aws s3 cp `
+    "s3://vesuvius-challenge-open-data/PHerc1667/segments/<seg>_flatboi/surface-volumes/<vol>.zarr/5/" `
+    "$env:USERPROFILE\Documents\_ves_tmp\<id>_24_l5" --recursive --no-sign-request
+  ```
+  Then in Python: `z = zarr.open(<dir>); sl = z[z.shape[0]//2]` -> plain `cv2.resize` to width
+  6000 (INTER_AREA, NO normalization) -> save `warp_MARK_<id>_2p4_source.png`.
+
+- 7.91um target texture: download the single MIDDLE layer TIFF (layer 32 of `paths/<seg>/layers/`),
+  **flip it horizontally** (the 7.91um flattening is mirrored vs the 2.4um one), plain-resize to
+  width 6000, plain 16->8 bit (`arr // 256`, NO contrast stretch) -> `warp_MARK_<id>_7p9_target.png`.
+
+  ```powershell
+  curl.exe -s --fail --max-time 900 --retry 5 --retry-all-errors `
+    "https://dl.ash2txt.org/.../paths/<seg>/layers/32.tif" -o "$env:USERPROFILE\Documents\_ves_tmp\<id>_79_l32.tif"
+  ```
+
+  IMPORTANT: use **plain downscaling only** — no percentile/contrast normalization. Keeping the
+  raw intensities makes the two frames easier to eyeball-match and avoids introducing artifacts.
+
+**(b) Manually add the dots.** Open both `warp_MARK_*` PNGs in any image editor. For each feature
+you can identify in BOTH frames (scallop humps, tears, distinctive fibers), place a dot of the
+**same saturated color** on that feature in both images. Use a DIFFERENT palette color for each
+correspondence. Supported palette (12 colors): red, green, blue, yellow, magenta, cyan, orange,
+purple, pink, teal, brown, violet. A few pixels wide is plenty; the underlying image is grayscale
+so any saturated pixel is detected as a dot. Save as `warp_MARK_<id>_2p4_source_dots.png` and
+`warp_MARK_<id>_7p9_target_dots.png`. More dots -> tighter alignment (aim for 8-12, spread out).
+
+**(c) Fit the warp** (writes `<tag>_dotwarp_map{x,y}.npy` + a QA overlay):
+
+```powershell
+python warp_from_dots.py --id <tag> `
+  --src-dots warp_MARK_<id>_2p4_source_dots.png --dst-dots warp_MARK_<id>_7p9_target_dots.png `
+  --src-tex  warp_MARK_<id>_2p4_source.png      --dst-tex  warp_MARK_<id>_7p9_target.png `
+  --ink-tif  <path to 2.4um ink prediction tif>
+```
+
+Check `warp_dots_overlay_<tag>.png`: red (warped 2.4) and green (7.91) should sit on top of each
+other (yellow = aligned). If text lines drift, add/adjust dots and rerun.
+
+**(d) Bake + clean up the labels** (two stages, with a manual-correction pause between):
+
+```powershell
+# stage A: threshold the 2.4 ink, morph-clean, warp into the 7.91 frame -> editable PNG
+python bake_scroll4_79_labels.py --out-id <id> --tag <tag> --ink-tif <2.4 ink tif> `
+  --src-mark warp_MARK_<id>_2p4_source.png --ink-thr 99
+
+# -> hand-correct <tmp>/<tag>_warp_edit.png  (paint WHITE=add ink, BLACK=remove)
+
+# stage B: upscale the corrected PNG to the full frame (auto-read from the zarr) + erode
+python bake_scroll4_79_labels.py --shrink --out-id <id> --tag <tag>
+```
+
+Stage B writes `inklabels/<id>.png` and `eroded_inklabels/<id>.png` (the trainer consumes the
+eroded one). The full 7.91um volume zarr + mask come from `build_scroll_zarr.py volpkg ... --flip`
+(§3.3b) — the `--flip` matches the horizontally-flipped target frame used here.
 
 ## 4) End-to-End Workflow in This Repo
 

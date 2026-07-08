@@ -6,13 +6,18 @@ import torch
 @dataclass
 class DataConfig:
     zarr_path: str = field(default_factory=lambda: os.getenv("VESUVIUS_ZARR_PATH", "C:\\Users\\ChenJeff\\Documents\\ves_zarrs2"))
-    scroll1_id: int = 20230827161847
-    # scroll1_id: int = 20230702185753
-    # scroll1_ids: list of scroll fragments to train on simultaneously (merged batches).
-    # defaults to [scroll1_id]; set via --scroll-ids to add the larger fragment.
+    # tra_scroll_id / tra_scroll_ids: the scroll fragment(s) we TRAIN on. renamed from
+    # scroll1_id to make clear the training set is a distinct (and now switchable) set
+    # of scrolls, independent of the goal/test scrolls (scroll2/scroll3/scroll4).
+    # now points at the scroll4 (PHerc1667) w018 dense-text patch, reconstructed at
+    # 2.399um in-plane / depth-resampled 109->64 via reconstruct_scroll4_patch.py.
+    # override with --scroll-id to train on a different fragment.
+    tra_scroll_id: int = 20240304144031
+    # tra_scroll_ids: list of scroll fragments to train on simultaneously (merged batches).
+    # defaults to [tra_scroll_id]; set via --scroll-ids to add more fragments.
     # each fragment uses the same 75/25 right/left train/valid split.
-    scroll1_ids: list = field(default_factory=lambda: [20230827161847])
-    # subset of scroll1_ids that render EVALUATION figures (and, when hard mining is
+    tra_scroll_ids: list = field(default_factory=lambda: [20240304144031])
+    # subset of tra_scroll_ids that render EVALUATION figures (and, when hard mining is
     # on, mine) on each eval step. None = all training scrolls (default, = current
     # behavior). set via --vis-scroll-ids to watch only some fragments when training
     # on many. NOTE: test figures are unaffected (they render for every scroll unless
@@ -20,6 +25,10 @@ class DataConfig:
     vis_scroll_ids: Optional[list] = None
     scroll2_id: int = 20230709155141
     scroll4_id: int = 20231210132040
+    # scroll3 (PHerc332) goal-scroll transfer target: same 7.91um modality as the scroll4
+    # training run. rendered as its OWN separate test figure alongside scroll2 when the test
+    # interval fires. loaded lazily/defensively (skipped if its zarr/mask are absent).
+    scroll3_id: int = 20240716140050
     # when false, 'test' figures use scroll2 instead of scroll4
     test_on_scroll4: bool = False
     # when true, the test figure renders ONLY the goal scroll2 fragment (full extent)
@@ -72,6 +81,15 @@ class DataConfig:
     # fetch from the flanking band instead and assign label soft_label_value
     soft_label_prob: float = 0.0
     soft_label_value: float = 0.3
+    # train/val split axis: 'x' = legacy vertical (left train / right valid);
+    # 'y' = horizontal (top train / bottom valid). the scroll4 7.91 dual-res test uses 'y'.
+    split_axis: str = 'x'
+    # fraction of the (cropped) split axis given to TRAIN (rest = valid). 0.75 = legacy.
+    train_split_frac: float = 0.75
+    # optional region crop as fractions of the full frame (start, end) per axis; (0,1)=full.
+    # lets a run train on only a sub-region (e.g. right 60% x, top 75% y) to save compute.
+    crop_x_frac: tuple = (0.0, 1.0)
+    crop_y_frac: tuple = (0.0, 1.0)
 
 @dataclass
 class DataloaderConfig:
@@ -100,6 +118,11 @@ class TrainingConfig:
     test_int: int = 30
     probe_int: int = 5
     eval_aggregate: bool = True  # show one aggregated (depth-averaged) eval figure in addition to per-depth
+    # probe ROIs: fixed readability probe regions rendered every probe_int epochs.
+    # disabled for now (regions are pinned to the old scroll2/scroll4 coords and will be
+    # re-introduced once the new scroll4/scroll3 probe locations are known). --probe-rois
+    # re-enables. when off, no probe specs are built and no probe figures render.
+    probe_rois_enabled: bool = False
     focal_gamma: float = 0.0   # >0 activates focal loss: down-weights easy negatives, pushes gradient toward hard tiles
     ranking_lambda: float = 0.0  # weight of pairwise ranking loss term
     ranking_margin: float = 0.3  # margin: pos_score must exceed neg_score by at least this

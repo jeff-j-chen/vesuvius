@@ -495,10 +495,10 @@ class DataManager:
     """manages data loading, splitting, and normalization"""
     def __init__(self, config: Config, scroll_id=None):
         """initializes the data manager.
-        scroll_id: which scroll fragment to load; defaults to config.data.scroll1_id.
+        scroll_id: which scroll fragment to load; defaults to config.data.tra_scroll_id.
         passing it explicitly lets the trainer build one manager per fragment."""
         self.c = config
-        self.scroll_id = int(scroll_id) if scroll_id is not None else int(config.data.scroll1_id)
+        self.scroll_id = int(scroll_id) if scroll_id is not None else int(config.data.tra_scroll_id)
 
         # load raw data and define splits
         self.vol, self.mask, self.labels, self.train_x, self.valid_x, self.y_range = self._load_raw_data()
@@ -555,21 +555,49 @@ class DataManager:
 
         labels = labels / 255.0
         mask = mask / 255.0
-        
-        # define the working area and split for train/validation
-        x_start, x_end = 0, vol.shape[2]
-        y_start, y_end = 0, vol.shape[1]
-        
-        # align the 75/25 split to the tile grid. if split_x is not a multiple of
-        # tile_size, floor(train_w/T) + floor(valid_w/T) loses a tile vs floor(full_w/T),
-        # which breaks the eval figure's pred-map vs label-map shape match (off-by-one).
+
+        # define the working area and split for train/validation.
+        # optional region crop (fractions of the full frame) trims the usable area so a run
+        # can train on only a sub-region. then the train/valid split is applied along the
+        # configured axis: 'x' = legacy vertical (left train / right valid), 'y' = horizontal
+        # (top train / bottom valid). all boundaries are tile-aligned so the eval pred-map and
+        # label-map shapes stay consistent.
         T = int(self.c.data.tile_size)
-        split_x = int((x_end - x_start) * 0.75) # type: ignore
-        split_x = (split_x // T) * T
-        train_x_range = (x_start, x_start + split_x)
-        valid_x_range = (x_start + split_x, x_end)
-        y_range = (y_start, y_end)
-        
+        H, W = int(vol.shape[1]), int(vol.shape[2])
+        cxf = getattr(self.c.data, "crop_x_frac", (0.0, 1.0))
+        cyf = getattr(self.c.data, "crop_y_frac", (0.0, 1.0))
+        x0 = (int(W * float(cxf[0])) // T) * T
+        x1 = (int(W * float(cxf[1])) // T) * T
+        y0 = (int(H * float(cyf[0])) // T) * T
+        y1 = (int(H * float(cyf[1])) // T) * T
+        x1 = max(x1, x0 + T); y1 = max(y1, y0 + T)
+
+        axis = str(getattr(self.c.data, "split_axis", "x")).lower()
+        frac = float(getattr(self.c.data, "train_split_frac", 0.75))
+
+        if axis == "y":
+            # horizontal split: train = top, valid = bottom; x fully shared (cropped)
+            span = y1 - y0
+            split = (int(span * frac) // T) * T
+            self.train_range = (y0, y0 + split)       # y-range for TRAIN
+            self.valid_range = (y0 + split, y1)       # y-range for VALID
+            self.shared_range = (x0, x1)              # x-range shared by both
+            # legacy attrs kept defined (unused on the y path)
+            train_x_range = (x0, x1)
+            valid_x_range = (x0, x1)
+            y_range = (y0, y1)
+        else:
+            # legacy vertical split: train = left, valid = right; y fully shared (cropped)
+            span = x1 - x0
+            split = (int(span * frac) // T) * T
+            train_x_range = (x0, x0 + split)
+            valid_x_range = (x0 + split, x1)
+            y_range = (y0, y1)
+            self.train_range = train_x_range
+            self.valid_range = valid_x_range
+            self.shared_range = y_range
+        self.split_axis = axis
+
         return vol, mask, labels, train_x_range, valid_x_range, y_range
 
     def _get_or_compute_norm(self):
@@ -632,10 +660,20 @@ class DataManager:
         return mean, std, g_min, g_max
 
     def get_datasets(self):
-        """creates train and validation datasets"""
+        """creates train and validation datasets.
+        for split_axis='y' (horizontal): train=top rows, valid=bottom rows, x fully shared.
+        for split_axis='x' (legacy vertical): train=left cols, valid=right cols, y fully shared.
+        InkVolumeDataset takes (x_range, y_range); we feed the split range on the split axis and
+        the shared range on the other axis."""
         train_mask = self._make_ring_mask() if getattr(self.c.data, 'ring_negatives', False) else self.mask
-        train_set = InkVolumeDataset(self.vol, train_mask, self.labels, self.c, self.train_x, self.y_range, self.norm_stats, shuffle=True)
-        valid_set = InkVolumeDataset(self.vol, self.mask, self.labels, self.c, self.valid_x, self.y_range, self.norm_stats, shuffle=False)
+        if getattr(self, "split_axis", "x") == "y":
+            train_x, train_y = self.shared_range, self.train_range
+            valid_x, valid_y = self.shared_range, self.valid_range
+        else:
+            train_x, train_y = self.train_range, self.shared_range
+            valid_x, valid_y = self.valid_range, self.shared_range
+        train_set = InkVolumeDataset(self.vol, train_mask, self.labels, self.c, train_x, train_y, self.norm_stats, shuffle=True)
+        valid_set = InkVolumeDataset(self.vol, self.mask, self.labels, self.c, valid_x, valid_y, self.norm_stats, shuffle=False)
         # the datasets have already copied what they need as uint8. the manager's own
         # float64 mask/labels (mask/255.0) are not used on the training side afterward
         # — for the big scroll they are ~1.9 GB EACH, so a many-scroll run would carry

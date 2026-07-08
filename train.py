@@ -42,29 +42,31 @@ def _apply_cli_overrides(c: Config, args):
         c.tra.log_dir = str(args.log_dir)
 
     if args.scroll_id is not None:
-        c.data.scroll1_id = int(args.scroll_id)
+        c.data.tra_scroll_id = int(args.scroll_id)
     if getattr(args, "scroll_ids", None):
         ids = [int(s.strip()) for s in args.scroll_ids.split(",") if s.strip()]
         if ids:
-            c.data.scroll1_ids = ids
-            # keep scroll1_id as the primary (first) fragment for any single-scroll fallbacks
-            c.data.scroll1_id = ids[0]
+            c.data.tra_scroll_ids = ids
+            # keep tra_scroll_id as the primary (first) fragment for any single-scroll fallbacks
+            c.data.tra_scroll_id = ids[0]
     else:
         # if only a single scroll id was given (or default), keep the list in sync
-        c.data.scroll1_ids = [int(c.data.scroll1_id)]
+        c.data.tra_scroll_ids = [int(c.data.tra_scroll_id)]
     # resolve which scrolls render evaluation figures (subset of training scrolls).
-    # must run AFTER scroll1_ids is finalized. None => all training scrolls.
+    # must run AFTER tra_scroll_ids is finalized. None => all training scrolls.
     if getattr(args, "vis_scroll_ids", None):
         vids = [int(s.strip()) for s in args.vis_scroll_ids.split(",") if s.strip()]
-        unknown = [v for v in vids if v not in c.data.scroll1_ids]
+        unknown = [v for v in vids if v not in c.data.tra_scroll_ids]
         if unknown:
             print(f"[warn] --vis-scroll-ids ids not in --scroll-ids are ignored: {unknown}")
-        kept = [v for v in vids if v in c.data.scroll1_ids]
+        kept = [v for v in vids if v in c.data.tra_scroll_ids]
         c.data.vis_scroll_ids = kept or None
     else:
         c.data.vis_scroll_ids = None
     if args.scroll4_id is not None:
         c.data.scroll4_id = int(args.scroll4_id)
+    if args.scroll3_id is not None:
+        c.data.scroll3_id = int(args.scroll3_id)
     if args.zarr_path is not None:
         c.data.zarr_path = args.zarr_path
 
@@ -120,6 +122,8 @@ def _apply_cli_overrides(c: Config, args):
         c.tra.ranking_margin = float(args.ranking_margin)
     if args.ranking_neg_frac is not None:
         c.tra.ranking_neg_frac = float(args.ranking_neg_frac)
+    if getattr(args, "probe_rois", None) is not None:
+        c.tra.probe_rois_enabled = bool(args.probe_rois)
     if args.pretrain_epochs is not None:
         c.tra.pretrain_epochs = int(args.pretrain_epochs)
     if args.preload_volume:
@@ -132,6 +136,14 @@ def _apply_cli_overrides(c: Config, args):
         c.data.test_scroll2_only = True
     if args.ring_label_source is not None:
         c.data.ring_label_source = args.ring_label_source
+    if getattr(args, "split_axis", None) is not None:
+        c.data.split_axis = str(args.split_axis)
+    if getattr(args, "train_split_frac", None) is not None:
+        c.data.train_split_frac = float(args.train_split_frac)
+    if getattr(args, "crop_x_frac", None) is not None:
+        c.data.crop_x_frac = tuple(float(v) for v in args.crop_x_frac.split(","))
+    if getattr(args, "crop_y_frac", None) is not None:
+        c.data.crop_y_frac = tuple(float(v) for v in args.crop_y_frac.split(","))
     if args.alternating_ring:
         c.data.alternating_ring = True
     if args.eval_cooldown is not None:
@@ -143,6 +155,12 @@ def _apply_cli_overrides(c: Config, args):
         c.data.train_d_end = c.data.train_d_start + c.data.depth  # default; overridden below if --train-d-end given
     if args.train_d_end is not None:
         c.data.train_d_end = int(args.train_d_end)
+    # inference/eval depth window (drives the eval figure z_range + inference sweep). set to
+    # 0/64 to visualize the whole sheet depth when the ink layer is unknown.
+    if args.d_start is not None:
+        c.data.d_start = int(args.d_start)
+    if args.d_end is not None:
+        c.data.d_end = int(args.d_end)
     if args.conv1_drop is not None:
         c.model.conv1_drop = float(args.conv1_drop)
     if args.conv2_drop is not None:
@@ -186,7 +204,7 @@ class Trainer:
         
         # setup logging and visualization
         print("Initializing Tensorboard...")
-        scroll_ids = getattr(self, '_scroll_ids', None) or [self.c.data.scroll1_id]
+        scroll_ids = getattr(self, '_scroll_ids', None) or [self.c.data.tra_scroll_id]
         if len(scroll_ids) > 1:
             # merged training stream: the main visualizer owns the single tensorboard
             # run folder and logs scalar metrics; one figure-visualizer per scroll
@@ -234,7 +252,7 @@ class Trainer:
         # resolve the list of scroll fragments to train on. multiple fragments are
         # merged into a single stream so every epoch sees all of them (integrated
         # batches). defaults to the single primary scroll for backward compatibility.
-        scroll_ids = [int(s) for s in (getattr(self.c.data, 'scroll1_ids', None) or [self.c.data.scroll1_id])]
+        scroll_ids = [int(s) for s in (getattr(self.c.data, 'tra_scroll_ids', None) or [self.c.data.tra_scroll_id])]
         self._scroll_ids = scroll_ids
         self._scroll_train_sets = None   # {scroll_id: train_set} in multiscroll, for HM routing
         multi = len(scroll_ids) > 1
@@ -287,7 +305,7 @@ class Trainer:
             t_loader, v_loader = get_dataloaders(t_set_full, v_set, self.c)
             # pos_weight from full scroll distribution (ring epochs re-weight internally)
             pos_weight = calc_class_wgts(t_set_full, v_set,
-                                         scroll_id=self.c.data.scroll1_id)
+                                         scroll_id=self.c.data.tra_scroll_id)
             self._t_set_full = t_set_full
             self._t_set_ring = t_set_ring
             print(f"[alternating_ring] full_tiles={len(t_set_full)}  ring_tiles={len(t_set_ring)}")
@@ -297,7 +315,7 @@ class Trainer:
             ring_mode = getattr(self.c.data, 'ring_negatives', False)
             pos_weight = calc_class_wgts(
                 t_set_full, t_set_full if ring_mode else v_set,
-                scroll_id=None if ring_mode else self.c.data.scroll1_id
+                scroll_id=None if ring_mode else self.c.data.tra_scroll_id
             )
             self._t_set_full = t_set_full
             self._t_set_ring = None
@@ -718,6 +736,7 @@ def main():
     parser.add_argument("--vis-scroll-ids", type=str, default=None,
                         help="Comma-separated subset of --scroll-ids that render EVALUATION figures each eval step (default: all training scrolls). Test figures still render for every scroll unless --test-scroll2-only.")
     parser.add_argument("--scroll4-id", type=int, default=None, help="Scroll id for scroll4 eval path")
+    parser.add_argument("--scroll3-id", type=int, default=None, help="Scroll id for scroll3 goal-scroll test figure")
     parser.add_argument("--zarr-path", type=str, default=None, help="Path to zarr root")
 
     parser.add_argument("--batch-size", type=int, default=None, help="Dataloader batch size")
@@ -758,6 +777,10 @@ def main():
                         help="Margin for pairwise ranking loss (default 0.3)")
     parser.add_argument("--ranking-neg-frac", type=float, default=None,
                         help="Partial-AUC: fraction of hardest negatives to rank against (1.0=all pairs, <1.0 focuses on low-FPR region)")
+    parser.add_argument("--probe-rois", dest="probe_rois", action="store_true", default=None,
+                        help="Enable fixed readability probe-ROI figures (default off)")
+    parser.add_argument("--no-probe-rois", dest="probe_rois", action="store_false", default=None,
+                        help="Disable probe-ROI figures")
     parser.add_argument("--pretrain-epochs", type=int, default=None,
                         help="Epochs of self-supervised band-identity pretraining before BCE")
     parser.add_argument("--preload-volume", action="store_true", default=False,
@@ -770,6 +793,14 @@ def main():
                         help="seconds to sleep after probe/eval epochs to let hardware cool (default 0)")
     parser.add_argument("--ring-label-source", type=str, default=None, choices=["eroded","original","closed"],
                         help="which inklabels to use for ring boundary: 'original' (default, safest) or 'eroded'")
+    parser.add_argument("--split-axis", type=str, default=None, choices=["x","y"],
+                        help="train/val split axis: 'x' vertical (left/right, legacy) or 'y' horizontal (top train/bottom valid)")
+    parser.add_argument("--train-split-frac", type=float, default=None,
+                        help="fraction of the (cropped) split axis given to train (default 0.75)")
+    parser.add_argument("--crop-x-frac", type=str, default=None,
+                        help="region crop along x as 'start,end' fractions of the frame (e.g. 0.4,1.0 = right 60%%)")
+    parser.add_argument("--crop-y-frac", type=str, default=None,
+                        help="region crop along y as 'start,end' fractions of the frame (e.g. 0.0,0.75 = top 75%%)")
     parser.add_argument("--alternating-ring", action="store_true", default=False,
                         help="alternate between full dataset (even epochs) and ring dataset (odd epochs); hard mining only on ring epochs")
     parser.add_argument("--depth", type=int, default=None,
@@ -778,6 +809,10 @@ def main():
                         help="start z-index of training depth window")
     parser.add_argument("--train-d-end", type=int, default=None,
                         help="end z-index of training depth window (exclusive); overrides the default train_d_start+depth")
+    parser.add_argument("--d-start", type=int, default=None,
+                        help="start z-index of the inference/eval depth window (eval figure z_range)")
+    parser.add_argument("--d-end", type=int, default=None,
+                        help="end z-index of the inference/eval depth window (exclusive); set 0/64 to sweep full depth")
     parser.add_argument("--test-scroll2-only", action="store_true", default=False,
                         help="test figure renders ONLY the full goal scroll2 fragment (skips the expensive training-scroll Test figure + scroll4); use for affordable end-of-training transfer checks")
     args = parser.parse_args()
