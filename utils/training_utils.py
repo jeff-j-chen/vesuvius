@@ -118,9 +118,14 @@ def calculate_metrics(y_true, y_pred, y_scores):
     fp = np.sum((y_true == 0) & (y_pred == 1))
     fn = np.sum((y_true == 1) & (y_pred == 0))
     
-    # accuracy
+    # accuracy (raw — biased by class imbalance; use balanced_accuracy for ring datasets)
     total = tp + tn + fp + fn
     metrics['accuracy'] = (tp + tn) / total if total > 0 else 0.0
+    # balanced accuracy: mean(sensitivity, specificity) — 0.5 when model predicts all one class,
+    # 1.0 when perfect. unaffected by ring imbalance ratio, so comparable across splits.
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    specificity_val = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    metrics['balanced_accuracy'] = (sensitivity + specificity_val) / 2.0
     
     # precision, recall, f1
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0

@@ -404,7 +404,85 @@ Interpretation:
 
 - by epoch 39, model appears much more over-confident on negatives (lots of false positive confidence), while hard positives shrink
 
+## 4.5) Ring Negatives — Why and How
+
+### What the problem was
+
+Training on the full papyrus mask yields a heavily imbalanced dataset: typically ~10% ink tiles
+and ~90% blank tiles. Blank tiles from regions far from any ink stroke are "easy negatives" —
+the model trivially learns to suppress them early and then stops learning anything useful.
+Worse, blank tiles from unmapped regions may contain actual ink the labelers missed; training
+on those as negatives directly contradicts the ink signal.
+
+### What ring negatives do
+
+Instead of sampling from the full blank papyrus area, ring negatives restrict the negative set
+to tiles that are ADJACENT TO confirmed ink tiles — the "ring" around the labeled region. This:
+
+1. Keeps the decision boundary tight: the model must distinguish ink from near-ink papyrus,
+   which is the hard and meaningful case.
+2. Eliminates unlabeled-ink contamination: tiles far from any label are excluded entirely.
+3. Dramatically reduces training set size (and therefore epoch time) while concentrating
+   gradient signal where it matters most.
+4. Consistently beats full-frame training across every campaign search that tested both.
+
+### Implementation
+
+The ring radius is computed by binary search: find the smallest dilation of the ink tile map
+such that ring_tiles >= ink_tiles. This guarantees at minimum a 1:1 positive:negative ratio.
+In practice the ratio lands at 1.6–1.9:1 for typical datasets:
+
+- 2.4um teacher (T=106, y-split): ink=3,124, ring=5,818, ratio=1.86:1, total=8,942 tiles
+- 7.9um w023 (T=32, x-split): ink=44,695, ring=74,757, ratio=1.67:1, total=119,452 tiles
+
+### Ring label source
+
+The `--ring-label-source` flag controls which labels define the ring BOUNDARY (not the
+positive training labels, which always come from eroded_inklabels):
+
+- `original`: ring touches any tile that intersects original (unmodified) inklabels.
+  Safe: no original ink pixel can enter the ring as a negative.
+  decent performer
+- `closed`: closes letter holes before ringing, then adds an explicit air gap. Ensures
+  tile interiors of large letters don't contaminate the ring with ink-containing tiles.
+  worst performer
+- `eroded` (legacy): ring built from eroded labels. Previously caused ~20.9% contamination.
+  best performer, despite the contamination
+
+**Always use `--ring-label-source eroded` for new runs.**
+
+### Usage
+
+```bash
+# add to any train.py invocation:
+--ring-negatives --ring-label-source closed
+
+# what to expect in the log at startup:
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=3124  ring_tiles=5818  ratio=1.86
+```
+
+The ring mask is recomputed at each training run from the current labels and mask, so it
+automatically adapts to any changes in inklabels without code changes.
+
+### IMPORTANT: ring applies to training loop AND validation loop, NOT the eval figure
+
+Three separate code paths use masks:
+
+- **Training DataLoader** (every epoch): uses ring mask when ring_negatives=True.
+  Gradient only flows through ink + ring-boundary tiles.
+- **Validation DataLoader** (every epoch, metrics): also uses ring mask when ring_negatives=True.
+  Metrics (F1, AUC, loss) are computed over ring tiles only — matches training distribution,
+  avoids thousands of easy blank tiles dominating the average and hiding real signal.
+- **Evaluation figure** (add_evaluation_figures, runs at eval_int): ALWAYS uses the full
+  papyrus mask regardless of ring_negatives. This is intentional — the figure is a visual
+  diagnostic showing model predictions across the ENTIRE cropped scroll region, not just the
+  ring. Restricting it to ring tiles would destroy the scroll-level readability visualization.
+
+This distinction is enforced in utils/visualizer.py (eval_mask = self.mask always) and
+utils/dataloader.py (valid_mask = ring_mask when ring_negatives=True).
+
 ## 5) Model and Training Details
+
 
 ### 5.1 Core config defaults
 
@@ -697,3 +775,329 @@ New zarr locations to be aware of:
   source: paths/20230709155141/layers/, 64 depth slices, 2806 × 8499 spatial
 
 This README is intended to be updated as the process evolves, especially when strategy changes around scroll4 targeting and tile objective calibration.
+
+## 14.0) Scroll4 w023 Patch Reconstruction Reference
+
+Two zarrs were built for the scroll4 w023 fragment. Both require the warp dots and each other.
+
+### Scroll4 w023 7.9um zarr (20240304161941)
+
+The 7.9um scan is a standard volpkg segment. Build via:
+
+```bash
+python build_scroll_zarr.py preset scroll4-79
+```
+
+This downloads 65 layer TIFFs from dl.ash2txt.org, assembles into
+`ves_zarrs2/20240304161941.zarr` (64, 13303, 31674), and writes `masks/20240304161941.png`.
+The `--flip` flag is applied (the 7.9um flattening is horizontally mirrored vs the 2.4um one).
+
+Labels for this zarr come from the 2.4um scan via dot-warp (section 3.5):
+- Dots: `warp_MARK_2p4_source_dots.png` and `warp_MARK_7p9_target_dots.png`
+- Warp: run `python warp_from_dots.py` with `--id w023` — writes
+  `_ves_tmp/w023_dotwarp_map{x,y}.npy`
+- Bake labels: `python bake_scroll4_79_labels.py --out-id 20240304161941 --tag w023`
+- Labels live at: `inklabels/20240304161941.png`, `eroded_inklabels/20240304161941.png`
+
+CRITICAL warp recipe (must match bake exactly):
+- `ww=3600`, `smoothing=1.0`, 4 frame-corner anchors — see `fit_warp()` in build_teacher_zarr.py
+- Using a different recipe (e.g. normalized/smoothing=1e-3) causes ~24px label/data offset
+
+### Scroll4 w023 2.4um teacher zarr (20251217075048)
+
+The 2.4um zarr covers the right 30% / top 40% of the w023 frame, warped into the 7.9um
+coordinate system and scaled 3.3125× to maintain native 2.4um fidelity:
+
+```bash
+# 1. download the ink prediction tif (386MB, used for QA only — labels come from the 7.9 ones)
+aws s3 cp --no-sign-request \
+  "s3://vesuvius-challenge-open-data/PHerc1667/segments/20240304161941-w023_20240304161941_flatboi/ink-detection/PHerc1667-20240304161941-2.399um-0.22m-78keV-volume-20251217075048-20260417190342-new_canon_autoresearch_recipe-tile256-stride128.tif" \
+  _ves_tmp/w023_ink_full.tif
+
+# 2. build the teacher zarr (downloads ~56GB of S3 chunks, warps, writes zarr + labels + mask)
+python build_teacher_zarr.py \
+  --out-id 20240304161941_t24 \
+  --x0f 0.70 --x1f 1.0 --y0f 0.0 --y1f 0.40 \
+  --block 512 --workers 16
+
+# 3. rename to numeric id
+NID=20251217075048
+mv ves_zarrs2/20240304161941_t24.zarr ves_zarrs2/${NID}.zarr
+mv inklabels/20240304161941_t24.png inklabels/${NID}.png
+mv eroded_inklabels/20240304161941_t24.png eroded_inklabels/${NID}.png
+mv masks/20240304161941_t24.png masks/${NID}.png
+
+# 4. precompute normalization
+python precompute_norm.py --scroll-id ${NID}
+```
+
+Key facts:
+- Source: S3 zarr `PHerc1667/segments/20240304161941-w023_20240304161941_flatboi/
+  surface-volumes/2.399um-0.22m-78keV-volume-20251217075048.zarr/0/`
+- Native 2.4um shape: (109, 41860, 102360) chunks (109, 128, 128) uint8
+- Teacher output: (64, 17626, 31479), chunks (8,32,32) uint16 (109→64 depth resample)
+- Labels are scaled-up version of 7.9um eroded_inklabels (user hand-cleaned, NOT the raw ink tif)
+- Warp: same exact recipe as the 7.9um label bake (ww=3600, smoothing=1.0, 4 corners)
+- QA: mask IoU=0.93, label/data IoU=0.71 at zero shift (validated)
+- Training split: --split-axis y (top 75% train / bottom 25% valid) — x-axis causes label
+  concentration confound due to ink being spatially clustered in the right portion of the frame
+- Ring negatives: r=2 tile radius → ratio 1.86:1 at T=106, confirmed sufficient
+
+## 14) Scroll4 Dual-Resolution Investigation (2026-07-08)
+
+This section records findings from an extended investigation into whether the 7.9um/54keV scan
+of scroll4 w023 can be made to yield ink signal, using the available 2.4um/78keV scan (which
+is legible) as a reference and label source.
+
+### 14.1 Background and Hypothesis
+
+Scroll1 ink is detectable at 7.9um/54keV by our tile-level classifier. Scrolls 2, 3, and 4
+at 7.9um are not — including by the researchers' heavy U-Net. The working hypothesis: scroll1
+ink contains a heavy-metal component (likely lead-bearing) which creates a large absorption
+contrast at 54keV. Scrolls 2/3/4 use purely carbon-based ink, which is elementally identical
+to carbonized papyrus and therefore yields no absorption contrast — only a weak morphological
+texture signal from pen pressure and fiber disruption. That morphological signal requires fine
+spatial resolution to resolve; hence legibility at 2.4um but not 7.9um.
+
+### 14.2 Data Assembled
+
+- Teacher zarr: `ves_zarrs2/20251217075048.zarr` (64, 17626, 31479), uint16
+  - The right 30% / top 40% of the 7.9um frame, resampled from 2.4um native chunks
+  - Warp: hand-anchored thin-plate-spline from warp_MARK_2p4_source_dots.png / _7p9_target_dots.png
+  - Labels: scaled-up eroded_inklabels/20240304161941.png (user hand-cleaned from 2.4um output)
+  - QA: mask overlap 93.7% (crop-edge artifact), label/data IoU 0.71 at zero shift
+- Ink prediction tif: `_ves_tmp/w023_ink_full.tif` (41860, 102360) uint8, 0-246
+  - Source: researchers' canonical U-Net run on the 2.4um scan
+- Warp maps validated: same recipe as bake_scroll4_79_labels.py (ww=3600, smoothing=1.0)
+- Builder: `build_teacher_zarr.py` (new script; no-download flag for iterative reruns)
+
+### 14.3 Teacher Training Attempt
+
+Two runs were launched on the teacher zarr:
+- Run 1: default depth window z32-40 (inherited from 7.9um config) — flat AUC=0.500, F1=0
+- Run 2: corrected depth window z48-56 (strongest ink band in 2.4um depth profile) — same result
+
+Root cause (3 compounding factors):
+1. 78keV energy = near-zero absorption contrast between carbon ink and carbonized papyrus.
+   The ink signal at 2.4um is morphological texture, not intensity.
+2. Both v1 and v12_asym_attn_pool architectures use AdaptiveAvgPool3d (global spatial average),
+   which is exactly wrong for a local texture signal: it collapses the spatial detail to zero.
+3. The 106px tile with "any ink" binary label contains mostly blank area even when labeled
+   positive, diluting the already-weak signal further.
+
+Our global-pool tile classifier is the right tool for scroll1's absorption regime and the wrong
+tool for the morphological texture regime of scrolls 2/3/4.
+
+### 14.4 Correlation Analysis (key diagnostic)
+
+Method: Spearman r between tile-level 7.9um features and the 2.4um ink labels/predictions.
+Decision rule: r > 0.15 consistent across all spatial quadrants = real signal. Spatial confound
+= consistent r overall but sign/magnitude reverses between quadrants.
+
+Results (eroded inklabels vs 7.9um features, 43k tiles, right-30/top-40 crop):
+
+| feature       | global r | top-L | top-R | bot-L | bot-R |
+|---------------|----------|-------|-------|-------|-------|
+| mean z28-40   | +0.061   | +0.13 | +0.17 | -0.01 | -0.01 |
+| std z28-40    | +0.045   | +0.10 | +0.17 | -0.03 | -0.02 |
+| mean z48-58   | +0.078   | +0.14 | +0.12 | +0.08 | -0.01 |
+
+Verdict: SPATIAL CONFOUND. Global r is positive but collapses or inverts in the bottom half.
+The top half of the sheet has slightly different papyrus exposure/texture that coincidentally
+overlaps the labeled region — not a detectable ink signal.
+
+Per-depth sweep (all 64 layers of 7.9um, same eroded labels):
+- Best single layer: z=30, r=+0.084
+- Mean |r| across all 64 layers: 0.040
+- Same spatial confound pattern at every depth
+
+Native 2.4um sanity check (raw 2.4um chunks vs ink tif, native coords, no warp):
+- Best single layer: z=102 (of 109), r=+0.157
+- Mean |r|: 0.102
+- Quadrant check: top-right r=+0.35, bot-left r=+0.01 — still partly confounded
+- Self-check (ink tif vs ink tif): r=1.000 — methodology sound
+- Signal is ~2.5x stronger at 2.4um than 7.9um, but even at 2.4um it is a local texture
+  signal that tile-mean intensity cannot reliably detect
+
+### 14.5 Conclusion
+
+The 7.9um/54keV scan of scroll4 does not appear to contain ink-detectable information under
+the current tile-level approach. The U-Net null result (researchers could not read it either)
+is the strongest prior. Our correlation analysis confirms this: no 7.9um voxel feature
+correlates with known ink location in a spatially consistent way.
+
+The 2.4um/78keV scan contains a real but weak morphological signal (~r=0.16 at best, spatially
+concentrated). The researchers' U-Net can read it; our global-pool tile classifier cannot.
+
+### 14.6 Recommended Next Steps (if pursuing 7.9um further)
+
+In priority order:
+
+1. LOCAL CONTRAST NORMALIZATION (preprocessing, cheapest)
+   Subtract a Gaussian-blurred version and divide by local std before feeding to the model.
+   This collapses the spatial brightness confound while preserving fine texture from ink
+   strokes. Apply to both training input and the correlation test to see if r improves.
+
+2. DENSE / FULLY-CONVOLUTIONAL PREDICTION (architecture, highest leverage)
+   Drop AdaptiveAvgPool3d. Use a small FCN head that produces a per-pixel heatmap at the
+   tile level. Train against per-pixel labels (not tile-level "any ink"). This preserves
+   spatial structure the global pool discards. This is the structural difference between
+   our approach and the researchers' U-Net.
+
+3. TEXTURE-BASED SCROLL1 PRETRAINING → SCROLL4 TRANSFER
+   Train a scroll1 model with local contrast normalization (forcing it to learn texture
+   rather than absorption). Use that texture-trained model as initialization for scroll4.
+   Scroll1 at 7.9um presumably has the same papyrus fiber texture patterns; a scroll4
+   ink signal may be learnable by transfer if it exists at all.
+
+4. QUADRANT SPLIT AS CONFOUND STRESS TEST (diagnostic)
+   Train on the top half of the scroll4 7.9um crop (where the spurious correlation is
+   strongest) and test on the bottom half (r≈0). If any ink signal transfers, it is real.
+   If not, the data is conclusively a dead end for this approach.
+
+5. WAIT FOR HIGHER-RESOLUTION SCANS
+   The moment a 2.4um or better scan of scrolls 2/3 is released, the existing pipeline
+   (build_teacher_zarr.py, warp infrastructure, train.py with --tile-size) is ready to
+   run immediately. Pipeline preparation is complete. The ink signal at 2.4um is strong
+   enough that even our lightweight model should learn, as validated on the scroll4 case.
+
+> UPDATE (2026-07-09, see section 15): recommendation #1 (local contrast normalization) was
+> DISPROVEN by direct probe on the 2.4um data — background subtraction HURTS separability.
+> Recommendation #2 (dense per-pixel prediction) is now the active hypothesis under test.
+> Read section 15 before acting on this list.
+
+## 15) Scroll4 2.4um Learning Investigation (2026-07-09)
+
+Continuation of section 14, focused specifically on the 2.4um/78keV scroll4 w023 teacher
+zarr (`ves_zarrs2/20251217075048.zarr`, shape (64, 17626, 31479)). Goal: get a model to
+TRULY LEARN the ink here (2.4um is legible to humans and the researchers' U-Net), so the
+signal/insight can later be lifted onto the lower-fidelity 7.9um scans of scrolls 2/3/4.
+This section is deliberately blunt about what was DISPROVEN so no one re-runs dead ends.
+
+### 15.1 The problem space (why this is hard)
+
+- Scroll1 @ 7.9um/54keV: ink readable by a simple 3D CNN — the ink carries heavy metals
+  (likely lead), giving ~30x X-ray absorption contrast. The signal is a scalar INTENSITY
+  offset, which global-average pooling reads directly.
+- Scrolls 2/3/4 @ 7.9um/54keV: ink undetectable by ANYONE (including the researchers' heavy
+  U-Net). The ink is carbon-based, elementally identical to carbonized papyrus → no
+  absorption contrast at this energy/resolution.
+- Scroll4 @ 2.4um/78keV: ink becomes readable again. At this resolution the discriminative
+  cue is a weak, LOCAL, in-plane morphological/textural pattern, NOT a mean-intensity shift.
+- Ink strokes are LARGE: ~400+ px wide, thousands of px long at 2.4um. Consequently the vast
+  majority of tiles are pure interior (all-ink or all-papyrus); only ~45% of ink-containing
+  106px tiles straddle a letter boundary (measured, see 15.3).
+
+### 15.2 Architectural constraints (hard rules for this problem)
+
+- Tile scale is fixed by the competition + evidence, NOT a free knob. 32x32 @ 7.9um (≈106 @
+  2.4um) already worked for scroll1; researchers succeeded at 128; 256 is BEYOND the
+  competition tile limit and hallucination-prone. Do NOT scale tiles up to "see more."
+- Binary "is there ink anywhere in this tile" is a legitimate, well-posed framing BECAUSE
+  voxels are ~binary ink/blank and most tiles are pure interior. Segmentation is not required
+  as a product — but see 15.4 for why dense LABELS still help as a training signal.
+- The three campaign architectures (v14_mil_deep, v17_2p1d_maxattn, v18_2p1d_lv) are all
+  PEAK-POOLED: v14 uses LSE (logsumexp), v17/v18 use AdaptiveMaxPool3d (hard spatial max).
+  A tile only has to fire at ONE location to satisfy its label — an "exists somewhere"
+  shortcut, trivially met by a spurious peak. This is a prime suspect for why they don't
+  learn a real feature.
+
+### 15.3 What was MEASURED (no-training probes, `_ves_tmp/*_probe.py`)
+
+All AUC values are ink-tile vs ring-negative-tile, on the geographic y-split validation region.
+
+- Hand-crafted per-tile feature separability (depth-mean, z=24-40):
+  intensity-mean 0.557, std 0.544, local-variance 0.519, high-pass 0.530, gradient 0.527,
+  fiber-band FFT 0.567. Multivariate logistic-regression ceiling ~0.58.
+  → The LOCAL-VARIANCE hypothesis behind v18 is REFUTED (0.52, sign unstable across regions).
+- Depth structure: sheet undulates (material COM-z mean 30.2, std 6.8, spans z≈12-50), but
+  SURFACE-ALIGNING the depth profile did not improve ink vs papyrus (0.54 aligned vs 0.55
+  raw). → Depth-window misalignment is NOT what hides the signal. Fixing depth alignment is
+  not the lever.
+- Spatial aggregation (the sqrt-N idea): averaging the per-tile intensity over K×K tile
+  neighborhoods (K=1..13) stayed FLAT at ~0.55. → The weak intensity signal is not a noisy
+  estimate of a coherent per-location truth; aggregation does NOT rescue it. REFUTED.
+- Local-contrast normalization (tile mean minus large-window background): 0.539, WORSE than
+  raw 0.550 at every neighborhood size. → Background/difference subtraction removes the
+  little low-frequency signal that exists. This matches the earlier scroll1 result that
+  difference-BANDS failed. Do NOT propose subtraction/difference inputs again without
+  evidence — disproven multiple times.
+- Label geometry (eroded labels, tile=106): of ink-containing tiles, 39.7% are ~pure ink,
+  7.7% near-pure, 21.9% mostly-ink, 22.6% mixed, 8.0% trace. Genuine BOUNDARY tiles
+  (10-90% ink) = 44.6% at tile=106 and 68.9% at tile=256.
+
+Consolidated reading: EVERY scalar statistic and every post-hoc combination sits at
+0.52-0.58, yet the best campaign CNN (t01/v14) visibly renders faint letter shapes. The
+learnable signal is therefore a genuine LEARNED in-plane spatial pattern that hand features,
+averaging, subtraction, and depth realignment cannot capture. Feature engineering is
+exhausted; the remaining lever is the LEARNING SIGNAL itself.
+
+### 15.4 The validation-metric bug (do not trust the campaign `Valid` scalars)
+
+The campaign `AUC/ROC_AUC/Valid` reads EXACTLY 0.5000, `PR_AUC/Valid` EXACTLY the positive
+prevalence (0.4337), `F1/Valid` = 0, `Specificity/Valid` = 1.0 — byte-identical across all
+three architectures and every epoch. That is the exact algebraic signature of a CONSTANT
+score vector (all tiles predicted one class) fed to `calculate_metrics`
+(`utils/training_utils.py`): `roc_auc_score` → 0.5000 and `average_precision_score` →
+positive_ratio precisely when `y_scores` is constant.
+
+Verified (loading the saved checkpoint, `_ves_tmp/val_metric_lean.py`): reproducing the
+figure inference path gives NON-constant scores and roc≈0.51 — so it is NOT an autocast/fp16
+issue and NOT the model literally being dead. The constant appears specifically inside the
+in-loop `validate_epoch`. Exact trigger still unconfirmed (suspects: BatchNorm eval-state
+timing, degenerate ring-valid batch). The TRUSTWORTHY signals are the `R_M/*` readability
+scalars and the eval FIGURE (both from the figure path), which correctly rank t01 best.
+Bottom line: rank experiments visually / by the figure path, not by `AUC/*/Valid`.
+
+### 15.5 Active hypothesis under test: dense per-pixel supervision
+
+Rationale (NOT "more gradients" — that was an overstatement given 40% pure tiles):
+1. It removes the peak-pooling "fire somewhere" shortcut (15.2): every interior pixel must be
+   classified from its LOCAL receptive field ("be right everywhere"), a much stronger
+   constraint on the learned feature — biting even on pure all-ink tiles.
+2. The ~45-69% boundary tiles supply letter-SHAPE supervision a tile classifier never sees.
+3. Must pair with a LARGE receptive field (U-Net decoder) so each pixel decides WITH context,
+   at the accepted 106-256 tile scale — i.e. the researchers' proven recipe minus the scale
+   inflation.
+
+Test harness: `_ves_tmp/dense_train.py` — a self-contained 2.5D U-Net (per-slice Conv3d
+texture stem → depth-max → 2D U-Net decoder → per-pixel logits), per-pixel masked
+BCEWithLogits on eroded labels, y-split 75/25, 128px tiles, z=24-40, 15 epochs. It reads the
+zarr directly (bypassing the DataManager setup) and renders a stitched raw|prediction|ground-
+truth figure over an ink-rich validation window every few epochs → `_ves_tmp/dense_pred_epNN.png`.
+Verdict is VISUAL: does it produce sharper letters than t01's blobs?
+
+INTEGRATED into train.py (config.data.dense_labels / --dense-labels):
+  - dataloader emits the (1,T,T) eroded ink-label MAP per tile (before any augmentation);
+  - trainer uses per-pixel masked BCE (_train_batch_dense / _validate_epoch_dense) with a
+    PIXEL-level pos_weight (calc_dense_pos_weight);
+  - archs: `dense_unet` (per-slice stem → hard depth-max → 2D U-Net) and `dense_unet_depth`
+    (per-slice stem → 3D depth-MIXING convs → LEARNED depth-attention softmax-over-depth pool →
+    2D U-Net) — the latter for putting weight on depth (campaign-15 finding);
+  - eval figure `add_dense_evaluation_figure`: seamless overlap-blended (Hann-window) inference,
+    and — per this README's convention — it ALWAYS sweeps the FULL inference depth d_start..d_end
+    (e.g. 0→64) in blocks of `depth`, rendering one prediction panel per depth block plus a
+    depth-MAX composite and the ground truth, EVEN THOUGH training uses only the narrower
+    train_d_start..train_d_end window (e.g. 24-40). the composite drives the logged
+    Dense/Valid_PixelAUC_window.
+
+  Example (train on the known ink band 24-40, always visualize the whole sheet depth):
+  ```bash
+  python train.py -n dense_s4_24um_depth --log-dir runs_dense_pipeline \
+    --scroll-id 20251217075048 --arch dense_unet_depth --dense-labels \
+    --tile-size 128 --depth 16 --train-d-start 24 --train-d-end 40 --d-start 0 --d-end 64 \
+    --epochs 15 --eval-int 5 --batch-size 12 --lr 2e-4 --data-aug 0 \
+    --ring-negatives --ring-label-source eroded --split-axis y --train-split-frac 0.75 \
+    --no-hard-mining --mask-memmap
+  ```
+
+### 15.6 Directions explicitly ABANDONED (evidence-backed)
+
+- Architecture roulette on fixed-window, global/peak-pooled, one-label-per-tile classifiers.
+- Local-variance / texture-energy input channels (v18 idea) — disproven, 0.52.
+- Difference/contrast/background-subtraction inputs — disproven twice (scroll1 bands + 15.3).
+- sqrt-N spatial aggregation of the weak scalar signal — disproven, flat ~0.55.
+- Depth-window realignment as the primary lever — disproven, aligned≈raw.
+- Readability-scalar tuning as an objective — legibility is judged visually; not a lever.
+- Over-indexing on 2.4um-only FINE texture — transfer dead-end: fiber-scale texture is
+  physically unresolved at 7.9um, so only LOW-frequency density/morphology can ever transfer.

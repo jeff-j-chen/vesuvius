@@ -160,8 +160,12 @@ class Transform:
 
 class InkVolumeDataset(IterableDataset):
     """iterable dataset for ink volume data"""
-    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True):
-        """initializes the dataset"""
+    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None):
+        """initializes the dataset.
+        soft_labels: optional full-res float [0,1] ink-probability map (expanded+blurred
+        eroded labels). when given AND config.data.dense_soft_labels is set, the dense
+        per-pixel target uses these CONTINUOUS values instead of the hard binary label —
+        calibrated soft edges (see _fetch/__next__ dense path). stored as uint8 0-255."""
         # store zarr path + segment id instead of the open zarr object so that
         # the dataset can be safely pickled for multiprocessing workers on Windows;
         # each worker opens its own zarr handle lazily on first access
@@ -201,6 +205,16 @@ class InkVolumeDataset(IterableDataset):
             self._labels_path = None
             self._mask_arr = mask_u8
             self._labels_arr = labels_u8
+        # optional soft labels (continuous ink probability, 0-255 uint8). stored parallel
+        # to the hard labels; used only by the dense target path when dense_soft_labels is on.
+        self._soft_path = None
+        self._soft_arr = None
+        if soft_labels is not None:
+            soft_u8 = np.clip(np.asarray(soft_labels) * 255.0, 0, 255).astype(np.uint8)
+            if getattr(config.data, "mask_memmap", False):
+                self._soft_path = _write_memmap(soft_u8)
+            else:
+                self._soft_arr = soft_u8
         self.c = config
         self.tile_size = config.data.tile_size
         self.depth = config.data.depth
@@ -233,6 +247,16 @@ class InkVolumeDataset(IterableDataset):
             self._labels_arr = np.load(self._labels_path, mmap_mode='r')
         return self._labels_arr
 
+    @property
+    def soft_labels(self):
+        """continuous ink-probability map in [0,1] (from uint8 0-255), or None if unset.
+        lazily memmapped per process, same as labels/mask."""
+        if self._soft_arr is None and self._soft_path is not None:
+            self._soft_arr = np.load(self._soft_path, mmap_mode='r')
+        if self._soft_arr is None:
+            return None
+        return self._soft_arr
+
     def __getstate__(self):
         """pickle only the memmap PATHS, never the open memmap. pickling a numpy
         memmap would copy its full contents into the pickle stream — exactly the
@@ -244,24 +268,39 @@ class InkVolumeDataset(IterableDataset):
             state["_mask_arr"] = None
         if state.get("_labels_path") is not None:
             state["_labels_arr"] = None
+        if state.get("_soft_path") is not None:
+            state["_soft_arr"] = None
+        # never pickle an open zarr handle to a spawned worker (unpicklable on Windows,
+        # OSError [Errno 22]). the main process may now hold one (vol opens lazily in the
+        # main process too, for num_workers=0 validation); drop it so workers reopen via
+        # _zarr_path. harmless when it was already None.
+        if state.get("_zarr_path") is not None:
+            state["_worker_vol"] = None
         return state
+
 
     @property
     def vol(self):
         """return volume; numpy arrays are returned directly (preloaded path);
-        zarr objects are opened lazily inside each worker to avoid pickle errors on Windows"""
+        zarr objects are opened lazily per process to avoid pickle errors on Windows"""
         # fast path: volume already in RAM as numpy array
         if isinstance(self._vol_obj, np.ndarray):
             return self._vol_obj
         if self._worker_vol is not None:
             return self._worker_vol
         if self._zarr_path is not None:
-            worker_info = get_worker_info()
-            if worker_info is not None:
-                # we are inside a worker — open a fresh zarr handle
-                import zarr as _zarr
-                self._worker_vol = _zarr.open(self._zarr_path, mode='r')
-                return self._worker_vol
+            # open a fresh zarr handle lazily — in a DataLoader worker OR the main
+            # process. BUGFIX: this previously opened ONLY inside workers (guarded by
+            # `if get_worker_info() is not None`). validation runs with num_workers=0,
+            # i.e. in the MAIN process, so vol fell through to `return self._vol_obj`
+            # (None for a non-preloaded zarr). _fetch_block then read None[...], hit its
+            # bare except, and returned ALL-ZERO tiles -> constant score -> every VALID
+            # metric frozen (roc_auc=0.5000, pr_auc=prevalence, f1=0) identically across
+            # epochs AND architectures. only surfaced on scroll4 because scroll1 was small
+            # enough to preload_to_ram (_vol_obj = ndarray, so the main process had data).
+            import zarr as _zarr
+            self._worker_vol = _zarr.open(self._zarr_path, mode='r')
+            return self._worker_vol
         return self._vol_obj
 
     def _gen_tile_coords(self):
@@ -421,6 +460,26 @@ class InkVolumeDataset(IterableDataset):
         # fetch data components
         mask = self._fetch_mask(y_off, x_off)
 
+        # dense per-pixel supervision: emit the full (1,T,T) ink-label MAP instead of a
+        # single scalar tile label. this is the switch away from binary tile labels — the
+        # trainer applies per-pixel masked BCE against this map. soft/flanking label logic
+        # is bypassed (it is a tile-scalar concept). no spatial aug on the label (keep off).
+        if getattr(self.c.data, "dense_labels", False):
+            block = self._fetch_block(z_off, y_off, x_off)
+            block = np.ascontiguousarray(block, dtype=np.float32)
+            block_tensor = torch.tensor(block, dtype=torch.float32).unsqueeze(0)
+            y = self.y_start + y_off
+            x = self.x_start + x_off
+            soft = self.soft_labels
+            if getattr(self.c.data, "dense_soft_labels", False) and soft is not None:
+                # continuous target: expanded+blurred ink probability in [0,1]
+                lbl = np.asarray(soft[y:y+self.tile_size, x:x+self.tile_size]).astype(np.float32) / 255.0
+            else:
+                lbl = (np.asarray(self.labels[y:y+self.tile_size, x:x+self.tile_size]) > 0.5).astype(np.float32)
+            label_map = torch.tensor(lbl, dtype=torch.float32).unsqueeze(0)
+            self.current_idx += 1
+            return block_tensor, label_map, mask
+
         # soft depth label: randomly replace ink-band block with flanking band + soft label
         soft_label_prob  = float(getattr(self.c.data, "soft_label_prob", 0.0))
         soft_label_value = float(getattr(self.c.data, "soft_label_value", 0.3))
@@ -556,6 +615,20 @@ class DataManager:
         labels = labels / 255.0
         mask = mask / 255.0
 
+        # optional soft labels (continuous ink probability) for dense soft-label training.
+        # loaded here so the hard `labels` (used for ring + tile detection) stay unchanged;
+        # only the dense per-pixel TARGET uses the soft map. None if the file is absent.
+        self.soft_labels = None
+        if getattr(self.c.data, "dense_soft_labels", False):
+            soft = cv2.imread(f"./soft_inklabels/{self.scroll_id}.png", cv2.IMREAD_GRAYSCALE)
+            if soft is None:
+                print(f"[soft_labels] soft_inklabels/{self.scroll_id}.png not found — "
+                      f"dense_soft_labels requested but falling back to hard labels")
+            else:
+                self.soft_labels = (soft / 255.0).astype(np.float32)
+                print(f"[soft_labels] loaded soft_inklabels/{self.scroll_id}.png "
+                      f"(mean={self.soft_labels.mean():.4f})")
+
         # define the working area and split for train/validation.
         # optional region crop (fractions of the full frame) trims the usable area so a run
         # can train on only a sub-region. then the train/valid split is applied along the
@@ -666,14 +739,19 @@ class DataManager:
         InkVolumeDataset takes (x_range, y_range); we feed the split range on the split axis and
         the shared range on the other axis."""
         train_mask = self._make_ring_mask() if getattr(self.c.data, 'ring_negatives', False) else self.mask
+        # when ring_negatives is on, restrict validation to ring tiles too so validation
+        # throughput and signal quality match the training distribution. without this,
+        # the full valid region (tens of thousands of easy tiles) swamps the validation
+        # loop and makes it take 5-10× longer than necessary.
+        valid_mask = train_mask if getattr(self.c.data, 'ring_negatives', False) else self.mask
         if getattr(self, "split_axis", "x") == "y":
             train_x, train_y = self.shared_range, self.train_range
             valid_x, valid_y = self.shared_range, self.valid_range
         else:
             train_x, train_y = self.train_range, self.shared_range
             valid_x, valid_y = self.valid_range, self.shared_range
-        train_set = InkVolumeDataset(self.vol, train_mask, self.labels, self.c, train_x, train_y, self.norm_stats, shuffle=True)
-        valid_set = InkVolumeDataset(self.vol, self.mask, self.labels, self.c, valid_x, valid_y, self.norm_stats, shuffle=False)
+        train_set = InkVolumeDataset(self.vol, train_mask, self.labels, self.c, train_x, train_y, self.norm_stats, shuffle=True, soft_labels=getattr(self, "soft_labels", None))
+        valid_set = InkVolumeDataset(self.vol, valid_mask, self.labels, self.c, valid_x, valid_y, self.norm_stats, shuffle=False, soft_labels=getattr(self, "soft_labels", None))
         # the datasets have already copied what they need as uint8. the manager's own
         # float64 mask/labels (mask/255.0) are not used on the training side afterward
         # — for the big scroll they are ~1.9 GB EACH, so a many-scroll run would carry
@@ -825,6 +903,33 @@ def _sample_labels(dataset, sample_size):
         except StopIteration:
             break
     return labels
+
+
+def calc_dense_pos_weight(dataset, n_samples=200, clamp=(1.0, 20.0)):
+    """pos_weight for dense per-pixel BCE = (neg_px / pos_px) over sampled valid pixels.
+    the dataset yields (block, label_map (1,T,T), mask (T,T)); we count ink vs non-ink
+    pixels inside the mask. returns a (1,) tensor, clamped to a sane range."""
+    pos, tot = 0, 0
+    it = iter(dataset)
+    for _ in range(n_samples):
+        try:
+            _, label_map, mask = next(it)
+        except StopIteration:
+            break
+        m = (mask > 0)
+        if m.sum() <= 0:
+            continue
+        lm = label_map.squeeze(0) if label_map.dim() == 3 else label_map
+        pos += int(((lm > 0.5) & m).sum().item())
+        tot += int(m.sum().item())
+    if tot == 0 or pos == 0:
+        print("[dense] pos_weight fallback -> 1.0 (no ink pixels sampled)")
+        return torch.tensor([1.0], dtype=torch.float32)
+    p = pos / tot
+    pw = float(np.clip((1 - p) / p, clamp[0], clamp[1]))
+    print(f"[dense] sampled ink pixel fraction={p:.3f}  pos_weight={pw:.2f}")
+    return torch.tensor([pw], dtype=torch.float32)
+
 
 def calc_class_wgts(train_set, valid_set, scroll_id=None, cache_path=UNIFIED_CACHE_PATH):
     """calculates class weights from dataset samples"""

@@ -1,23 +1,16 @@
-"""campaign_runner_scroll4.py — scroll4 7.91um v1 BASELINE (the real feasibility run).
+"""campaign_runner_scroll4.py — scroll4 7.91um: two C15 winners on cleaned labels.
 
-the question: can the v1 baseline (the C15 winner that nailed the scroll1 artifacts) detect
-ink on scroll4's OWN held-out 7.91um/53keV region -- the SAME modality as scroll3, our goal
-scroll? labels come from the 2.4um scan warped into the flipped-7.91 frame.
+the question: do the two best C15 models (v1 anchor and asym_attn_pool winner) detect
+ink on scroll4's OWN held-out 7.91um/53keV region with the manually-cleaned eroded labels?
 
-single scan only: 7.91um w023 (id 20240304161941). the 2.4um scan is deliberately NOT touched.
+runs back to back:
+  t01_v1              — v1 baseline, l1=7e-6     (C15 anchor)
+  t02_asym_attn_pool  — v12_asym_attn_pool, l1=7.65e-6  (C14/C15 overall winner)
 
-DELIBERATE SETTINGS (clean full baseline, no crutches)
-  - v1 baseline arch.
-  - region crop for speed: train only the RIGHT 60% (x) and TOP 75% (y) of the frame.
-  - within that crop, HORIZONTAL split -> top 75% train / bottom 25% valid (split-axis y).
-  - eval-int 20  -> eval-on-self figure (cropped region, horizontal split) renders at epoch 20.
-  - test-int 30  -> > epochs, so the scroll2/scroll3 transfer figure never fires this run.
-  - probe ROIs OFF (coords pinned to old scrolls).
-  - pr-auc surrogate (pairwise ranking loss) OFF -> ranking-lambda 0.0.
-  - ring dataset ON (ring-label-source eroded) — proven more robust + faster than full-mask
-    across campaigns 10-15. no hard mining.
+all other settings identical to the feasibility run (full depth 0-64, ring eroded,
+right 60% x / top 75% y crop, horizontal y-split 75/25 train/valid).
 
-logs -> runs_scroll4/ (a fresh campaign set).
+logs -> runs_scroll4/
 """
 from __future__ import annotations
 import argparse, os, subprocess, sys, time
@@ -28,7 +21,13 @@ from typing import Any, Dict, List
 os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
-EPOCHS = 10
+EPOCHS = 15
+
+# two C15 winners to run back-to-back
+RUN_SPECS = [
+    {"name": "t01_v1",             "arch": "v1",                 "l1-lambda": 7e-6},
+    {"name": "t02_asym_attn_pool", "arch": "v12_asym_attn_pool", "l1-lambda": 7.65e-6},
+]
 
 # v1 baseline pipeline (single-scroll, eval-on-self, test disabled, probes + surrogate off)
 BASE: Dict[str, Any] = {
@@ -38,7 +37,7 @@ BASE: Dict[str, Any] = {
     "conv1-drop": 0.0, "conv2-drop": 0.05, "fc1-drop": 0.2, "fc2-drop": 0.1,
     "batch-size": 512,
     "num-workers": 8,
-    "eval-int": 10,          # eval-on-self figure (cropped, horizontal split) at epoch 20
+    "eval-int": 15,          # eval-on-self figure (cropped, horizontal split) at epoch 20
     "test-int": 30,          # > epochs -> scroll2/scroll3 transfer figure never renders
     "no-probe-rois": True,   # probe ROIs pinned to old scrolls
     "ranking-lambda": 0.0,   # pr-auc surrogate (pairwise ranking loss) OFF
@@ -58,7 +57,7 @@ BASE: Dict[str, Any] = {
     "mask-memmap": True,
     # region + split: train only the right 60% (x) and top 75% (y); within that,
     # split HORIZONTALLY -> top 75% train / bottom 25% valid.
-    "crop-x-frac": "0.4,1.0",
+    "crop-x-frac": "0.6,1.0",
     "crop-y-frac": "0.0,0.75",
     "split-axis": "y",
     "train-split-frac": 0.75,
@@ -85,10 +84,12 @@ def dict_to_cli_args(overrides: Dict[str, Any]) -> List[str]:
     return args
 
 
-def build_cmd(python_exe: str, runs_dir: Path, campaign_id: str):
+def build_cmd(python_exe: str, runs_dir: Path, campaign_id: str, spec: Dict[str, Any]):
     merged = dict(BASE)
     merged["scroll-id"] = SCROLL4_79_ID
-    exp_name = f"cmp_{campaign_id}_s4_79um"
+    merged["arch"] = spec["arch"]
+    merged["l1-lambda"] = spec["l1-lambda"]
+    exp_name = f"cmp_{campaign_id}_{spec['name']}_s4_79um"
     cmd = [python_exe, "train.py", "-n", exp_name, "--log-dir", str(runs_dir)]
     cmd += dict_to_cli_args(merged)
     return cmd, exp_name
@@ -102,7 +103,7 @@ def run_with_monitoring(cmd, repo_root, env, log_path, stall_minutes=90):
     print(f"[MONITOR] log -> {log_path}")
     with open(log_path, "w", encoding="utf-8", errors="replace") as lf:
         proc = subprocess.Popen(cmd, cwd=str(repo_root), env=env,
-                                stdout=lf, stderr=subprocess.STDOUT)
+                                stdout=lf, stderr=None)
     last_progress = time.time()
     last_epoch = 0
     while proc.poll() is None:
@@ -141,8 +142,8 @@ def run_with_monitoring(cmd, repo_root, env, log_path, stall_minutes=90):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="scroll4 7.91um v1 baseline feasibility run")
-    ap.add_argument("--campaign-id", type=str, default="scroll4_2026_07_06")
+    ap = argparse.ArgumentParser(description="scroll4 7.91um C15 winners on cleaned labels")
+    ap.add_argument("--campaign-id", type=str, default="scroll4_2026_07_08")
     ap.add_argument("--python-exe", type=str, default=sys.executable)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--stall-minutes", type=float, default=90.0)
@@ -163,15 +164,23 @@ def main():
     if not labels_exist(SCROLL4_79_ID):
         print(f"[scroll4 79um] ABORT — eroded_inklabels/{SCROLL4_79_ID}.png not found")
         return
-    cmd, exp_name = build_cmd(args.python_exe, runs_dir, args.campaign_id)
-    print(f"   cmd: {' '.join(cmd)}")
+
+    for spec in RUN_SPECS:
+        print(f"\n{'='*78}\n[scroll4] run: {spec['name']}  arch={spec['arch']}  l1={spec['l1-lambda']}")
+        cmd, exp_name = build_cmd(args.python_exe, runs_dir, args.campaign_id, spec)
+        print(f"   cmd: {' '.join(cmd)}")
+        if args.dry_run:
+            continue
+        log_path = log_dir / f"{exp_name}.log"
+        rc, crashed = run_with_monitoring(cmd, repo_root, env, log_path,
+                                          stall_minutes=args.stall_minutes)
+        print(f"[scroll4] {spec['name']} done rc={rc} crashed={crashed}")
+        if crashed:
+            print("[scroll4] aborting remaining runs after crash")
+            break
+
     if args.dry_run:
         print("\n[scroll4] dry-run only.")
-        return
-    log_path = log_dir / f"{exp_name}.log"
-    rc, crashed = run_with_monitoring(cmd, repo_root, env, log_path,
-                                      stall_minutes=args.stall_minutes)
-    print(f"[scroll4 79um] done rc={rc} crashed={crashed}")
 
 
 if __name__ == "__main__":

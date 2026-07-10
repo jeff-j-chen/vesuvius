@@ -9,7 +9,7 @@ class DataConfig:
     # on windows fall back to the old local docs path. override via VESUVIUS_ZARR_PATH.
     zarr_path: str = field(default_factory=lambda: os.getenv(
         "VESUVIUS_ZARR_PATH",
-        "/workspace/ves_zarrs2" if os.name == "posix" else "C:\\Users\\ChenJeff\\Documents\\ves_zarrs2"))
+        "/vesuvius/ves_zarrs2" if os.name == "posix" else "C:\\Users\\ChenJeff\\Documents\\ves_zarrs2"))
     # tra_scroll_id / tra_scroll_ids: the scroll fragment(s) we TRAIN on. renamed from
     # scroll1_id to make clear the training set is a distinct (and now switchable) set
     # of scrolls, independent of the goal/test scrolls (scroll2/scroll3/scroll4).
@@ -94,6 +94,23 @@ class DataConfig:
     # lets a run train on only a sub-region (e.g. right 60% x, top 75% y) to save compute.
     crop_x_frac: tuple = (0.0, 1.0)
     crop_y_frac: tuple = (0.0, 1.0)
+    # DENSE PER-PIXEL SUPERVISION (switch away from binary tile labels).
+    # when true the dataloader emits a full (1,T,T) ink-label MAP per tile (from
+    # eroded_inklabels) instead of a single (1,) "any ink in tile" scalar, and the
+    # trainer uses per-pixel masked BCE against that map. this is the fundamental
+    # departure from the historical binary-tile framing: supervision becomes
+    # "classify EVERY interior pixel" instead of "does ink exist somewhere in this
+    # tile". requires a dense (fully-convolutional) arch that returns (B,1,H,W)
+    # logits, e.g. arch='dense_unet'. pairs with a large-receptive-field decoder so
+    # each output pixel decides WITH spatial context. NB: spatial data augmentation
+    # (rotations/flips) is NOT applied to the label map, so keep data_aug off here.
+    dense_labels: bool = False
+    # when true (and dense_labels on): dense per-pixel target uses a CONTINUOUS soft
+    # ink-probability map (soft_inklabels/<id>.png = eroded labels dilated + gaussian
+    # blurred) instead of the hard 0/1 mask. soft edges express calibrated boundary
+    # uncertainty (reduces overfitting) and the slight dilation recovers stroke-edge ink
+    # the erosion removed. mirrors the researchers' distilled-soft-label recipe.
+    dense_soft_labels: bool = False
 
 @dataclass
 class DataloaderConfig:

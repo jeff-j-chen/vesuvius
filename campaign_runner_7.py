@@ -312,7 +312,7 @@ def run_with_monitoring(cmd, repo_root, env, log_path, stall_minutes=60):
     print(f"[MONITOR] log -> {log_path}")
     with open(log_path, "w", encoding="utf-8", errors="replace") as lf:
         proc = subprocess.Popen(cmd, cwd=str(repo_root), env=env,
-                                stdout=lf, stderr=subprocess.STDOUT)
+                                stdout=lf, stderr=None)
     last_progress = time.time()
     last_epoch = 0
     while proc.poll() is None:

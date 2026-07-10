@@ -10,6 +10,7 @@ import re
 import cv2
 import numpy as np
 import torch
+from torch.amp.autocast_mode import autocast
 from PIL import Image
 import matplotlib
 matplotlib.use("Agg")
@@ -66,6 +67,11 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     pmap = np.full((h_small, w_small), np.nan, dtype=np.float32)
 
     infer_bs = min(max(config.dl.batch_size * 2, 256), 256)
+    # scale inference batch size by tile area relative to the baseline T=32.
+    # at T=106/D=16, B=256 requires ~10GB for input alone and OOMs during eval.
+    # formula: 256 * (32/T)^2 * (8/D), clamped to [1, 256].
+    tile_scale = (32.0 / tile) ** 2 * (8.0 / max(depth, 1))
+    infer_bs = max(1, min(infer_bs, int(256 * tile_scale)))
     device = config.device if torch.cuda.is_available() else "cpu"
 
     tile_list = [
@@ -348,7 +354,11 @@ class TensorboardVisualizer:
         self.volume = dm.vol
         self.mask = dm.mask
         self.labels = dm.labels
-        # eval figure uses full papyrus mask — shows entire scroll, not just ring tiles
+        # eval figure always uses the FULL papyrus mask so the prediction map covers
+        # the entire cropped scroll region — this is intentional and distinct from
+        # the training/validation loop which uses the ring mask when ring_negatives=True.
+        # the figure is a visual diagnostic of where the model fires across the scroll,
+        # not a metric computation; restricting it to the ring would defeat the purpose.
         self.eval_mask = self.mask
         # use the dataloader's coordinate system directly — the old hardcoded crop
         # (y0=200, x0=1000) was NOT tile-aligned (200%32=8, 1000%32=8), so the eval
@@ -1008,6 +1018,10 @@ class TensorboardVisualizer:
 
         self.writer.add_scalar("G_M/Acc/Train", train_metrics['accuracy'], epoch)
         self.writer.add_scalar("G_M/Acc/Valid", val_metrics['accuracy'], epoch)
+        # balanced accuracy: mean(sensitivity, specificity) — invariant to ring imbalance.
+        # unlike raw accuracy it is 0.5 when the model predicts all-one-class, not 0.566x.
+        self.writer.add_scalar("G_M/BalAcc/Train", train_metrics.get('balanced_accuracy', 0.0), epoch)
+        self.writer.add_scalar("G_M/BalAcc/Valid", val_metrics.get('balanced_accuracy', 0.0), epoch)
 
         self.writer.add_scalar("P_M/Precision/Train", train_metrics['precision'], epoch)
         self.writer.add_scalar("P_M/Precision/Valid", val_metrics['precision'], epoch)
@@ -1042,7 +1056,10 @@ class TensorboardVisualizer:
 
         if self.mode == 'train' and self.eval_enabled and (epoch + 1) % self.c.tra.eval_int == 0:
             try:
-                self.add_evaluation_figures(epoch, model)
+                if getattr(self.c.data, "dense_labels", False):
+                    self.add_dense_evaluation_figure(epoch, model)
+                else:
+                    self.add_evaluation_figures(epoch, model)
             except Exception as e:
                 print(f"[ERROR] add_evaluation_figures failed at epoch {epoch}: {e}")
                 import traceback; traceback.print_exc()
@@ -1194,11 +1211,169 @@ class TensorboardVisualizer:
             return os.path.join(base, f"scroll_{self.scroll1_id}")
         return base
 
+    def add_dense_evaluation_figure(self, epoch, model):
+        """dense per-pixel eval figure (for dense_labels runs).
+
+        renders the ENTIRE region given to the model (the whole cropped scroll = train range
+        UNION valid range on the split axis, full shared range on the other) — matching the
+        historical add_evaluation_figures which spans the full train+valid region, NOT a small
+        window. per the README convention it ALWAYS sweeps the FULL inference depth
+        d_start..d_end (e.g. 0->64) in blocks of `depth`, regardless of the (narrower) training
+        window. shows one full-region prediction map per depth block, a depth-MAX composite, and
+        the ground truth, with the train/valid split boundary drawn. inference is fully-
+        convolutional over large chunks; each chunk's per-pixel prediction is downsampled into a
+        canvas so the whole ~17k x 31k region fits in memory. the composite drives the logged
+        per-pixel validation AUC (computed over the VALID sub-region only)."""
+        import matplotlib.pyplot as plt
+        model.eval()
+        dev = self.c.device
+        D = int(self.c.data.depth)
+        zf0 = int(self.c.data.d_start)
+        zf1 = min(int(self.c.data.d_end), int(self.volume.shape[0]))
+        stride_z = max(1, D)
+        z_starts = list(range(zf0, max(zf0 + 1, zf1 - D + 1), stride_z))
+        if not z_starts:
+            z_starts = [zf0]
+        if z_starts[-1] != zf1 - D and (zf1 - D) >= zf0:
+            z_starts.append(zf1 - D)
+        g_mean, g_std, g_min, g_max = self.global_mean, self.global_std, self.global_min, self.global_max
+        vol, lab, mk = self.volume, self.labels, self.eval_mask
+
+        # FULL given region = union of train+valid on the split axis, shared range on the other.
+        if getattr(self, "split_axis", "x") == "y":
+            (tr_lo, tr_hi) = self.train_range
+            (va_lo, va_hi) = self.valid_range
+            (sx0, sx1) = self.shared_range
+            y0, y1 = min(tr_lo, va_lo), max(tr_hi, va_hi)
+            x0, x1 = sx0, sx1
+            split_is_y = True
+            split_at = va_lo   # valid starts here on the y axis
+        else:
+            (tr_lo, tr_hi) = self.train_range
+            (va_lo, va_hi) = self.valid_range
+            (sy0, sy1) = self.shared_range
+            x0, x1 = min(tr_lo, va_lo), max(tr_hi, va_hi)
+            y0, y1 = sy0, sy1
+            split_is_y = False
+            split_at = va_lo
+        y1 = min(y1, int(vol.shape[1])); x1 = min(x1, int(vol.shape[2]))
+        Hreg, Wreg = y1 - y0, x1 - x0
+
+        # downsample factor so the whole region fits a ~3000px-max canvas
+        DS = max(1, int(np.ceil(max(Hreg, Wreg) / 3000.0)))
+        Hc, Wc = Hreg // DS, Wreg // DS
+
+        # fully-convolutional chunk size (divisible by 8 for the 3-pool U-Net AND by DS so the
+        # downsampled placement tiles exactly)
+        CH = 768
+        CH = (CH // 8) * 8
+        while CH % DS != 0:
+            CH -= 8
+
+        def _norm(blk):
+            blk = (blk - g_mean) / g_std
+            return np.clip((blk - g_min) / (g_max - g_min + 1e-12), 0, 1)
+
+        def _pad8(a):
+            _, h, w = a.shape
+            ph = (-h) % 8; pw = (-w) % 8
+            if ph or pw:
+                a = np.pad(a, ((0, 0), (0, ph), (0, pw)), mode="reflect")
+            return a, h, w
+
+        ys = list(range(y0, y1, CH))
+        xs = list(range(x0, x1, CH))
+
+        def _predict_region_at_depth(z0):
+            canvas = np.zeros((Hc, Wc), np.float32)
+            with torch.no_grad():
+                for yy in ys:
+                    ch = min(CH, y1 - yy)
+                    for xx in xs:
+                        cw = min(CH, x1 - xx)
+                        blk = np.asarray(vol[z0:z0 + D, yy:yy + ch, xx:xx + cw]).astype(np.float32)
+                        if blk.shape[0] != D:
+                            continue
+                        blk = _norm(blk)
+                        blk, oh, ow = _pad8(blk)
+                        bt = torch.from_numpy(blk).unsqueeze(0).unsqueeze(0).float().to(dev)
+                        with autocast(dev):
+                            p = torch.sigmoid(model(bt))[0, 0, :oh, :ow].float().cpu().numpy()
+                        # downsample this chunk's prediction into the canvas
+                        cyd, cxd = (yy - y0) // DS, (xx - x0) // DS
+                        chd, cwd = oh // DS, ow // DS
+                        if chd < 1 or cwd < 1:
+                            continue
+                        import cv2 as _cv
+                        pd = _cv.resize(p, (cwd, chd), interpolation=_cv.INTER_AREA)
+                        canvas[cyd:cyd + chd, cxd:cxd + cwd] = pd
+            return canvas
+
+        # downsampled mask, gt, raw over the whole region
+        import cv2 as _cv
+        mask_ds = _cv.resize((np.asarray(mk[y0:y1, x0:x1]) > 0).astype(np.float32), (Wc, Hc), interpolation=_cv.INTER_AREA)
+        mask_ds = (mask_ds > 0.5).astype(np.float32)
+        gt_ds = _cv.resize((np.asarray(lab[y0:y1, x0:x1]) > 0.5).astype(np.float32), (Wc, Hc), interpolation=_cv.INTER_AREA)
+        raw_full = np.asarray(vol[zf0:zf1, y0:y1, x0:x1]).astype(np.float32).mean(0)
+        raw_ds = _cv.resize(raw_full, (Wc, Hc), interpolation=_cv.INTER_AREA)
+
+        preds = [(z0, _predict_region_at_depth(z0) * mask_ds) for z0 in z_starts]
+        composite = np.max(np.stack([p for _, p in preds], axis=0), axis=0) * mask_ds
+
+        # validation AUC over the VALID sub-region only (the held-out part)
+        split_ds = max(0, min(Hc if split_is_y else Wc, (split_at - (y0 if split_is_y else x0)) // DS))
+        if split_is_y:
+            comp_val, gt_val, m_val = composite[split_ds:], gt_ds[split_ds:], mask_ds[split_ds:]
+        else:
+            comp_val, gt_val, m_val = composite[:, split_ds:], gt_ds[:, split_ds:], mask_ds[:, split_ds:]
+        sel = m_val.reshape(-1) > 0
+        try:
+            from sklearn.metrics import roc_auc_score
+            yv = (gt_val.reshape(-1)[sel] > 0.5).astype(int)
+            auc = roc_auc_score(yv, comp_val.reshape(-1)[sel]) if len(np.unique(yv)) > 1 else float("nan")
+        except Exception:
+            auc = float("nan")
+        self.writer.add_scalar("Dense/Valid_PixelAUC", auc, epoch)
+
+        def _mark_split(ax):
+            if split_is_y:
+                ax.axhline(split_ds, color="cyan", lw=1.0, ls="--")
+            else:
+                ax.axvline(split_ds, color="cyan", lw=1.0, ls="--")
+
+        n_rows = 2 + len(preds) + 1
+        fig, ax = plt.subplots(n_rows, 1, figsize=(min(18, Wc / 150), min(48, n_rows * Hc / 150)))
+        ax[0].imshow(raw_ds, cmap="gray")
+        ax[0].set_title(f"scan depth-mean z{zf0}-{zf1} — FULL region ep{epoch+1} "
+                        f"(train z{self.c.data.train_d_start}-{self.c.data.train_d_end}; "
+                        f"cyan=train/valid split; VALID composite auc={auc:.3f})")
+        _mark_split(ax[0])
+        for i, (z0, p) in enumerate(preds):
+            ax[1 + i].imshow(p, cmap="magma", vmin=0, vmax=1); _mark_split(ax[1 + i])
+            ax[1 + i].set_title(f"pred depth block z{z0}-{z0 + D}")
+        ax[1 + len(preds)].imshow(composite, cmap="magma", vmin=0, vmax=1); _mark_split(ax[1 + len(preds)])
+        ax[1 + len(preds)].set_title("depth-MAX composite (best-depth response per pixel)")
+        ax[-1].imshow(gt_ds, cmap="magma", vmin=0, vmax=1); _mark_split(ax[-1])
+        ax[-1].set_title("ground truth (eroded)")
+        for a_ in ax: a_.axis("off")
+        plt.tight_layout()
+        self.writer.add_figure("Dense/FullRegion_Prediction", fig, epoch)
+        try:
+            out_dir = os.path.join(os.path.dirname(self.log_path), "dense_figs")
+            os.makedirs(out_dir, exist_ok=True)
+            out_png = os.path.join(out_dir, f"dense_eval_ep{epoch+1:02d}.png")
+            fig.savefig(out_png, dpi=120)
+            print(f"[dense eval] ep{epoch+1} FULL region y[{y0},{y1}] x[{x0},{x1}] "
+                  f"canvas={Hc}x{Wc} DS={DS} depth-blocks={[z for z,_ in preds]} "
+                  f"VALID_auc={auc:.4f} -> {out_png}")
+        except Exception as e:
+            print(f"[dense eval] figure save failed: {e}")
+        plt.close(fig)
+
     def add_evaluation_figures(self, epoch, model):
         """run eval on train and valid splits produce mining and figures"""
         print("Starting evaluation figure generation...")
         model.eval()
-
         z_range = (self.c.data.d_start, self.c.data.d_end)
 
         # use ring mask when ring_negatives=True so the eval figure only renders
@@ -1357,7 +1532,90 @@ class TensorboardVisualizer:
                 self.writer.add_figure('Evaluation/Aggregated', fig, epoch)
                 plt.close(fig)
 
-        self._run_and_log_hard_mining_evaluation(epoch, model)
+            # ---- voxel map visualization (v13_mil only) ----
+            # log a grid of representative tiles showing WHERE the model fires,
+            # not just WHETHER it fires. only runs when the model exposes last_voxel_map
+            # (i.e. arch=v13_mil). adds 'VoxelMap/InkTiles' and 'VoxelMap/BlankTiles'
+            # to TensorBoard under the Images tab.
+            self._log_voxel_maps(epoch, model)
+
+    def _log_voxel_maps(self, epoch, model):
+        """log per-tile voxel maps for v13_mil to TensorBoard Images tab.
+
+        for each tile: shows (left) the depth-mean raw scan slice and (right) the
+        depth-max of the model's per-voxel logit map, both normalized to [0,1].
+        logged under VoxelMap/InkTiles and VoxelMap/BlankTiles.
+
+        what to look for:
+          INK TILES — the right panel should show bright spots/streaks at ink stroke
+          positions: thin horizontal ribbons for letter strokes, NOT diffuse blobs.
+          BLANK TILES — right panel should be uniformly dark (low activation everywhere).
+          if ink and blank panels look identical (diffuse/random), the model has not
+          learned spatially localized ink — it's still doing coarse intensity detection.
+        """
+        if not hasattr(model, 'last_voxel_map') or model.last_voxel_map is None:
+            return   # non-MIL architecture; skip silently
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        try:
+            tile   = self.c.data.tile_size
+            depth  = self.c.data.depth
+            z_start = self.c.data.d_start
+            device = self.c.device
+            z_range = (self.c.data.d_start, self.c.data.d_end)
+            if getattr(self, "split_axis", "x") == "y":
+                tr_y, tr_x = self.train_range, self.shared_range
+            else:
+                tr_y, tr_x = self.shared_range, self.train_range
+            all_coords  = self._gen_tile_coords(z_range, tr_y, tr_x, self.mask)
+            ink_tiles   = [(z, y, x) for z, y, x in all_coords
+                           if self.labels[tr_y[0] + y: tr_y[0] + y + tile,
+                                          tr_x[0] + x: tr_x[0] + x + tile].any()]
+            blank_tiles = [(z, y, x) for z, y, x in all_coords
+                           if not self.labels[tr_y[0] + y: tr_y[0] + y + tile,
+                                              tr_x[0] + x: tr_x[0] + x + tile].any()]
+            n_show = 6
+            rng = np.random.default_rng(epoch)
+            ink_sample   = [ink_tiles[i]   for i in rng.choice(len(ink_tiles),   min(n_show, len(ink_tiles)),   replace=False)] if ink_tiles   else []
+            blank_sample = [blank_tiles[i] for i in rng.choice(len(blank_tiles), min(n_show, len(blank_tiles)), replace=False)] if blank_tiles else []
+            g_mean, g_std = self.global_mean, self.global_std
+            g_min,  g_max = self.global_min,  self.global_max
+
+            def _fetch(d_off, y_off, x_off):
+                y = tr_y[0] + y_off; x = tr_x[0] + x_off; z = z_start + d_off
+                if z + depth > self.volume.shape[0]: return None, None
+                blk = np.array(self.volume[z:z + depth, y:y + tile, x:x + tile]).astype(np.float32)
+                blk = np.clip((blk - g_mean) / (g_std + 1e-8), -5, 5)
+                blk = np.clip((blk - g_min) / (g_max - g_min + 1e-8), 0, 1)
+                t = torch.from_numpy(blk).float().unsqueeze(0).unsqueeze(0).to(device)
+                with torch.no_grad(): model(t)
+                vmap = torch.sigmoid(model.last_voxel_map[0, 0]).max(0).values.cpu().numpy()
+                return blk.mean(0), vmap   # (H,W) depth-mean scan; (H',W') depth-max logit
+
+            def _make_grid(samples, title):
+                if not samples: return None
+                n = len(samples)
+                fig, axes = plt.subplots(n, 2, figsize=(4, n * 2))
+                if n == 1: axes = [axes]
+                for row, (d_off, y_off, x_off) in enumerate(samples):
+                    raw, vmap = _fetch(d_off, y_off, x_off)
+                    if raw is None: continue
+                    axes[row][0].imshow(raw,  cmap='gray', vmin=0, vmax=1, interpolation='nearest')
+                    axes[row][1].imshow(vmap, cmap='hot',  vmin=0, vmax=1, interpolation='nearest')
+                    axes[row][0].axis('off'); axes[row][1].axis('off')
+                axes[0][0].set_title('scan (depth-mean)', fontsize=7)
+                axes[0][1].set_title('voxel map (depth-max sigmoid)', fontsize=7)
+                fig.suptitle(title, fontsize=8); plt.tight_layout()
+                return fig
+
+            for tag, samples in [('VoxelMap/InkTiles', ink_sample), ('VoxelMap/BlankTiles', blank_sample)]:
+                fig = _make_grid(samples, f'{tag.split("/")[1]} — epoch {epoch}')
+                if fig is not None:
+                    self.writer.add_figure(tag, fig, epoch)
+                    plt.close(fig)
+        except Exception as e:
+            print(f"[voxel map logging] skipped: {e}")
 
     def _run_and_log_hard_mining_evaluation(self, current_epoch, model):
         """evaluate previously mined files and log metrics"""

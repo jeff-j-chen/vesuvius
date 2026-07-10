@@ -26,7 +26,7 @@ def main():
     ap.add_argument("--scroll-id", type=str, required=True)
     ap.add_argument("--zarr-path", type=str,
                     default=os.getenv("VESUVIUS_ZARR_PATH",
-                                      "/workspace/ves_zarrs2" if os.name == "posix"
+                                      "/vesuvius/ves_zarrs2" if os.name == "posix"
                                       else r"C:\Users\ChenJeff\Documents\ves_zarrs2"))
     ap.add_argument("--cache", type=str, default="./norm_cache.json")
     ap.add_argument("--y-block", type=int, default=512, help="y band height per read (mult of 32)")

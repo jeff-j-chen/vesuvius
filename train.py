@@ -7,7 +7,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 from utils.config import Config
 from utils.visualizer import TensorboardVisualizer
 from utils.hard_mining import HardMiningManager, HardMiningInjector
-from utils.dataloader import DataManager, get_dataloaders, calc_class_wgts, MultiScrollIterableDataset
+from utils.dataloader import DataManager, get_dataloaders, calc_class_wgts, calc_dense_pos_weight, MultiScrollIterableDataset
 from utils.model import create_model
 from utils.training_utils import (
     create_optimizer_and_scheduler, 
@@ -23,6 +23,7 @@ from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 
 from tqdm import tqdm
+import sys
 import time
 import argparse
 import random
@@ -99,6 +100,10 @@ def _apply_cli_overrides(c: Config, args):
 
     if args.channel_mixing_prob is not None:
         c.dl.channel_mixing_prob = float(args.channel_mixing_prob)
+    if getattr(args, 'noise_prob', None) is not None:
+        c.dl.noise_prob = float(args.noise_prob)
+    if getattr(args, 'rotation_prob', None) is not None:
+        c.dl.rotation_prob = float(args.rotation_prob)
 
     if args.pooling is not None:
         c.model.pooling = str(args.pooling)
@@ -132,6 +137,10 @@ def _apply_cli_overrides(c: Config, args):
         c.data.mask_memmap = True
     if args.ring_negatives:
         c.data.ring_negatives = True
+    if getattr(args, "dense_labels", False):
+        c.data.dense_labels = True
+    if getattr(args, "dense_soft_labels", False):
+        c.data.dense_soft_labels = True
     if getattr(args, "test_scroll2_only", False):
         c.data.test_scroll2_only = True
     if args.ring_label_source is not None:
@@ -150,6 +159,8 @@ def _apply_cli_overrides(c: Config, args):
         c.tra.eval_cooldown_secs = int(args.eval_cooldown)
     if args.depth is not None:
         c.data.depth = int(args.depth)
+    if getattr(args, "tile_size", None) is not None:
+        c.data.tile_size = int(args.tile_size)
     if args.train_d_start is not None:
         c.data.train_d_start = int(args.train_d_start)
         c.data.train_d_end = c.data.train_d_start + c.data.depth  # default; overridden below if --train-d-end given
@@ -313,10 +324,16 @@ class Trainer:
             t_set_full, v_set = data_manager.get_datasets()
             t_loader, v_loader = get_dataloaders(t_set_full, v_set, self.c)
             ring_mode = getattr(self.c.data, 'ring_negatives', False)
-            pos_weight = calc_class_wgts(
-                t_set_full, t_set_full if ring_mode else v_set,
-                scroll_id=None if ring_mode else self.c.data.tra_scroll_id
-            )
+            if getattr(self.c.data, 'dense_labels', False):
+                # dense per-pixel BCE needs a PIXEL-level pos_weight (ink px fraction),
+                # not the tile-level class ratio; tile-label sampling would also crash on
+                # the (1,T,T) label maps.
+                pos_weight = calc_dense_pos_weight(t_set_full)
+            else:
+                pos_weight = calc_class_wgts(
+                    t_set_full, t_set_full if ring_mode else v_set,
+                    scroll_id=None if ring_mode else self.c.data.tra_scroll_id
+                )
             self._t_set_full = t_set_full
             self._t_set_ring = None
 
@@ -337,6 +354,8 @@ class Trainer:
 
     def _train_batch(self, b_imgs, b_labels, mask):
         """trains the model on a single batch of data"""
+        if getattr(self.c.data, "dense_labels", False):
+            return self._train_batch_dense(b_imgs, b_labels, mask)
         b_imgs = b_imgs.to(self.c.device)
         b_labels = b_labels.to(self.c.device).view(-1, 1)
         # mask is (B, 32, 32) per-pixel; collapse to per-tile (B, 1): tile is valid if any pixel is valid
@@ -387,6 +406,49 @@ class Trainer:
         
         return scores, labels, loss.item(), raw_loss_val
 
+    @staticmethod
+    def _dense_pixel_sample(scores_map, label_map, pmask, max_px=4096):
+        """flatten valid (mask>0) pixels and subsample for epoch-level metric accumulation.
+        keeps per-pixel metric memory bounded across an epoch (a full tile is ~16k px)."""
+        sel = pmask.reshape(-1) > 0
+        s = scores_map.reshape(-1)[sel]
+        l = (label_map.reshape(-1)[sel] > 0.5).astype(np.int64)
+        if s.shape[0] > max_px:
+            idx = np.random.default_rng(0).choice(s.shape[0], max_px, replace=False)
+            s, l = s[idx], l[idx]
+        return s, l
+
+    def _train_batch_dense(self, b_imgs, b_labels, mask):
+        """dense per-pixel training step: per-pixel masked BCE against the (B,1,T,T) label map.
+
+        this is the non-binary path — the model returns a (B,1,H,W) logit map and every
+        interior (mask>0) pixel contributes a BCE term. no MIL max-collapse, no tile scalar."""
+        device = self.c.device
+        b_imgs = b_imgs.to(device)
+        b_labels = b_labels.to(device).float()                    # (B,1,T,T)
+        pmask = (mask.to(device) > 0).float().unsqueeze(1)        # (B,1,T,T)
+
+        self.optimizer.zero_grad()
+        with autocast(device):
+            outputs = self.model(b_imgs)                          # (B,1,H,W)
+            raw = self.criterion(outputs, b_labels)              # per-pixel (reduction='none')
+            denom = pmask.sum()
+            if denom <= 0:
+                return np.empty([]), np.empty([]), 0.0, 0.0
+            raw_loss_val = ((raw * pmask).sum() / denom).item()
+            l1_loss = sum(p.abs().sum() for p in self.model.parameters())
+            loss = (raw * pmask).sum() / denom + self.c.tra.l1_lambda * l1_loss
+
+        self.scaler.scale(loss).backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+
+        scores_map = torch.sigmoid(outputs).detach().float().cpu().numpy()
+        s, l = self._dense_pixel_sample(scores_map, b_labels.cpu().numpy(),
+                                        pmask.cpu().numpy())
+        return s, l, loss.item(), raw_loss_val
+
     def _ins_hard_samples(self, b_imgs, b_labels, mask, hard_injector, rem_batches):
         """injects hard-mined samples into the current batch"""
         if not hard_injector or not hard_injector.has_next():
@@ -426,7 +488,7 @@ class Trainer:
         labels, preds, scores = [], [], []
         total_inj = 0
 
-        for batch_idx, (b_imgs, b_labels, mask) in enumerate(tqdm(self.train_loader, desc="Training")):
+        for batch_idx, (b_imgs, b_labels, mask) in enumerate(tqdm(self.train_loader, desc="Training", mininterval=5, miniters=1, file=sys.stderr)):
             # inject hard-mined samples into the batch
             total_inj += self._ins_hard_samples(
                 b_imgs, b_labels, mask, hard_injector, len(self.train_loader) - batch_idx
@@ -461,9 +523,12 @@ class Trainer:
         self.model.eval()
         loss = 0.0
         labels, preds, scores = [], [], []
-        
+
+        if getattr(self.c.data, "dense_labels", False):
+            return self._validate_epoch_dense()
+
         with torch.no_grad(), autocast(self.c.device):
-            for b_imgs, b_labels, mask in tqdm(self.valid_loader, desc="Validating"):
+            for b_imgs, b_labels, mask in tqdm(self.valid_loader, desc="Validating", mininterval=5, miniters=1, file=sys.stderr):
                 if mask.view(mask.size(0), -1).sum() <= 0:
                     print("[ERROR] Encountered batch with mask sum == 0 in validation. This block should not be loaded!")
                     continue
@@ -493,6 +558,32 @@ class Trainer:
         # calculate and return epoch metrics
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
         metrics['loss'] = loss / len(self.valid_loader)
+        metrics['scores'] = scores
+        return metrics
+
+    def _validate_epoch_dense(self):
+        """dense per-pixel validation: per-pixel masked BCE + subsampled per-pixel metrics."""
+        device = self.c.device
+        loss, nb = 0.0, 0
+        labels, preds, scores = [], [], []
+        with torch.no_grad(), autocast(device):
+            for b_imgs, b_labels, mask in tqdm(self.valid_loader, desc="Validating", mininterval=5, miniters=1, file=sys.stderr):
+                pmask = (mask.to(device) > 0).float().unsqueeze(1)     # (B,1,T,T)
+                if pmask.sum() <= 0:
+                    continue
+                b_imgs = b_imgs.to(device)
+                b_labels = b_labels.to(device).float()                # (B,1,T,T)
+                outputs = self.model(b_imgs)                          # (B,1,H,W)
+                raw = self.criterion(outputs, b_labels)
+                loss += ((raw * pmask).sum() / pmask.sum()).item(); nb += 1
+                s_map = torch.sigmoid(outputs).float().cpu().numpy()
+                s, l = self._dense_pixel_sample(s_map, b_labels.cpu().numpy(),
+                                                pmask.cpu().numpy())
+                labels.extend(l.tolist())
+                preds.extend((s > 0.5).astype(int).tolist())
+                scores.extend(s.tolist())
+        metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
+        metrics['loss'] = loss / max(nb, 1)
         metrics['scores'] = scores
         return metrics
 
@@ -590,7 +681,7 @@ class Trainer:
         ink_z  = getattr(self.c.data, "train_d_start", 32)
         criterion = nn.BCEWithLogitsLoss()
 
-        for batch_idx, (b_imgs, b_labels, mask) in enumerate(tqdm(self.train_loader, desc="Pretrain")):
+        for batch_idx, (b_imgs, b_labels, mask) in enumerate(tqdm(self.train_loader, desc="Pretrain", mininterval=5, miniters=1, file=sys.stderr)):
             # b_imgs is the normal ink-band batch; we also sample flanking batches
             # build: half ink-band (label=1), half flanking (label=0)
             bs = b_imgs.size(0)
@@ -755,6 +846,8 @@ def main():
     parser.add_argument("--hm-dir", type=str, default=None, help="Hard-mining directory")
 
     parser.add_argument("--channel-mixing-prob", type=float, default=None, help="Depth channel permutation probability")
+    parser.add_argument("--noise-prob", type=float, default=None, help="Gaussian noise augmentation probability (default 0.30; set low when signal is faint)")
+    parser.add_argument("--rotation-prob", type=float, default=None, help="90/180/270 rotation augmentation probability")
     parser.add_argument("--pooling", type=str, choices=["avg", "max", "gem"], default=None, help="Pooling mode")
     parser.add_argument("--gem-p", type=float, default=None, help="Initial GeM pooling p")
     parser.add_argument("--conv3-dilation", type=int, default=None, help="Dilation for final conv stage")
@@ -789,6 +882,10 @@ def main():
                         help="back each dataset's binary mask/labels with an on-disk memmap so they pickle as a path, not data; avoids per-worker RAM duplication at the 5-10 fragment scale (scratch dir via env VESUVIUS_MMAP_DIR)")
     parser.add_argument("--ring-negatives", action="store_true", default=False,
                         help="restrict training negatives to a ring around ink labels (~1:1 pos/neg ratio, no unlabeled-ink contamination)")
+    parser.add_argument("--dense-labels", action="store_true", default=False,
+                        help="DENSE per-pixel supervision: emit the (1,T,T) ink-label MAP per tile and train per-pixel masked BCE (switch away from binary tile labels). requires a dense arch, e.g. --arch dense_unet")
+    parser.add_argument("--dense-soft-labels", action="store_true", default=False,
+                        help="use continuous soft ink labels (soft_inklabels/<id>.png = eroded dilated+blurred) as the dense target instead of hard 0/1; calibrated soft edges. requires --dense-labels")
     parser.add_argument("--eval-cooldown", type=int, default=None,
                         help="seconds to sleep after probe/eval epochs to let hardware cool (default 0)")
     parser.add_argument("--ring-label-source", type=str, default=None, choices=["eroded","original","closed"],
@@ -805,6 +902,9 @@ def main():
                         help="alternate between full dataset (even epochs) and ring dataset (odd epochs); hard mining only on ring epochs")
     parser.add_argument("--depth", type=int, default=None,
                         help="number of depth slices per tile (default 8; use 12 for ink band z=28-40)")
+    parser.add_argument("--tile-size", type=int, default=None,
+                        help="in-plane tile size (default 32; use 106 for the 2.4um teacher so a "
+                             "106x106 teacher tile == a 32x32 7.91um tile physically)")
     parser.add_argument("--train-d-start", type=int, default=None,
                         help="start z-index of training depth window")
     parser.add_argument("--train-d-end", type=int, default=None,

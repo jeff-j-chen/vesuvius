@@ -58,8 +58,8 @@ BPP = 2  # uint16 output
 CURL = "curl.exe" if shutil.which("curl.exe") else "curl"
 # default output/scratch roots. on linux (remote server) the scrolls live on the mounted
 # network volume at /workspace; on windows fall back to the old local docs path
-_POSIX_DEFAULT_ZARR = "/workspace/ves_zarrs2"
-_POSIX_DEFAULT_TMP = "/workspace/_ves_tmp"
+_POSIX_DEFAULT_ZARR = "/vesuvius/ves_zarrs2"
+_POSIX_DEFAULT_TMP = "/vesuvius/_ves_tmp"
 _WIN_DEFAULT_ZARR = r"C:\Users\ChenJeff\Documents\ves_zarrs2"
 _WIN_DEFAULT_TMP = r"C:\Users\ChenJeff\Documents\_ves_tmp"
 DEFAULT_ZARR = os.getenv("VESUVIUS_ZARR_PATH",
