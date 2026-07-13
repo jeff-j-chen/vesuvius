@@ -157,6 +157,10 @@ def _apply_cli_overrides(c: Config, args):
         c.data.alternating_ring = True
     if args.eval_cooldown is not None:
         c.tra.eval_cooldown_secs = int(args.eval_cooldown)
+    if getattr(args, 'val_cooldown', None) is not None:
+        c.tra.val_cooldown_secs = int(args.val_cooldown)
+    if getattr(args, 'fig_chunk_cooldown', None) is not None:
+        c.tra.fig_chunk_cooldown_ms = int(args.fig_chunk_cooldown)
     if args.depth is not None:
         c.data.depth = int(args.depth)
     if getattr(args, "tile_size", None) is not None:
@@ -786,6 +790,13 @@ class Trainer:
 
             # run training and validation for the epoch
             train_metrics = self.train_epoch(hard_injector)
+
+            # brief thermal cooldown between train and validation every epoch
+            _val_cool = int(getattr(self.c.tra, 'val_cooldown_secs', 0))
+            if _val_cool > 0:
+                print(f"[COOLDOWN] train->val pause {_val_cool}s...")
+                time.sleep(_val_cool)
+
             val_metrics = self.validate_epoch()
             
             # update learning rate scheduler and save models
@@ -888,6 +899,10 @@ def main():
                         help="use continuous soft ink labels (soft_inklabels/<id>.png = eroded dilated+blurred) as the dense target instead of hard 0/1; calibrated soft edges. requires --dense-labels")
     parser.add_argument("--eval-cooldown", type=int, default=None,
                         help="seconds to sleep after probe/eval epochs to let hardware cool (default 0)")
+    parser.add_argument("--val-cooldown", type=int, default=None,
+                        help="seconds to sleep between training and validation each epoch (thermal relief, default 0)")
+    parser.add_argument("--fig-chunk-cooldown", type=int, default=None,
+                        help="milliseconds to sleep between spatial chunks during eval figure inference (default 0)")
     parser.add_argument("--ring-label-source", type=str, default=None, choices=["eroded","original","closed"],
                         help="which inklabels to use for ring boundary: 'original' (default, safest) or 'eroded'")
     parser.add_argument("--split-axis", type=str, default=None, choices=["x","y"],

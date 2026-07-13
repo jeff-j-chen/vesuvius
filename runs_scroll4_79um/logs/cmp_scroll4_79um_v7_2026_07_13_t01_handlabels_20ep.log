@@ -1,0 +1,33 @@
+C:\Users\ChenJeff\Documents\vesuvius\train.py:242: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = GradScaler()
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', tra_scroll_id=20240304161941, tra_scroll_ids=[20240304161941], vis_scroll_ids=None, scroll2_id=20230709155141, scroll4_id=20231210132040, scroll3_id=20240716140050, test_on_scroll4=False, test_scroll2_only=True, tile_size=32, depth=8, d_start=0, d_end=64, train_d_start=0, train_d_end=64, smooth_sigma=0.0, input_mode='single', pre_band_start=20, pre_band_end=28, post_band_start=40, post_band_end=48, preload_to_ram=False, mask_memmap=True, ring_negatives=True, ring_label_source='eroded', alternating_ring=False, soft_label_prob=0.0, soft_label_value=0.3, split_axis='y', train_split_frac=0.75, crop_x_frac=(0.6, 1.0), crop_y_frac=(0.0, 0.75), dense_labels=True, dense_soft_labels=True)
+dl: DataloaderConfig(batch_size=1024, num_workers=2, data_aug=False, channel_mixing_prob=0.0, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=20, lr=0.0002, weight_decay=0, l1_lambda=0.0, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_scroll4_79um', eval_int=20, test_int=60, probe_int=5, eval_aggregate=True, probe_rois_enabled=False, focal_gamma=0.0, ranking_lambda=0.0, ranking_margin=0.3, ranking_neg_frac=1.0, pretrain_epochs=0, eval_cooldown_secs=120, val_cooldown_secs=45, fig_chunk_cooldown_ms=100)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.0, fc1_drop=0.0, fc2_drop=0.0, pooling='avg', gem_p=3.0, conv3_dilation=1, arch='dense_unet')
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(enabled=False, hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_scroll4_79um_v7_2026_07_13_t01_handlabels_20ep')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_scroll4_79um_v7_2026_07_13_t01_handlabels_20ep
+---------------------
+Creating datasets...
+[soft_labels] loaded soft_inklabels/20240304161941.png (mean=0.0644)
+[info] using cached normalization for segment 20240304161941
+[ring_negatives] source='eroded' tile_radius=2  ink_tiles=42932  ring_tiles=81424  ratio=1.90
+[dense] sampled ink pixel fraction=0.253  pos_weight=2.95
+Data setup done in 37.02s
+Creating model and loss... l1 lambda 0.0... Model parameters (dense_unet): 1,933,265
+ done in 2.28s
+Initializing Tensorboard...
+[soft_labels] loaded soft_inklabels/20240304161941.png (mean=0.0644)
+[info] using cached normalization for segment 20240304161941
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+[dense probe] 6 probe specs: ['Easy', 'Medium', 'Hard', 'Scroll4_Pi', 'Scroll2_Center', 'Scroll3_Center']  (size=512px, snap_unit=32px)
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs_scroll4_79um\cmp_scroll4_79um_v7_2026_07_13_t01_handlabels_20ep_13_09-59-33
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs_scroll4_79um
+
+--- Epoch 1/20 ---
+Training:   0%|          | 0/297 [00:00<?, ?it/s]Training:   0%|          | 1/297 [00:32<2:40:47, 32.59s/it]Training:   2%|▏         | 6/297 [00:38<24:36,  5.08s/it]  Training:   3%|▎         | 8/297 [00:44<21:04,  4.37s/it]Training:   3%|▎         | 10/297 [00:50<18:39,  3.90s/it]Training:   4%|▍         | 12/297 [00:55<16:41,  3.51s/it]Training:   5%|▍         | 14/297 [01:01<15:18,  3.25s/it]Training:   5%|▌         | 16/297 [01:14<20:03,  4.28s/it]Training:   6%|▌         | 18/297 [01:19<17:48,  3.83s/it]Training:   7%|▋         | 20/297 [01:25<16:17,  3.53s/it]Training:   7%|▋         | 22/297 [01:31<15:10,  3.31s/it]Training:   8%|▊         | 24/297 [01:40<16:38,  3.66s/it]Training:   9%|▉         | 28/297 [01:50<14:05,  3.14s/it]Training:  10%|█         | 30/297 [01:55<13:16,  2.98s/it]Training:  11%|█         | 32/297 [02:00<12:39,  2.87s/it]Training:  11%|█▏        | 34/297 [02:05<12:08,  2.77s/it]Training:  12%|█▏        | 36/297 [02:10<11:46,  2.71s/it]Training:  13%|█▎        | 39/297 [02:15<10:00,  2.33s/it]Training:  14%|█▍        | 41/297 [02:20<10:08,  2.38s/it]Training:  14%|█▍        | 43/297 [02:25<10:12,  2.41s/it]Training:  15%|█▌        | 46/297 [02:34<11:07,  2.66s/it]Training:  17%|█▋        | 50/297 [02:43<10:00,  2.43s/it]Training:  18%|█▊        | 54/297 [02:52<09:31,  2.35s/it]Training:  20%|█▉        | 58/297 [03:00<09:00,  2.26s/it]Training:  21%|██        | 62/297 [03:08<08:27,  2.16s/it]Training:  22%|██▏       | 66/297 [03:16<08:07,  2.11s/it]Training:  24%|██▎       | 70/297 [03:25<08:04,  2.13s/it]Training:  25%|██▍       | 74/297 [03:33<07:58,  2.15s/it]Training:  26%|██▋       | 78/297 [03:44<08:21,  2.29s/it]Training:  27%|██▋       | 80/297 [03:49<08:34,  2.37s/it]Training:  28%|██▊       | 83/297 [03:54<07:46,  2.18s/it]

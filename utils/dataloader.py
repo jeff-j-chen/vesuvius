@@ -568,12 +568,8 @@ class DataManager:
     def _load_raw_data(self):
         """loads raw zarr data and metadata"""
         # open the zarr volume in read-only mode
-        vol = zarr.open(
-            os.path.join(
-                self.c.data.zarr_path, f"{self.scroll_id}.zarr"
-            ),
-            mode='r'
-        )
+        zarr_dir = os.path.join(self.c.data.zarr_path, f"{self.scroll_id}.zarr")
+        vol = zarr.open(zarr_dir, mode='r')
 
         # optionally preload the entire volume into RAM so all reads are RAM-speed
         # keep the zarr object as fallback for large-scale training

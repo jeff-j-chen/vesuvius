@@ -436,6 +436,384 @@ class TensorboardVisualizer:
         self.probe_specs = self._build_probe_specs() if self.probe_rois_enabled else []
         self._debug_scroll4_ranges_once()
 
+        # dense probe specs: named ROIs rendered every probe_int epochs.
+        # built once at init; add_dense_probe_figure iterates them all.
+        self._dense_probe_specs = []
+        if getattr(self.c.data, "dense_labels", False):
+            self._dense_probe_specs = self._build_dense_probe_specs()
+
+        # legacy single auto-probe (kept for backward compat with non-dense runs)
+        self._probe_py0 = self._probe_px0 = self._probe_size = None
+
+    def _build_dense_probe_specs(self):
+        """build list of named probe ROI specs for dense runs.
+
+        each entry:
+          tag   : TensorBoard tag suffix and log filename prefix
+          vol   : zarr/array to read from
+          norm  : (mean, std, g_min, g_max) normalisation stats
+          labels: pixel label array (None for transfer scrolls with no GT)
+          mask  : binary papyrus mask
+          y0,x0 : top-left corner of the probe window (tile AND 8-pixel aligned)
+          size  : patch side length in pixels (divisible by 8 for U-Net)
+        """
+        T    = self.c.data.tile_size
+        # snap to tile_size — multiples of T are always multiples of 8 when T=32,
+        # satisfying both the training tile grid alignment AND the U-Net div-by-8 requirement.
+        snap = lambda v: (v // T) * T
+        # probe size: 512 is divisible by both 32 and 8 — no adjustment needed.
+        ps = 512
+        n  = (self.global_mean, self.global_std, self.global_min, self.global_max)
+        specs = []
+
+        # full eroded labels for the training scroll (pixel array, already loaded as float)
+        # dm.labels is cast to uint8 after get_datasets(), so reload from file
+        def _load_eroded(sid):
+            import cv2 as _cv2
+            img = _cv2.imread(f"./eroded_inklabels/{sid}.png", _cv2.IMREAD_GRAYSCALE)
+            return (img / 255.0).astype(np.float32) if img is not None else None
+
+        # named probes on the training scroll (scroll4 w023)
+        SCROLL4_W023 = 20240304161941
+        if int(self.scroll1_id) == SCROLL4_W023:
+            train_labels = _load_eroded(SCROLL4_W023)   # full-res float labels
+            for tag, y, x in [("Easy", 5085, 25596), ("Medium", 4943, 22575), ("Hard", 8966, 21726)]:
+                specs.append({"tag": tag, "vol": self.volume, "norm": n,
+                               "labels": train_labels, "mask": self.mask,
+                               "y0": snap(y), "x0": snap(x), "size": ps})
+        else:
+            # fall back to auto-detected densest window for other training scrolls
+            try:
+                py0, px0, _ = self._find_dense_probe_region(probe_px=ps)
+                train_labels = _load_eroded(int(self.scroll1_id))
+                specs.append({"tag": "Auto", "vol": self.volume, "norm": n,
+                               "labels": train_labels, "mask": self.mask,
+                               "y0": py0, "x0": px0, "size": ps})
+            except Exception as e:
+                print(f"[dense probe] auto-detect failed: {e}")
+
+        # scroll4_pi probe — uses the small scroll4 test segment (20231210132040),
+        # which HAS eroded inklabels. loaded defensively.
+        if self.scroll4_volume is not None:
+            sn = (self.scroll4_global_mean, self.scroll4_global_std,
+                  self.scroll4_global_min, self.scroll4_global_max)
+            scroll4_labels = _load_eroded(int(self.c.data.scroll4_id))
+            _d4, H4, W4 = (int(v) for v in self.scroll4_volume.shape)
+            # pi region: y=7968, x=1952 (already tile-aligned per legacy specs)
+            s4y, s4x = snap(7968), snap(1952)
+            # clamp in case this test scroll is smaller than expected
+            s4y = min(s4y, max(0, H4 - ps))
+            s4x = min(s4x, max(0, W4 - ps))
+            specs.append({"tag": "Scroll4_Pi", "vol": self.scroll4_volume,
+                          "norm": sn, "labels": scroll4_labels, "mask": self.scroll4_mask,
+                          "y0": s4y, "x0": s4x, "size": ps})
+
+        # scroll2 and scroll3: no inklabels — labels=None, no GT panel
+        if self.scroll2_volume is not None:
+            sn = (self.scroll2_global_mean, self.scroll2_global_std,
+                  self.scroll2_global_min, self.scroll2_global_max)
+            _d2, H2, W2 = (int(v) for v in self.scroll2_volume.shape)
+            cy = snap(max(0, (H2 - ps) // 2))
+            cx = snap(max(0, (W2 - ps) // 2))
+            specs.append({"tag": "Scroll2_Center", "vol": self.scroll2_volume,
+                          "norm": sn, "labels": None, "mask": self.scroll2_mask,
+                          "y0": cy, "x0": cx, "size": ps})
+
+        if self.scroll3_volume is not None:
+            sn = (self.scroll3_global_mean, self.scroll3_global_std,
+                  self.scroll3_global_min, self.scroll3_global_max)
+            _d3, H3, W3 = (int(v) for v in self.scroll3_volume.shape)
+            cy = snap(max(0, (H3 - ps) // 2))
+            cx = snap(max(0, (W3 - ps) // 2))
+            specs.append({"tag": "Scroll3_Center", "vol": self.scroll3_volume,
+                          "norm": sn, "labels": None, "mask": self.scroll3_mask,
+                          "y0": cy, "x0": cx, "size": ps})
+
+        tags = [s['tag'] for s in specs]
+        print(f"[dense probe] {len(specs)} probe specs: {tags}  (size={ps}px, snap_unit={T}px)")
+        return specs
+
+    def _find_dense_probe_region(self, probe_px=512):
+        """scan the training region for the densest probe_px x probe_px ink window.
+        returns absolute pixel (py0, px0, probe_px) within the training area."""
+        T = self.c.data.tile_size
+        lab = np.asarray(self.labels)
+
+        # training-region bounds in pixel space
+        if self.split_axis == "y":
+            (tr_lo, tr_hi) = self.train_range
+            (sx0, sx1)     = self.shared_range
+            abs_y0, abs_y1 = tr_lo, tr_hi
+            abs_x0, abs_x1 = sx0, sx1
+        else:
+            (sy0, sy1)     = self.shared_range
+            (tr_lo, tr_hi) = self.train_range
+            abs_y0, abs_y1 = sy0, sy1
+            abs_x0, abs_x1 = tr_lo, tr_hi
+
+        # build tile-level ink count map (vectorised reshape; cheap even for large labels)
+        ht = lab.shape[0] // T
+        wt = lab.shape[1] // T
+        lab_bin = (lab[:ht*T, :wt*T] > 0.5).astype(np.float32)
+        ink_tile = lab_bin.reshape(ht, T, wt, T).sum(axis=(1, 3))  # (ht, wt)
+
+        # tile-index bounds of the training region
+        ty0, ty1 = abs_y0 // T, min(abs_y1 // T, ht)
+        tx0, tx1 = abs_x0 // T, min(abs_x1 // T, wt)
+        probe_tiles = max(1, probe_px // T)
+
+        H_c, W_c = ty1 - ty0, tx1 - tx0
+        if H_c < probe_tiles or W_c < probe_tiles:
+            # training region smaller than the probe window -- use its top-left corner
+            print(f"[dense probe] region ({H_c}x{W_c} tiles) smaller than probe ({probe_tiles}x{probe_tiles}); using top-left")
+            return abs_y0, abs_x0, probe_px
+
+        crop = ink_tile[ty0:ty1, tx0:tx1]
+        cs = np.cumsum(np.cumsum(crop, axis=0), axis=1)
+        cs_pad = np.pad(cs, ((1, 0), (1, 0)))
+
+        # vectorised sliding-window sum over the crop
+        r_max = H_c - probe_tiles + 1
+        c_max = W_c - probe_tiles + 1
+        win = (cs_pad[probe_tiles:probe_tiles+r_max, probe_tiles:probe_tiles+c_max]
+             - cs_pad[0:r_max,                      probe_tiles:probe_tiles+c_max]
+             - cs_pad[probe_tiles:probe_tiles+r_max, 0:c_max]
+             + cs_pad[0:r_max,                      0:c_max])
+        best_r, best_c = np.unravel_index(win.argmax(), win.shape)
+        best_score = float(win[best_r, best_c])
+
+        py0 = (ty0 + int(best_r)) * T
+        px0 = (tx0 + int(best_c)) * T
+        max_ink = probe_tiles * probe_tiles * T * T  # total px in window
+        print(f"[dense probe] best window y[{py0},{py0+probe_px}] x[{px0},{px0+probe_px}] "
+              f"ink_px={int(best_score)}/{max_ink} ({100*best_score/max_ink:.1f}%)")
+        return py0, px0, probe_px
+
+    def add_dense_probe_figure(self, epoch, model):
+        """combined probe ROI figure across all named probes and all depth windows.
+
+        layout (matches historical ProbeROIs style, adapted for dense inference):
+          rows  : one per depth window (no half-step: z_step=depth), + final composite row
+          cols  : two per probe — (pred, pred+inklabel overlay)
+                  scroll2/scroll3 (no GT) still get two columns; the overlay is pred only.
+          probes: Easy | Medium | Hard | Scroll4_Pi | Scroll2_Center | Scroll3_Center
+
+        each cell is a single forward pass on the probe's 512x512 region.
+        no raw scan, no standalone GT column.
+        """
+        if not self._dense_probe_specs:
+            return
+
+        D   = self.c.data.depth
+        zf0 = int(self.c.data.d_start)
+        zf1 = int(self.c.data.d_end)
+        dev = self.c.device
+        model.eval()
+
+        out_dir = os.path.join(os.path.dirname(self.log_path), "dense_figs")
+        os.makedirs(out_dir, exist_ok=True)
+
+        # depth windows: NO half-stepping — step = D so windows don't overlap
+        z_step   = max(1, D)
+        z_starts = list(range(zf0, max(zf0 + 1, zf1 - D + 1), z_step))
+        if not z_starts:
+            z_starts = [zf0]
+        # add a final non-overlapping window if the last one doesn't reach zf1-D
+        if z_starts[-1] + D < zf1:
+            z_starts.append(zf1 - D)
+        n_depths = len(z_starts)
+        n_rows   = n_depths + 1      # depth rows + composite row
+
+        specs   = self._dense_probe_specs
+        n_probes = len(specs)
+        n_cols   = n_probes * 2      # pred + overlay per probe
+
+        # gold overlay RGBA (reused for every probe that has labels)
+        _GOLD = np.array([0.98, 0.85, 0.37, 0.50], dtype=np.float32)
+
+        # ── per-probe inference ─────────────────────────────────────────────
+        # probe_preds[pi] = list of (oh, ow, pred_map) per depth, + composite
+        probe_data = []   # list of dicts per probe
+        for spec in specs:
+            tag      = spec.get("tag", "probe")
+            vol      = spec["vol"]
+            g_mean, g_std, g_min, g_max = spec["norm"]
+            lab_src  = spec.get("labels")
+            mask_src = spec.get("mask")
+            py0 = int(spec["y0"])
+            px0 = int(spec["x0"])
+            ps  = int(spec["size"])
+
+            vol_d = int(vol.shape[0])
+            py1   = min(py0 + ps, int(vol.shape[1]))
+            px1   = min(px0 + ps, int(vol.shape[2]))
+            oh, ow = py1 - py0, px1 - px0
+            if oh < 8 or ow < 8:
+                probe_data.append(None)
+                continue
+
+            ph = (-oh) % 8; pw = (-ow) % 8  # U-Net pad-to-8
+
+            mk = ((np.asarray(mask_src[py0:py1, px0:px1]) > 0.5).astype(np.float32)
+                  if mask_src is not None else np.ones((oh, ow), np.float32))
+            gt = ((np.asarray(lab_src[py0:py1, px0:px1]) > 0.5).astype(np.float32)
+                  if lab_src is not None else None)
+
+            depth_preds = []
+            for z0 in z_starts:
+                z0c = max(0, min(z0, vol_d - D))
+                blk = np.asarray(vol[z0c:z0c+D, py0:py1, px0:px1]).astype(np.float32)
+                if blk.shape[0] != D:
+                    depth_preds.append(np.zeros((oh, ow), np.float32))
+                    continue
+                blk_n = np.clip(((blk - g_mean) / g_std - g_min) / (g_max - g_min + 1e-12), 0, 1)
+                if ph or pw:
+                    blk_n = np.pad(blk_n, ((0, 0), (0, ph), (0, pw)), mode="reflect")
+                bt = torch.from_numpy(blk_n).unsqueeze(0).unsqueeze(0).float().to(dev)
+                try:
+                    with torch.no_grad(), autocast(dev):
+                        p = torch.sigmoid(model(bt))[0, 0, :oh, :ow].float().cpu().numpy()
+                except Exception:
+                    p = np.zeros((oh, ow), np.float32)
+                depth_preds.append(p * mk)
+
+            composite = np.max(np.stack(depth_preds, axis=0), axis=0)
+            probe_data.append({"tag": tag, "oh": oh, "ow": ow,
+                               "mk": mk, "gt": gt,
+                               "depth_preds": depth_preds,
+                               "composite": composite,
+                               "z_starts": z_starts})
+
+        # ── figure layout ───────────────────────────────────────────────────
+        cell_h = 2.4   # inches per row
+        cell_w = 2.4   # inches per column
+        fig_h  = cell_h * n_rows + 0.6
+        fig_w  = cell_w * n_cols + 0.3
+        fig, axes = plt.subplots(n_rows, n_cols,
+                                 figsize=(fig_w, fig_h),
+                                 squeeze=False)
+
+        col_headers = []
+        for sp in specs:
+            t = sp.get("tag", "?")
+            col_headers += [t, f"{t} overlay"]
+
+        for ci, hdr in enumerate(col_headers):
+            axes[0, ci].set_title(hdr, fontsize=6, pad=2)
+
+        for pi, (spec, pd) in enumerate(zip(specs, probe_data)):
+            c_pred    = pi * 2
+            c_overlay = pi * 2 + 1
+
+            for ri in range(n_rows):
+                ax_p = axes[ri, c_pred]
+                ax_o = axes[ri, c_overlay]
+                ax_p.axis("off"); ax_o.axis("off")
+
+                if pd is None:
+                    continue
+
+                if ri < n_depths:
+                    pred = pd["depth_preds"][ri]
+                    z0   = z_starts[ri]
+                    row_label = f"z{z0}-{z0+D}"
+                else:
+                    pred = pd["composite"]
+                    row_label = "composite"
+
+                ax_p.imshow(pred, cmap="magma", vmin=0, vmax=1)
+                ax_p.set_title(row_label, fontsize=5, pad=1)
+
+                # overlay column: pred + gold inklabel if GT exists
+                ax_o.imshow(pred, cmap="magma", vmin=0, vmax=1)
+                if pd["gt"] is not None:
+                    gt_rgba        = np.zeros((*pred.shape, 4), dtype=np.float32)
+                    gt_rgba[..., :] = _GOLD
+                    gt_rgba[..., 3] = pd["gt"] * _GOLD[3]
+                    ax_o.imshow(gt_rgba)
+
+        plt.suptitle(f"Dense probe ROIs — ep{epoch+1}  z_step={D}  {n_depths} depths + composite",
+                     fontsize=8, y=1.002)
+        plt.tight_layout(pad=0.3)
+        self.writer.add_figure("Dense/ProbeROIs_Combined", fig, epoch)
+        try:
+            out_png = os.path.join(out_dir, f"probe_combined_ep{epoch+1:02d}.png")
+            fig.savefig(out_png, dpi=100, bbox_inches="tight")
+            # shrink saved file to half resolution; inference canvas stays full-res
+            import cv2 as _cv2
+            _img = _cv2.imread(out_png)
+            if _img is not None:
+                _h, _w = _img.shape[:2]
+                _cv2.imwrite(out_png, _cv2.resize(_img, (_w//2, _h//2), interpolation=_cv2.INTER_AREA))
+            print(f"[dense probe] combined ep{epoch+1} -> {out_png}")
+        except Exception as e:
+            print(f"[dense probe] save failed: {e}")
+        plt.close(fig)
+
+        # READABILITY METRICS from training-scroll labeled probes only (Easy, Medium, Hard).
+        # Scroll4_Pi is a test segment, Scroll2/Scroll3 have no GT — all excluded.
+        try:
+            T = self.c.data.tile_size
+            _TRAIN_TAGS = {"Easy", "Medium", "Hard"}
+            agg_rm = []
+            for spec, pd in zip(specs, probe_data):
+                if pd is None or pd.get("gt") is None:
+                    continue   # no GT (scroll2, scroll3)
+                if spec.get("tag") not in _TRAIN_TAGS:
+                    continue   # scroll4_pi is test segment, not training corpus
+                py0   = int(spec["y0"]); px0 = int(spec["x0"]); ps = int(spec["size"])
+                tag   = spec.get("tag", "probe")
+                comp  = pd["composite"]  # (oh, ow) pixel-space composite prediction
+                oh, ow = comp.shape
+                mask_src = spec.get("mask")
+                lab_src  = pd["gt"]      # already loaded as float32 binary
+
+                # build tile-level maps for this probe's spatial extent
+                # use full-res label/mask arrays cropped to the probe window
+                mk_full = ((np.asarray(mask_src[py0:py0+oh, px0:px0+ow]) > 0.5)
+                           if mask_src is not None else np.ones((oh, ow), np.float32))
+                lb_tile = np.zeros((oh // T, ow // T), dtype=bool)
+                lf_tile = np.zeros((oh // T, ow // T), dtype=np.float32)
+                vt_tile = np.zeros((oh // T, ow // T), dtype=bool)
+                for ty in range(oh // T):
+                    for tx in range(ow // T):
+                        l_patch = lab_src[ty*T:(ty+1)*T, tx*T:(tx+1)*T]
+                        m_patch = mk_full[ty*T:(ty+1)*T, tx*T:(tx+1)*T]
+                        if m_patch.sum() <= 0:
+                            continue
+                        vt_tile[ty, tx] = True
+                        lb_tile[ty, tx] = bool(np.any(l_patch > 0.5))
+                        lf_tile[ty, tx] = float(np.mean(l_patch > 0.5))
+
+                # center-sample composite into tile resolution
+                tile_ys = np.arange(oh // T) * T + T // 2
+                tile_xs = np.arange(ow // T) * T + T // 2
+                tile_ys = np.clip(tile_ys, 0, oh - 1)
+                tile_xs = np.clip(tile_xs, 0, ow - 1)
+                tp = comp[np.ix_(tile_ys, tile_xs)]
+
+                rm = self._compute_readability_metrics(tp, lb_tile, lf_tile, vt_tile)
+                agg_rm.append(rm)
+
+                # per-probe contrast scalar for quick comparison (training probes only)
+                lc = rm.get("local_contrast", float("nan"))
+                rc = rm.get("readability_composite", float("nan"))
+                if np.isfinite(lc):
+                    self.writer.add_scalar(f"R_M/Probe/{tag}/LocalContrast", lc, epoch)
+                if np.isfinite(rc):
+                    self.writer.add_scalar(f"R_M/Probe/{tag}/ReadabilityComposite", rc, epoch)
+
+            if agg_rm:
+                merged = self._aggregate_metric_dicts(agg_rm)
+                self._log_readability_metrics(epoch, merged, [], [])
+                print(f"[dense probe] readability logged ep{epoch+1}  "
+                      f"composite={merged.get('readability_composite', float('nan')):.4f}")
+        except Exception as _rm_err:
+            import traceback
+            print(f"[dense probe] readability metrics failed: {_rm_err}")
+            traceback.print_exc()
+
+
     def _get_or_compute_norm(self, vol, mask, seg_id):
         """compute or load cached normalization stats for a volume using a mask"""
         cache_path = "./norm_cache.json"
@@ -1078,6 +1456,17 @@ class TensorboardVisualizer:
                 print(f"[ERROR] add_probe_region_figures failed at epoch {epoch}: {e}")
                 import traceback; traceback.print_exc()
 
+        # dense per-pixel probes: fire every probe_int epochs for all named probe specs.
+        if (self.mode == 'train'
+                and getattr(self.c.data, "dense_labels", False)
+                and self._dense_probe_specs
+                and (epoch + 1) % self.probe_log_interval == 0):
+            try:
+                self.add_dense_probe_figure(epoch, model)
+            except Exception as e:
+                print(f"[ERROR] add_dense_probe_figure failed at epoch {epoch}: {e}")
+                import traceback; traceback.print_exc()
+
         self.writer.flush()
 
     def log_confusion_matrix(self, train_metrics, val_metrics, epoch):
@@ -1281,11 +1670,20 @@ class TensorboardVisualizer:
                 a = np.pad(a, ((0, 0), (0, ph), (0, pw)), mode="reflect")
             return a, h, w
 
-        ys = list(range(y0, y1, CH))
-        xs = list(range(x0, x1, CH))
+        # overlapping tiled inference: chunks overlap by CH//4 on each side and are blended
+        # with a 2D Hann window. this eliminates the grid artifact caused by the U-Net's
+        # receptive field context differing at non-overlapping chunk boundaries.
+        _OVERLAP = max(CH // 4, 8)
+        _stride  = max(CH - _OVERLAP, CH // 2)
+        ys = list(range(y0, y1, _stride))
+        xs = list(range(x0, x1, _stride))
 
         def _predict_region_at_depth(z0):
-            canvas = np.zeros((Hc, Wc), np.float32)
+            accum  = np.zeros((Hc, Wc), np.float32)
+            weight = np.zeros((Hc, Wc), np.float32)
+            import cv2 as _cv2
+            import time as _time
+            _chunk_sleep_s = int(getattr(self.c.tra, 'fig_chunk_cooldown_ms', 0)) / 1000.0
             with torch.no_grad():
                 for yy in ys:
                     ch = min(CH, y1 - yy)
@@ -1299,23 +1697,34 @@ class TensorboardVisualizer:
                         bt = torch.from_numpy(blk).unsqueeze(0).unsqueeze(0).float().to(dev)
                         with autocast(dev):
                             p = torch.sigmoid(model(bt))[0, 0, :oh, :ow].float().cpu().numpy()
-                        # downsample this chunk's prediction into the canvas
-                        cyd, cxd = (yy - y0) // DS, (xx - x0) // DS
-                        chd, cwd = oh // DS, ow // DS
+                        if _chunk_sleep_s > 0:
+                            _time.sleep(_chunk_sleep_s)
+                        # 2D Hann taper — N+2 trick avoids exact-zero endpoints
+                        wy = np.hanning(oh + 2)[1:-1].astype(np.float32).reshape(-1, 1)
+                        wx = np.hanning(ow + 2)[1:-1].astype(np.float32).reshape(1, -1)
+                        w2d = (wy * wx)
+                        # downsample into canvas with weighted accumulation
+                        cyd = (yy - y0) // DS
+                        cxd = (xx - x0) // DS
+                        chd = oh // DS
+                        cwd = ow // DS
                         if chd < 1 or cwd < 1:
                             continue
-                        import cv2 as _cv
-                        pd = _cv.resize(p, (cwd, chd), interpolation=_cv.INTER_AREA)
-                        canvas[cyd:cyd + chd, cxd:cxd + cwd] = pd
+                        pd = _cv2.resize(p,   (cwd, chd), interpolation=_cv2.INTER_AREA)
+                        wd = _cv2.resize(w2d, (cwd, chd), interpolation=_cv2.INTER_AREA)
+                        ey = min(cyd + chd, Hc)
+                        ex = min(cxd + cwd, Wc)
+                        accum [cyd:ey, cxd:ex] += (pd * wd)[:ey - cyd, :ex - cxd]
+                        weight[cyd:ey, cxd:ex] += wd       [:ey - cyd, :ex - cxd]
+            with np.errstate(invalid='ignore'):
+                canvas = np.where(weight > 1e-6, accum / weight, 0.0)
             return canvas
 
-        # downsampled mask, gt, raw over the whole region
+        # downsampled mask and GT (raw scan not displayed; removed to reduce memory + clutter)
         import cv2 as _cv
         mask_ds = _cv.resize((np.asarray(mk[y0:y1, x0:x1]) > 0).astype(np.float32), (Wc, Hc), interpolation=_cv.INTER_AREA)
         mask_ds = (mask_ds > 0.5).astype(np.float32)
         gt_ds = _cv.resize((np.asarray(lab[y0:y1, x0:x1]) > 0.5).astype(np.float32), (Wc, Hc), interpolation=_cv.INTER_AREA)
-        raw_full = np.asarray(vol[zf0:zf1, y0:y1, x0:x1]).astype(np.float32).mean(0)
-        raw_ds = _cv.resize(raw_full, (Wc, Hc), interpolation=_cv.INTER_AREA)
 
         preds = [(z0, _predict_region_at_depth(z0) * mask_ds) for z0 in z_starts]
         composite = np.max(np.stack([p for _, p in preds], axis=0), axis=0) * mask_ds
@@ -1335,34 +1744,86 @@ class TensorboardVisualizer:
             auc = float("nan")
         self.writer.add_scalar("Dense/Valid_PixelAUC", auc, epoch)
 
+        # READABILITY METRICS: downsample composite to tile resolution and reuse the
+        # standard readability pipeline so R_M/* scalars appear for dense runs too.
+        # we tile-max-pool the pixel-space composite: each tile's score = max prediction
+        # over its T×T px region (mapped through DS). center-sampling from the DS canvas
+        # is equivalent and avoids a second resize.
+        try:
+            T = self.c.data.tile_size
+            lab_full  = np.asarray(self.labels)
+            mask_full = np.asarray(self.mask)
+            # compute tile-level label maps over the full eval region (train+valid)
+            lb, lf, vt = self._compute_tile_maps(lab_full, mask_full, (y0, y1), (x0, x1))
+            h_tiles, w_tiles = lb.shape
+            # center-sample the DS-downsampled composite into tile resolution
+            tile_ys = np.arange(h_tiles) * T // DS + (T // DS // 2)
+            tile_xs = np.arange(w_tiles) * T // DS + (T // DS // 2)
+            tile_ys = np.clip(tile_ys, 0, Hc - 1)
+            tile_xs = np.clip(tile_xs, 0, Wc - 1)
+            tile_pred = composite[np.ix_(tile_ys, tile_xs)]  # (h_tiles, w_tiles)
+            rm = self._compute_readability_metrics(tile_pred, lb, lf, vt)
+            self._log_readability_metrics(epoch, rm, {}, [])
+        except Exception as _rm_err:
+            print(f"[dense eval] readability metrics failed: {_rm_err}")
+
         def _mark_split(ax):
             if split_is_y:
                 ax.axhline(split_ds, color="cyan", lw=1.0, ls="--")
             else:
                 ax.axvline(split_ds, color="cyan", lw=1.0, ls="--")
 
-        n_rows = 2 + len(preds) + 1
-        fig, ax = plt.subplots(n_rows, 1, figsize=(min(18, Wc / 150), min(48, n_rows * Hc / 150)))
-        ax[0].imshow(raw_ds, cmap="gray")
-        ax[0].set_title(f"scan depth-mean z{zf0}-{zf1} — FULL region ep{epoch+1} "
-                        f"(train z{self.c.data.train_d_start}-{self.c.data.train_d_end}; "
-                        f"cyan=train/valid split; VALID composite auc={auc:.3f})")
-        _mark_split(ax[0])
-        for i, (z0, p) in enumerate(preds):
-            ax[1 + i].imshow(p, cmap="magma", vmin=0, vmax=1); _mark_split(ax[1 + i])
-            ax[1 + i].set_title(f"pred depth block z{z0}-{z0 + D}")
-        ax[1 + len(preds)].imshow(composite, cmap="magma", vmin=0, vmax=1); _mark_split(ax[1 + len(preds)])
-        ax[1 + len(preds)].set_title("depth-MAX composite (best-depth response per pixel)")
-        ax[-1].imshow(gt_ds, cmap="magma", vmin=0, vmax=1); _mark_split(ax[-1])
-        ax[-1].set_title("ground truth (eroded)")
-        for a_ in ax: a_.axis("off")
+        # 2-column layout: left = prediction, right = prediction + GT label overlay (gold)
+        # no raw scan, no standalone GT row — refer to attached reference image
+        n_panels = len(preds) + 1   # one row per depth block + composite
+        gt_ov = np.zeros((Hc, Wc, 4), dtype=np.float32)   # gold RGBA overlay
+        gt_ov[..., 0] = 0.98
+        gt_ov[..., 1] = 0.85
+        gt_ov[..., 2] = 0.37
+        gt_ov[..., 3] = np.clip(gt_ds, 0.0, 1.0) * 0.50
+
+        panel_h = max(3.0, min(8.0, Hc / 250))
+        fig_w   = min(22, 2.0 * Wc / 150)
+        fig, axes = plt.subplots(n_panels, 2,
+                                 figsize=(fig_w, panel_h * n_panels),
+                                 squeeze=False)
+
+        for i, (z0_b, p) in enumerate(preds):
+            axes[i, 0].imshow(p, cmap="magma", vmin=0, vmax=1)
+            axes[i, 0].set_title(f"pred z{z0_b}-{z0_b + D}", fontsize=7)
+            _mark_split(axes[i, 0])
+            axes[i, 1].imshow(p, cmap="magma", vmin=0, vmax=1)
+            axes[i, 1].imshow(gt_ov)                             # GT overlay
+            axes[i, 1].set_title(f"pred z{z0_b}-{z0_b + D}  + GT", fontsize=7)
+            _mark_split(axes[i, 1])
+
+        axes[-1, 0].imshow(composite, cmap="magma", vmin=0, vmax=1)
+        axes[-1, 0].set_title("depth-MAX composite", fontsize=7)
+        _mark_split(axes[-1, 0])
+        axes[-1, 1].imshow(composite, cmap="magma", vmin=0, vmax=1)
+        axes[-1, 1].imshow(gt_ov)
+        axes[-1, 1].set_title(f"composite  + GT   VALID_auc={auc:.3f}", fontsize=7)
+        _mark_split(axes[-1, 1])
+
+        for row in axes:
+            for a_ in row:
+                a_.axis("off")
+        plt.suptitle(f"ep{epoch+1}  y[{y0},{y1}] x[{x0},{x1}]  "
+                     f"train z{self.c.data.train_d_start}-{self.c.data.train_d_end}  "
+                     f"cyan=train/valid boundary", fontsize=8)
         plt.tight_layout()
         self.writer.add_figure("Dense/FullRegion_Prediction", fig, epoch)
         try:
             out_dir = os.path.join(os.path.dirname(self.log_path), "dense_figs")
             os.makedirs(out_dir, exist_ok=True)
             out_png = os.path.join(out_dir, f"dense_eval_ep{epoch+1:02d}.png")
-            fig.savefig(out_png, dpi=120)
+            fig.savefig(out_png, dpi=100)
+            # shrink saved file to half resolution; inference canvas stays full-res
+            import cv2 as _cv2
+            _img = _cv2.imread(out_png)
+            if _img is not None:
+                _h, _w = _img.shape[:2]
+                _cv2.imwrite(out_png, _cv2.resize(_img, (_w//2, _h//2), interpolation=_cv2.INTER_AREA))
             print(f"[dense eval] ep{epoch+1} FULL region y[{y0},{y1}] x[{x0},{x1}] "
                   f"canvas={Hc}x{Wc} DS={DS} depth-blocks={[z for z,_ in preds]} "
                   f"VALID_auc={auc:.4f} -> {out_png}")
@@ -2109,42 +2570,48 @@ class TensorboardVisualizer:
         for idx, value in enumerate(good_values):
             axes[0].annotate(f"{value:.2f}", (idx, value), textcoords="offset points", xytext=(0, 5), ha="center", fontsize=7, color="red")
 
-        # right: per-depth annotated heatmap
+        # right: per-depth annotated heatmap (skipped when no per-depth data provided)
         raw_matrix = np.array([
             [float(metric.get(key, np.nan)) for key, _ in metric_keys]
             for metric in per_depth_metrics
         ], dtype=np.float32)
 
-        norm_matrix = np.zeros_like(raw_matrix)
-        for col in range(raw_matrix.shape[1]):
-            col_vals = raw_matrix[:, col]
-            finite_mask = np.isfinite(col_vals)
-            if not np.any(finite_mask):
-                continue
-            vmin = float(np.min(col_vals[finite_mask]))
-            vmax = float(np.max(col_vals[finite_mask]))
-            if abs(vmax - vmin) < 1e-12:
-                norm_matrix[finite_mask, col] = 0.5
-            else:
-                norm_matrix[finite_mask, col] = (col_vals[finite_mask] - vmin) / (vmax - vmin)
+        if raw_matrix.ndim < 2 or raw_matrix.shape[0] == 0:
+            # no per-depth data — leave the right panel blank
+            axes[1].axis("off")
+            axes[1].text(0.5, 0.5, "no per-depth data", ha="center", va="center",
+                         transform=axes[1].transAxes, fontsize=9, color="gray")
+        else:
+            norm_matrix = np.zeros_like(raw_matrix)
+            for col in range(raw_matrix.shape[1]):
+                col_vals = raw_matrix[:, col]
+                finite_mask = np.isfinite(col_vals)
+                if not np.any(finite_mask):
+                    continue
+                vmin = float(np.min(col_vals[finite_mask]))
+                vmax = float(np.max(col_vals[finite_mask]))
+                if abs(vmax - vmin) < 1e-12:
+                    norm_matrix[finite_mask, col] = 0.5
+                else:
+                    norm_matrix[finite_mask, col] = (col_vals[finite_mask] - vmin) / (vmax - vmin)
 
-        annot = np.empty(raw_matrix.shape, dtype=object)
-        for yi in range(raw_matrix.shape[0]):
-            for xi in range(raw_matrix.shape[1]):
-                annot[yi, xi] = "nan" if not np.isfinite(raw_matrix[yi, xi]) else f"{raw_matrix[yi, xi]:.3f}"
+            annot = np.empty(raw_matrix.shape, dtype=object)
+            for yi in range(raw_matrix.shape[0]):
+                for xi in range(raw_matrix.shape[1]):
+                    annot[yi, xi] = "nan" if not np.isfinite(raw_matrix[yi, xi]) else f"{raw_matrix[yi, xi]:.3f}"
 
-        sns.heatmap(
-            norm_matrix,
-            annot=annot,
-            fmt="",
-            cmap="viridis",
-            xticklabels=[label for _, label in metric_keys],
-            yticklabels=depth_labels,
-            ax=axes[1],
-            cbar=False,
-        )
-        axes[1].set_title("per-depth readability summary\ncolumn-normalized colors with raw annotations")
-        axes[1].tick_params(axis="x", rotation=35)
+            sns.heatmap(
+                norm_matrix,
+                annot=annot,
+                fmt="",
+                cmap="viridis",
+                xticklabels=[label for _, label in metric_keys],
+                yticklabels=depth_labels,
+                ax=axes[1],
+                cbar=False,
+            )
+            axes[1].set_title("per-depth readability summary\ncolumn-normalized colors with raw annotations")
+            axes[1].tick_params(axis="x", rotation=35)
 
         plt.tight_layout()
         return fig

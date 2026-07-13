@@ -150,6 +150,8 @@ class TrainingConfig:
     ranking_neg_frac: float = 1.0  # partial-AUC: fraction of hardest (top-scoring) negatives to rank against; 1.0=all pairs (full AUC), <1.0 focuses gradient on the low-FPR region
     pretrain_epochs: int = 0     # epochs of band-identity pretraining before BCE fine-tuning
     eval_cooldown_secs: int = 0   # sleep this many seconds after probe/eval epochs to let hardware cool
+    val_cooldown_secs: int = 0    # sleep between train and validation each epoch (thermal relief)
+    fig_chunk_cooldown_ms: int = 0  # sleep (ms) between spatial chunks during figure inference
 
 @dataclass
 class FinetuneConfig:
