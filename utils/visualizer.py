@@ -7,6 +7,8 @@ from collections import defaultdict
 import json
 import re
 
+# raise OpenCV decode pixel cap before cv2 import (native 2.4 masks/labels ~1.3 Gpx)
+os.environ.setdefault("CV_IO_MAX_IMAGE_PIXELS", str(2**34))
 import cv2
 import numpy as np
 import torch
@@ -25,7 +27,7 @@ import scipy.ndimage as ndimage
 from scipy import stats as scipy_stats
 
 from .config import Config
-from .dataloader import DataManager
+from .dataloader import DataManager, imread_gray
 from .training_utils import calculate_metrics
 
 # Pillow>=10 removed Image.ANTIALIAS, but some torch/tensorboard paths still
@@ -469,8 +471,7 @@ class TensorboardVisualizer:
         # full eroded labels for the training scroll (pixel array, already loaded as float)
         # dm.labels is cast to uint8 after get_datasets(), so reload from file
         def _load_eroded(sid):
-            import cv2 as _cv2
-            img = _cv2.imread(f"./eroded_inklabels/{sid}.png", _cv2.IMREAD_GRAYSCALE)
+            img = imread_gray(f"./eroded_inklabels/{sid}.png")
             return (img / 255.0).astype(np.float32) if img is not None else None
 
         # named probes on the training scroll (scroll4 w023)
@@ -924,7 +925,7 @@ class TensorboardVisualizer:
         D, H, W = map(int, vol.shape)
 
         mask_path = f"./masks/{sid}.png"
-        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) / 255.0
+        mask = imread_gray(mask_path) / 255.0
 
         # y_range = (max(0, H - max(0, H - 4200)), H)
         y_range = (0, H)
@@ -946,7 +947,7 @@ class TensorboardVisualizer:
         D, H, W = map(int, vol.shape)
 
         mask_path = f"./masks/{sid}.png"
-        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) / 255.0
+        mask = imread_gray(mask_path) / 255.0
 
         y_range = (6500 if H > 6500 else 0, H)
         x_range = (0, min(5000, W))
@@ -969,7 +970,7 @@ class TensorboardVisualizer:
             raise RuntimeError(f"could not open zarr at {zarr_path}: {e}")
 
         mask_path = f"./masks/{sid}.png"
-        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) / 255.0
+        mask = imread_gray(mask_path) / 255.0
 
         # full fragment extent (was a fixed 2048x1024 crop at x=3080,y=748)
         D, H, W = map(int, vol.shape)
@@ -991,7 +992,7 @@ class TensorboardVisualizer:
         vol = zarr.open(zarr_path, mode='r')
 
         mask_path = f"./masks/{sid}.png"
-        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        mask = imread_gray(mask_path)
         if mask is None:
             raise FileNotFoundError(f"scroll3 mask not found at {mask_path}")
         mask = mask / 255.0
@@ -1096,7 +1097,7 @@ class TensorboardVisualizer:
     def _load_segment_labels(self, seg_id):
         """load eroded labels for a segment"""
         path = f"./eroded_inklabels/{seg_id}.png"
-        labels = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        labels = imread_gray(path)
         if labels is None:
             raise RuntimeError(f"could not read labels at {path}")
         return labels / 255.0
@@ -1104,7 +1105,7 @@ class TensorboardVisualizer:
     def _load_segment_mask(self, seg_id):
         """load mask for a segment"""
         path = f"./masks/{seg_id}.png"
-        mask = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        mask = imread_gray(path)
         if mask is None:
             raise RuntimeError(f"could not read mask at {path}")
         return mask / 255.0
@@ -2895,7 +2896,7 @@ class TensorboardVisualizer:
         if not os.path.exists(label_path):
             return None
 
-        label_gray = cv2.imread(label_path, cv2.IMREAD_GRAYSCALE)
+        label_gray = imread_gray(label_path)
         if label_gray is None:
             return None
 

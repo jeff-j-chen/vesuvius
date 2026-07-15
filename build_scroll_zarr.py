@@ -44,6 +44,7 @@ AFTER BUILDING (big frames): precompute normalization to avoid the slow in-pipel
 from __future__ import annotations
 import argparse
 import os
+import sys
 import shutil
 import struct
 import subprocess
@@ -259,7 +260,8 @@ S3_BUCKET = "vesuvius-challenge-open-data"
 
 
 def _aws(*args):
-    subprocess.run(["aws", "s3"] + list(args) + ["--no-sign-request"], check=True)
+    # call awscli via this venv's python (no aws.exe on PATH here); public bucket
+    subprocess.run([sys.executable, "-m", "awscli", "s3"] + list(args) + ["--no-sign-request"], check=True)
 
 
 def _download_chunks(vol_l0, y0, y1, x0, x1, cache_dir, chunk, src_z):
@@ -286,8 +288,14 @@ def _download_chunks(vol_l0, y0, y1, x0, x1, cache_dir, chunk, src_z):
 
 def build_s3patch(seg, vol_subpath, ink_key, out_id, zarr_path, tmp_dir,
                   y0, y1, x0, x1, src_z=109, chunk=128, ink_frame=None,
-                  close_size=3, min_component=8, erosion_size=3, iterations=12):
-    """assemble a bbox from an S3 surface-volume zarr, and (if ink_key given) bake labels."""
+                  close_size=3, min_component=8, erosion_size=3, iterations=12,
+                  depth_out=None, purge_chunks=False):
+    """assemble a bbox from an S3 surface-volume zarr, and (if ink_key given) bake labels.
+
+    depth_out: output zarr depth layers. None -> src_z (keep NATIVE depth, no z-resample).
+    purge_chunks: delete each y-chunk-row's cache files right after it is consumed, so the
+        on-disk peak stays ~= the output zarr size instead of chunks+zarr simultaneously.
+    """
     os.makedirs(tmp_dir, exist_ok=True)
     cache_dir = os.path.join(tmp_dir, f"{out_id}_chunks")
     os.makedirs(cache_dir, exist_ok=True)
@@ -295,12 +303,13 @@ def build_s3patch(seg, vol_subpath, ink_key, out_id, zarr_path, tmp_dir,
     out_zarr = os.path.join(zarr_path, f"{out_id}.zarr")
     H, W = y1 - y0, x1 - x0
     chunk_bytes = src_z * chunk * chunk
-    print(f"[s3patch] y[{y0}-{y1}] x[{x0}-{x1}] H={H} W={W} -> {out_zarr}", flush=True)
+    z_out = int(depth_out) if depth_out else int(src_z)   # native depth by default
+    print(f"[s3patch] y[{y0}-{y1}] x[{x0}-{x1}] H={H} W={W} depth_out={z_out} -> {out_zarr}", flush=True)
 
     _download_chunks(vol_l0, y0, y1, x0, x1, cache_dir, chunk, src_z)
 
-    Wmat = _resample_weights(src_z, DEPTH_OUT)
-    store = zarr.open(out_zarr, mode="w", shape=(DEPTH_OUT, H, W),
+    Wmat = _resample_weights(src_z, z_out)
+    store = zarr.open(out_zarr, mode="w", shape=(z_out, H, W),
                       chunks=(8, 32, 32), dtype="<u2", compressor=None, zarr_format=2)
     mask = np.zeros((H, W), dtype=np.uint8)
     yc0, yc1 = y0 // chunk, (y1 - 1) // chunk
@@ -320,11 +329,16 @@ def build_s3patch(seg, vol_subpath, ink_key, out_id, zarr_path, tmp_dir,
                 raise ValueError(f"bad chunk {yc}/{xc}: {raw.size} != {chunk_bytes}")
             ck = raw.reshape(src_z, chunk, chunk)
             strip[:, ys - gy:ye - gy, xs - x0:xe - x0] = ck[:, ys - gy:ye - gy, xs - gx:xe - gx]
-        res = (Wmat @ strip.astype(np.float32).reshape(src_z, -1)).reshape(DEPTH_OUT, ye - ys, W)
+        res = (Wmat @ strip.astype(np.float32).reshape(src_z, -1)).reshape(z_out, ye - ys, W)
         np.clip(res, 0, 65535, out=res)
         store[:, ys - y0:ye - y0, :] = res.round().astype(np.uint16)
         mask[ys - y0:ye - y0, :] = (strip.max(axis=0) > 0).astype(np.uint8) * 255
-    print(f"[zarr] wrote {out_zarr} shape ({DEPTH_OUT},{H},{W})", flush=True)
+        if purge_chunks:
+            # free this row's raw chunks now that it's baked into the zarr — keeps disk peak
+            # near the zarr size instead of chunks+zarr at once.
+            import shutil as _sh
+            _sh.rmtree(os.path.join(cache_dir, str(yc)), ignore_errors=True)
+    print(f"[zarr] wrote {out_zarr} shape ({z_out},{H},{W})", flush=True)
 
     os.makedirs("masks", exist_ok=True)
     cv2.imwrite(f"masks/{out_id}.png", mask)
@@ -429,6 +443,10 @@ def main():
     ps.add_argument("--x1", type=int, required=True)
     ps.add_argument("--src-z", type=int, default=109)
     ps.add_argument("--chunk", type=int, default=128)
+    ps.add_argument("--depth-out", type=int, default=None,
+                    help="output zarr depth layers; omit to keep NATIVE src-z depth (no z-resample)")
+    ps.add_argument("--purge-chunks", action="store_true",
+                    help="delete each chunk-row after baking it into the zarr (caps disk peak)")
 
     pp = sub.add_parser("preset", help="run a named preset")
     pp.add_argument("name", choices=list(PRESETS))
@@ -441,7 +459,8 @@ def main():
     elif args.cmd == "s3patch":
         build_s3patch(args.seg, args.vol_subpath, args.ink_key, args.out_id,
                       args.zarr_path, args.tmp_dir, args.y0, args.y1, args.x0, args.x1,
-                      src_z=args.src_z, chunk=args.chunk)
+                      src_z=args.src_z, chunk=args.chunk,
+                      depth_out=args.depth_out, purge_chunks=args.purge_chunks)
     elif args.cmd == "preset":
         run_preset(args.name, args.zarr_path, args.tmp_dir, args.workers)
 

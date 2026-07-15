@@ -16,6 +16,9 @@ visualizer/dataloader expect, so training then SKIPS the slow loop entirely.
 import argparse
 import json
 import os
+# raise OpenCV's decode pixel cap BEFORE importing cv2 — the native 2.4 masks/labels are
+# ~1.3 Gpx (32512x41344), well over the default ~1.07 Gpx guard.
+os.environ["CV_IO_MAX_IMAGE_PIXELS"] = str(2**34)
 import numpy as np
 import zarr
 import cv2
@@ -38,9 +41,19 @@ def main():
     D, H, W = map(int, vol.shape)
     zc = int(vol.chunks[0])  # chunk depth (8) -> read whole z-bands so chunks are hit once
 
-    mask = cv2.imread(f"./masks/{sid}.png", cv2.IMREAD_GRAYSCALE)
+    # cv2.imread enforces a ~1.07 Gpx cap that these native-2.4 masks (~1.3 Gpx) exceed and
+    # the CV_IO_MAX_IMAGE_PIXELS env var is not honored by this build; fall back to PIL.
+    p = f"./masks/{sid}.png"
+    try:
+        mask = cv2.imread(p, cv2.IMREAD_GRAYSCALE)
+    except cv2.error:
+        mask = None
     if mask is None:
-        raise FileNotFoundError(f"mask not found: ./masks/{sid}.png")
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        if not os.path.exists(p):
+            raise FileNotFoundError(f"mask not found: {p}")
+        mask = np.array(Image.open(p).convert("L"))
     mbin = mask > 0
     print(f"[norm] {sid} vol=({D},{H},{W}) chunkz={zc} mask_valid={float(mbin.mean()):.3f}", flush=True)
 

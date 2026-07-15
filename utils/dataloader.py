@@ -17,6 +17,23 @@ from tqdm import tqdm
 UNIFIED_CACHE_PATH = "./norm_cache.json"
 
 
+def imread_gray(path):
+    """grayscale PNG reader that survives huge (>1 Gpx) images. cv2.imread enforces a
+    ~1.07 Gpx cap (and this build ignores CV_IO_MAX_IMAGE_PIXELS), raising on native 2.4um
+    masks/labels (~1.3 Gpx). fall back to PIL, which we uncap. returns uint8 ndarray or None."""
+    if not os.path.exists(path):
+        return None
+    try:
+        img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        if img is not None:
+            return img
+    except cv2.error:
+        pass
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    return np.array(Image.open(path).convert("L"))
+
+
 # ---- memmap scratch backing for mask/labels --------------------------------
 # at the 5-10 fragment scale the per-scroll uint8 mask/labels (hundreds of MB
 # each for the big scroll) get pickled to every spawned DataLoader worker on
@@ -230,7 +247,19 @@ class InkVolumeDataset(IterableDataset):
         
         # pre-calculate all valid block coordinates
         self.block_coords = self._gen_tile_coords()
-        self.samples_per_epoch = len(self.block_coords)
+        # optional per-epoch tile cap: on very large volumes (native 2.4um) a full pass
+        # is prohibitively slow. when set (and this is the shuffled TRAIN set), each epoch
+        # draws a fresh random subset of this many coords, bounding epoch wall-time without
+        # changing per-step behavior or the depth window. validation stays full.
+        self._max_samples = getattr(self.c.data, "max_samples_per_epoch", None)
+        if self._max_samples is None:
+            _env_cap = os.getenv("VESUVIUS_MAX_SAMPLES_PER_EPOCH")
+            if _env_cap:
+                self._max_samples = int(_env_cap)
+        if self.shuffle and self._max_samples is not None:
+            self.samples_per_epoch = min(len(self.block_coords), int(self._max_samples))
+        else:
+            self.samples_per_epoch = len(self.block_coords)
 
     @property
     def mask(self):
@@ -433,6 +462,9 @@ class InkVolumeDataset(IterableDataset):
         shuffled_coords = self.block_coords.copy()
         if self.shuffle:
             np.random.shuffle(shuffled_coords)
+            # cap tiles per epoch (fresh random subset each epoch) to bound wall-time
+            if self._max_samples is not None and len(shuffled_coords) > int(self._max_samples):
+                shuffled_coords = shuffled_coords[:int(self._max_samples)]
             
         # handle multi-worker data loading
         worker_info = get_worker_info()
@@ -593,15 +625,9 @@ class DataManager:
                     # vol stays as the zarr object; workers will lazy-open their own handles
         
         # load labels and mask, and normalize to [0, 1]
-        labels = cv2.imread(
-            f"./eroded_inklabels/{self.scroll_id}.png",
-            cv2.IMREAD_GRAYSCALE
-        )
+        labels = imread_gray(f"./eroded_inklabels/{self.scroll_id}.png")
 
-        mask = cv2.imread(
-            f"./masks/{self.scroll_id}.png", 
-            cv2.IMREAD_GRAYSCALE
-        )
+        mask = imread_gray(f"./masks/{self.scroll_id}.png")
 
         if labels is None:
             raise FileNotFoundError(f"labels not found for scroll {self.scroll_id}")
@@ -616,7 +642,7 @@ class DataManager:
         # only the dense per-pixel TARGET uses the soft map. None if the file is absent.
         self.soft_labels = None
         if getattr(self.c.data, "dense_soft_labels", False):
-            soft = cv2.imread(f"./soft_inklabels/{self.scroll_id}.png", cv2.IMREAD_GRAYSCALE)
+            soft = imread_gray(f"./soft_inklabels/{self.scroll_id}.png")
             if soft is None:
                 print(f"[soft_labels] soft_inklabels/{self.scroll_id}.png not found — "
                       f"dense_soft_labels requested but falling back to hard labels")
@@ -779,7 +805,7 @@ class DataManager:
         ring_source = getattr(self.c.data, 'ring_label_source', 'original')
         if ring_source in ('original', 'closed'):
             orig_path = f"./inklabels/{self.scroll_id}.png"
-            orig_img = cv2.imread(orig_path, cv2.IMREAD_GRAYSCALE)
+            orig_img = imread_gray(orig_path)
             if orig_img is not None:
                 orig_img = (orig_img / 255.0)[:h, :w]
                 ring_labels = orig_img

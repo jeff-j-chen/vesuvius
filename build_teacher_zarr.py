@@ -24,6 +24,7 @@ note: NOTHING here downsamples the 2.4 in-plane data — the teacher grid is ~1:
 from __future__ import annotations
 import argparse
 import os
+import sys
 import subprocess
 import numpy as np
 import cv2
@@ -40,7 +41,10 @@ CHUNK = 128
 
 
 def _aws(*args):
-    subprocess.run(["aws", "s3"] + list(args) + ["--no-sign-request"], check=True)
+    # invoke the awscli that's installed in THIS venv. a bare "aws" needs aws.exe on PATH,
+    # which isn't present here (pip installs a .py shim), so call it as a python module using
+    # the SAME interpreter running this script. --no-sign-request: public open-data bucket.
+    subprocess.run([sys.executable, "-m", "awscli", "s3"] + list(args) + ["--no-sign-request"], check=True)
 
 
 def fit_warp(src_dots, dst_dots, ww=3600):
@@ -194,6 +198,9 @@ def build(args):
     # grid (plenty of RAM; ~2GB per map). exact because the coarse grid is uniform.
     MAPX = cv2.resize(su, (Wt, Ht), interpolation=cv2.INTER_LINEAR)
     MAPY = cv2.resize(sv, (Wt, Ht), interpolation=cv2.INTER_LINEAR)
+    # depth output layers. when == SRC_Z (109) the resample matrix is the identity, so the
+    # NATIVE 2.4 depth is preserved 1:1 (no z-downsampling). set <109 to resample.
+    DEPTH_OUT = int(getattr(args, "depth_out", SRC_Z))
     Wmat = _resample_weights(SRC_Z, DEPTH_OUT)
     out_zarr = os.path.join(args.zarr_path, f"{args.out_id}.zarr")
     store = zarr.open(out_zarr, mode="w", shape=(DEPTH_OUT, Ht, Wt),
@@ -346,6 +353,8 @@ def main():
     ap.add_argument("--y0f", type=float, default=0.0)
     ap.add_argument("--y1f", type=float, default=0.40)
     ap.add_argument("--scale", type=float, default=106.0 / 32.0)   # 3.3125
+    ap.add_argument("--depth-out", type=int, default=109,
+                    help="teacher zarr depth layers; 109 = keep NATIVE 2.4 depth (no z-resample)")
     ap.add_argument("--coarse-step", type=int, default=32, help="teacher px between warp samples")
     ap.add_argument("--margin", type=int, default=64, help="source bbox padding (native 2.4 px)")
     ap.add_argument("--block", type=int, default=256, help="teacher rows per streamed block")

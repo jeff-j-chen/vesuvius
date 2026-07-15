@@ -1383,6 +1383,192 @@ class InkDetectorDenseUNetCoord(nn.Module):
         return self.head(d1)                           # (B,1,H,W)
 
 
+class _ResBlockD2d(nn.Module):
+    """ResNet-D residual block (nnU-Net ResEnc style), BatchNorm, optional stride.
+
+    matches the researchers' BasicBlockD: two 3x3 convs, the FIRST carries the stride;
+    the skip path is avgpool(stride) + 1x1 conv projection (ResNet-D 'bag of tricks'),
+    NOT a strided 1x1. downsampling is done by STRIDED CONV here, not maxpool. norm is
+    BatchNorm (NOT InstanceNorm — IN was confirmed to destroy our ink signal)."""
+    def __init__(self, ci, co, stride=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(ci, co, 3, stride=stride, padding=1, bias=False)
+        self.norm1 = nn.BatchNorm2d(co)
+        self.conv2 = nn.Conv2d(co, co, 3, stride=1, padding=1, bias=False)
+        self.norm2 = nn.BatchNorm2d(co)
+        need_proj = (stride != 1) or (ci != co)
+        if need_proj:
+            ops = []
+            if stride != 1:
+                ops.append(nn.AvgPool2d(stride, stride))     # ResNet-D skip avgpool
+            ops.append(nn.Conv2d(ci, co, 1, bias=False))
+            ops.append(nn.BatchNorm2d(co))
+            self.skip = nn.Sequential(*ops)
+        else:
+            self.skip = nn.Identity()
+
+    def forward(self, x):
+        h = F.relu(self.norm1(self.conv1(x)), inplace=True)
+        h = self.norm2(self.conv2(h))
+        return F.relu(h + self.skip(x), inplace=True)
+
+
+class InkDetectorDenseUNetResEnc(nn.Module):
+    """dense_unet_resenc: residual encoder U-Net matching the researchers' nnU-Net
+    ResEnc family as closely as the trainer allows, at the required 32x32 tile.
+
+    faithful to theirs:
+      - RESIDUAL blocks (ResNet-D BasicBlockD) in encoder AND decoder
+      - STRIDED-CONV downsampling (stride-2 conv, NO maxpool)
+      - transpose-conv upsampling with skip concatenation
+    deliberate divergences (documented):
+      - BatchNorm not InstanceNorm (IN kills our signal — proven across 11 archs)
+      - single seg head, NO deep supervision (train.py dense loss expects one (B,1,H,W)
+        output; multi-scale supervision would require a trainer change)
+      - per-slice 2.5D stem + hard depth-max (our proven depth handling; keeps MAE-twin
+        weight compatibility and 24GB-VRAM affordability)
+
+    shares submodule names with DenseUNetResEncMAE so MAE weights transfer strict=False.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = nn.Sequential(
+            nn.Conv3d(1, 16, (1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(16).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.Conv3d(16, 16, (1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(16).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        # residual encoder with strided-conv downsampling (stride in first block of stage)
+        self.e1   = _ResBlockD2d(16,  32,  stride=1)   # full res
+        self.e2   = _ResBlockD2d(32,  64,  stride=2)   # /2
+        self.e3   = _ResBlockD2d(64,  128, stride=2)   # /4
+        self.bott = _ResBlockD2d(128, 256, stride=2)   # /8
+        # residual decoder, transpose-conv upsample + skip concat
+        self.u3 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.d3 = _ResBlockD2d(256, 128, stride=1)
+        self.u2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.d2 = _ResBlockD2d(128, 64, stride=1)
+        self.u1 = nn.ConvTranspose2d(64, 32, 2, stride=2)
+        self.d1 = _ResBlockD2d(64, 32, stride=1)
+        self.head = nn.Conv2d(32, 1, 1)
+        self.last_voxel_map = None
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)          # (B,1,D,H,W)
+        f  = self.per_slice(x).max(dim=2).values     # depth-max -> (B,16,H,W)
+        s1 = self.e1(f)                               # (B,32,H,W)
+        s2 = self.e2(s1)                              # (B,64,H/2,W/2)
+        s3 = self.e3(s2)                              # (B,128,H/4,W/4)
+        b  = self.bott(s3)                            # (B,256,H/8,W/8)
+        d3 = self.d3(torch.cat([self.u3(b), s3], 1))
+        d2 = self.d2(torch.cat([self.u2(d3), s2], 1))
+        d1 = self.d1(torch.cat([self.u1(d2), s1], 1))
+        return self.head(d1)                          # (B,1,H,W) logits
+
+
+class DenseUNetResEncMAE(nn.Module):
+    """MAE pretraining twin of dense_unet_resenc — identical stem/encoder/decoder names,
+    only the output head differs (recon: 32->depth per-slice vs head: 32->1 ink)."""
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = nn.Sequential(
+            nn.Conv3d(1, 16, (1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(16).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.Conv3d(16, 16, (1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(16).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.e1   = _ResBlockD2d(16,  32,  stride=1)
+        self.e2   = _ResBlockD2d(32,  64,  stride=2)
+        self.e3   = _ResBlockD2d(64,  128, stride=2)
+        self.bott = _ResBlockD2d(128, 256, stride=2)
+        self.u3 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.d3 = _ResBlockD2d(256, 128, stride=1)
+        self.u2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.d2 = _ResBlockD2d(128, 64, stride=1)
+        self.u1 = nn.ConvTranspose2d(64, 32, 2, stride=2)
+        self.d1 = _ResBlockD2d(64, 32, stride=1)
+        self.recon_depth = int(getattr(config.data, "depth", 8))
+        self.recon = nn.Conv2d(32, self.recon_depth, 1)
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f  = self.per_slice(x).max(dim=2).values
+        s1 = self.e1(f)
+        s2 = self.e2(s1)
+        s3 = self.e3(s2)
+        b  = self.bott(s3)
+        d3 = self.d3(torch.cat([self.u3(b), s3], 1))
+        d2 = self.d2(torch.cat([self.u2(d3), s2], 1))
+        d1 = self.d1(torch.cat([self.u1(d2), s1], 1))
+        return self.recon(d1)                         # (B,depth,H,W)
+
+
+class DenseUNetMAE(nn.Module):
+    """masked-autoencoder pretraining twin of dense_unet.
+
+    reuses the EXACT same submodule NAMES as InkDetectorDenseUNet
+    (per_slice, e1, e2, e3, bott, pool, u3/d3, u2/d2, u1/d1) so a state_dict
+    saved here loads straight into dense_unet with strict=False — only the
+    reconstruction head (recon) differs from the ink head (head) and is dropped
+    at fine-tune time. this makes MAE a true pretraining of the ink encoder.
+
+    task: reconstruct the depth-MEAN texture image of the input volume from a
+    heavily masked copy. the depth-mean 2D target matches the U-Net's own
+    depth-max information bottleneck and its (B,1,H,W) output resolution, so the
+    encoder must learn the in-plane papyrus texture structure to fill masked
+    regions. no labels are used anywhere.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+
+        def conv2(ci, co):
+            return nn.Sequential(
+                nn.Conv2d(ci, co, 3, padding=1, bias=False),
+                nn.BatchNorm2d(co).to(dtype=torch.float32), nn.ReLU(inplace=True),
+                nn.Conv2d(co, co, 3, padding=1, bias=False),
+                nn.BatchNorm2d(co).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            )
+
+        # identical stem + encoder + decoder to InkDetectorDenseUNet (same names)
+        self.per_slice = nn.Sequential(
+            nn.Conv3d(1, 16, (1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(16).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.Conv3d(16, 16, (1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(16).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.e1 = conv2(16, 32)
+        self.e2 = conv2(32, 64)
+        self.e3 = conv2(64, 128)
+        self.bott = conv2(128, 256)
+        self.pool = nn.MaxPool2d(2)
+        self.u3 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.d3 = conv2(256, 128)
+        self.u2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.d2 = conv2(128, 64)
+        self.u1 = nn.ConvTranspose2d(64, 32, 2, stride=2)
+        self.d1 = conv2(64, 32)
+        # reconstruction head (dropped when transferring to dense_unet).
+        # outputs D channels = one predicted image PER DEPTH SLICE. reconstructing every
+        # slice (not just their mean) forces the per_slice stem to preserve depth-varying
+        # texture THROUGH the depth-max bottleneck — a harder, richer pretext than depth-mean,
+        # which low-pass-filters exactly the slice-to-slice variation where an ink cue lives.
+        self.recon_depth = int(getattr(config.data, "depth", 8))
+        self.recon = nn.Conv2d(32, self.recon_depth, 1)
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)      # (B,1,D,H,W)
+        f = self.per_slice(x)                    # (B,16,D,H,W)
+        f = f.max(dim=2).values                  # depth-max -> (B,16,H,W)
+        s1 = self.e1(f)
+        s2 = self.e2(self.pool(s1))
+        s3 = self.e3(self.pool(s2))
+        b  = self.bott(self.pool(s3))
+        d3 = self.d3(torch.cat([self.u3(b), s3], 1))
+        d2 = self.d2(torch.cat([self.u2(d3), s2], 1))
+        d1 = self.d1(torch.cat([self.u1(d2), s1], 1))
+        return self.recon(d1)                     # (B,D,H,W) per-slice reconstruction
+
+
 _ARCH_MAP = {
     "v1":                 InkDetector,
     "v12_asym_attn_pool": InkDetectorAsymAttnPool,
@@ -1402,8 +1588,10 @@ _ARCH_MAP = {
     "dense_unet_sdrop":        InkDetectorDenseUNetSpatialDrop,
     "dense_unet_deep":         InkDetectorDenseUNetDeep,
     "dense_unet_coord":        InkDetectorDenseUNetCoord,
+    "dense_unet_mae":          DenseUNetMAE,
+    "dense_unet_resenc":       InkDetectorDenseUNetResEnc,
+    "dense_unet_resenc_mae":   DenseUNetResEncMAE,
 }
-
 def create_model(config: Config):
     """create and initialize the model, dispatching on config.model.arch"""
     arch = str(getattr(config.model, "arch", "v1")).lower()

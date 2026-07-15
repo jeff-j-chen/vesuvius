@@ -113,6 +113,8 @@ def _apply_cli_overrides(c: Config, args):
         c.model.conv3_dilation = int(args.conv3_dilation)
     if args.arch is not None:
         c.model.arch = str(args.arch)
+    if getattr(args, "init_weights", None) is not None:
+        c.init_weights = str(args.init_weights)
     if args.smooth_sigma is not None:
         c.data.smooth_sigma = float(args.smooth_sigma)
     if args.input_mode is not None:
@@ -350,6 +352,15 @@ class Trainer:
         start_time = time.time()
         
         model, params = create_model(self.c)
+        # optional warm-start: load MAE (or any) pretrained weights, ignoring
+        # non-matching keys (e.g. the MAE 'recon' head vs the ink 'head').
+        init_path = getattr(self.c, "init_weights", None)
+        if init_path:
+            sd = torch.load(init_path, map_location=self.c.device)
+            missing, unexpected = model.load_state_dict(sd, strict=False)
+            loaded = len(sd) - len(unexpected)
+            print(f"[init-weights] loaded {loaded}/{len(sd)} tensors from {init_path} "
+                  f"(missing={len(missing)} unexpected={len(unexpected)})")
         optimizer, scheduler = create_optimizer_and_scheduler(model, self.c)
         criterion = create_loss_function(self.pos_weight, self.c)
         
@@ -863,6 +874,8 @@ def main():
     parser.add_argument("--gem-p", type=float, default=None, help="Initial GeM pooling p")
     parser.add_argument("--conv3-dilation", type=int, default=None, help="Dilation for final conv stage")
     parser.add_argument("--arch", type=str, default=None, help="Model architecture variant (v1, v2_slim_head, ...)")    
+    parser.add_argument("--init-weights", type=str, default=None,
+                        help="path to a checkpoint to warm-start the model (loaded strict=False; e.g. MAE-pretrained encoder)")
     parser.add_argument("--smooth-sigma", type=float, default=None, help="Gaussian blur sigma applied to inference prediction maps (0=off)")
     parser.add_argument("--conv1-drop", type=float, default=None, help="Dropout after first conv block")
     parser.add_argument("--conv2-drop", type=float, default=None, help="Dropout after second conv block")
