@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -1569,7 +1570,694 @@ class DenseUNetMAE(nn.Module):
         return self.recon(d1)                     # (B,D,H,W) per-slice reconstruction
 
 
+# ==============================================================================
+# arch18 campaign — 10 NEW physics-motivated dense architectures (2026-07-15)
+#
+# shared premise (from the 9.3um/113keV physics + all prior saturation failures):
+#   - ink is a thin carbon layer that sits BETWEEN sheets (at the surface interface),
+#     so the discriminative signal is a THROUGH-DEPTH morphological/density perturbation,
+#     NOT an in-plane brightness offset.
+#   - the failure mode of every prior arch = saturation (predict "all valid papyrus").
+#   - two fixes must both hold: PRESERVE SPATIAL RESOLUTION (per-pixel output, no global
+#     pool) and MODEL THE DEPTH PROFILE explicitly (not hard-max / not single-softmax).
+# each class below attacks the depth-profile or the resolution/context problem a
+# different way. BatchNorm throughout (InstanceNorm confirmed to kill the signal).
+# all output (B,1,H,W) logits; H,W must be divisible by 8 (32->16->8->4).
+# ==============================================================================
+
+def _dcv(ci, co):
+    """double 3x3 conv block, BatchNorm + ReLU (the dense_unet body unit)."""
+    return nn.Sequential(
+        nn.Conv2d(ci, co, 3, padding=1, bias=False),
+        nn.BatchNorm2d(co).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        nn.Conv2d(co, co, 3, padding=1, bias=False),
+        nn.BatchNorm2d(co).to(dtype=torch.float32), nn.ReLU(inplace=True),
+    )
+
+
+class _DenseUNetBody(nn.Module):
+    """standard 3-level 2D U-Net body: (B,cin,H,W) -> (B,1,H,W) logits.
+
+    factored out so the 10 arches below only need to define their (depth-aware)
+    front-end that produces a (B,cin,H,W) feature map; the decoder is identical.
+    """
+    def __init__(self, cin):
+        super().__init__()
+        self.e1 = _dcv(cin, 32)
+        self.e2 = _dcv(32, 64)
+        self.e3 = _dcv(64, 128)
+        self.bott = _dcv(128, 256)
+        self.pool = nn.MaxPool2d(2)
+        self.u3 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.d3 = _dcv(256, 128)
+        self.u2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.d2 = _dcv(128, 64)
+        self.u1 = nn.ConvTranspose2d(64, 32, 2, stride=2)
+        self.d1 = _dcv(64, 32)
+        self.head = nn.Conv2d(32, 1, 1)
+
+    def forward(self, f):
+        s1 = self.e1(f)
+        s2 = self.e2(self.pool(s1))
+        s3 = self.e3(self.pool(s2))
+        b  = self.bott(self.pool(s3))
+        d3 = self.d3(torch.cat([self.u3(b), s3], 1))
+        d2 = self.d2(torch.cat([self.u2(d3), s2], 1))
+        d1 = self.d1(torch.cat([self.u1(d2), s1], 1))
+        return self.head(d1)
+
+
+def _per_slice_stem(cin, cout=16):
+    """per-slice (depth-kernel=1) texture stem: (B,cin,D,H,W)->(B,cout,D,H,W)."""
+    return nn.Sequential(
+        nn.Conv3d(cin, cout, (1, 3, 3), padding=(0, 1, 1), bias=False),
+        nn.BatchNorm3d(cout).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        nn.Conv3d(cout, cout, (1, 3, 3), padding=(0, 1, 1), bias=False),
+        nn.BatchNorm3d(cout).to(dtype=torch.float32), nn.ReLU(inplace=True),
+    )
+
+
+class InkDetectorDenseUNetZConv1d(nn.Module):
+    """dense_unet_zconv1d: LEARNED 1D-CNN along the depth axis as the collapse op.
+
+    WHY: every prior dense arch collapses depth by hard-max or a single softmax score.
+    both throw away the SHAPE of the depth profile. if ink is an inter-layer feature,
+    its signature is a specific 1D pattern along z (e.g. a dip-then-rise at the
+    interface). a stack of Conv3d with kernel (3,1,1) is a genuine 1D CNN over depth
+    applied at every (x,y): it can learn to recognise that profile shape before the
+    (now-informed) max collapse. resolution in H,W is fully preserved.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(1, 16)
+        self.zmix = nn.Sequential(
+            nn.Conv3d(16, 16, (3, 1, 1), padding=(1, 0, 0), bias=False),
+            nn.BatchNorm3d(16).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.Conv3d(16, 16, (3, 1, 1), padding=(1, 0, 0), bias=False),
+            nn.BatchNorm3d(16).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.body = _DenseUNetBody(16)
+        self.last_voxel_map = None
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(x)          # (B,16,D,H,W)
+        f = self.zmix(f)               # learned 1D conv along depth
+        f = f.max(dim=2).values        # informed depth collapse -> (B,16,H,W)
+        return self.body(f)
+
+
+class InkDetectorDenseUNetZGrad(nn.Module):
+    """dense_unet_zgrad: prepend the DEPTH GRADIENT (finite difference along z).
+
+    WHY: ink 'between layers' is precisely a DISCONTINUITY in the depth profile.
+    the first derivative d/dz of the volume peaks exactly at inter-layer transitions
+    and is invariant to the slowly-varying papyrus-density baseline that dominates
+    absolute intensity at 113keV. feeding [raw, dz] gives the stem direct access to
+    the interface signal instead of hoping conv filters rediscover it.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(2, 16)
+        self.body = _DenseUNetBody(16)
+        self.last_voxel_map = None
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)          # (B,1,D,H,W)
+        dz = torch.zeros_like(x)
+        dz[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]    # forward difference along depth
+        x_in = torch.cat([x, dz], dim=1)             # (B,2,D,H,W)
+        f = self.per_slice(x_in).max(dim=2).values   # (B,16,H,W)
+        return self.body(f)
+
+
+class InkDetectorDenseUNetZPEAttn(nn.Module):
+    """dense_unet_zpe_attn: depth-attention WITH a learned depth positional encoding.
+
+    WHY: dense_unet_depth's attention scores each depth purely from its features, so
+    it cannot express 'ink lives at a specific ABSOLUTE depth band' (near the surface).
+    adding a learnable positional embedding over depth lets the attention key on the
+    absolute z-location of the interface — a strong, physically-grounded prior — while
+    still preserving H,W and producing a per-pixel output.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(1, 16)
+        self.depth_mix = nn.Sequential(
+            nn.Conv3d(16, 32, (3, 3, 3), padding=(1, 1, 1), bias=False),
+            nn.BatchNorm3d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.pe = nn.Parameter(torch.zeros(1, 32, 32, 1, 1))   # up to depth 32
+        self.depth_score = nn.Conv3d(32, 1, kernel_size=1, bias=True)
+        self.body = _DenseUNetBody(32)
+        self.last_depth_attn = None
+        self.last_voxel_map = None
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.depth_mix(self.per_slice(x))        # (B,32,D,H,W)
+        f = f + self.pe[:, :, :f.shape[2]]           # add depth positional encoding
+        attn = torch.softmax(self.depth_score(f), dim=2)
+        self.last_depth_attn = attn.detach()
+        f2d = (f * attn).sum(dim=2)                  # (B,32,H,W)
+        return self.body(f2d)
+
+
+class InkDetectorDenseUNetBandSplit(nn.Module):
+    """dense_unet_bandsplit: shallow/deep band split + interface difference channel.
+
+    WHY: an ink layer at a sheet interface should perturb the sheet ABOVE and the
+    sheet BELOW asymmetrically. splitting the stack into a shallow half and a deep
+    half, collapsing each, and forming their DIFFERENCE isolates that interface
+    asymmetry (the difference cancels the shared papyrus baseline, leaving the ink
+    contribution). [shallow, deep, shallow-deep] are fused and fed per-pixel.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(1, 16)
+        self.fuse = nn.Sequential(
+            nn.Conv2d(48, 32, 1, bias=False),
+            nn.BatchNorm2d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.body = _DenseUNetBody(32)
+        self.last_voxel_map = None
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(x)                        # (B,16,D,H,W)
+        D = f.shape[2]; half = max(1, D // 2)
+        shallow = f[:, :, :half].max(dim=2).values   # (B,16,H,W)
+        deep    = f[:, :, half:].max(dim=2).values   # (B,16,H,W)
+        cat = torch.cat([shallow, deep, shallow - deep], dim=1)  # (B,48,H,W)
+        return self.body(self.fuse(cat))
+
+
+class InkDetectorDenseUNet3DEnc(nn.Module):
+    """dense_unet_3denc: genuine 3D-conv encoder, depth collapsed only at each skip.
+
+    WHY: all prior dense arches collapse depth at the STEM, before any 3D context is
+    built, so the network never sees ink as a 3D interface structure. here the encoder
+    uses full 3D convs (spatial-only pooling keeps depth intact) so features encode
+    the local 3D neighbourhood; depth is collapsed (max) per scale to form 2D skips
+    feeding a 2D decoder. this is the 'model ink as a 3D texture' hypothesis.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        def cv3(ci, co):
+            return nn.Sequential(
+                nn.Conv3d(ci, co, 3, padding=1, bias=False),
+                nn.BatchNorm3d(co).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            )
+        self.per_slice = _per_slice_stem(1, 16)
+        self.c1 = cv3(16, 32)
+        self.c2 = cv3(32, 64)
+        self.c3 = cv3(64, 128)
+        self.cb = cv3(128, 256)
+        self.pool3 = nn.MaxPool3d((1, 2, 2))         # spatial pool only, keep depth
+        self.u3 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.d3 = _dcv(256, 128)
+        self.u2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.d2 = _dcv(128, 64)
+        self.u1 = nn.ConvTranspose2d(64, 32, 2, stride=2)
+        self.d1 = _dcv(64, 32)
+        self.head = nn.Conv2d(32, 1, 1)
+        self.last_voxel_map = None
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f0 = self.per_slice(x)                        # (B,16,D,H,W)
+        a1 = self.c1(f0)                              # (B,32,D,H,W)
+        a2 = self.c2(self.pool3(a1))                  # (B,64,D,H/2,W/2)
+        a3 = self.c3(self.pool3(a2))                  # (B,128,D,H/4,W/4)
+        ab = self.cb(self.pool3(a3))                  # (B,256,D,H/8,W/8)
+        s1 = a1.max(dim=2).values; s2 = a2.max(dim=2).values
+        s3 = a3.max(dim=2).values; b = ab.max(dim=2).values
+        d3 = self.d3(torch.cat([self.u3(b), s3], 1))
+        d2 = self.d2(torch.cat([self.u2(d3), s2], 1))
+        d1 = self.d1(torch.cat([self.u1(d2), s1], 1))
+        return self.head(d1)
+
+
+class InkDetectorDenseUNetLCN(nn.Module):
+    """dense_unet_lcn: local-contrast-normalization front-end (contrast, not brightness).
+
+    WHY: at 113keV the ABSOLUTE intensity of a voxel is dominated by bulk papyrus
+    density and exposure, not ink. subtracting a local mean and dividing by local
+    std per slice removes that baseline and exposes the local CONTRAST structure —
+    exactly where a faint morphological ink perturbation would show. [raw, lcn] are
+    fed so the network keeps both the normalised contrast and the raw reference.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(2, 16)
+        self.body = _DenseUNetBody(16)
+        self.last_voxel_map = None
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        B, _, D, H, W = x.shape
+        xf = x.reshape(B * D, 1, H, W)
+        mu = F.avg_pool2d(xf, 5, stride=1, padding=2)
+        var = F.avg_pool2d(xf * xf, 5, stride=1, padding=2) - mu * mu
+        lcn = (xf - mu) / torch.sqrt(var.clamp(min=1e-4))
+        lcn = lcn.reshape(B, 1, D, H, W)
+        x_in = torch.cat([x, lcn], dim=1)            # (B,2,D,H,W)
+        f = self.per_slice(x_in).max(dim=2).values
+        return self.body(f)
+
+
+class InkDetectorDenseUNetGabor(nn.Module):
+    """dense_unet_gabor: fixed multi-orientation band-pass (Gabor) filter bank per slice.
+
+    WHY: ink disrupts the ORIENTED fiber texture of papyrus. an isotropic Laplacian
+    (dense_unet_lap) responds to any edge; an oriented Gabor bank responds to specific
+    fiber orientations and spatial frequencies, so a local disruption of that texture
+    (a stroke laid across the fibers) produces a distinctive multi-orientation
+    response. four fixed orientations are concatenated with the raw slice.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        ksize, sigma, lam, gamma = 5, 1.5, 3.0, 0.5
+        thetas = [0.0, torch.pi / 4, torch.pi / 2, 3 * torch.pi / 4]
+        half = ksize // 2
+        yy, xx = torch.meshgrid(torch.arange(-half, half + 1, dtype=torch.float32),
+                                torch.arange(-half, half + 1, dtype=torch.float32),
+                                indexing="ij")
+        kernels = []
+        for th in thetas:
+            xr = xx * torch.cos(torch.tensor(th)) + yy * torch.sin(torch.tensor(th))
+            yr = -xx * torch.sin(torch.tensor(th)) + yy * torch.cos(torch.tensor(th))
+            g = torch.exp(-(xr ** 2 + (gamma ** 2) * yr ** 2) / (2 * sigma ** 2)) \
+                * torch.cos(2 * torch.pi * xr / lam)
+            g = g - g.mean()                          # zero-DC -> pure band-pass
+            kernels.append(g)
+        gk = torch.stack(kernels, dim=0).unsqueeze(1)  # (4,1,5,5)
+        self.register_buffer("gk", gk)
+        self.per_slice = _per_slice_stem(5, 16)       # raw + 4 gabor
+        self.body = _DenseUNetBody(16)
+        self.last_voxel_map = None
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        B, _, D, H, W = x.shape
+        xf = x.reshape(B * D, 1, H, W)
+        g = F.conv2d(xf, self.gk, padding=self.gk.shape[-1] // 2)  # (B*D,4,H,W)
+        g = g.reshape(B, D, 4, H, W).permute(0, 2, 1, 3, 4)        # (B,4,D,H,W)
+        x_in = torch.cat([x, g], dim=1)               # (B,5,D,H,W)
+        f = self.per_slice(x_in).max(dim=2).values
+        return self.body(f)
+
+
+class InkDetectorDenseUNetBottAttn(nn.Module):
+    """dense_unet_bottattn: spatial self-attention at the U-Net bottleneck.
+
+    WHY: convs are local; ink strokes are spatially EXTENDED and continuous. a
+    self-attention block at the (coarse) bottleneck lets every location attend to
+    every other, modelling stroke continuity and global context. this pushes the
+    network past the 'saturate to the dominant class' local optimum by giving it a
+    global view before it decides per-pixel. output stays per-pixel (B,1,H,W).
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(1, 16)
+        self.e1 = _dcv(16, 32)
+        self.e2 = _dcv(32, 64)
+        self.e3 = _dcv(64, 128)
+        self.bott = _dcv(128, 256)
+        self.pool = nn.MaxPool2d(2)
+        self.attn = nn.MultiheadAttention(256, num_heads=4, batch_first=True)
+        self.attn_norm = nn.LayerNorm(256)
+        self.u3 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.d3 = _dcv(256, 128)
+        self.u2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.d2 = _dcv(128, 64)
+        self.u1 = nn.ConvTranspose2d(64, 32, 2, stride=2)
+        self.d1 = _dcv(64, 32)
+        self.head = nn.Conv2d(32, 1, 1)
+        self.last_voxel_map = None
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(x).max(dim=2).values
+        s1 = self.e1(f)
+        s2 = self.e2(self.pool(s1))
+        s3 = self.e3(self.pool(s2))
+        b = self.bott(self.pool(s3))                  # (B,256,H/8,W/8)
+        Bn, C, Hb, Wb = b.shape
+        seq = b.flatten(2).transpose(1, 2)            # (B, Hb*Wb, C)
+        a, _ = self.attn(seq, seq, seq)
+        seq = self.attn_norm(seq + a)                 # residual + norm
+        b = seq.transpose(1, 2).reshape(Bn, C, Hb, Wb)
+        d3 = self.d3(torch.cat([self.u3(b), s3], 1))
+        d2 = self.d2(torch.cat([self.u2(d3), s2], 1))
+        d1 = self.d1(torch.cat([self.u1(d2), s1], 1))
+        return self.head(d1)
+
+
+class InkDetectorDenseUNetASPP(nn.Module):
+    """dense_unet_aspp: atrous spatial pyramid pooling bottleneck.
+
+    WHY: ink stroke width, fiber gap scale and sheet-curvature scale differ by an
+    order of magnitude. ASPP probes several receptive fields IN PARALLEL (dilation
+    1/2/4 + a global-context branch) at the bottleneck without extra downsampling, so
+    the decoder receives multi-scale context while full spatial resolution is
+    preserved on the skip paths. targets the resolution-vs-context tradeoff directly.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(1, 16)
+        self.e1 = _dcv(16, 32)
+        self.e2 = _dcv(32, 64)
+        self.e3 = _dcv(64, 128)
+        self.pool = nn.MaxPool2d(2)
+        # ASPP over the pooled s3 (128ch @ H/8): 3 dilated branches + global branch
+        def br(d):
+            return nn.Sequential(
+                nn.Conv2d(128, 64, 3, padding=d, dilation=d, bias=False),
+                nn.BatchNorm2d(64).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            )
+        self.a1, self.a2, self.a4 = br(1), br(2), br(4)
+        self.agp = nn.Sequential(
+            nn.Conv2d(128, 64, 1, bias=False),
+            nn.BatchNorm2d(64).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.aspp_proj = nn.Sequential(
+            nn.Conv2d(256, 256, 1, bias=False),
+            nn.BatchNorm2d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.u3 = nn.ConvTranspose2d(256, 128, 2, stride=2)
+        self.d3 = _dcv(256, 128)
+        self.u2 = nn.ConvTranspose2d(128, 64, 2, stride=2)
+        self.d2 = _dcv(128, 64)
+        self.u1 = nn.ConvTranspose2d(64, 32, 2, stride=2)
+        self.d1 = _dcv(64, 32)
+        self.head = nn.Conv2d(32, 1, 1)
+        self.last_voxel_map = None
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(x).max(dim=2).values
+        s1 = self.e1(f)
+        s2 = self.e2(self.pool(s1))
+        s3 = self.e3(self.pool(s2))
+        p = self.pool(s3)                             # (B,128,H/8,W/8)
+        gp = self.agp(F.adaptive_avg_pool2d(p, 1))
+        gp = gp.expand(-1, -1, p.shape[2], p.shape[3])
+        b = self.aspp_proj(torch.cat([self.a1(p), self.a2(p), self.a4(p), gp], dim=1))
+        d3 = self.d3(torch.cat([self.u3(b), s3], 1))
+        d2 = self.d2(torch.cat([self.u2(d3), s2], 1))
+        d1 = self.d1(torch.cat([self.u1(d2), s1], 1))
+        return self.head(d1)
+
+
+class InkDetectorDenseUNetHR(nn.Module):
+    """dense_unet_hr: HRNet-lite — a full-resolution stream maintained throughout.
+
+    WHY: the saturation failure is fundamentally a LOSS-OF-RESOLUTION problem — the
+    U-Net's repeated downsampling blurs the faint fine-scale ink texture into the
+    dominant papyrus signal before it can be classified. HRNet keeps a high-res
+    stream alive end-to-end and only uses a parallel low-res stream for context,
+    exchanging information between them. this maximally preserves the fine detail
+    that carries the ink morphology.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(1, 16)
+        self.h0 = _dcv(16, 32)                        # high-res stream @ H
+        self.l0 = _dcv(16, 64)                        # low-res stream @ H/2 (after pool)
+        self.pool = nn.MaxPool2d(2)
+        self.l_to_h = nn.Conv2d(64, 32, 1, bias=False)   # low->high projection
+        self.h_to_l = nn.Conv2d(32, 64, 1, bias=False)   # high->low projection
+        self.h1 = _dcv(32, 32)
+        self.l1 = _dcv(64, 64)
+        self.fuse = nn.Sequential(
+            nn.Conv2d(96, 32, 3, padding=1, bias=False),
+            nn.BatchNorm2d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        self.head = nn.Conv2d(32, 1, 1)
+        self.last_voxel_map = None
+
+    def _up(self, t, ref):
+        return F.interpolate(t, size=ref.shape[-2:], mode="bilinear", align_corners=False)
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(x).max(dim=2).values       # (B,16,H,W)
+        hi = self.h0(f)                               # (B,32,H,W)
+        lo = self.l0(self.pool(f))                    # (B,64,H/2,W/2)
+        # exchange: hi absorbs upsampled lo; lo absorbs downsampled hi
+        hi2 = self.h1(hi + self.l_to_h(self._up(lo, hi)))
+        lo2 = self.l1(lo + self.h_to_l(self.pool(hi)))
+        out = self.fuse(torch.cat([hi2, self._up(lo2, hi2)], dim=1))
+        return self.head(out)
+
+
+# ==============================================================================
+# arch28 campaign — 10 MORE physics-motivated dense archs (2026-07-16)
+#
+# built on the two arch18 WINNERS (by pure train-loss / pr_auc ranking):
+#   s07_v14_mil_deep  -> MIL: per-voxel logits + LSE aggregation LOCALIZE where ink is
+#   n06_lcn           -> local contrast normalization REMOVES the 113keV bulk-density
+#                        baseline so faint ink contrast survives
+# NOTE: in arch18, NO run dropped train_loss below 0.8 (best s07=0.814), so every run was
+# cut by the 0.8 floor. the arch28 runner relaxes that floor to 0.95.
+# these 10 lean into LCN (contrast/baseline removal) and MIL/LSE (depth localization),
+# plus new depth-profile / morphology / frequency front-ends. all output (B,1,H,W).
+# ==============================================================================
+
+def _lcn2d(x5, k=5):
+    """per-slice local contrast normalization: (B,1,D,H,W) -> (B,1,D,H,W)."""
+    B, C, D, H, W = x5.shape
+    xf = x5.reshape(B * D, C, H, W)
+    mu = F.avg_pool2d(xf, k, stride=1, padding=k // 2)
+    var = F.avg_pool2d(xf * xf, k, stride=1, padding=k // 2) - mu * mu
+    out = (xf - mu) / torch.sqrt(var.clamp(min=1e-4))
+    return out.reshape(B, C, D, H, W)
+
+
+class _DepthLSE(nn.Module):
+    """soft depth collapse via learnable-hardness log-sum-exp: (B,C,D,H,W)->(B,C,H,W)."""
+    def __init__(self, r0=2.0):
+        super().__init__()
+        self.r = nn.Parameter(torch.tensor(float(r0)))
+    def forward(self, f):
+        r = self.r.clamp(0.5, 10.0)
+        D = f.shape[2]
+        return (torch.logsumexp(r * f, dim=2) - math.log(D)) / r
+
+
+class InkDetectorDenseUNetLCNMil(nn.Module):
+    """dense_unet_lcnmil: FUSES the two arch18 winners.
+    n06 LCN front-end (removes 113keV bulk-density baseline, exposes faint contrast) +
+    s07 LSE soft depth collapse (picks the ink depth per (x,y) instead of a hard max).
+    dense per-pixel output."""
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(2, 16)     # [raw, lcn]
+        self.lse = _DepthLSE()
+        self.body = _DenseUNetBody(16)
+        self.last_voxel_map = None
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(torch.cat([x, _lcn2d(x, 5)], dim=1))
+        return self.body(self.lse(f))
+
+
+class InkDetectorDenseUNetZScore(nn.Module):
+    """dense_unet_zscore: per-pixel z-score ALONG depth.
+    each (x,y) column is normalized by its OWN depth mean/std, so an ink band that deviates
+    from that column's papyrus baseline becomes a large z regardless of absolute brightness
+    -- directly targets 'ink = deviation in the depth profile'. dense output."""
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(1, 16)
+        self.body = _DenseUNetBody(16)
+        self.last_voxel_map = None
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        mu = x.mean(dim=2, keepdim=True)
+        sd = x.std(dim=2, keepdim=True)
+        z = (x - mu) / sd.clamp(min=1e-3)
+        return self.body(self.per_slice(z).max(dim=2).values)
+
+
+class InkDetectorDenseUNetMoments(nn.Module):
+    """dense_unet_moments: statistical depth collapse (mean/std/max/range), not just max.
+    ink between layers raises the local depth VARIANCE and range at that (x,y); a hard max
+    discards it. four moments give the decoder a depth 'fingerprint'. dense output."""
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(1, 16)
+        self.body = _DenseUNetBody(64)
+        self.last_voxel_map = None
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(x)                        # (B,16,D,H,W)
+        mean_d = f.mean(dim=2)
+        std_d = f.std(dim=2)
+        max_d = f.max(dim=2).values
+        rng_d = max_d - f.min(dim=2).values
+        return self.body(torch.cat([mean_d, std_d, max_d, rng_d], dim=1))
+
+
+class InkDetectorDenseUNetLCNMS(nn.Module):
+    """dense_unet_lcnms: MULTI-SCALE local contrast normalization (extends n06 winner).
+    LCN at windows 3/7/15 exposes contrast anomalies at fiber, stroke and sheet scales;
+    concatenated with raw. dense output."""
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(4, 16)      # raw + lcn@3/7/15
+        self.body = _DenseUNetBody(16)
+        self.last_voxel_map = None
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(torch.cat([x, _lcn2d(x, 3), _lcn2d(x, 7), _lcn2d(x, 15)], dim=1))
+        return self.body(f.max(dim=2).values)
+
+
+class InkDetectorDenseUNetTopHat(nn.Module):
+    """dense_unet_tophat: fixed morphological top-hat front-end.
+    white top-hat (x - opening) isolates small BRIGHT structures; black top-hat
+    (closing - x) isolates small DARK structures against local background. carbon ink
+    specks between fibers are small dark features -> black top-hat lights them up
+    independent of bulk density. dense output."""
+    def __init__(self, config: Config):
+        super().__init__()
+        self.k = 3
+        self.per_slice = _per_slice_stem(3, 16)      # raw + white + black top-hat
+        self.body = _DenseUNetBody(16)
+        self.last_voxel_map = None
+    def _open(self, xf):
+        e = -F.max_pool2d(-xf, self.k, 1, self.k // 2)
+        return F.max_pool2d(e, self.k, 1, self.k // 2)
+    def _close(self, xf):
+        d = F.max_pool2d(xf, self.k, 1, self.k // 2)
+        return -F.max_pool2d(-d, self.k, 1, self.k // 2)
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        B, C, D, H, W = x.shape
+        xf = x.reshape(B * D, 1, H, W)
+        wth = xf - self._open(xf)
+        bth = self._close(xf) - xf
+        stack = torch.cat([xf, wth, bth], dim=1).reshape(B, D, 3, H, W).permute(0, 2, 1, 3, 4)
+        return self.body(self.per_slice(stack).max(dim=2).values)
+
+
+class InkDetectorDenseUNetCoherence(nn.Module):
+    """dense_unet_coherence: structure-tensor orientation coherence per slice.
+    papyrus fibers are locally coherent/oriented; ink laid across them DISRUPTS coherence.
+    coherence = sqrt((Jxx-Jyy)^2 + 4 Jxy^2)/(Jxx+Jyy) from the smoothed structure tensor;
+    low-coherence spots flag disruption. concatenated with raw. dense output."""
+    def __init__(self, config: Config):
+        super().__init__()
+        sx = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(1, 1, 3, 3)
+        self.register_buffer("sx", sx)
+        self.register_buffer("sy", sx.transpose(-1, -2).contiguous())
+        self.per_slice = _per_slice_stem(2, 16)
+        self.body = _DenseUNetBody(16)
+        self.last_voxel_map = None
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        B, C, D, H, W = x.shape
+        xf = x.reshape(B * D, 1, H, W)
+        gx = F.conv2d(xf, self.sx, padding=1)
+        gy = F.conv2d(xf, self.sy, padding=1)
+        Jxx = F.avg_pool2d(gx * gx, 5, 1, 2)
+        Jyy = F.avg_pool2d(gy * gy, 5, 1, 2)
+        Jxy = F.avg_pool2d(gx * gy, 5, 1, 2)
+        coh = torch.sqrt(((Jxx - Jyy) ** 2 + 4 * Jxy * Jxy).clamp(min=0)) / (Jxx + Jyy + 1e-4)
+        coh = coh.reshape(B, 1, D, H, W)
+        return self.body(self.per_slice(torch.cat([x, coh], dim=1)).max(dim=2).values)
+
+
+class InkDetectorDenseUNetDoG(nn.Module):
+    """dense_unet_dog: difference-of-Gaussians band-pass front-end.
+    subtract a wide blur from a narrow blur to kill both low-freq bulk-density variation
+    and high-freq fiber noise, leaving stroke-scale structure. concat with raw. dense out."""
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(2, 16)
+        self.body = _DenseUNetBody(16)
+        self.last_voxel_map = None
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        B, C, D, H, W = x.shape
+        xf = x.reshape(B * D, 1, H, W)
+        dog = (F.avg_pool2d(xf, 3, 1, 1) - F.avg_pool2d(xf, 9, 1, 4)).reshape(B, 1, D, H, W)
+        return self.body(self.per_slice(torch.cat([x, dog], dim=1)).max(dim=2).values)
+
+
+class InkDetectorDenseUNetLSE(nn.Module):
+    """dense_unet_lse: soft depth collapse via learnable LSE (s07 idea, dense form).
+    replaces hard depth-max with learnable-hardness log-sum-exp (between mean and max) so
+    the network tunes how sharply it picks the ink depth per pixel. dense output."""
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(1, 16)
+        self.lse = _DepthLSE()
+        self.body = _DenseUNetBody(16)
+        self.last_voxel_map = None
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        return self.body(self.lse(self.per_slice(x)))
+
+
+class InkDetectorDenseUNetMilHead(nn.Module):
+    """dense_unet_milhead: dense U-Net PLUS an auxiliary per-voxel MIL logit path.
+    s07's per-voxel logits + LSE localization is added on top of the spatial dense decoder:
+    a 1x1x1 voxel head scores every voxel, LSE-reduced over depth to a per-pixel map, summed
+    with the U-Net's per-pixel logits. spatial context + voxel-level localization."""
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(1, 16)
+        self.voxel_head = nn.Conv3d(16, 1, 1)
+        self.lse = _DepthLSE()
+        self.body = _DenseUNetBody(16)
+        self.last_voxel_map = None
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(x)                         # (B,16,D,H,W)
+        vox = self.voxel_head(f)                      # (B,1,D,H,W)
+        self.last_voxel_map = vox.detach()
+        vox2d = self.lse(vox)                         # (B,1,H,W)
+        dense = self.body(f.max(dim=2).values)        # (B,1,H,W)
+        return dense + vox2d
+
+
+class InkDetectorDenseUNetAttnLCN(nn.Module):
+    """dense_unet_attn_lcn: LCN front-end (winner n06) + bottleneck self-attention.
+    LCN removes the bulk-density baseline; bottleneck self-attention models stroke
+    continuity / global context to push past the 'predict all papyrus' saturation. dense."""
+    def __init__(self, config: Config):
+        super().__init__()
+        self.per_slice = _per_slice_stem(2, 16)
+        self.e1 = _dcv(16, 32); self.e2 = _dcv(32, 64); self.e3 = _dcv(64, 128)
+        self.bott = _dcv(128, 256); self.pool = nn.MaxPool2d(2)
+        self.attn = nn.MultiheadAttention(256, num_heads=4, batch_first=True)
+        self.attn_norm = nn.LayerNorm(256)
+        self.u3 = nn.ConvTranspose2d(256, 128, 2, stride=2); self.d3 = _dcv(256, 128)
+        self.u2 = nn.ConvTranspose2d(128, 64, 2, stride=2); self.d2 = _dcv(128, 64)
+        self.u1 = nn.ConvTranspose2d(64, 32, 2, stride=2); self.d1 = _dcv(64, 32)
+        self.head = nn.Conv2d(32, 1, 1)
+        self.last_voxel_map = None
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(torch.cat([x, _lcn2d(x, 5)], dim=1)).max(dim=2).values
+        s1 = self.e1(f); s2 = self.e2(self.pool(s1)); s3 = self.e3(self.pool(s2))
+        b = self.bott(self.pool(s3))
+        Bn, Ck, Hb, Wb = b.shape
+        seq = b.flatten(2).transpose(1, 2)
+        a, _ = self.attn(seq, seq, seq)
+        seq = self.attn_norm(seq + a)
+        b = seq.transpose(1, 2).reshape(Bn, Ck, Hb, Wb)
+        d3 = self.d3(torch.cat([self.u3(b), s3], 1))
+        d2 = self.d2(torch.cat([self.u2(d3), s2], 1))
+        d1 = self.d1(torch.cat([self.u1(d2), s1], 1))
+        return self.head(d1)
+
+
 _ARCH_MAP = {
+
     "v1":                 InkDetector,
     "v12_asym_attn_pool": InkDetectorAsymAttnPool,
     "v13_mil":            InkDetectorMIL,
@@ -1591,6 +2279,28 @@ _ARCH_MAP = {
     "dense_unet_mae":          DenseUNetMAE,
     "dense_unet_resenc":       InkDetectorDenseUNetResEnc,
     "dense_unet_resenc_mae":   DenseUNetResEncMAE,
+    # arch18 campaign — 10 new physics-motivated dense archs (2026-07-15)
+    "dense_unet_zconv1d":      InkDetectorDenseUNetZConv1d,
+    "dense_unet_zgrad":        InkDetectorDenseUNetZGrad,
+    "dense_unet_zpe_attn":     InkDetectorDenseUNetZPEAttn,
+    "dense_unet_bandsplit":    InkDetectorDenseUNetBandSplit,
+    "dense_unet_3denc":        InkDetectorDenseUNet3DEnc,
+    "dense_unet_lcn":          InkDetectorDenseUNetLCN,
+    "dense_unet_gabor":        InkDetectorDenseUNetGabor,
+    "dense_unet_bottattn":     InkDetectorDenseUNetBottAttn,
+    "dense_unet_aspp":         InkDetectorDenseUNetASPP,
+    "dense_unet_hr":           InkDetectorDenseUNetHR,
+    # arch28 campaign — 10 more, built on arch18 winners LCN(n06) + MIL/LSE(s07) (2026-07-16)
+    "dense_unet_lcnmil":       InkDetectorDenseUNetLCNMil,
+    "dense_unet_zscore":       InkDetectorDenseUNetZScore,
+    "dense_unet_moments":      InkDetectorDenseUNetMoments,
+    "dense_unet_lcnms":        InkDetectorDenseUNetLCNMS,
+    "dense_unet_tophat":       InkDetectorDenseUNetTopHat,
+    "dense_unet_coherence":    InkDetectorDenseUNetCoherence,
+    "dense_unet_dog":          InkDetectorDenseUNetDoG,
+    "dense_unet_lse":          InkDetectorDenseUNetLSE,
+    "dense_unet_milhead":      InkDetectorDenseUNetMilHead,
+    "dense_unet_attn_lcn":     InkDetectorDenseUNetAttnLCN,
 }
 def create_model(config: Config):
     """create and initialize the model, dispatching on config.model.arch"""

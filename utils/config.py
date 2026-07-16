@@ -39,6 +39,15 @@ class DataConfig:
     # and skips the expensive full training-scroll "Test" figure + scroll4.
     # used to keep end-of-training test inference affordable in campaigns.
     test_scroll2_only: bool = False
+    # primary test fragment: id of a rendered surface-volume (e.g. an unwrapped PHerc0191
+    # patch). when set, the test figure renders ONLY this fragment by default; the training
+    # 'Test', scroll2, scroll3, scroll4 figures become opt-in via the show flags below.
+    # legacy behavior is fully preserved when this is None.
+    test_scroll_id: Optional[int] = None
+    test_show_train: bool = False
+    test_show_scroll2: bool = False
+    test_show_scroll3: bool = False
+    test_show_scroll4: bool = False
     tile_size: int = 32
     depth: int = 8
     d_start: int = 28
@@ -152,6 +161,7 @@ class TrainingConfig:
     eval_cooldown_secs: int = 0   # sleep this many seconds after probe/eval epochs to let hardware cool
     val_cooldown_secs: int = 0    # sleep between train and validation each epoch (thermal relief)
     fig_chunk_cooldown_ms: int = 0  # sleep (ms) between spatial chunks during figure inference
+    epoch_cooldown_secs: int = 0  # sleep after EVERY epoch (thermal relief on hot days)
 
 @dataclass
 class FinetuneConfig:

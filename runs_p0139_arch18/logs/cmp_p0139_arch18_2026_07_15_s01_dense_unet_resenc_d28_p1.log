@@ -1,0 +1,123 @@
+--- Configuration ---
+data: DataConfig(zarr_path='C:\\Users\\ChenJeff\\Documents\\ves_zarrs2', tra_scroll_id=20260115000000, tra_scroll_ids=[20260115000000], vis_scroll_ids=None, scroll2_id=20230709155141, scroll4_id=20231210132040, scroll3_id=20240716140050, test_on_scroll4=False, test_scroll2_only=False, test_scroll_id=None, test_show_train=False, test_show_scroll2=False, test_show_scroll3=False, test_show_scroll4=False, tile_size=32, depth=28, d_start=0, d_end=28, train_d_start=0, train_d_end=28, smooth_sigma=0.0, input_mode='single', pre_band_start=20, pre_band_end=28, post_band_start=40, post_band_end=48, preload_to_ram=False, mask_memmap=True, ring_negatives=True, ring_label_source='eroded', alternating_ring=False, soft_label_prob=0.0, soft_label_value=0.3, split_axis='y', train_split_frac=0.8055, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0), dense_labels=True, dense_soft_labels=True)
+dl: DataloaderConfig(batch_size=64, num_workers=2, data_aug=False, channel_mixing_prob=0.0, rotation_prob=0.25, flip_prob=0.25, noise_prob=0.3, brightness_prob=0.5, contrast_prob=0.5)
+tra: TrainingConfig(n_epochs=10, lr=0.0002, weight_decay=0, l1_lambda=0.0, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=10, log_dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\runs_p0139_arch18', eval_int=9999, test_int=9999, probe_int=9999, eval_aggregate=True, probe_rois_enabled=False, focal_gamma=0.0, ranking_lambda=0.0, ranking_margin=0.3, ranking_neg_frac=1.0, pretrain_epochs=0, eval_cooldown_secs=600, val_cooldown_secs=120, fig_chunk_cooldown_ms=600, epoch_cooldown_secs=90)
+model: ModelConfig(conv1_drop=0.0, conv2_drop=0.05, fc1_drop=0.2, fc2_drop=0.1, pooling='avg', gem_p=3.0, conv3_dilation=1, arch='dense_unet_resenc')
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(enabled=False, hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1, dir='C:\\Users\\ChenJeff\\Documents\\vesuvius\\hard_negs\\cmp_p0139_arch18_2026_07_15_s01_dense_unet_resenc_d28_p1')
+device: cuda
+model_dir: C:\Users\ChenJeff\Documents\vesuvius\models
+exp_name: cmp_p0139_arch18_2026_07_15_s01_dense_unet_resenc_d28_p1
+---------------------
+Creating datasets...
+[soft_labels] loaded soft_inklabels/20260115000000.png (mean=0.0174)
+[info] using cached normalization for segment 20260115000000
+[ring_negatives] source='eroded' tile_radius=2  ink_tiles=1488  ring_tiles=2623  ratio=1.76
+[dense] sampled ink pixel fraction=0.166  pos_weight=5.03
+Data setup done in 3.19s
+Creating model and loss... l1 lambda 0.0... Model parameters (dense_unet_resenc): 2,021,201
+ done in 2.30s
+Initializing Tensorboard...
+[soft_labels] loaded soft_inklabels/20260115000000.png (mean=0.0174)
+[info] using cached normalization for segment 20260115000000
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.9114
+[SCROLL4 DEBUG] Potential issues detected:
+ - Ranges not tile aligned: y_start%tile=4, x_start%tile=0
+[dense probe] best window y[3680,4192] x[3616,4128] ink_px=56512/262144 (21.6%)
+[dense probe] 4 probe specs: ['Auto', 'Scroll4_Pi', 'Scroll2_Center', 'Scroll3_Center']  (size=512px, snap_unit=32px)
+TensorBoard logs will be saved to: C:\Users\ChenJeff\Documents\vesuvius\runs_p0139_arch18\cmp_p0139_arch18_2026_07_15_s01_dense_unet_resenc_d28_p1_15_20-45-51
+To view, run: tensorboard --logdir=C:\Users\ChenJeff\Documents\vesuvius\runs_p0139_arch18
+C:\Users\ChenJeff\Documents\vesuvius\train.py:253: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = GradScaler()
+
+--- Epoch 1/10 ---
+Training:   0%|          | 0/45 [00:00<?, ?it/s]Training:   2%|▏         | 1/45 [00:26<19:37, 26.77s/it]Training:  67%|██████▋   | 30/45 [00:31<00:12,  1.25it/s]Training:  98%|█████████▊| 44/45 [00:34<00:00,  1.29it/s]
+[COOLDOWN] train->val pause 120s...
+Validating:   0%|          | 0/19 [00:00<?, ?it/s]Validating:  68%|██████▊   | 13/19 [00:05<00:02,  2.59it/s]Validating: 100%|██████████| 19/19 [00:13<00:00,  1.26it/s]Validating: 100%|██████████| 19/19 [00:13<00:00,  1.41it/s]
+New best F1 model saved! Val F1: 0.0913
+New best loss model saved! Val Loss: 1.3024
+[METRICS] epoch=1 train_loss=1.2545 val_loss=1.3024 train_f1=0.3176
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+[COOLDOWN] end-of-epoch pause 90s for hardware to cool...
+
+--- Epoch 2/10 ---
+Training:   0%|          | 0/45 [00:00<?, ?it/s]Training:  96%|█████████▌| 43/45 [00:05<00:00,  8.52it/s]Training:  98%|█████████▊| 44/45 [00:05<00:00,  8.39it/s]
+[COOLDOWN] train->val pause 120s...
+Validating:   0%|          | 0/19 [00:00<?, ?it/s]Validating: 100%|██████████| 19/19 [00:03<00:00,  6.13it/s]
+New best F1 model saved! Val F1: 0.2899
+New best loss model saved! Val Loss: 1.2083
+[METRICS] epoch=2 train_loss=1.2426 val_loss=1.2083 train_f1=0.3419
+Logging metrics for epoch: 2
+[COOLDOWN] end-of-epoch pause 90s for hardware to cool...
+
+--- Epoch 3/10 ---
+Training:   0%|          | 0/45 [00:00<?, ?it/s]Training:  98%|█████████▊| 44/45 [00:03<00:00, 11.37it/s]
+[COOLDOWN] train->val pause 120s...
+Validating:   0%|          | 0/19 [00:00<?, ?it/s]Validating: 100%|██████████| 19/19 [00:03<00:00,  5.81it/s]
+New best F1 model saved! Val F1: 0.2923
+New best loss model saved! Val Loss: 1.2079
+[METRICS] epoch=3 train_loss=1.2468 val_loss=1.2079 train_f1=0.3509
+Logging metrics for epoch: 3
+[COOLDOWN] end-of-epoch pause 90s for hardware to cool...
+
+--- Epoch 4/10 ---
+Training:   0%|          | 0/45 [00:00<?, ?it/s]Training:  98%|█████████▊| 44/45 [00:03<00:00, 13.75it/s]
+[COOLDOWN] train->val pause 120s...
+Validating:   0%|          | 0/19 [00:00<?, ?it/s]Validating: 100%|██████████| 19/19 [00:02<00:00,  8.56it/s]
+New best loss model saved! Val Loss: 1.2024
+[METRICS] epoch=4 train_loss=1.2334 val_loss=1.2024 train_f1=0.3464
+Logging metrics for epoch: 4
+[COOLDOWN] end-of-epoch pause 90s for hardware to cool...
+
+--- Epoch 5/10 ---
+Training:   0%|          | 0/45 [00:00<?, ?it/s]Training:  98%|█████████▊| 44/45 [00:02<00:00, 17.83it/s]
+[COOLDOWN] train->val pause 120s...
+Validating:   0%|          | 0/19 [00:00<?, ?it/s]Validating: 100%|██████████| 19/19 [00:02<00:00,  7.17it/s]
+New best loss model saved! Val Loss: 1.2017
+[METRICS] epoch=5 train_loss=1.2255 val_loss=1.2017 train_f1=0.3438
+Logging metrics for epoch: 5
+[COOLDOWN] end-of-epoch pause 90s for hardware to cool...
+
+--- Epoch 6/10 ---
+Training:   0%|          | 0/45 [00:00<?, ?it/s]Training:  98%|█████████▊| 44/45 [00:02<00:00, 17.39it/s]
+[COOLDOWN] train->val pause 120s...
+Validating:   0%|          | 0/19 [00:00<?, ?it/s]Validating: 100%|██████████| 19/19 [00:02<00:00,  8.26it/s]
+[METRICS] epoch=6 train_loss=1.2284 val_loss=1.2150 train_f1=0.3533
+Logging metrics for epoch: 6
+[COOLDOWN] end-of-epoch pause 90s for hardware to cool...
+
+--- Epoch 7/10 ---
+Training:   0%|          | 0/45 [00:00<?, ?it/s]Training:  98%|█████████▊| 44/45 [00:02<00:00, 16.91it/s]
+[COOLDOWN] train->val pause 120s...
+Validating:   0%|          | 0/19 [00:00<?, ?it/s]Validating: 100%|██████████| 19/19 [00:03<00:00,  6.22it/s]
+[METRICS] epoch=7 train_loss=1.2052 val_loss=1.2238 train_f1=0.3486
+Logging metrics for epoch: 7
+[COOLDOWN] end-of-epoch pause 90s for hardware to cool...
+
+--- Epoch 8/10 ---
+Training:   0%|          | 0/45 [00:00<?, ?it/s]Training:  96%|█████████▌| 43/45 [00:05<00:00,  8.28it/s]Training:  98%|█████████▊| 44/45 [00:05<00:00,  8.15it/s]
+[COOLDOWN] train->val pause 120s...
+Validating:   0%|          | 0/19 [00:00<?, ?it/s]Validating: 100%|██████████| 19/19 [00:02<00:00,  6.53it/s]
+[METRICS] epoch=8 train_loss=1.1976 val_loss=1.2597 train_f1=0.3609
+Logging metrics for epoch: 8
+[COOLDOWN] end-of-epoch pause 90s for hardware to cool...
+
+--- Epoch 9/10 ---
+Training:   0%|          | 0/45 [00:00<?, ?it/s]Training:  98%|█████████▊| 44/45 [00:03<00:00, 12.49it/s]
+[COOLDOWN] train->val pause 120s...
+Validating:   0%|          | 0/19 [00:00<?, ?it/s]Validating: 100%|██████████| 19/19 [00:02<00:00,  7.56it/s]
+[METRICS] epoch=9 train_loss=1.1794 val_loss=1.2653 train_f1=0.3805
+Logging metrics for epoch: 9
+[COOLDOWN] end-of-epoch pause 90s for hardware to cool...
+
+--- Epoch 10/10 ---
+Training:   0%|          | 0/45 [00:00<?, ?it/s]Training:  98%|█████████▊| 44/45 [00:02<00:00, 16.14it/s]
+[COOLDOWN] train->val pause 120s...
+Validating:   0%|          | 0/19 [00:00<?, ?it/s]Validating: 100%|██████████| 19/19 [00:02<00:00,  8.92it/s]
+[METRICS] epoch=10 train_loss=1.1561 val_loss=1.3064 train_f1=0.3931
+Logging metrics for epoch: 10
+[COOLDOWN] end-of-epoch pause 90s for hardware to cool...
+[save-final] wrote final model to models/arch18/s01_dense_unet_resenc_d28_p1.pth
+TensorBoard logs saved to: C:\Users\ChenJeff\Documents\vesuvius\runs_p0139_arch18\cmp_p0139_arch18_2026_07_15_s01_dense_unet_resenc_d28_p1_15_20-45-51
+Training completed.

@@ -68,6 +68,11 @@ def _apply_cli_overrides(c: Config, args):
         c.data.scroll4_id = int(args.scroll4_id)
     if args.scroll3_id is not None:
         c.data.scroll3_id = int(args.scroll3_id)
+    if getattr(args, 'test_scroll_id', None) is not None:
+        c.data.test_scroll_id = int(args.test_scroll_id)
+    for _tflag in ('test_show_train', 'test_show_scroll2', 'test_show_scroll3', 'test_show_scroll4'):
+        if getattr(args, _tflag, False):
+            setattr(c.data, _tflag, True)
     if args.zarr_path is not None:
         c.data.zarr_path = args.zarr_path
 
@@ -115,6 +120,8 @@ def _apply_cli_overrides(c: Config, args):
         c.model.arch = str(args.arch)
     if getattr(args, "init_weights", None) is not None:
         c.init_weights = str(args.init_weights)
+    if getattr(args, "save_final", None) is not None:
+        c.save_final = str(args.save_final)
     if args.smooth_sigma is not None:
         c.data.smooth_sigma = float(args.smooth_sigma)
     if args.input_mode is not None:
@@ -163,6 +170,8 @@ def _apply_cli_overrides(c: Config, args):
         c.tra.val_cooldown_secs = int(args.val_cooldown)
     if getattr(args, 'fig_chunk_cooldown', None) is not None:
         c.tra.fig_chunk_cooldown_ms = int(args.fig_chunk_cooldown)
+    if getattr(args, 'epoch_cooldown', None) is not None:
+        c.tra.epoch_cooldown_secs = int(args.epoch_cooldown)
     if args.depth is not None:
         c.data.depth = int(args.depth)
     if getattr(args, "tile_size", None) is not None:
@@ -300,8 +309,12 @@ class Trainer:
             t_set_merged = MultiScrollIterableDataset(train_sets)
             v_set_merged = MultiScrollIterableDataset(valid_sets)
             t_loader, v_loader = get_dataloaders(t_set_merged, v_set_merged, self.c)
-            # pos_weight from the merged distribution across all fragments
-            pos_weight = calc_class_wgts(t_set_merged, v_set_merged, scroll_id=None)
+            # pos_weight from the merged distribution across all fragments. dense per-pixel
+            # BCE needs a PIXEL-level pos_weight (ink px fraction), not the tile class ratio.
+            if getattr(self.c.data, 'dense_labels', False):
+                pos_weight = calc_dense_pos_weight(t_set_merged)
+            else:
+                pos_weight = calc_class_wgts(t_set_merged, v_set_merged, scroll_id=None)
             self._t_set_full = t_set_merged
             self._t_set_ring = None
             print(f"[multi-scroll] merged train_tiles={len(t_set_merged)} valid_tiles={len(v_set_merged)}")
@@ -357,10 +370,17 @@ class Trainer:
         init_path = getattr(self.c, "init_weights", None)
         if init_path:
             sd = torch.load(init_path, map_location=self.c.device)
-            missing, unexpected = model.load_state_dict(sd, strict=False)
-            loaded = len(sd) - len(unexpected)
-            print(f"[init-weights] loaded {loaded}/{len(sd)} tensors from {init_path} "
-                  f"(missing={len(missing)} unexpected={len(unexpected)})")
+            # keep only keys that exist in the model AND share the same shape.
+            # strict=False skips missing/unexpected keys but still errors on shape
+            # mismatch, so filter those out for partial cross-arch transfer (e.g.
+            # dense_unet MAE -> dense_unet_depth: per_slice matches, e1+ differ).
+            model_sd = model.state_dict()
+            compat = {k: v for k, v in sd.items()
+                      if k in model_sd and v.shape == model_sd[k].shape}
+            skipped = len(sd) - len(compat)
+            missing, unexpected = model.load_state_dict(compat, strict=False)
+            print(f"[init-weights] loaded {len(compat)}/{len(sd)} tensors from {init_path} "
+                  f"(shape-skipped={skipped} missing={len(missing)} unexpected={len(unexpected)})")
         optimizer, scheduler = create_optimizer_and_scheduler(model, self.c)
         criterion = create_loss_function(self.pos_weight, self.c)
         
@@ -645,7 +665,11 @@ class Trainer:
     def _log_epoch(self, epoch, train_metrics, val_metrics, time_elapsed):
         """logs metrics for the completed epoch to tensorboard"""
         current_lr = self.optimizer.param_groups[0]['lr']
-        
+
+        # parseable one-liner for external monitors (campaign early-stop wrapper reads this)
+        print(f"[METRICS] epoch={epoch+1} train_loss={train_metrics['loss']:.4f} "
+              f"val_loss={val_metrics['loss']:.4f} train_f1={train_metrics['f1']:.4f}")
+
         self.vis.log_epoch_metrics(epoch, self.model, train_metrics, val_metrics, current_lr, time_elapsed, self.params, self.pos_weight)
         if self.c.hm.enabled:
             self.vis.writer.add_scalar("HardMining/Injected", train_metrics.get('hard_injected', 0), epoch)
@@ -656,10 +680,17 @@ class Trainer:
             eval_due  = (epoch + 1) % self.c.tra.eval_int  == 0
             test_due  = (epoch + 1) % self.c.tra.test_int  == 0
             probe_due = (epoch + 1) % self.c.tra.probe_int == 0
+            dense = getattr(self.c.data, 'dense_labels', False)
             for idx, (sid, svis) in enumerate(self.scroll_vis.items()):
                 if eval_due and getattr(svis, 'eval_enabled', True):
                     try:
-                        svis.add_evaluation_figures(epoch, self.model)
+                        # dense models produce per-pixel maps -> dense figure; else tile figure.
+                        # each per-scroll visualizer loaded its own volume/labels, so the two
+                        # scrolls render as two separate figures namespaced by s<sid>/.
+                        if dense:
+                            svis.add_dense_evaluation_figure(epoch, self.model)
+                        else:
+                            svis.add_evaluation_figures(epoch, self.model)
                     except Exception as e:
                         print(f"[ERROR] eval figures failed for scroll {sid}: {e}")
                         import traceback; traceback.print_exc()
@@ -827,6 +858,21 @@ class Trainer:
                 print(f"[COOLDOWN] {kind} epoch — sleeping {cooldown}s for hardware to cool...")
                 time.sleep(cooldown)
 
+            # unconditional per-epoch thermal cooldown (fires after EVERY epoch).
+            # avoid double-sleeping when the eval/probe cooldown above already ran.
+            _ep_cool = int(getattr(self.c.tra, 'epoch_cooldown_secs', 0))
+            if _ep_cool > 0 and not (cooldown > 0 and (is_probe_epoch or is_eval_epoch)):
+                print(f"[COOLDOWN] end-of-epoch pause {_ep_cool}s for hardware to cool...")
+                time.sleep(_ep_cool)
+
+        # explicit final checkpoint save (deterministic path) for clean resume by the
+        # campaign wrapper; independent of save_int arithmetic.
+        _final = getattr(self.c, "save_final", None)
+        if _final:
+            os.makedirs(os.path.dirname(_final), exist_ok=True)
+            save_model(self.model, _final)
+            print(f"[save-final] wrote final model to {_final}")
+
         self.vis.close()
         if getattr(self, 'scroll_vis', None):
             for svis in self.scroll_vis.values():
@@ -850,6 +896,11 @@ def main():
                         help="Comma-separated subset of --scroll-ids that render EVALUATION figures each eval step (default: all training scrolls). Test figures still render for every scroll unless --test-scroll2-only.")
     parser.add_argument("--scroll4-id", type=int, default=None, help="Scroll id for scroll4 eval path")
     parser.add_argument("--scroll3-id", type=int, default=None, help="Scroll id for scroll3 goal-scroll test figure")
+    parser.add_argument("--test-scroll-id", type=int, default=None, help="primary test fragment id; test figures render ONLY this by default (others opt-in via --test-show-*)")
+    parser.add_argument("--test-show-train", action="store_true", default=False, help="also render the training-scroll Test figure")
+    parser.add_argument("--test-show-scroll2", action="store_true", default=False, help="also render the scroll2 test figure")
+    parser.add_argument("--test-show-scroll3", action="store_true", default=False, help="also render the scroll3 test figure")
+    parser.add_argument("--test-show-scroll4", action="store_true", default=False, help="also render the scroll4 test figure")
     parser.add_argument("--zarr-path", type=str, default=None, help="Path to zarr root")
 
     parser.add_argument("--batch-size", type=int, default=None, help="Dataloader batch size")
@@ -876,6 +927,8 @@ def main():
     parser.add_argument("--arch", type=str, default=None, help="Model architecture variant (v1, v2_slim_head, ...)")    
     parser.add_argument("--init-weights", type=str, default=None,
                         help="path to a checkpoint to warm-start the model (loaded strict=False; e.g. MAE-pretrained encoder)")
+    parser.add_argument("--save-final", type=str, default=None,
+                        help="path to save the final model at end of training (deterministic, for resume by campaign wrapper)")
     parser.add_argument("--smooth-sigma", type=float, default=None, help="Gaussian blur sigma applied to inference prediction maps (0=off)")
     parser.add_argument("--conv1-drop", type=float, default=None, help="Dropout after first conv block")
     parser.add_argument("--conv2-drop", type=float, default=None, help="Dropout after second conv block")
@@ -916,6 +969,8 @@ def main():
                         help="seconds to sleep between training and validation each epoch (thermal relief, default 0)")
     parser.add_argument("--fig-chunk-cooldown", type=int, default=None,
                         help="milliseconds to sleep between spatial chunks during eval figure inference (default 0)")
+    parser.add_argument("--epoch-cooldown", type=int, default=None,
+                        help="seconds to sleep after EVERY epoch for thermal relief (default 0)")
     parser.add_argument("--ring-label-source", type=str, default=None, choices=["eroded","original","closed"],
                         help="which inklabels to use for ring boundary: 'original' (default, safest) or 'eroded'")
     parser.add_argument("--split-axis", type=str, default=None, choices=["x","y"],

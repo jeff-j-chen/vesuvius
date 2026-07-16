@@ -6,6 +6,7 @@ from typing import Any, Literal
 from collections import defaultdict
 import json
 import re
+import warnings
 
 # raise OpenCV decode pixel cap before cv2 import (native 2.4 masks/labels ~1.3 Gpx)
 os.environ.setdefault("CV_IO_MAX_IMAGE_PIXELS", str(2**34))
@@ -434,6 +435,33 @@ class TensorboardVisualizer:
             print(f"[scroll3] not available, skipping its test figure ({e})")
             self.scroll3_volume = None
 
+        # primary test fragment (e.g. an unwrapped PHerc0191 patch): loaded DEFENSIVELY.
+        # when config.data.test_scroll_id is set, add_test_figures renders ONLY this by
+        # default (others opt-in). generic full-extent load + cached norm.
+        self.testfrag_volume = self.testfrag_mask = None
+        self.testfrag_y_range = self.testfrag_x_range = None
+        self.testfrag_global_mean = self.testfrag_global_std = None
+        self.testfrag_global_min = self.testfrag_global_max = None
+        _tf = getattr(self.c.data, 'test_scroll_id', None)
+        if _tf is not None:
+            try:
+                import zarr as _zarr
+                _tv = _zarr.open(os.path.join(self.c.data.zarr_path, f'{int(_tf)}.zarr'), mode='r')
+                _tm = imread_gray(f'./masks/{int(_tf)}.png')
+                if _tm is None:
+                    raise FileNotFoundError(f'./masks/{int(_tf)}.png missing')
+                _tm = _tm / 255.0
+                _D, _H, _W = map(int, _tv.shape)
+                self.testfrag_volume = _tv; self.testfrag_mask = _tm
+                self.testfrag_y_range = (0, _H); self.testfrag_x_range = (0, _W)
+                (self.testfrag_global_mean, self.testfrag_global_std,
+                 self.testfrag_global_min, self.testfrag_global_max) = self._get_or_compute_norm(
+                    _tv, _tm, str(int(_tf)))
+                print(f'[testfrag] loaded {int(_tf)} shape ({_D},{_H},{_W}) for test figures')
+            except Exception as e:
+                print(f'[testfrag] not available, skipping ({e})')
+                self.testfrag_volume = None
+
         self._segment_assets = {}
         self.probe_specs = self._build_probe_specs() if self.probe_rois_enabled else []
         self._debug_scroll4_ranges_once()
@@ -611,7 +639,7 @@ class TensorboardVisualizer:
         dev = self.c.device
         model.eval()
 
-        out_dir = os.path.join(os.path.dirname(self.log_path), "dense_figs")
+        out_dir = os.path.join(self.log_path, "dense_figs")
         os.makedirs(out_dir, exist_ok=True)
 
         # depth windows: NO half-stepping — step = D so windows don't overlap
@@ -1815,7 +1843,7 @@ class TensorboardVisualizer:
         plt.tight_layout()
         self.writer.add_figure("Dense/FullRegion_Prediction", fig, epoch)
         try:
-            out_dir = os.path.join(os.path.dirname(self.log_path), "dense_figs")
+            out_dir = os.path.join(self.log_path, "dense_figs")
             os.makedirs(out_dir, exist_ok=True)
             out_png = os.path.join(out_dir, f"dense_eval_ep{epoch+1:02d}.png")
             fig.savefig(out_png, dpi=100)
@@ -2205,6 +2233,42 @@ class TensorboardVisualizer:
         print("Starting test figure generation...")
         model.eval()
 
+        # PRIMARY-FRAGMENT MODE: when config.data.test_scroll_id is set, render ONLY that
+        # fragment by default; Test/scroll2/scroll3/scroll4 are opt-in via test_show_* flags.
+        _tf = getattr(self.c.data, 'test_scroll_id', None)
+        if _tf is not None:
+            d = self.c.data
+            if self.testfrag_volume is not None:
+                try:
+                    self._add_single_test_figure(epoch, model, self.testfrag_volume, self.testfrag_mask,
+                        self.testfrag_y_range, self.testfrag_x_range, self.testfrag_global_mean,
+                        self.testfrag_global_std, self.testfrag_global_min, self.testfrag_global_max,
+                        f'Frag_{int(_tf)}')
+                except Exception as e:
+                    print(f'[ERROR] test-fragment figure failed: {e}')
+                    import traceback; traceback.print_exc()
+            if getattr(d, 'test_show_train', False):
+                try:
+                    self._add_single_test_figure(epoch, model, self.test_volume, self.test_mask, self.test_y_range, self.test_x_range, self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max, 'Test')
+                except Exception as e:
+                    print(f'[ERROR] Test figure failed: {e}')
+            if getattr(d, 'test_show_scroll2', False) and self.scroll2_volume is not None:
+                try:
+                    self._add_single_test_figure(epoch, model, self.scroll2_volume, self.scroll2_mask, self.scroll2_y_range, self.scroll2_x_range, self.scroll2_global_mean, self.scroll2_global_std, self.scroll2_global_min, self.scroll2_global_max, 'Scroll2')
+                except Exception as e:
+                    print(f'[ERROR] Scroll2 figure failed: {e}')
+            if getattr(d, 'test_show_scroll3', False) and self.scroll3_volume is not None:
+                try:
+                    self._add_single_test_figure(epoch, model, self.scroll3_volume, self.scroll3_mask, self.scroll3_y_range, self.scroll3_x_range, self.scroll3_global_mean, self.scroll3_global_std, self.scroll3_global_min, self.scroll3_global_max, 'Scroll3')
+                except Exception as e:
+                    print(f'[ERROR] Scroll3 figure failed: {e}')
+            if getattr(d, 'test_show_scroll4', False) and self.scroll4_volume is not None:
+                try:
+                    self._add_single_test_figure(epoch, model, self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range, self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max, 'Scroll4')
+                except Exception as e:
+                    print(f'[ERROR] Scroll4 figure failed: {e}')
+            return
+
         # cost-control: when test_scroll2_only is set, render ONLY the goal scroll2
         # fragment. this skips the very expensive full training-scroll "Test" figure
         # (e.g. the big fragment is ~2.3M tile reads / several hours) so end-of-training
@@ -2298,7 +2362,12 @@ class TensorboardVisualizer:
         return fig
 
     def _create_aggregate_eval_figure(self, all_pred_data, train_split_n, label_binary, split_axis="x"):
-        """n_blocks-row × 2-col figure: left col = predictions, right col = overlay with inklabels.
+        """(n_blocks+1)-row × 2-col figure: left col = predictions, right col = overlay with inklabels.
+
+        the final extra row is the MAX response across ALL depth layers at each coordinate
+        (element-wise nanmax over every depth block's prediction) — this is the readable
+        "collapsed" ink map, since ink at any depth should light up that coordinate. the
+        right panel of that row carries the same gold inklabel overlay as the per-depth rows.
 
         figure size adapts to the map's tile dimensions and aspect ratio so the image
         is never distorted regardless of scroll geometry. split_axis controls whether the
@@ -2319,10 +2388,18 @@ class TensorboardVisualizer:
         # recompute panel_w in case panel_h was clamped
         panel_w = panel_h * aspect
 
-        fig_w = panel_w * 2 + 0.3           # two columns + small gap
-        fig_h = panel_h * n_blocks + 0.4    # one row per depth block + title margin
+        # element-wise MAX response across every depth block (nanmax so out-of-mask
+        # NaNs are ignored; all-NaN coords stay NaN -> render black under inferno_nan)
+        stack = np.stack([pd[0] for pd in all_pred_data], axis=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            max_pred = np.nanmax(stack, axis=0)
 
-        fig, axes = plt.subplots(n_blocks, 2, figsize=(fig_w, fig_h),
+        n_rows = n_blocks + 1               # +1 for the max-across-depths row
+        fig_w = panel_w * 2 + 0.3           # two columns + small gap
+        fig_h = panel_h * n_rows + 0.4      # one row per depth block + max row + title margin
+
+        fig, axes = plt.subplots(n_rows, 2, figsize=(fig_w, fig_h),
                                  squeeze=False)
 
         split_pos = train_split_n - 0.5
@@ -2332,6 +2409,15 @@ class TensorboardVisualizer:
                 ax.axhline(y=split_pos, color='red', linestyle='--', linewidth=0.8)
             else:
                 ax.axvline(x=split_pos, color='red', linestyle='--', linewidth=0.8)
+
+        def _overlay(ax, pred):
+            """paint the gold inklabel overlay on top of a prediction panel."""
+            if label_binary is not None:
+                ov = np.zeros((*pred.shape, 4))
+                h = min(label_binary.shape[0], ov.shape[0])
+                w = min(label_binary.shape[1], ov.shape[1])
+                ov[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
+                ax.imshow(ov)
 
         for row, (full_pred, train_pred, d_start, d_end) in enumerate(all_pred_data):
             # left: raw prediction
@@ -2345,14 +2431,23 @@ class TensorboardVisualizer:
             ax_ov = axes[row, 1]
             ax_ov.imshow(full_pred, cmap='inferno_nan', vmin=0, vmax=1, aspect='equal')
             ax_ov.set_title(f'Overlay {d_start}-{d_end}', fontsize=8)
-            if label_binary is not None:
-                ov = np.zeros((*full_pred.shape, 4))
-                h = min(label_binary.shape[0], ov.shape[0])
-                w = min(label_binary.shape[1], ov.shape[1])
-                ov[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
-                ax_ov.imshow(ov)
+            _overlay(ax_ov, full_pred)
             _draw_split(ax_ov)
             ax_ov.axis('off')
+
+        # final row: MAX across all depth layers (left) + gold overlay (right)
+        ax_mp = axes[n_blocks, 0]
+        ax_mp.imshow(max_pred, cmap='inferno_nan', vmin=0, vmax=1, aspect='equal')
+        ax_mp.set_title('MAX across all depths', fontsize=8)
+        _draw_split(ax_mp)
+        ax_mp.axis('off')
+
+        ax_mpo = axes[n_blocks, 1]
+        ax_mpo.imshow(max_pred, cmap='inferno_nan', vmin=0, vmax=1, aspect='equal')
+        ax_mpo.set_title('MAX across all depths + overlay', fontsize=8)
+        _overlay(ax_mpo, max_pred)
+        _draw_split(ax_mpo)
+        ax_mpo.axis('off')
 
         plt.subplots_adjust(wspace=0.04, hspace=0.12,
                             left=0.01, right=0.99,
