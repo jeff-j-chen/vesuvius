@@ -1,195 +1,168 @@
+"""config.py -- single source of truth for all training configuration.
+
+train.py takes only `-n experiment_name`. everything else is set here by default
+or overridden per-test in campaign runners by constructing a Config() and mutating
+fields before passing to Trainer.
+
+SCROLL CONFIGURATION:
+  `scrolls` is a list of ScrollConfig objects (one per training fragment).
+  each entry carries its zarr id, split axis/fraction, and any fragment-specific
+  overrides.
+
+CURRENT TRAINING SCROLLS (4 PHerc0139 9.362um / 113keV fragments):
+  20260115000000  w044  split y 0.8055  (horizontal, top 80% train)
+  20250223000000  w059  split x 0.75   (vertical, left 75% train)
+  20260206000001  w047  split x 0.75   (vertical, left 75% train)
+  20260115000001  w056  split y 0.50   (horizontal, top 50% train)
+
+CURRENT MODEL: v14_mil_deep (MIL with per-voxel logits + LSE aggregation).
+  physics variants: v14b_mil_zgrad (depth-gradient channel), v14c_mil_lcn (local contrast norm + depth PE).
+"""
+from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List, Dict
 import os
 import torch
 
+
 @dataclass
-class DataConfig:
-    # on linux (remote server) scrolls live on the mounted network volume at /workspace;
-    # on windows fall back to the old local docs path. override via VESUVIUS_ZARR_PATH.
-    zarr_path: str = field(default_factory=lambda: os.getenv(
-        "VESUVIUS_ZARR_PATH",
-        "/vesuvius/ves_zarrs2" if os.name == "posix" else "C:\\Users\\ChenJeff\\Documents\\ves_zarrs2"))
-    # tra_scroll_id / tra_scroll_ids: the scroll fragment(s) we TRAIN on. renamed from
-    # scroll1_id to make clear the training set is a distinct (and now switchable) set
-    # of scrolls, independent of the goal/test scrolls (scroll2/scroll3/scroll4).
-    # now points at the scroll4 (PHerc1667) w018 dense-text patch, reconstructed at
-    # 2.399um in-plane / depth-resampled 109->64 via reconstruct_scroll4_patch.py.
-    # override with --scroll-id to train on a different fragment.
-    tra_scroll_id: int = 20240304144031
-    # tra_scroll_ids: list of scroll fragments to train on simultaneously (merged batches).
-    # defaults to [tra_scroll_id]; set via --scroll-ids to add more fragments.
-    # each fragment uses the same 75/25 right/left train/valid split.
-    tra_scroll_ids: list = field(default_factory=lambda: [20240304144031])
-    # subset of tra_scroll_ids that render EVALUATION figures (and, when hard mining is
-    # on, mine) on each eval step. None = all training scrolls (default, = current
-    # behavior). set via --vis-scroll-ids to watch only some fragments when training
-    # on many. NOTE: test figures are unaffected (they render for every scroll unless
-    # test_scroll2_only); probes are scroll-independent and always render once.
-    vis_scroll_ids: Optional[list] = None
-    scroll2_id: int = 20230709155141
-    scroll4_id: int = 20231210132040
-    # scroll3 (PHerc332) goal-scroll transfer target: same 7.91um modality as the scroll4
-    # training run. rendered as its OWN separate test figure alongside scroll2 when the test
-    # interval fires. loaded lazily/defensively (skipped if its zarr/mask are absent).
-    scroll3_id: int = 20240716140050
-    # when false, 'test' figures use scroll2 instead of scroll4
-    test_on_scroll4: bool = False
-    # when true, the test figure renders ONLY the goal scroll2 fragment (full extent)
-    # and skips the expensive full training-scroll "Test" figure + scroll4.
-    # used to keep end-of-training test inference affordable in campaigns.
-    test_scroll2_only: bool = False
-    # primary test fragment: id of a rendered surface-volume (e.g. an unwrapped PHerc0191
-    # patch). when set, the test figure renders ONLY this fragment by default; the training
-    # 'Test', scroll2, scroll3, scroll4 figures become opt-in via the show flags below.
-    # legacy behavior is fully preserved when this is None.
-    test_scroll_id: Optional[int] = None
-    test_show_train: bool = False
-    test_show_scroll2: bool = False
-    test_show_scroll3: bool = False
-    test_show_scroll4: bool = False
-    tile_size: int = 32
-    depth: int = 8
-    d_start: int = 28
-    d_end: int = 48
-    # training-only depth window; inference still uses d_start/d_end
-    train_d_start: int = 32
-    train_d_end: int = 40
-    # gaussian blur applied to prediction maps at inference time (0 = off)
-    # promotes spatial coherence without changing what the model learns
-    smooth_sigma: float = 0.0
-    # input representation mode for training
-    #   single: 8-slice ink-band window (current behavior)
-    #   diff:   ink_band - pre_band  (differential absorption = ink signal)
-    #   triple: concat(pre_band, ink_band, post_band) = 24 depth channels
-    input_mode: str = "single"
-    pre_band_start: int = 20   # guaranteed no-ink band before the ink window
-    pre_band_end: int = 28
-    post_band_start: int = 40  # guaranteed no-ink band after the ink window
-    post_band_end: int = 48
-    # when true: load the full zarr volume into a numpy array at startup
-    # makes all reads RAM-speed instead of disk-speed; only viable for small scrolls
-    # set false when training on terabytes of data
-    preload_to_ram: bool = False
-    # when true: back each dataset's binary mask/labels with an on-disk memmap so
-    # they pickle as a file path (a few bytes) instead of the full array. removes the
-    # per-worker RAM duplication on windows spawn — matters at the 5-10 fragment scale
-    # where N x hundreds-of-MB x num_workers would otherwise balloon. default off so
-    # small/existing runs are unchanged. scratch dir via env VESUVIUS_MMAP_DIR.
-    mask_memmap: bool = False
-    # when true: restrict training negatives to a ring of dilated-inklabel pixels
-    # eliminates the risk of training on unlabeled ink as negatives; balances to ~1:1
-    ring_negatives: bool = False
-    # which inklabels to use for ring boundary computation:
-    #   'eroded' (old behavior): ring computed from eroded_inklabels/
-    #   'original': ring computed from inklabels/ — no original ink pixel enters ring as negative
-    #   'closed': dilate+erode original labels to close letter holes, add air gap, then ring
-    # training positive labels always come from eroded_inklabels (conservative, clean)
-    ring_label_source: str = 'closed'
-    # alternating ring: on odd epochs use the ring training set, on even epochs use the
-    # full training set. hard mining runs only on ring-epoch data (closer to the decision
-    # boundary). ring set sees ~2x the epochs relative to a pure full-set run.
-    alternating_ring: bool = False
-    # soft depth label sampling: for labeled ink tiles, with prob soft_label_prob
-    # fetch from the flanking band instead and assign label soft_label_value
-    soft_label_prob: float = 0.0
-    soft_label_value: float = 0.3
-    # train/val split axis: 'x' = legacy vertical (left train / right valid);
-    # 'y' = horizontal (top train / bottom valid). the scroll4 7.91 dual-res test uses 'y'.
-    split_axis: str = 'x'
-    # fraction of the (cropped) split axis given to TRAIN (rest = valid). 0.75 = legacy.
-    train_split_frac: float = 0.75
-    # optional region crop as fractions of the full frame (start, end) per axis; (0,1)=full.
-    # lets a run train on only a sub-region (e.g. right 60% x, top 75% y) to save compute.
+class ScrollConfig:
+    scroll_id: int
+    split_axis: str = "y"         # 'x' = vertical (left/right), 'y' = horizontal (top/bottom)
+    train_split_frac: float = 0.8055
     crop_x_frac: tuple = (0.0, 1.0)
     crop_y_frac: tuple = (0.0, 1.0)
-    # DENSE PER-PIXEL SUPERVISION (switch away from binary tile labels).
-    # when true the dataloader emits a full (1,T,T) ink-label MAP per tile (from
-    # eroded_inklabels) instead of a single (1,) "any ink in tile" scalar, and the
-    # trainer uses per-pixel masked BCE against that map. this is the fundamental
-    # departure from the historical binary-tile framing: supervision becomes
-    # "classify EVERY interior pixel" instead of "does ink exist somewhere in this
-    # tile". requires a dense (fully-convolutional) arch that returns (B,1,H,W)
-    # logits, e.g. arch='dense_unet'. pairs with a large-receptive-field decoder so
-    # each output pixel decides WITH spatial context. NB: spatial data augmentation
-    # (rotations/flips) is NOT applied to the label map, so keep data_aug off here.
-    dense_labels: bool = False
-    # when true (and dense_labels on): dense per-pixel target uses a CONTINUOUS soft
-    # ink-probability map (soft_inklabels/<id>.png = eroded labels dilated + gaussian
-    # blurred) instead of the hard 0/1 mask. soft edges express calibrated boundary
-    # uncertainty (reduces overfitting) and the slight dilation recovers stroke-edge ink
-    # the erosion removed. mirrors the researchers' distilled-soft-label recipe.
-    dense_soft_labels: bool = False
+
+
+@dataclass
+class ProbeROI:
+    """a fixed readability probe: a window of tiles centred on (x, y) in pixel coords.
+    x/y are snapped to tile_size multiples at render time so they align with the training grid."""
+    x: int
+    y: int
+    label: str = ""   # e.g. 'easy' or 'hard'; used as tag prefix in TensorBoard
+
+
+# default per-scroll probe ROIs — the same window size and grid snapping apply to all.
+DEFAULT_PROBE_ROIS: Dict[int, List[ProbeROI]] = {
+    20260115000000: [
+        ProbeROI(3702, 3885, "easy"),
+        ProbeROI(2612, 4900, "hard"),
+    ],
+    20250223000000: [
+        ProbeROI(3826, 4096, "easy"),
+        ProbeROI(5210, 2496, "hard"),
+    ],
+    20260206000001: [
+        ProbeROI(5858, 1585, "easy"),
+        ProbeROI(6419, 2431, "hard"),
+    ],
+    # w056 — labeled band spans y≈1837-4472; split at y=3590 (50%)
+    # probes are approximate; adjust once ink distribution is known
+    20260115000001: [
+        ProbeROI(4870, 2500, "easy"),   # training half, center-ish
+        ProbeROI(4870, 4000, "hard"),   # validation half
+    ],
+}
+
+
+DEFAULT_SCROLLS: List[ScrollConfig] = [
+    ScrollConfig(20260115000000, split_axis="y", train_split_frac=0.8055),
+    ScrollConfig(20250223000000, split_axis="x", train_split_frac=0.75),
+    ScrollConfig(20260206000001, split_axis="x", train_split_frac=0.75),
+    ScrollConfig(20260115000001, split_axis="y", train_split_frac=0.5),
+]
+
+
+@dataclass
+class DataConfig:
+    zarr_path: str = field(default_factory=lambda: os.getenv(
+        "VESUVIUS_ZARR_PATH",
+        "/vesuvius/ves_zarrs2" if os.name == "posix"
+        else r"C:\Users\ChenJeff\Documents\ves_zarrs2"))
+
+    scrolls: List[ScrollConfig] = field(default_factory=lambda: list(DEFAULT_SCROLLS))
+
+    # test/inference scroll: fires when test_int <= epochs. default = PHerc0813 test segment.
+    test_scroll_id: Optional[int] = 20260716083545
+
+    tile_size: int = 16
+    depth: int = 8
+    d_start: int = 0
+    d_end: int = 28
+    train_d_start: int = 0
+    train_d_end: int = 28
+
+    mask_memmap: bool = True
+    ring_negatives: bool = True
+    ring_label_source: str = "eroded"
+    preload_to_ram: bool = False  # load full zarr into RAM; only useful if disk I/O is the bottleneck (it's not — chunks are uncompressed, OS caches them)
+    # per-scroll probe ROIs: {scroll_id: [ProbeROI, ...]}
+    probe_rois: Dict[int, List[ProbeROI]] = field(
+        default_factory=lambda: {k: list(v) for k, v in DEFAULT_PROBE_ROIS.items()})
+
+    # scroll2/3/4 ids: legacy eval targets; not used in the new pipeline.
+    @property
+    def scroll2_id(self) -> Optional[int]: return None
+    @property
+    def scroll3_id(self) -> Optional[int]: return None
+    @property
+    def scroll4_id(self) -> Optional[int]: return None
+    @property
+    def vis_scroll_ids(self) -> Optional[list]: return None
 
 @dataclass
 class DataloaderConfig:
-    batch_size: int = 96
-    num_workers: int = 2
-    data_aug: bool = True
-    channel_mixing_prob: float = 0.0
+    batch_size: int = 64
+    num_workers: int = 0
+    data_aug: bool = False
+    channel_mixing_prob: float = 0.25
     rotation_prob: float = 0.25
     flip_prob: float = 0.25
     noise_prob: float = 0.30
     brightness_prob: float = 0.50
     contrast_prob: float = 0.50
 
+
 @dataclass
 class TrainingConfig:
     n_epochs: int = 20
-    lr: float = 1e-4
-    weight_decay: float = 0
-    l1_lambda: float = 7e-6
+    lr: float = 2e-4
+    weight_decay: float = 0.0
+    l1_lambda: float = 3e-7
     grad_norm: float = 0.5
     patience: int = 5
     lr_decay: float = 0.5
     save_int: int = 10
-    log_dir: str = './runs_campaign4'
-    eval_int: int = 10
-    test_int: int = 30
-    probe_int: int = 5
-    eval_aggregate: bool = True  # show one aggregated (depth-averaged) eval figure in addition to per-depth
-    # probe ROIs: fixed readability probe regions rendered every probe_int epochs.
-    # disabled for now (regions are pinned to the old scroll2/scroll4 coords and will be
-    # re-introduced once the new scroll4/scroll3 probe locations are known). --probe-rois
-    # re-enables. when off, no probe specs are built and no probe figures render.
-    probe_rois_enabled: bool = False
-    focal_gamma: float = 0.0   # >0 activates focal loss: down-weights easy negatives, pushes gradient toward hard tiles
-    ranking_lambda: float = 0.0  # weight of pairwise ranking loss term
-    ranking_margin: float = 0.3  # margin: pos_score must exceed neg_score by at least this
-    ranking_neg_frac: float = 1.0  # partial-AUC: fraction of hardest (top-scoring) negatives to rank against; 1.0=all pairs (full AUC), <1.0 focuses gradient on the low-FPR region
-    pretrain_epochs: int = 0     # epochs of band-identity pretraining before BCE fine-tuning
-    eval_cooldown_secs: int = 0   # sleep this many seconds after probe/eval epochs to let hardware cool
-    val_cooldown_secs: int = 0    # sleep between train and validation each epoch (thermal relief)
-    fig_chunk_cooldown_ms: int = 0  # sleep (ms) between spatial chunks during figure inference
-    epoch_cooldown_secs: int = 0  # sleep after EVERY epoch (thermal relief on hot days)
+    log_dir: str = "./runs_p0139_triple"
+    eval_int: int = 20
+    test_int: int = 9999
+    probe_int: int = 5               # render probe ROI figures every N epochs; set > n_epochs to disable
+    epoch_cooldown_secs: int = 90
+    val_cooldown_secs: int = 120
+    eval_cooldown_secs: int = 600
+    fig_chunk_cooldown_ms: int = 600
 
-@dataclass
-class FinetuneConfig:
-    learning_rate: float = 1e-5
-    num_epochs: int = 25
 
 @dataclass
 class ModelConfig:
-    # conv1_drop: float = 0
-    # conv2_drop: float = 0
-    # fc1_drop: float = 0
-    # fc2_drop: float = 0
-    conv1_drop: float = 0.0
-    conv2_drop: float = 0.05
-    fc1_drop: float = 0.2
-    fc2_drop: float = 0.1
-    pooling: str = "avg"
-    gem_p: float = 3.0
-    conv3_dilation: int = 1
-    arch: str = "v1"
+    arch: str = "v14_mil_deep"
+    conv1_drop: float = 0.05
+    conv2_drop: float = 0.075
+
 
 @dataclass
-class HardMining:
-    enabled: bool = True
-    hn_cutoff: float = 0.8
-    hp_cutoff: float = 0.45
-    hm_frac: float = 0.1
-    dir: str = './hard_negs'
+class HardMiningConfig:
+    """hard negative / hard positive mining. set enabled=True to activate.
+    mining files are written per-scroll by the evaluator; on multi-scroll runs each
+    scroll mines independently (keyed by scroll_id) and the injector routes records
+    back to the correct volume via the scroll_id field in each JSONL record."""
+    enabled: bool = False
+    hn_cutoff: float = 0.8    # tiles scoring above this with label=0 are hard negatives
+    hp_cutoff: float = 0.45   # tiles scoring below this with label=1 are hard positives
+    hm_frac: float = 0.1      # fraction of epoch tiles to replace with hard examples
+    dir: str = "./hard_negs"  # root directory for per-experiment mining JSONL files
+
 
 @dataclass
 class Config:
@@ -197,10 +170,19 @@ class Config:
     dl: DataloaderConfig = field(default_factory=DataloaderConfig)
     tra: TrainingConfig = field(default_factory=TrainingConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
-    finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
-    hm: HardMining = field(default_factory=HardMining)
-    
-    # Derived properties
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    hm: HardMiningConfig = field(default_factory=HardMiningConfig)
+    device: str = field(default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu")
     model_dir: str = "models"
     exp_name: Optional[str] = None
+
+    def scroll_ids(self) -> List[int]:
+        return [s.scroll_id for s in self.data.scrolls]
+
+    def split_overrides(self) -> dict:
+        return {
+            s.scroll_id: {"axis": s.split_axis, "frac": s.train_split_frac}
+            for s in self.data.scrolls
+        }
+
+    def tra_scroll_ids(self) -> List[int]:
+        return self.scroll_ids()

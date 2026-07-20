@@ -659,16 +659,45 @@ class DataManager:
         # label-map shapes stay consistent.
         T = int(self.c.data.tile_size)
         H, W = int(vol.shape[1]), int(vol.shape[2])
-        cxf = getattr(self.c.data, "crop_x_frac", (0.0, 1.0))
-        cyf = getattr(self.c.data, "crop_y_frac", (0.0, 1.0))
+
+        # per-scroll crop and split: first look up this scroll's ScrollConfig if it exists,
+        # then fall back to global config fields for backward compatibility.
+        _sc = None
+        if hasattr(self.c.data, "scrolls"):
+            for s in self.c.data.scrolls:
+                if s.scroll_id == self.scroll_id:
+                    _sc = s; break
+        cxf = _sc.crop_x_frac if _sc else getattr(self.c.data, "crop_x_frac", (0.0, 1.0))
+        cyf = _sc.crop_y_frac if _sc else getattr(self.c.data, "crop_y_frac", (0.0, 1.0))
+
         x0 = (int(W * float(cxf[0])) // T) * T
         x1 = (int(W * float(cxf[1])) // T) * T
         y0 = (int(H * float(cyf[0])) // T) * T
         y1 = (int(H * float(cyf[1])) // T) * T
         x1 = max(x1, x0 + T); y1 = max(y1, y0 + T)
 
-        axis = str(getattr(self.c.data, "split_axis", "x")).lower()
-        frac = float(getattr(self.c.data, "train_split_frac", 0.75))
+        # resolve split axis and fraction: ScrollConfig takes priority, then split_overrides
+        # dict (backward compat with campaign runners), then global config defaults.
+        axis = getattr(self.c.data, "split_axis", "x")
+        frac = getattr(self.c.data, "train_split_frac", 0.75)
+        if _sc:
+            axis = _sc.split_axis
+            frac = _sc.train_split_frac
+            print(f"[split] scroll {self.scroll_id}: axis={axis} train_frac={frac}")
+        else:
+            # legacy: check split_overrides dict produced by Config.split_overrides() or
+            # passed explicitly by campaign runners using the old API
+            _ov = {}
+            if callable(getattr(self.c, "split_overrides", None)):
+                _ov = self.c.split_overrides()
+            elif isinstance(getattr(self.c.data, "split_overrides", None), dict):
+                _ov = self.c.data.split_overrides
+            ov = _ov.get(self.scroll_id, _ov.get(str(self.scroll_id)))
+            if ov:
+                axis = ov.get("axis", axis)
+                frac = ov.get("frac", frac)
+                print(f"[split-override] scroll {self.scroll_id}: axis={axis} train_frac={frac}")
+        axis = str(axis).lower()
 
         if axis == "y":
             # horizontal split: train = top, valid = bottom; x fully shared (cropped)
@@ -696,63 +725,16 @@ class DataManager:
         return vol, mask, labels, train_x_range, valid_x_range, y_range
 
     def _get_or_compute_norm(self):
-        """retrieves or computes normalization statistics"""
+        """retrieve cached norm stats; if absent, compute with the fast chunk-aligned method."""
+        from .norm import compute_norm, load_cached_norm, UNIFIED_CACHE_PATH
         seg_id = str(self.scroll_id)
-
-        # first, try to load from cache
-        cache = _load_unified_cache()
-        stats = cache.get(seg_id)
-        if isinstance(stats, dict) and _is_norm_stats(stats):
+        cached = load_cached_norm(seg_id, UNIFIED_CACHE_PATH)
+        if cached is not None:
             print(f"[info] using cached normalization for segment {seg_id}")
-            return stats["mean"], stats["std"], stats["min"], stats["max"]
-
-        # if not in cache, compute the statistics
-        print(f"[info] computing normalization for segment {seg_id}")
-        total_sum, total_sq_sum, total_count = 0.0, 0.0, 0
-        
-        # first pass: calculate mean and standard deviation
-        for z in tqdm(range(self.vol.shape[0])): # type: ignore
-            chunk = self.vol[z, :, :]
-            mask_chunk = self.mask[:, :]
-            valid_pixels = chunk[mask_chunk > 0]
-            if valid_pixels.size == 0: continue
-            
-            total_sum += np.sum(valid_pixels, dtype=np.float64) # type: ignore
-            total_sq_sum += np.sum(np.square(valid_pixels, dtype=np.float64), dtype=np.float64) # type: ignore
-            total_count += valid_pixels.size # type: ignore
-
-        if total_count == 0: raise ValueError("no valid pixels found")
-
-        mean = total_sum / total_count
-        std = np.sqrt((total_sq_sum / total_count) - np.square(mean))
-        
-        # second pass: calculate min and max of normalized values
-        g_min, g_max = float('inf'), float('-inf')
-        for z in tqdm(range(self.vol.shape[0])): # type: ignore
-            chunk = self.vol[z, :, :]
-            mask_chunk = self.mask[:, :]
-            valid_pixels = chunk[mask_chunk > 0]
-            if valid_pixels.size == 0: continue
-            
-            norm_pixels = (valid_pixels.astype(np.float64) - mean) / std # type: ignore
-            g_min = min(g_min, norm_pixels.min())
-            g_max = max(g_max, norm_pixels.max())
-
-        stats = {"mean": mean, "std": std, "min": g_min, "max": g_max}
-
-        # update unified cache file
-        cache = _load_unified_cache()
-        entry = cache.get(seg_id, {})
-        if not isinstance(entry, dict):
-            entry = {}
-        entry["mean"] = mean
-        entry["std"] = std
-        entry["min"] = g_min
-        entry["max"] = g_max
-        cache[seg_id] = entry
-        _save_unified_cache(cache)
-            
-        return mean, std, g_min, g_max
+            return cached
+        print(f"[info] computing normalization for segment {seg_id} (chunk-aligned pass)")
+        zarr_path = getattr(self.c.data, "zarr_path", "./ves_zarrs2")
+        return compute_norm(seg_id, zarr_path, UNIFIED_CACHE_PATH)
 
     def get_datasets(self):
         """creates train and validation datasets.
@@ -896,7 +878,7 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
         num_workers=config.dl.num_workers,
         pin_memory=True,
         persistent_workers=config.dl.num_workers > 0,
-        prefetch_factor=2 if config.dl.num_workers > 0 else None,
+        prefetch_factor=4 if config.dl.num_workers > 0 else None,
         drop_last=True,   # prevents trailing batch of 1 from crashing BatchNorm
     )
 

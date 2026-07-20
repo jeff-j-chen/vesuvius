@@ -7,12 +7,11 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 from utils.config import Config
 from utils.visualizer import TensorboardVisualizer
 from utils.hard_mining import HardMiningManager, HardMiningInjector
-from utils.dataloader import DataManager, get_dataloaders, calc_class_wgts, calc_dense_pos_weight, MultiScrollIterableDataset
+from utils.dataloader import DataManager, get_dataloaders, calc_class_wgts, MultiScrollIterableDataset
 from utils.model import create_model
 from utils.training_utils import (
     create_optimizer_and_scheduler, 
     create_loss_function,
-    pairwise_ranking_loss,
     calculate_metrics,
     save_model
 )
@@ -25,176 +24,8 @@ from torch.cuda.amp.grad_scaler import GradScaler
 from tqdm import tqdm
 import sys
 import time
-import argparse
 import random
 
-
-def _apply_cli_overrides(c: Config, args):
-    """apply optional CLI overrides to config"""
-    if args.epochs is not None:
-        c.tra.n_epochs = int(args.epochs)
-    if args.eval_int is not None:
-        c.tra.eval_int = int(args.eval_int)
-    if args.test_int is not None:
-        c.tra.test_int = int(args.test_int)
-    if args.probe_int is not None:
-        c.tra.probe_int = int(args.probe_int)
-    if args.log_dir is not None:
-        c.tra.log_dir = str(args.log_dir)
-
-    if args.scroll_id is not None:
-        c.data.tra_scroll_id = int(args.scroll_id)
-    if getattr(args, "scroll_ids", None):
-        ids = [int(s.strip()) for s in args.scroll_ids.split(",") if s.strip()]
-        if ids:
-            c.data.tra_scroll_ids = ids
-            # keep tra_scroll_id as the primary (first) fragment for any single-scroll fallbacks
-            c.data.tra_scroll_id = ids[0]
-    else:
-        # if only a single scroll id was given (or default), keep the list in sync
-        c.data.tra_scroll_ids = [int(c.data.tra_scroll_id)]
-    # resolve which scrolls render evaluation figures (subset of training scrolls).
-    # must run AFTER tra_scroll_ids is finalized. None => all training scrolls.
-    if getattr(args, "vis_scroll_ids", None):
-        vids = [int(s.strip()) for s in args.vis_scroll_ids.split(",") if s.strip()]
-        unknown = [v for v in vids if v not in c.data.tra_scroll_ids]
-        if unknown:
-            print(f"[warn] --vis-scroll-ids ids not in --scroll-ids are ignored: {unknown}")
-        kept = [v for v in vids if v in c.data.tra_scroll_ids]
-        c.data.vis_scroll_ids = kept or None
-    else:
-        c.data.vis_scroll_ids = None
-    if args.scroll4_id is not None:
-        c.data.scroll4_id = int(args.scroll4_id)
-    if args.scroll3_id is not None:
-        c.data.scroll3_id = int(args.scroll3_id)
-    if getattr(args, 'test_scroll_id', None) is not None:
-        c.data.test_scroll_id = int(args.test_scroll_id)
-    for _tflag in ('test_show_train', 'test_show_scroll2', 'test_show_scroll3', 'test_show_scroll4'):
-        if getattr(args, _tflag, False):
-            setattr(c.data, _tflag, True)
-    if args.zarr_path is not None:
-        c.data.zarr_path = args.zarr_path
-
-    if args.batch_size is not None:
-        c.dl.batch_size = int(args.batch_size)
-    if args.num_workers is not None:
-        c.dl.num_workers = int(args.num_workers)
-    if args.data_aug is not None:
-        c.dl.data_aug = bool(int(args.data_aug))
-
-    if args.lr is not None:
-        c.tra.lr = float(args.lr)
-    if args.weight_decay is not None:
-        c.tra.weight_decay = float(args.weight_decay)
-    if args.l1_lambda is not None:
-        c.tra.l1_lambda = float(args.l1_lambda)
-
-    if args.no_hard_mining:
-        c.hm.enabled = False
-    if args.focal_gamma is not None:
-        c.tra.focal_gamma = float(args.focal_gamma)
-    if args.hm_frac is not None:
-        c.hm.hm_frac = float(args.hm_frac)
-    if args.hn_cutoff is not None:
-        c.hm.hn_cutoff = float(args.hn_cutoff)
-    if args.hp_cutoff is not None:
-        c.hm.hp_cutoff = float(args.hp_cutoff)
-    if args.hm_dir is not None:
-        c.hm.dir = args.hm_dir
-
-    if args.channel_mixing_prob is not None:
-        c.dl.channel_mixing_prob = float(args.channel_mixing_prob)
-    if getattr(args, 'noise_prob', None) is not None:
-        c.dl.noise_prob = float(args.noise_prob)
-    if getattr(args, 'rotation_prob', None) is not None:
-        c.dl.rotation_prob = float(args.rotation_prob)
-
-    if args.pooling is not None:
-        c.model.pooling = str(args.pooling)
-    if args.gem_p is not None:
-        c.model.gem_p = float(args.gem_p)
-    if args.conv3_dilation is not None:
-        c.model.conv3_dilation = int(args.conv3_dilation)
-    if args.arch is not None:
-        c.model.arch = str(args.arch)
-    if getattr(args, "init_weights", None) is not None:
-        c.init_weights = str(args.init_weights)
-    if getattr(args, "save_final", None) is not None:
-        c.save_final = str(args.save_final)
-    if args.smooth_sigma is not None:
-        c.data.smooth_sigma = float(args.smooth_sigma)
-    if args.input_mode is not None:
-        c.data.input_mode = str(args.input_mode)
-    if args.soft_label_prob is not None:
-        c.data.soft_label_prob = float(args.soft_label_prob)
-    if args.soft_label_value is not None:
-        c.data.soft_label_value = float(args.soft_label_value)
-    if args.ranking_lambda is not None:
-        c.tra.ranking_lambda = float(args.ranking_lambda)
-    if args.ranking_margin is not None:
-        c.tra.ranking_margin = float(args.ranking_margin)
-    if args.ranking_neg_frac is not None:
-        c.tra.ranking_neg_frac = float(args.ranking_neg_frac)
-    if getattr(args, "probe_rois", None) is not None:
-        c.tra.probe_rois_enabled = bool(args.probe_rois)
-    if args.pretrain_epochs is not None:
-        c.tra.pretrain_epochs = int(args.pretrain_epochs)
-    if args.preload_volume:
-        c.data.preload_to_ram = True
-    if getattr(args, "mask_memmap", False):
-        c.data.mask_memmap = True
-    if args.ring_negatives:
-        c.data.ring_negatives = True
-    if getattr(args, "dense_labels", False):
-        c.data.dense_labels = True
-    if getattr(args, "dense_soft_labels", False):
-        c.data.dense_soft_labels = True
-    if getattr(args, "test_scroll2_only", False):
-        c.data.test_scroll2_only = True
-    if args.ring_label_source is not None:
-        c.data.ring_label_source = args.ring_label_source
-    if getattr(args, "split_axis", None) is not None:
-        c.data.split_axis = str(args.split_axis)
-    if getattr(args, "train_split_frac", None) is not None:
-        c.data.train_split_frac = float(args.train_split_frac)
-    if getattr(args, "crop_x_frac", None) is not None:
-        c.data.crop_x_frac = tuple(float(v) for v in args.crop_x_frac.split(","))
-    if getattr(args, "crop_y_frac", None) is not None:
-        c.data.crop_y_frac = tuple(float(v) for v in args.crop_y_frac.split(","))
-    if args.alternating_ring:
-        c.data.alternating_ring = True
-    if args.eval_cooldown is not None:
-        c.tra.eval_cooldown_secs = int(args.eval_cooldown)
-    if getattr(args, 'val_cooldown', None) is not None:
-        c.tra.val_cooldown_secs = int(args.val_cooldown)
-    if getattr(args, 'fig_chunk_cooldown', None) is not None:
-        c.tra.fig_chunk_cooldown_ms = int(args.fig_chunk_cooldown)
-    if getattr(args, 'epoch_cooldown', None) is not None:
-        c.tra.epoch_cooldown_secs = int(args.epoch_cooldown)
-    if args.depth is not None:
-        c.data.depth = int(args.depth)
-    if getattr(args, "tile_size", None) is not None:
-        c.data.tile_size = int(args.tile_size)
-    if args.train_d_start is not None:
-        c.data.train_d_start = int(args.train_d_start)
-        c.data.train_d_end = c.data.train_d_start + c.data.depth  # default; overridden below if --train-d-end given
-    if args.train_d_end is not None:
-        c.data.train_d_end = int(args.train_d_end)
-    # inference/eval depth window (drives the eval figure z_range + inference sweep). set to
-    # 0/64 to visualize the whole sheet depth when the ink layer is unknown.
-    if args.d_start is not None:
-        c.data.d_start = int(args.d_start)
-    if args.d_end is not None:
-        c.data.d_end = int(args.d_end)
-    if args.conv1_drop is not None:
-        c.model.conv1_drop = float(args.conv1_drop)
-    if args.conv2_drop is not None:
-        c.model.conv2_drop = float(args.conv2_drop)
-    if args.fc1_drop is not None:
-        c.model.fc1_drop = float(args.fc1_drop)
-    if args.fc2_drop is not None:
-        c.model.fc2_drop = float(args.fc2_drop)
 
 def set_seed(seed=42):
     """sets the seed for reproducibility across all relevant libraries"""
@@ -230,7 +61,7 @@ class Trainer:
         
         # setup logging and visualization
         print("Initializing Tensorboard...")
-        scroll_ids = getattr(self, '_scroll_ids', None) or [self.c.data.tra_scroll_id]
+        scroll_ids = self._scroll_ids
         if len(scroll_ids) > 1:
             # merged training stream: the main visualizer owns the single tensorboard
             # run folder and logs scalar metrics; one figure-visualizer per scroll
@@ -253,7 +84,6 @@ class Trainer:
         self.scaler = GradScaler()
         self.hard_manager = HardMiningManager(self.c.hm.dir)
         self.hard_samples = []
-        
         # initialize tracking variables for best model saving
         self.best_val_loss = float('inf')
         self.best_val_f1 = 0.0
@@ -275,23 +105,12 @@ class Trainer:
         print("Creating datasets...")
         start_time = time.time()
 
-        # resolve the list of scroll fragments to train on. multiple fragments are
-        # merged into a single stream so every epoch sees all of them (integrated
-        # batches). defaults to the single primary scroll for backward compatibility.
-        scroll_ids = [int(s) for s in (getattr(self.c.data, 'tra_scroll_ids', None) or [self.c.data.tra_scroll_id])]
+        scroll_ids = [s.scroll_id for s in self.c.data.scrolls]
         self._scroll_ids = scroll_ids
         self._scroll_train_sets = None   # {scroll_id: train_set} in multiscroll, for HM routing
         multi = len(scroll_ids) > 1
 
-        alternating = getattr(self.c.data, 'alternating_ring', False)
-
         if multi:
-            # multi-scroll merged training. alternating-ring is still unsupported here,
-            # but hard mining IS supported: each scroll mines into its own dir and the
-            # injector routes every mined record back to the right scroll volume via its
-            # scroll_id. build a per-scroll train-set map so injection can resolve it.
-            if alternating:
-                print("[multi-scroll] alternating_ring not supported with multiple scrolls; ignoring")
 
             ring_mode = getattr(self.c.data, 'ring_negatives', False)
             train_sets, valid_sets = [], []
@@ -309,12 +128,7 @@ class Trainer:
             t_set_merged = MultiScrollIterableDataset(train_sets)
             v_set_merged = MultiScrollIterableDataset(valid_sets)
             t_loader, v_loader = get_dataloaders(t_set_merged, v_set_merged, self.c)
-            # pos_weight from the merged distribution across all fragments. dense per-pixel
-            # BCE needs a PIXEL-level pos_weight (ink px fraction), not the tile class ratio.
-            if getattr(self.c.data, 'dense_labels', False):
-                pos_weight = calc_dense_pos_weight(t_set_merged)
-            else:
-                pos_weight = calc_class_wgts(t_set_merged, v_set_merged, scroll_id=None)
+            pos_weight = calc_class_wgts(t_set_merged, v_set_merged, scroll_id=None)
             self._t_set_full = t_set_merged
             self._t_set_ring = None
             print(f"[multi-scroll] merged train_tiles={len(t_set_merged)} valid_tiles={len(v_set_merged)}")
@@ -324,37 +138,11 @@ class Trainer:
         data_manager = DataManager(self.c, scroll_id=scroll_ids[0])
         self._scroll_dms = {scroll_ids[0]: data_manager}
 
-        if alternating:
-            # build both datasets upfront: full-mask set and ring-mask set
-            t_set_full, v_set = data_manager.get_datasets()  # ring_negatives=False path
-            # temporarily enable ring for the ring dataset
-            self.c.data.ring_negatives = True
-            t_set_ring, _ = data_manager.get_datasets()
-            self.c.data.ring_negatives = False
-            # loader defaults to full set; switched per-epoch in run()
-            t_loader, v_loader = get_dataloaders(t_set_full, v_set, self.c)
-            # pos_weight from full scroll distribution (ring epochs re-weight internally)
-            pos_weight = calc_class_wgts(t_set_full, v_set,
-                                         scroll_id=self.c.data.tra_scroll_id)
-            self._t_set_full = t_set_full
-            self._t_set_ring = t_set_ring
-            print(f"[alternating_ring] full_tiles={len(t_set_full)}  ring_tiles={len(t_set_ring)}")
-        else:
-            t_set_full, v_set = data_manager.get_datasets()
-            t_loader, v_loader = get_dataloaders(t_set_full, v_set, self.c)
-            ring_mode = getattr(self.c.data, 'ring_negatives', False)
-            if getattr(self.c.data, 'dense_labels', False):
-                # dense per-pixel BCE needs a PIXEL-level pos_weight (ink px fraction),
-                # not the tile-level class ratio; tile-label sampling would also crash on
-                # the (1,T,T) label maps.
-                pos_weight = calc_dense_pos_weight(t_set_full)
-            else:
-                pos_weight = calc_class_wgts(
-                    t_set_full, t_set_full if ring_mode else v_set,
-                    scroll_id=None if ring_mode else self.c.data.tra_scroll_id
-                )
-            self._t_set_full = t_set_full
-            self._t_set_ring = None
+        t_set_full, v_set = data_manager.get_datasets()
+        t_loader, v_loader = get_dataloaders(t_set_full, v_set, self.c)
+        pos_weight = calc_class_wgts(t_set_full, v_set, scroll_id=None)
+        self._t_set_full = t_set_full
+        self._t_set_ring = None
 
         print(f"Data setup done in {time.time() - start_time:.2f}s")
         return t_set_full, t_loader, v_loader, pos_weight
@@ -416,18 +204,6 @@ class Trainer:
             raw_loss_val = (raw_loss.sum() / mask.sum()).item()
             l1_loss = sum(p.abs().sum() for p in self.model.parameters())
             loss = (raw_loss.sum() / mask.sum()) + self.c.tra.l1_lambda * l1_loss
-
-            # pairwise ranking loss: positive tiles must score above negatives by >= margin
-            ranking_lambda = float(getattr(self.c.tra, 'ranking_lambda', 0.0))
-            if ranking_lambda > 0:
-                probs = torch.sigmoid(outputs).squeeze(1)
-                labels_flat = b_labels.squeeze(1)
-                rank_loss = pairwise_ranking_loss(
-                    probs, labels_flat,
-                    margin=float(getattr(self.c.tra, 'ranking_margin', 0.3)),
-                    neg_frac=float(getattr(self.c.tra, 'ranking_neg_frac', 1.0))
-                )
-                loss = loss + ranking_lambda * rank_loss
 
         # backward pass and optimization step
         self.scaler.scale(loss).backward()
@@ -879,147 +655,29 @@ class Trainer:
                 svis.close()
         print("Training completed.")
 
+
 def main():
-    """parses arguments, initializes the configuration, and starts training"""
-    parser = argparse.ArgumentParser(description="Training script for Vesuvius model.")
-    parser.add_argument("-n", "--experiment_name", type=str, default="", help="Name of the experiment")
-    parser.add_argument("--epochs", type=int, default=None, help="Override number of epochs")
-    parser.add_argument("--eval-int", type=int, default=None, help="Override evaluation interval")
-    parser.add_argument("--test-int", type=int, default=None, help="Override test figure interval")
-    parser.add_argument("--probe-int", type=int, default=None, help="Override probe interval")
-    parser.add_argument("--log-dir", type=str, default=None, help="Override TensorBoard log directory")
-
-    parser.add_argument("--scroll-id", type=int, default=None, help="Scroll id for train/valid")
-    parser.add_argument("--scroll-ids", type=str, default=None,
-                        help="Comma-separated scroll fragment ids to train on simultaneously (merged batches), e.g. 20230827161847,20230702185753")
-    parser.add_argument("--vis-scroll-ids", type=str, default=None,
-                        help="Comma-separated subset of --scroll-ids that render EVALUATION figures each eval step (default: all training scrolls). Test figures still render for every scroll unless --test-scroll2-only.")
-    parser.add_argument("--scroll4-id", type=int, default=None, help="Scroll id for scroll4 eval path")
-    parser.add_argument("--scroll3-id", type=int, default=None, help="Scroll id for scroll3 goal-scroll test figure")
-    parser.add_argument("--test-scroll-id", type=int, default=None, help="primary test fragment id; test figures render ONLY this by default (others opt-in via --test-show-*)")
-    parser.add_argument("--test-show-train", action="store_true", default=False, help="also render the training-scroll Test figure")
-    parser.add_argument("--test-show-scroll2", action="store_true", default=False, help="also render the scroll2 test figure")
-    parser.add_argument("--test-show-scroll3", action="store_true", default=False, help="also render the scroll3 test figure")
-    parser.add_argument("--test-show-scroll4", action="store_true", default=False, help="also render the scroll4 test figure")
-    parser.add_argument("--zarr-path", type=str, default=None, help="Path to zarr root")
-
-    parser.add_argument("--batch-size", type=int, default=None, help="Dataloader batch size")
-    parser.add_argument("--num-workers", type=int, default=None, help="Dataloader workers")
-    parser.add_argument("--data-aug", type=int, choices=[0, 1], default=None, help="Enable/disable data augmentation")
-
-    parser.add_argument("--lr", type=float, default=None, help="Learning rate")
-    parser.add_argument("--weight-decay", type=float, default=None, help="Weight decay")
-    parser.add_argument("--l1-lambda", type=float, default=None, help="L1 regularization strength")
-
-    parser.add_argument("--no-hard-mining", action="store_true", help="Disable hard mining entirely")
-    parser.add_argument("--focal-gamma", type=float, default=None, help="Focal loss gamma (0=BCE, 2.0=standard focal)")
-    parser.add_argument("--hm-frac", type=float, default=None, help="Hard-mining sample fraction")
-    parser.add_argument("--hn-cutoff", type=float, default=None, help="Hard-negative score cutoff")
-    parser.add_argument("--hp-cutoff", type=float, default=None, help="Hard-positive score cutoff")
-    parser.add_argument("--hm-dir", type=str, default=None, help="Hard-mining directory")
-
-    parser.add_argument("--channel-mixing-prob", type=float, default=None, help="Depth channel permutation probability")
-    parser.add_argument("--noise-prob", type=float, default=None, help="Gaussian noise augmentation probability (default 0.30; set low when signal is faint)")
-    parser.add_argument("--rotation-prob", type=float, default=None, help="90/180/270 rotation augmentation probability")
-    parser.add_argument("--pooling", type=str, choices=["avg", "max", "gem"], default=None, help="Pooling mode")
-    parser.add_argument("--gem-p", type=float, default=None, help="Initial GeM pooling p")
-    parser.add_argument("--conv3-dilation", type=int, default=None, help="Dilation for final conv stage")
-    parser.add_argument("--arch", type=str, default=None, help="Model architecture variant (v1, v2_slim_head, ...)")    
-    parser.add_argument("--init-weights", type=str, default=None,
-                        help="path to a checkpoint to warm-start the model (loaded strict=False; e.g. MAE-pretrained encoder)")
-    parser.add_argument("--save-final", type=str, default=None,
-                        help="path to save the final model at end of training (deterministic, for resume by campaign wrapper)")
-    parser.add_argument("--smooth-sigma", type=float, default=None, help="Gaussian blur sigma applied to inference prediction maps (0=off)")
-    parser.add_argument("--conv1-drop", type=float, default=None, help="Dropout after first conv block")
-    parser.add_argument("--conv2-drop", type=float, default=None, help="Dropout after second conv block")
-    parser.add_argument("--fc1-drop", type=float, default=None, help="Dropout on first FC layers")
-    parser.add_argument("--fc2-drop", type=float, default=None, help="Dropout on final FC layer")
-    # campaign 4 additions
-    parser.add_argument("--input-mode", type=str, choices=["single","diff","triple","double","fulldepth"], default=None,
-                        help="Input representation mode")
-    parser.add_argument("--soft-label-prob", type=float, default=None,
-                        help="Probability of sampling flanking band with soft label for ink tiles")
-    parser.add_argument("--soft-label-value", type=float, default=None,
-                        help="Label value assigned to flanking-band ink tiles (default 0.3)")
-    parser.add_argument("--ranking-lambda", type=float, default=None,
-                        help="Weight for pairwise ranking loss (0=off)")
-    parser.add_argument("--ranking-margin", type=float, default=None,
-                        help="Margin for pairwise ranking loss (default 0.3)")
-    parser.add_argument("--ranking-neg-frac", type=float, default=None,
-                        help="Partial-AUC: fraction of hardest negatives to rank against (1.0=all pairs, <1.0 focuses on low-FPR region)")
-    parser.add_argument("--probe-rois", dest="probe_rois", action="store_true", default=None,
-                        help="Enable fixed readability probe-ROI figures (default off)")
-    parser.add_argument("--no-probe-rois", dest="probe_rois", action="store_false", default=None,
-                        help="Disable probe-ROI figures")
-    parser.add_argument("--pretrain-epochs", type=int, default=None,
-                        help="Epochs of self-supervised band-identity pretraining before BCE")
-    parser.add_argument("--preload-volume", action="store_true", default=False,
-                        help="load full zarr into RAM before training; only safe for small scrolls (~10GB free RAM needed)")
-    parser.add_argument("--mask-memmap", action="store_true", default=False,
-                        help="back each dataset's binary mask/labels with an on-disk memmap so they pickle as a path, not data; avoids per-worker RAM duplication at the 5-10 fragment scale (scratch dir via env VESUVIUS_MMAP_DIR)")
-    parser.add_argument("--ring-negatives", action="store_true", default=False,
-                        help="restrict training negatives to a ring around ink labels (~1:1 pos/neg ratio, no unlabeled-ink contamination)")
-    parser.add_argument("--dense-labels", action="store_true", default=False,
-                        help="DENSE per-pixel supervision: emit the (1,T,T) ink-label MAP per tile and train per-pixel masked BCE (switch away from binary tile labels). requires a dense arch, e.g. --arch dense_unet")
-    parser.add_argument("--dense-soft-labels", action="store_true", default=False,
-                        help="use continuous soft ink labels (soft_inklabels/<id>.png = eroded dilated+blurred) as the dense target instead of hard 0/1; calibrated soft edges. requires --dense-labels")
-    parser.add_argument("--eval-cooldown", type=int, default=None,
-                        help="seconds to sleep after probe/eval epochs to let hardware cool (default 0)")
-    parser.add_argument("--val-cooldown", type=int, default=None,
-                        help="seconds to sleep between training and validation each epoch (thermal relief, default 0)")
-    parser.add_argument("--fig-chunk-cooldown", type=int, default=None,
-                        help="milliseconds to sleep between spatial chunks during eval figure inference (default 0)")
-    parser.add_argument("--epoch-cooldown", type=int, default=None,
-                        help="seconds to sleep after EVERY epoch for thermal relief (default 0)")
-    parser.add_argument("--ring-label-source", type=str, default=None, choices=["eroded","original","closed"],
-                        help="which inklabels to use for ring boundary: 'original' (default, safest) or 'eroded'")
-    parser.add_argument("--split-axis", type=str, default=None, choices=["x","y"],
-                        help="train/val split axis: 'x' vertical (left/right, legacy) or 'y' horizontal (top train/bottom valid)")
-    parser.add_argument("--train-split-frac", type=float, default=None,
-                        help="fraction of the (cropped) split axis given to train (default 0.75)")
-    parser.add_argument("--crop-x-frac", type=str, default=None,
-                        help="region crop along x as 'start,end' fractions of the frame (e.g. 0.4,1.0 = right 60%%)")
-    parser.add_argument("--crop-y-frac", type=str, default=None,
-                        help="region crop along y as 'start,end' fractions of the frame (e.g. 0.0,0.75 = top 75%%)")
-    parser.add_argument("--alternating-ring", action="store_true", default=False,
-                        help="alternate between full dataset (even epochs) and ring dataset (odd epochs); hard mining only on ring epochs")
-    parser.add_argument("--depth", type=int, default=None,
-                        help="number of depth slices per tile (default 8; use 12 for ink band z=28-40)")
-    parser.add_argument("--tile-size", type=int, default=None,
-                        help="in-plane tile size (default 32; use 106 for the 2.4um teacher so a "
-                             "106x106 teacher tile == a 32x32 7.91um tile physically)")
-    parser.add_argument("--train-d-start", type=int, default=None,
-                        help="start z-index of training depth window")
-    parser.add_argument("--train-d-end", type=int, default=None,
-                        help="end z-index of training depth window (exclusive); overrides the default train_d_start+depth")
-    parser.add_argument("--d-start", type=int, default=None,
-                        help="start z-index of the inference/eval depth window (eval figure z_range)")
-    parser.add_argument("--d-end", type=int, default=None,
-                        help="end z-index of the inference/eval depth window (exclusive); set 0/64 to sweep full depth")
-    parser.add_argument("--test-scroll2-only", action="store_true", default=False,
-                        help="test figure renders ONLY the full goal scroll2 fragment (skips the expensive training-scroll Test figure + scroll4); use for affordable end-of-training transfer checks")
+    """train.py takes only -n for the experiment name; all other config comes from config.py.
+    campaign runners override config fields directly by instantiating Config() and mutating
+    fields before passing to Trainer. see campaign_runner_p0139_triple.py for examples."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Vesuvius ink-detection training")
+    parser.add_argument("-n", "--experiment_name", type=str, default="", help="experiment name (used for TensorBoard log dir and checkpoint naming)")
     args = parser.parse_args()
-    
-    # load configuration and optionally override experiment name
+
     c = Config()
     if args.experiment_name:
         c.exp_name = args.experiment_name
-    _apply_cli_overrides(c, args)
 
     repo_root = os.path.dirname(os.path.abspath(__file__))
-    if c.exp_name:
-        c.hm.dir = os.path.join(c.hm.dir, c.exp_name)
-
     if not os.path.isabs(c.tra.log_dir):
         c.tra.log_dir = os.path.normpath(os.path.join(repo_root, c.tra.log_dir))
-    if not os.path.isabs(c.hm.dir):
-        c.hm.dir = os.path.normpath(os.path.join(repo_root, c.hm.dir))
     if not os.path.isabs(c.model_dir):
         c.model_dir = os.path.normpath(os.path.join(repo_root, c.model_dir))
-        
-    # initialize and run the trainer
+
     trainer = Trainer(c)
     trainer.run()
+
 
 if __name__ == "__main__":
     main()

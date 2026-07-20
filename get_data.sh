@@ -1,1 +1,0 @@
-aria2c -x10 https://jeff-vesuvius.s3.us-east-2.amazonaws.com/ves_zarrs2.tar --file-allocation=none; tar -xf ves_zarrs2.tar`
