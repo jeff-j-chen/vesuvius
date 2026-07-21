@@ -1101,3 +1101,113 @@ INTEGRATED into train.py (config.data.dense_labels / --dense-labels):
 - Readability-scalar tuning as an objective — legibility is judged visually; not a lever.
 - Over-indexing on 2.4um-only FINE texture — transfer dead-end: fiber-scale texture is
   physically unresolved at 7.9um, so only LOW-frequency density/morphology can ever transfer.
+
+---
+
+## 16) PHerc0139 9.362 µm Campaign Series (2026-07 onwards)
+
+This section documents the shift to the **PHerc0139** scroll (9.362 µm / 113 keV / 1.2 m detector),
+away from the old PHerc0332/PHerc1667 7.91 µm work in sections 1-15. The ink here is
+carbon-based (same as scrolls 2/3/4) but at 113 keV there is measurable morphological contrast
+from pen pressure — enough for MIL-based tile classifiers to learn from.
+
+The old sections (1-15) remain as a reference for the 7.91 µm / 2.4 µm investigation history.
+All active training code, zarr paths, and config have been updated to the new data.
+
+### 16.1 Data and Infrastructure
+
+**Training zarrs** (all PHerc0139, 9.362 µm, chunks (8,32,32), uint16, zarr_format=2):
+- `20260115000000` w044 — shape (28, 6021, 8141), mask valid 0.882
+- `20250223000000` w059 — shape (28, 7220, 10020), mask valid 0.295 (1.1 µm overlap band)
+- `20260206000001` w047 — shape (28, 5821, 8421), mask valid 0.402 (1.1 µm overlap band)
+- `20260115000001` w056 — shape (28, 7180, 9740), mask valid ~0.313 (1.1 µm overlap band)
+  added 2026-07-19; labeled band y≈1837-4472; horizontal split top 50% train
+
+**Zarr root:** `C:\Users\ChenJeff\Documents\ves_zarrs2\`
+
+**Test zarr:** `20260716083545` — PHerc0813, (28, 4421, 4421), VC3D-grown segment
+`auto_grown_20260716083545968`, 2.98 cm², max_gen=175 (restored snap 9, 2026-07-17).
+External backup: `Documents/vc3d_recovered_0211/RESTORED_auto_grown_20260716083545968_snap9_latest`
+
+**Config system:** `utils/config.py` — dataclass-based, no CLI args to `train.py` (only `-n`).
+Campaign runners instantiate `Config()`, mutate fields, pass to `Trainer(c).run()`.
+
+**Depth convention:** d=0 is the topmost layer. The ink signal for PHerc0139 concentrates
+most strongly in the middle stack (d=8-16); d=0-4 and d=24-28 tend to be noise or empty
+air above/below the papyrus.
+
+**VC3D segment recovery procedure:** if the active paths folder gets zeroed by a crash,
+autosave backups survive at `~/.VC3D/remote_cache/open_data/projects/backups/<uuid>/<N>/`.
+Restore by copying the highest-numbered good snapshot back into `paths/<uuid>/`. Check with
+`($b = [System.IO.File]::ReadAllBytes("$snap\x.tif"); ($b | Where-Object {$_ -ne 0}).Count)`.
+
+### 16.2 Architecture Family (v14)
+
+All active models share the v14 MIL backbone, registered in `utils/model.py`:
+
+**v14_mil_deep** (base, 1,136,210 params at tile=16, depth=8):
+1. Per-slice stem: two Conv3d with depth kernel=1. Learns 2D texture per depth independently.
+2. Depth-mix: two full Conv3d(3,3,3) + CBAM3D attention + MaxPool3d(1,2,2) spatial only.
+3. Per-voxel logit head: Conv1×1×1 → scalar per voxel.
+4. LSE aggregation: tile_logit = (1/r) × (logsumexp(r·v) − log N), r learnable [0.5, 10].
+5. BCE loss against eroded-inklabel tile label.
+
+Key insight: global-average-pool (all arch10/18/28 models) dilutes the sparse ink signal
+~1000×. LSE lets a handful of high-confidence voxels drive the tile prediction.
+
+**v14b_mil_zgrad:** feeds [raw, dI/dz] to the per-slice stem. The z-derivative peaks at
+ink-layer interfaces and is invariant to the slowly-varying papyrus bulk-density baseline.
+
+**v14c_mil_lcn:** feeds [raw, LCN(raw)] to the per-slice stem plus a learnable depth
+positional encoding. LCN removes the global bulk baseline while preserving local texture.
+The depth PE lets the model key on the absolute depth band where ink sits, exploiting the
+fact that the papyrus surface lies at a consistent depth range across tiles.
+
+### 16.3 Triple-Scroll Sweep: campaign_p0139_triple_v2 (2026-07-17)
+
+12 tests (t02-t13) covering:
+- tile: 16, 24
+- depth: 8, 4
+- range: 0-28, 8-16
+- arch: v14_mil_deep, v14b_mil_zgrad, v14c_mil_lcn
+- one aug test (t13)
+
+Training scrolls: w044 + w059 + w047 (3-scroll). Logs in `runs_p0139_triple/`.
+
+WINNER: **t06 — v14c_mil_lcn, tile=24, depth=8, range=0-28**
+`cmp_p0139_triple_v2_2026_07_17_t06_v14c_mil_lcn_t24_d8_r0to28`
+
+Extreme overfitting but clearly the best learner — it finds ink where others don't. The
+overfitting just means regularization needs to be tightened, not that the architecture is wrong.
+
+Key findings from the sweep:
+- d8 > d4 overall (more depth context helps)
+- t16 > t24 overall (smaller tiles = tighter locality = harder decision boundary = better generalization)
+- range 8-16 > 0-28 overall (concentrating on the ink-rich middle stack reduces noise)
+- EXCEPTION: d4 performed better than d8 when combined with range 8-16 (shallower depth
+  window is more tolerable when the spatial range is already tight)
+- v14c_mil_lcn dominated across every tile/depth combination it appeared in
+
+WHY LCN WON: at 113 keV the papyrus bulk density creates a slowly-varying spatial
+brightness gradient that is different in every tile (beam hardening, scan geometry,
+papyrus thickness variation). Raw intensities force the network to spend capacity learning
+invariance to this gradient. LCN removes it by subtracting the local neighborhood mean and
+dividing by local std — the network sees only LOCAL CONTRAST which is what ink actually is:
+a fine-scale density perturbation relative to the surrounding papyrus. The depth PE is a
+bonus: ink consistently sits at a specific depth range within the papyrus stack, and the PE
+gives the model a soft prior on this without hardcoding it.
+
+### 16.4 LCN Refinement Campaign: campaign_lcn (2026-07-19)
+
+3 tests, all v14c_mil_lcn, range 8-16, 4-scroll (w044+w059+w047+w056):
+- t01: tile=16, depth=8
+- t02: tile=16, depth=4
+- t03: tile=8, depth=4
+
+Key changes vs triple_v2:
+- l1_lambda raised 3e-7 → 7e-6 (to fight the overfitting the LCN win exposed)
+- w056 added as 4th training scroll (horizontal split, top 50% train)
+- range fixed to 8-16 (best range from triple_v2)
+- only LCN arch tested (winner confirmed, refining not re-searching)
+
+Logs in `runs_lcn/`. Runner: `campaign_runner_lcn.py`.

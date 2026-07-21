@@ -1,7 +1,7 @@
 # PHerc0139 Ink Detector
 
 Binary tile-level ink detection on 9.362 µm / 113 keV CT scans of Herculaneum papyrus scrolls.
-Winning architecture: **v14_mil_deep** — Multiple Instance Learning with per-voxel logits and a learnable-hardness log-sum-exp bag aggregation (see [Model](#model)).
+Current leading architecture: **v14c_mil_lcn** — MIL with LCN preprocessing + learnable depth positional encoding, winner of the triple-scroll sweep (see [Model](#model)). Base variant **v14_mil_deep** is the stable reference.
 
 ---
 
@@ -15,7 +15,8 @@ Winning architecture: **v14_mil_deep** — Multiple Instance Learning with per-v
 python train.py -n "experiment_name"
 
 # run a named campaign (overrides config fields per test)
-python campaign_runner_p0139_triple.py
+python campaign_runner_p0139_triple_v2.py   # 12-test arch/tile/depth sweep (completed)
+python campaign_runner_lcn.py                # LCN refinement sweep (3 tests, active)
 
 # compute/cache normalisation stats (needed once per new zarr)
 python precompute_norm.py --scroll-id 20260206000001
@@ -25,13 +26,14 @@ python precompute_norm.py --scroll-id 20260206000001
 
 ## Training data
 
-All three fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113 keV, 1.2 m detector distance). Raw volume ID: `20250728140407`.
+All four fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113 keV, 1.2 m detector distance). Raw volume ID: `20250728140407`.
 
 | ID | Fragment | Scroll | Zarr shape (D,H,W) | Mask valid frac | Split |
 |---|---|---|---|---|---|
 | `20260115000000` | **w044** | PHerc0139 | (28, 6021, 8141) | 0.882 | horizontal (top 80.55% train) |
 | `20250223000000` | **w059** | PHerc0139 | (28, 7220, 10020) | 0.295 (1.1 µm overlap band) | vertical (left 75% train) |
 | `20260206000001` | **w047** | PHerc0139 | (28, 5821, 8421) | 0.402 (1.1 µm overlap band) | vertical (left 75% train) |
+| `20260115000001` | **w056** | PHerc0139 | (28, 7161, 9721) | 0.866 (rendered from tifxyz; label coverage ~full footprint) | horizontal (top 50% train) |
 
 The masks for **w059** and **w047** are intersected with the 1.1 µm ink-detection footprint (ROI2). Only the portion of the 9.4 µm surface that was also scanned at high resolution carries reliable ink labels. Full 9.4 µm masks are preserved as `masks/<id>_full9um.png`.
 
@@ -39,24 +41,73 @@ Ink labels (1.129 µm source, 59 keV) live in `inklabels/` (continuous 0–255 i
 
 ---
 
-## Test segment
-(segment from 0211 also looks great)
-The test/inference segment is from a different scroll — **PHerc0813** (also 9.362 µm / 113 keV / 1.2 m, raw volume `20250821151723`).
+## Test segments
+
+Three VC3D-grown patches are configured as default test targets (`test_scroll_ids` in `utils/config.py`). Test figures are generated when `test_int` fires (currently set to 9999 — disabled until a sufficiently good model is found). The visualizer loads each segment sequentially with CUDA cache cleared between renders to keep VRAM bounded for the larger segments.
+
+### Segment 1 — original reference patch
 
 | | |
 |---|---|
 | Segment name | `auto_grown_20260716083545968` |
+| Scroll Source | Pherc0813 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151723`)
 | Zarr ID | `20260716083545` |
 | Zarr shape | (28, 4421, 4421) |
-| Area | **2.84 cm²** |
-| max_gen | 179 (VC3D growth iterations) |
-| tifxyz grid | 222 × 222 vertices, 8002 valid (16.2% of grid) |
-| tifxyz bbox | x 4176–5730 µm, y 3261–4570 µm, z 9208–11370 µm (in 9.362 µm raw-volume voxel coords) |
-| tifxyz scale | 0.05 cm per grid step (i.e. 0.5 mm per grid unit) |
-| tifxyz format | Each (u,v) cell stores the raw-volume (x,y,z) voxel coordinate of the corresponding surface point. Invalid cells = –1. `uuid` = segment creation timestamp = zarr ID. |
-| tifxyz location | `~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260716083545968/` — files `x.tif`, `y.tif`, `z.tif`, `generations.tif`, `meta.json` |
+| Area | **2.98 cm²** |
+| max_gen | 175 (VC3D growth iterations, restored from autosave snap 9) |
+| Mask valid frac | 0.87 (compact rectangular patch) |
+| tifxyz grid | 222 × 222 vertices |
+| tifxyz bbox | x 4176–5730 µm, y 3261–4570 µm, z 9208–11370 µm (raw-volume voxel coords) |
+| tifxyz scale | 0.05 cm per grid step |
+| tifxyz location | `~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260716083545968/` |
+| Notes | First segment I unrolled; results are shoddy | 
 
-The tifxyz `uuid` (`auto_grown_20260716083545968`) and zarr ID (`20260716083545`) together satisfy the competition traceability requirement: "name each image after the tifxyz mesh used to generate it."
+### Segment 2 — large elongated strip (2026-07-17)
+
+| | |
+|---|---|
+| Segment name | `auto_grown_20260717193517520` |
+| Scroll Source | Pherc0211 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151803`)
+| Zarr ID | `20260717193517` |
+| Zarr shape | (28, 10821, 10821) |
+| Area | **11.49 cm²** |
+| max_gen | 740 (VC3D growth iterations) |
+| Mask valid frac | 0.055 (re-rendered from updated .VC3D mesh; mesh coverage unchanged) |
+| tifxyz grid | 542 × 542 vertices |
+| tifxyz location | `~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260717193517520/` |
+| Notes | Stretches the entire length of the scroll, page is connected to segment xx218)
+
+### Segment 3 — wide patch (2026-07-19)
+
+| | |
+|---|---|
+| Segment name | `auto_grown_20260719202304218` |
+| Scroll Source | Pherc0211 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151803`)
+| Zarr ID | `20260719202304` |
+| Zarr shape | (28, 6741, 6741) |
+| Area | **10.74 cm²** |
+| max_gen | 392 (VC3D growth iterations) |
+| Mask valid frac | 0.120 (re-rendered from updated .VC3D mesh; mesh coverage unchanged) |
+| tifxyz grid | 338 × 338 vertices |
+| tifxyz location | `~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260719202304218/` |
+| Notes | Stretches the majority of the scroll (too much artifacting at top and bottom) | 
+
+### Segment 4 — PHerc1203 patch (2026-07-20)
+
+| | |
+|---|---|
+| Segment name | `auto_grown_20260720090842117` |
+| Scroll Source | PHerc1203 (9.362 µm / 113 keV / 1.2 m, raw volume `20250820131727`) |
+| Zarr ID | `20260720090842` |
+| Zarr shape | (28, 13201, 13201) |
+| Area | **7.90 cm²** |
+| max_gen | 345 (VC3D growth iterations) |
+| Mask valid frac | 0.049 (sparse strip within large bounding box) |
+| tifxyz grid | 661 × 661 vertices |
+| tifxyz location | `~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260720090842117/` |
+| Notes | First PHerc1203 segment; different scroll entirely from training data |
+
+All four are rendered from their VC3D tifxyz mesh against their respective raw CT volume. The tifxyz format stores a 2D grid of 3D raw-volume voxel coordinates — the actual CT intensities are fetched at render time via `old/render_9um_surface.py`. See `assemble_test_zarr.sh` for the reproduction command for segment 1.
 
 ---
 
@@ -95,7 +146,8 @@ The tifxyz `uuid` (`auto_grown_20260716083545968`) and zarr ID (`20260716083545`
 | `old/render_9um_surface.py` | Renders a tifxyz mesh against the raw zarr via surface-normal sampling. Used for w047 and test segment. |
 | `overlay_2p4_9um.py` | Alignment sanity: hi-res (red, half opacity) over lo-res (green), yellow = overlap. Reports NCC. |
 | `test_inference.ipynb` | Standalone inference notebook. Set `MODEL_PATH` + `SCROLL_ID`, Run All → depth panels + MAX figure. |
-| `campaign_runner_p0139_triple.py` | 13-test sweep: tile 16/24 × base/zgrad/lcn × depth-8/4 × range-0-28/8-16 + augmentation. |
+| `campaign_runner_p0139_triple_v2.py` | 12-test sweep: tile 16/24 × base/zgrad/lcn × depth-8/4 × range 0-28/8-16 + aug. **v14c_mil_lcn t24 d8 r8-16 won.** |
+| `campaign_runner_lcn.py` | LCN refinement sweep: 3 tests (tile 16/8 × depth 8/4, range 8-16, l1=7e-6, 4 scrolls). |
 
 ---
 
@@ -108,7 +160,7 @@ bash assemble_training_zarrs.sh [--workers 24]
 Downloads w044 and w059 (pre-rendered OME-Zarr on S3 via `old/download_surface_zarr.py`) and renders w047 from its tifxyz mesh (`old/render_9um_surface.py`). After running, restrict the w047 mask to the 1.1 µm overlap band (see the snippet in the script comments). Then cache normalization stats:
 
 ```bash
-python precompute_norm.py --scroll-id 20260115000000 --scroll-id 20250223000000 --scroll-id 20260206000001
+python precompute_norm.py --scroll-id 20260115000000 --scroll-id 20250223000000 --scroll-id 20260206000001 --scroll-id 20260115000001
 ```
 
 **Adding a new segment:**
@@ -130,10 +182,10 @@ Loads the checkpoint, opens `ves_zarrs2/<SCROLL_ID>.zarr`, uses cached normaliza
 - A **MAX across all depths** collapsed panel + gold inklabel overlay
 - Optional PNG save (`SAVE_PNG` variable)
 
-Default: winning model (`models/arch28/s07_v14_mil_deep_d8_p2.pth`) on the PHerc0813 test segment (`20260716083545`).
+Default: set `MODEL_PATH` to your best checkpoint (latest: `runs_lcn/` from the LCN sweep) on the PHerc0813 test segment (`20260716083545`).
 
 ---
 
 ## Historical notes
 
-See `old/KNOWLEDGE.md` for the full research log: architecture search campaigns (arch10/18/28/triple), failure modes (saturation, hard-max depth collapse, BatchNorm vs InstanceNorm), physics analysis (113 keV ink model), PHerc0211/0813 segment work, 2.4 µm vs 9.4 µm comparison, overlay analysis, and hardware crash diagnosis.
+See `old/KNOWLEDGE.md` for the full research log: pre-2026 campaigns (arch10/18/28, scroll1/4 at 7.91 µm), 2.4 µm vs 9.4 µm investigation, scroll4 teacher-zarr work, and the 2026-07 PHerc0139 9.362 µm campaign series (triple-scroll sweep, LCN win, w056 addition).

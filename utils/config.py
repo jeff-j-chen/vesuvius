@@ -83,8 +83,19 @@ class DataConfig:
 
     scrolls: List[ScrollConfig] = field(default_factory=lambda: list(DEFAULT_SCROLLS))
 
-    # test/inference scroll: fires when test_int <= epochs. default = PHerc0813 test segment.
-    test_scroll_id: Optional[int] = 20260716083545
+    # test/inference scrolls (all rendered when test_int fires).
+    # default = VC3D segments grown so far (PHerc0813 x3, PHerc1203 x1).
+    test_scroll_ids: List[int] = field(default_factory=lambda: [
+        20260716083545,   # auto_grown_20260716083545968  2.98cm²  max_gen=175  PHerc0813
+        20260717193517,   # auto_grown_20260717193517520  11.49cm² max_gen=740  PHerc0211
+        20260719202304,   # auto_grown_20260719202304218  10.74cm² max_gen=392  PHerc0211
+        20260720090842,   # auto_grown_20260720090842117  7.90cm²  max_gen=345  PHerc1203
+    ])
+
+    @property
+    def test_scroll_id(self) -> Optional[int]:
+        """backward-compat: returns first test scroll id, or None"""
+        return self.test_scroll_ids[0] if self.test_scroll_ids else None
 
     tile_size: int = 16
     depth: int = 8
@@ -138,6 +149,12 @@ class TrainingConfig:
     eval_int: int = 20
     test_int: int = 9999
     probe_int: int = 5               # render probe ROI figures every N epochs; set > n_epochs to disable
+    probe_rois_enabled: bool = True
+    label_smooth: float = 0.0        # label smoothing: 0 = hard 0/1, 0.05 = soft 0.05/0.95
+    seed: int = 41                   # base RNG seed (torch/cuda/numpy/random + dataloader workers)
+    deterministic: bool = False      # True = exact reproducibility (cudnn deterministic, no benchmark);
+                                     # costs ~10-20% speed. False = fast path (cudnn benchmark, GPU atomics
+                                     # -> tiny run-to-run differences even with a fixed seed)
     epoch_cooldown_secs: int = 90
     val_cooldown_secs: int = 120
     eval_cooldown_secs: int = 600
@@ -147,8 +164,9 @@ class TrainingConfig:
 @dataclass
 class ModelConfig:
     arch: str = "v14_mil_deep"
-    conv1_drop: float = 0.05
-    conv2_drop: float = 0.075
+    conv1_drop: float = 0.05   # Dropout3d between depth-mix conv blocks (channel-wise)
+    conv2_drop: float = 0.075  # Dropout3d at end of depth-mix stage (channel-wise)
+    head_drop:  float = 0.0    # Dropout3d before voxel head (closest to old FC-head dropout)
 
 
 @dataclass

@@ -96,6 +96,7 @@ class InkDetectorMILDeep(nn.Module):
         self.lse_r = nn.Parameter(torch.tensor(2.0))
         d1 = float(getattr(config.model, "conv1_drop", 0.0))
         d2 = float(getattr(config.model, "conv2_drop", 0.05))
+        dh = float(getattr(config.model, "head_drop", 0.0))
         self.per_slice = nn.Sequential(
             nn.Conv3d(1, 32, kernel_size=(1, 3, 3), padding=(0, 1, 1), bias=False),
             nn.BatchNorm3d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
@@ -103,6 +104,7 @@ class InkDetectorMILDeep(nn.Module):
             nn.BatchNorm3d(64).to(dtype=torch.float32), nn.ReLU(inplace=True),
         )
         self.depth_mix = _depth_mix(d1, d2)
+        self.head_drop = nn.Dropout3d(dh) if dh > 0 else nn.Identity()
         self.voxel_head = nn.Conv3d(256, 1, kernel_size=1, bias=True)
         self.last_voxel_map = None
 
@@ -110,7 +112,7 @@ class InkDetectorMILDeep(nn.Module):
         if x.dim() == 4: x = x.unsqueeze(1)
         f = self.per_slice(x)
         f = self.depth_mix(f)
-        vmap = self.voxel_head(f)
+        vmap = self.voxel_head(self.head_drop(f))
         self.last_voxel_map = vmap.detach()
         return _mil_lse(vmap, self.lse_r, x.device)
 
@@ -128,6 +130,7 @@ class InkDetectorMILDeepZGrad(nn.Module):
         self.lse_r = nn.Parameter(torch.tensor(2.0))
         d1 = float(getattr(config.model, "conv1_drop", 0.0))
         d2 = float(getattr(config.model, "conv2_drop", 0.05))
+        dh = float(getattr(config.model, "head_drop", 0.0))
         self.per_slice = nn.Sequential(
             nn.Conv3d(2, 32, kernel_size=(1, 3, 3), padding=(0, 1, 1), bias=False),
             nn.BatchNorm3d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
@@ -135,6 +138,7 @@ class InkDetectorMILDeepZGrad(nn.Module):
             nn.BatchNorm3d(64).to(dtype=torch.float32), nn.ReLU(inplace=True),
         )
         self.depth_mix = _depth_mix(d1, d2)
+        self.head_drop = nn.Dropout3d(dh) if dh > 0 else nn.Identity()
         self.voxel_head = nn.Conv3d(256, 1, kernel_size=1, bias=True)
         self.last_voxel_map = None
 
@@ -144,7 +148,7 @@ class InkDetectorMILDeepZGrad(nn.Module):
         dz[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
         f = self.per_slice(torch.cat([x, dz], dim=1))
         f = self.depth_mix(f)
-        vmap = self.voxel_head(f)
+        vmap = self.voxel_head(self.head_drop(f))
         self.last_voxel_map = vmap.detach()
         return _mil_lse(vmap, self.lse_r, x.device)
 
@@ -163,6 +167,7 @@ class InkDetectorMILDeepLCN(nn.Module):
         self.lse_r = nn.Parameter(torch.tensor(2.0))
         d1 = float(getattr(config.model, "conv1_drop", 0.0))
         d2 = float(getattr(config.model, "conv2_drop", 0.05))
+        dh = float(getattr(config.model, "head_drop", 0.0))
         self.per_slice = nn.Sequential(
             nn.Conv3d(2, 32, kernel_size=(1, 3, 3), padding=(0, 1, 1), bias=False),
             nn.BatchNorm3d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
@@ -171,23 +176,109 @@ class InkDetectorMILDeepLCN(nn.Module):
         )
         self.depth_pe = nn.Parameter(torch.zeros(1, 64, 32, 1, 1))
         self.depth_mix = _depth_mix(d1, d2)
+        self.head_drop = nn.Dropout3d(dh) if dh > 0 else nn.Identity()
         self.voxel_head = nn.Conv3d(256, 1, kernel_size=1, bias=True)
         self.last_voxel_map = None
+
+    def get_voxel_logits(self, x, depth_offset=0):
+        """extract per-voxel logit map (B,1,D,H/2,W/2) before MIL aggregation.
+        depth_offset: absolute start slice index in the zarr, selects the correct
+        depth_pe slice so the model receives accurate absolute-depth context."""
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(torch.cat([x, _lcn2d(x, 5)], dim=1))
+        D = f.shape[2]
+        f = f + self.depth_pe[:, :, depth_offset:depth_offset + D]
+        f = self.depth_mix(f)
+        return self.voxel_head(self.head_drop(f))
 
     def forward(self, x):
         if x.dim() == 4: x = x.unsqueeze(1)
         f = self.per_slice(torch.cat([x, _lcn2d(x, 5)], dim=1))
         f = f + self.depth_pe[:, :, :f.shape[2]]
         f = self.depth_mix(f)
-        vmap = self.voxel_head(f)
+        vmap = self.voxel_head(self.head_drop(f))
         self.last_voxel_map = vmap.detach()
         return _mil_lse(vmap, self.lse_r, x.device)
 
 
+class InkDetectorTwoStageLCN(nn.Module):
+    """v15_twostage_lcn: two-stage MIL detector with learned cross-window depth fusion.
+
+    stage 1 (shared backbone, tied weights):
+      v14c_mil_lcn applied to each of 3 non-overlapping 8-slice depth windows
+      covering depth 4->28 (windows: 4-12, 12-20, 20-28).
+      weights are TIED across windows -- same feature extractor, but each window
+      receives its correct ABSOLUTE depth positional encoding (offset 4, 12, 20),
+      so the model can genuinely distinguish depth bands (unlike single-window
+      training where depth_pe is always indexed 0-7 regardless of absolute depth).
+
+    stage 2 (small 3D CNN):
+      fuses the 3 per-voxel logit maps (shape B,3,8,H/2,W/2) via learned convolutions.
+      can learn cross-window patterns, e.g. "strong in window 2 but silent in 1+3"
+      -- a signature the single-window model cannot detect.
+      final MIL-LSE aggregates the fused map to a tile logit.
+
+    why this differs from the old dense_unet:
+      dense_unet used hard depth-max -> 2D U-Net decoder with dense pixel labels.
+      this model uses soft MIL-LSE per window -> learned cross-window fusion -> tile
+      label, staying fully within the MIL tile-label framing.
+
+    input: (B, 1, 24, H, W) raw CT  (single channel; LCN computed per-window internally)
+    depth layout within the 24-slice block:
+      slices  0-7  -> absolute depth  4-12  (pe_offset=4)
+      slices  8-15 -> absolute depth 12-20  (pe_offset=12)
+      slices 16-23 -> absolute depth 20-28  (pe_offset=20)
+    config: set depth=24, train_d_start=4, train_d_end=28, d_start=4, d_end=28
+    """
+
+    # (slice_start, slice_end, absolute_pe_offset) for each window
+    WINDOWS = [(0, 8, 4), (8, 16, 12), (16, 24, 20)]
+
+    def __init__(self, config: Config):
+        super().__init__()
+        # shared stage-1 backbone (tied weights across all 3 windows)
+        self.stage1 = InkDetectorMILDeepLCN(config)
+
+        # stage-2 fusion CNN: (B,3,D,H/2,W/2) -> (B,1,D,H/2,W/2)
+        self.stage2 = nn.Sequential(
+            nn.Conv3d(3, 16, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm3d(16), nn.ReLU(inplace=True),
+            nn.Conv3d(16, 8, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm3d(8), nn.ReLU(inplace=True),
+            nn.Conv3d(8, 1, kernel_size=1, bias=True),
+        )
+        # independent MIL-LSE temperature for stage 2
+        self.lse_r2 = nn.Parameter(torch.tensor(2.0))
+        self.last_voxel_map = None
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        # stage 1: per-window voxel logit extraction with correct absolute depth PE
+        voxel_maps = [
+            self.stage1.get_voxel_logits(x[:, :, z0:z1], depth_offset=pe_off)
+            for z0, z1, pe_off in self.WINDOWS
+        ]  # each (B, 1, 8, H/2, W/2)
+
+        # stage 2: cross-window fusion
+        v_cat = torch.cat(voxel_maps, dim=1)      # (B, 3, 8, H/2, W/2)
+        fused = self.stage2(v_cat)                 # (B, 1, 8, H/2, W/2)
+        self.last_voxel_map = fused.detach()
+
+        # MIL-LSE aggregation on stage-2 output
+        r = self.lse_r2.clamp(min=0.5, max=10.0)
+        flat = fused.flatten(1)
+        N = flat.shape[1]
+        return (1.0 / r) * (
+            torch.logsumexp(r * flat, dim=1, keepdim=True)
+            - torch.log(torch.tensor(float(N), device=fused.device))
+        )
+
+
 _ARCH_MAP = {
-    "v14_mil_deep":   InkDetectorMILDeep,
-    "v14b_mil_zgrad": InkDetectorMILDeepZGrad,
-    "v14c_mil_lcn":   InkDetectorMILDeepLCN,
+    "v14_mil_deep":      InkDetectorMILDeep,
+    "v14b_mil_zgrad":    InkDetectorMILDeepZGrad,
+    "v14c_mil_lcn":      InkDetectorMILDeepLCN,
+    "v15_twostage_lcn":  InkDetectorTwoStageLCN,
 }
 
 

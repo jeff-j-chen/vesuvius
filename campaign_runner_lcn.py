@@ -27,7 +27,7 @@ run one:   python campaign_runner_lcn.py --only t02
 dry-run:   python campaign_runner_lcn.py --dry-run
 """
 from __future__ import annotations
-import argparse, os, sys, time, traceback
+import argparse, gc, os, sys, time, traceback
 from pathlib import Path
 from typing import List
 
@@ -37,7 +37,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 from utils.config import Config
 
-INTER_RUN_COOLDOWN_SECS = 420
+INTER_RUN_COOLDOWN_SECS = 120
 
 
 def _base_config(exp_name: str) -> Config:
@@ -66,10 +66,10 @@ def _base_config(exp_name: str) -> Config:
     c.data.ring_negatives    = True
     c.data.ring_label_source = "eroded"
     # thermal cooldowns
-    c.tra.epoch_cooldown_secs   = 90
-    c.tra.val_cooldown_secs     = 120
-    c.tra.eval_cooldown_secs    = 600
-    c.tra.fig_chunk_cooldown_ms = 600
+    c.tra.epoch_cooldown_secs   = 9
+    c.tra.val_cooldown_secs     = 12
+    c.tra.eval_cooldown_secs    = 60
+    c.tra.fig_chunk_cooldown_ms = 60
     return c
 
 
@@ -148,6 +148,14 @@ def main():
         results.append(f"  {tid} (v14c_mil_lcn t{tile} d{depth} r8-16): {status}")
         print(f"[lcn] done {tid} -> {status}", flush=True)
         if i < len(selected) and not args.dry_run:
+            # free GPU memory before next run to prevent OOM from accumulation
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
             cooldown(INTER_RUN_COOLDOWN_SECS, "inter-run")
 
     print(f"\n{'='*70}\n[lcn] SUMMARY\n{'='*70}")

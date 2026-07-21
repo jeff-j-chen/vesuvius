@@ -27,24 +27,43 @@ import time
 import random
 
 
-def set_seed(seed=42):
-    """sets the seed for reproducibility across all relevant libraries"""
-    # benchmark=True: cuDNN profiles algorithms on the first batch and caches the winner
-    # deterministic=True would conflict — it prevents caching, causing re-benchmarking
-    # on every forward pass and growing cuDNN workspace memory until OOM
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.deterministic = False
+def set_seed(seed=42, deterministic=False):
+    """sets the seed for reproducibility across all relevant libraries.
+
+    deterministic=False (default, FAST): cuDNN profiles+caches the fastest conv algo
+      (benchmark=True). conv/pool backward use non-deterministic GPU atomics, so two
+      runs with the SAME seed differ very slightly (fp noise that compounds over epochs).
+      this is the speed/memory path.
+    deterministic=True (EXACT): forces deterministic cuDNN algos, disables benchmark, and
+      requires CUBLAS_WORKSPACE_CONFIG for deterministic cuBLAS matmuls. two runs with the
+      same seed are then bit-for-bit identical, at ~10-20% speed cost. warn_only=True so an
+      op without a deterministic kernel warns instead of hard-crashing mid-run.
+    """
     torch.cuda.manual_seed_all(seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
+    if deterministic:
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        except Exception as e:
+            print(f"[seed] use_deterministic_algorithms unavailable: {e}")
+        print(f"[seed] DETERMINISTIC mode (seed={seed}) — exact reproducibility, slower")
+    else:
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+        print(f"[seed] fast mode (seed={seed}) — cudnn benchmark on, tiny run-to-run fp noise")
 
 class Trainer:
     """manages the model training and validation process"""
     def __init__(self, config):
         """initializes the trainer, setting up data, model, and logging"""
         self.c = config
-        set_seed(41)
+        set_seed(int(getattr(config.tra, "seed", 41)),
+                 deterministic=bool(getattr(config.tra, "deterministic", False)))
         self._print_config()
         
         # initialize data, model, and optimizer

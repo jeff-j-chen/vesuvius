@@ -110,12 +110,17 @@ def _save_unified_cache(cache, cache_path=UNIFIED_CACHE_PATH):
 class Transform:
     """handles data augmentation transforms"""
     def __init__(self, config: Config):
-        self.channel_mixing_prob = float(getattr(config.dl, "channel_mixing_prob", 0.25))
+        self.channel_mixing_prob = float(getattr(config.dl, "channel_mixing_prob", 0.0))
         self.rotation_prob = float(getattr(config.dl, "rotation_prob", 0.25))
         self.flip_prob = float(getattr(config.dl, "flip_prob", 0.25))
         self.noise_prob = float(getattr(config.dl, "noise_prob", 0.30))
         self.brightness_prob = float(getattr(config.dl, "brightness_prob", 0.50))
         self.contrast_prob = float(getattr(config.dl, "contrast_prob", 0.50))
+        # specaugment-style masking
+        self.cutout_prob      = float(getattr(config.dl, "cutout_prob", 0.0))
+        self.cutout_max_frac  = float(getattr(config.dl, "cutout_max_frac", 0.35))
+        self.cutout_n_patches = int(getattr(config.dl, "cutout_n_patches", 1))
+        self.depth_mask_prob  = float(getattr(config.dl, "depth_mask_prob", 0.0))
 
     def __call__(self, block):
         """applies a random sequence of transforms to a block"""
@@ -132,11 +137,38 @@ class Transform:
             block = self._apply_brightness_adjustment(block)
         if random.random() < self.contrast_prob:
             block = self._apply_contrast_adjustment(block)
+        if random.random() < self.cutout_prob:
+            block = self._apply_cutout(block)
+        if self.depth_mask_prob > 0:
+            block = self._apply_depth_mask(block)
         # ensure the final result is contiguous to avoid negative strides
         return np.ascontiguousarray(block)
 
+    def _apply_cutout(self, block):
+        """zero out random XY patches across all depth slices (specaugment-style).
+        forces the model to use distributed spatial evidence rather than
+        memorizing specific locations."""
+        out = block.copy()
+        _, H, W = out.shape
+        for _ in range(self.cutout_n_patches):
+            ph = random.randint(1, max(1, int(H * self.cutout_max_frac)))
+            pw = random.randint(1, max(1, int(W * self.cutout_max_frac)))
+            y0 = random.randint(0, H - ph)
+            x0 = random.randint(0, W - pw)
+            out[:, y0:y0 + ph, x0:x0 + pw] = 0.0
+        return out
+
+    def _apply_depth_mask(self, block):
+        """independently zero out depth slices with depth_mask_prob each.
+        forces robustness to missing depth planes."""
+        out = block.copy()
+        for d in range(out.shape[0]):
+            if random.random() < self.depth_mask_prob:
+                out[d] = 0.0
+        return out
+
     def _apply_channel_mixing(self, block):
-        """mixes the order of the depth channels"""
+        """mixes the order of the depth channels. NOTE: almost certainly ruins training in all cases"""
         indices = np.random.permutation(block.shape[0])
         mixed = block[indices]
         # guard against any non contiguous result from advanced indexing
@@ -872,6 +904,17 @@ class DataManager:
 
 def get_dataloaders(train_dataset, valid_dataset, config: Config):
     """creates dataloader objects from datasets"""
+    # deterministic per-worker seeding: each spawned worker reseeds numpy+random from a
+    # base seed + worker id, so the augmentations (which draw from the GLOBAL np.random /
+    # random state) are reproducible across runs even with num_workers>0. with
+    # num_workers=0 this is unused and the main-process set_seed already covers it.
+    _base_seed = int(getattr(config.tra, "seed", 41))
+
+    def _worker_init(worker_id):
+        s = _base_seed + worker_id
+        np.random.seed(s)
+        random.seed(s)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.dl.batch_size,
@@ -879,6 +922,7 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
         pin_memory=True,
         persistent_workers=config.dl.num_workers > 0,
         prefetch_factor=4 if config.dl.num_workers > 0 else None,
+        worker_init_fn=_worker_init if config.dl.num_workers > 0 else None,
         drop_last=True,   # prevents trailing batch of 1 from crashing BatchNorm
     )
 

@@ -440,15 +440,17 @@ class TensorboardVisualizer:
                 print(f"[scroll3] not available, skipping its test figure ({e})")
                 self.scroll3_volume = None
 
-        # primary test fragment (e.g. an unwrapped PHerc0191 patch): loaded DEFENSIVELY.
-        # when config.data.test_scroll_id is set, add_test_figures renders ONLY this by
-        # default (others opt-in). generic full-extent load + cached norm.
-        self.testfrag_volume = self.testfrag_mask = None
-        self.testfrag_y_range = self.testfrag_x_range = None
-        self.testfrag_global_mean = self.testfrag_global_std = None
-        self.testfrag_global_min = self.testfrag_global_max = None
-        _tf = getattr(self.c.data, 'test_scroll_id', None)
-        if _tf is not None:
+        # test fragments: one entry per test_scroll_id. each is loaded defensively
+        # (missing zarr/mask is skipped). stored as a list of dicts so add_test_figures
+        # can iterate them one at a time, clearing CUDA cache between to prevent OOM
+        # on large segments.
+        self.testfrags = []
+        _tfs = list(getattr(self.c.data, 'test_scroll_ids', None) or [])
+        if not _tfs:
+            _tf1 = getattr(self.c.data, 'test_scroll_id', None)
+            if _tf1 is not None:
+                _tfs = [_tf1]
+        for _tf in _tfs:
             try:
                 import zarr as _zarr
                 _tv = _zarr.open(os.path.join(self.c.data.zarr_path, f'{int(_tf)}.zarr'), mode='r')
@@ -457,15 +459,16 @@ class TensorboardVisualizer:
                     raise FileNotFoundError(f'./masks/{int(_tf)}.png missing')
                 _tm = _tm / 255.0
                 _D, _H, _W = map(int, _tv.shape)
-                self.testfrag_volume = _tv; self.testfrag_mask = _tm
-                self.testfrag_y_range = (0, _H); self.testfrag_x_range = (0, _W)
-                (self.testfrag_global_mean, self.testfrag_global_std,
-                 self.testfrag_global_min, self.testfrag_global_max) = self._get_or_compute_norm(
-                    _tv, _tm, str(int(_tf)))
+                _norm = self._get_or_compute_norm(_tv, _tm, str(int(_tf)))
+                self.testfrags.append({
+                    'id': int(_tf), 'volume': _tv, 'mask': _tm,
+                    'y_range': (0, _H), 'x_range': (0, _W),
+                    'mean': _norm[0], 'std': _norm[1],
+                    'min': _norm[2], 'max': _norm[3],
+                })
                 print(f'[testfrag] loaded {int(_tf)} shape ({_D},{_H},{_W}) for test figures')
             except Exception as e:
-                print(f'[testfrag] not available, skipping ({e})')
-                self.testfrag_volume = None
+                print(f'[testfrag] {int(_tf)} not available, skipping ({e})')
 
         self._segment_assets = {}
         self.probe_specs = self._build_probe_specs()
@@ -1281,7 +1284,7 @@ class TensorboardVisualizer:
 
     def _compute_fraction_correlation(self, scores, fractions):
         """correlation between score and per-tile ink fraction"""
-        if scores.size < 2 or np.std(scores) <= 1e-12 or np.std(fractions) <= 1e-12:
+        if scores.size < 2 or np.unique(scores).size < 2 or np.unique(fractions).size < 2:
             return np.nan, np.nan
 
         pearson = float(np.corrcoef(scores, fractions)[0, 1])
@@ -2230,20 +2233,31 @@ class TensorboardVisualizer:
         print("Starting test figure generation...")
         model.eval()
 
-        # PRIMARY-FRAGMENT MODE: when config.data.test_scroll_id is set, render ONLY that
-        # fragment by default; Test/scroll2/scroll3/scroll4 are opt-in via test_show_* flags.
+        # PRIMARY-FRAGMENT MODE: when test_scroll_ids (or legacy test_scroll_id) are set,
+        # render ALL loaded test fragments one at a time; CUDA cache is cleared between
+        # each to keep VRAM bounded even for very large segments.
         _tf = getattr(self.c.data, 'test_scroll_id', None)
         if _tf is not None:
             d = self.c.data
-            if self.testfrag_volume is not None:
+            for tf in self.testfrags:
                 try:
-                    self._add_single_test_figure(epoch, model, self.testfrag_volume, self.testfrag_mask,
-                        self.testfrag_y_range, self.testfrag_x_range, self.testfrag_global_mean,
-                        self.testfrag_global_std, self.testfrag_global_min, self.testfrag_global_max,
-                        f'Frag_{int(_tf)}')
+                    self._add_single_test_figure(
+                        epoch, model,
+                        tf['volume'], tf['mask'],
+                        tf['y_range'], tf['x_range'],
+                        tf['mean'], tf['std'], tf['min'], tf['max'],
+                        f'Frag_{tf["id"]}')
                 except Exception as e:
-                    print(f'[ERROR] test-fragment figure failed: {e}')
+                    print(f'[ERROR] test-fragment {tf["id"]} figure failed: {e}')
                     import traceback; traceback.print_exc()
+                finally:
+                    # free VRAM between large renders so subsequent segments don't OOM
+                    try:
+                        import torch as _torch
+                        if _torch.cuda.is_available():
+                            _torch.cuda.empty_cache()
+                    except Exception:
+                        pass
             if getattr(d, 'test_show_train', False):
                 try:
                     self._add_single_test_figure(epoch, model, self.test_volume, self.test_mask, self.test_y_range, self.test_x_range, self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max, 'Test')
