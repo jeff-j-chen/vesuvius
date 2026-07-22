@@ -175,16 +175,18 @@ class Transform:
         return np.ascontiguousarray(mixed)
     
     def _apply_brightness_adjustment(self, block):
-        """applies brightness adjustment to each channel independently"""
-        factors = np.random.uniform(0.85, 1.15, size=(block.shape[0], 1, 1))
-        return np.clip(block * factors, 0, 1)
+        """applies ONE brightness factor to the whole block (shared across depth).
+        per-depth factors distort the through-depth intensity profile the model keys on."""
+        factor = random.uniform(0.85, 1.15)
+        return np.clip(block * factor, 0, 1)
     
     def _apply_contrast_adjustment(self, block):
-        """applies contrast adjustment to each channel independently"""
+        """applies ONE contrast factor across all depth slices (shared factor; per-slice
+        mean preserved) so the depth profile is scaled uniformly, not warped per slice."""
+        factor = random.uniform(0.85, 1.15)
         adj_block = block.copy()
         for i in range(block.shape[0]):
             channel = block[i]
-            factor = random.uniform(0.85, 1.15)
             mean = np.mean(channel)
             adj_block[i] = np.clip((channel - mean) * factor + mean, 0, 1)
         return adj_block

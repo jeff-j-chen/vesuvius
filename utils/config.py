@@ -9,11 +9,14 @@ SCROLL CONFIGURATION:
   each entry carries its zarr id, split axis/fraction, and any fragment-specific
   overrides.
 
-CURRENT TRAINING SCROLLS (4 PHerc0139 9.362um / 113keV fragments):
-  20260115000000  w044  split y 0.8055  (horizontal, top 80% train)
-  20250223000000  w059  split x 0.75   (vertical, left 75% train)
-  20260206000001  w047  split x 0.75   (vertical, left 75% train)
-  20260115000001  w056  split y 0.50   (horizontal, top 50% train)
+CURRENT TRAINING SCROLLS (14 PHerc0139 9.362um / 113keV fragments):
+  original 4:
+    20260115000000  w044  split y 0.8055
+    20250223000000  w059  split x 0.75
+    20260206000001  w047  split x 0.75
+    20260115000001  w056  split y 0.50
+  new 10 (2026-07-21, all split x 0.75):
+    w058 w052 w049 w046 w041 w040 w039 w038 w037 w034
 
 CURRENT MODEL: v14_mil_deep (MIL with per-voxel logits + LSE aggregation).
   physics variants: v14b_mil_zgrad (depth-gradient channel), v14c_mil_lcn (local contrast norm + depth PE).
@@ -67,10 +70,23 @@ DEFAULT_PROBE_ROIS: Dict[int, List[ProbeROI]] = {
 
 
 DEFAULT_SCROLLS: List[ScrollConfig] = [
-    ScrollConfig(20260115000000, split_axis="y", train_split_frac=0.8055),
-    ScrollConfig(20250223000000, split_axis="x", train_split_frac=0.75),
-    ScrollConfig(20260206000001, split_axis="x", train_split_frac=0.75),
-    ScrollConfig(20260115000001, split_axis="y", train_split_frac=0.5),
+    # original 4 PHerc0139 fragments
+    ScrollConfig(20260115000000, split_axis="y", train_split_frac=0.8055),  # w044
+    ScrollConfig(20250223000000, split_axis="x", train_split_frac=0.75),    # w059
+    ScrollConfig(20260206000001, split_axis="x", train_split_frac=0.75),    # w047
+    ScrollConfig(20260115000001, split_axis="y", train_split_frac=0.5),     # w056
+    # 10 new PHerc0139 fragments (2026-07-21). vertical split, left 75% train / right 25% valid.
+    # HOLDOUT FOR SANITY:
+    # ScrollConfig(20260210000000, split_axis="x", train_split_frac=0.75),    # w058
+    ScrollConfig(20260227000000, split_axis="x", train_split_frac=0.75),    # w052
+    ScrollConfig(20260318000000, split_axis="x", train_split_frac=0.75),    # w049
+    ScrollConfig(20260325000000, split_axis="x", train_split_frac=0.75),    # w046
+    ScrollConfig(20260108000000, split_axis="x", train_split_frac=0.75),    # w041
+    ScrollConfig(20250831000000, split_axis="x", train_split_frac=0.75),    # w040
+    ScrollConfig(20260302000000, split_axis="x", train_split_frac=0.75),    # w039
+    ScrollConfig(20260306000000, split_axis="x", train_split_frac=0.75),    # w038
+    ScrollConfig(20260310000000, split_axis="x", train_split_frac=0.75),    # w037
+    ScrollConfig(20260303000000, split_axis="x", train_split_frac=0.75),    # w034
 ]
 
 
@@ -107,6 +123,8 @@ class DataConfig:
     mask_memmap: bool = True
     ring_negatives: bool = True
     ring_label_source: str = "eroded"
+    dense_labels: bool = False        # dense per-pixel BCE (model emits (B,1,T,T) map, not a tile scalar)
+    dense_soft_labels: bool = False   # use soft_inklabels probability map as the dense target
     preload_to_ram: bool = False  # load full zarr into RAM; only useful if disk I/O is the bottleneck (it's not — chunks are uncompressed, OS caches them)
     # per-scroll probe ROIs: {scroll_id: [ProbeROI, ...]}
     probe_rois: Dict[int, List[ProbeROI]] = field(
@@ -151,14 +169,18 @@ class TrainingConfig:
     probe_int: int = 5               # render probe ROI figures every N epochs; set > n_epochs to disable
     probe_rois_enabled: bool = True
     label_smooth: float = 0.0        # label smoothing: 0 = hard 0/1, 0.05 = soft 0.05/0.95
+    focal_gamma: float = 0.0         # >0 = focal loss (down-weights easy tiles); 0 = plain BCE
+    ranking_lambda: float = 0.0      # weight on pairwise ranking (AUC surrogate) added to BCE; 0 = off
+    ranking_neg_frac: float = 1.0    # 1.0 = full-AUC ranking; <1.0 = partial-AUC (hardest negatives only)
+    ranking_margin: float = 0.3      # margin for the ranking hinge
     seed: int = 41                   # base RNG seed (torch/cuda/numpy/random + dataloader workers)
     deterministic: bool = False      # True = exact reproducibility (cudnn deterministic, no benchmark);
                                      # costs ~10-20% speed. False = fast path (cudnn benchmark, GPU atomics
                                      # -> tiny run-to-run differences even with a fixed seed)
-    epoch_cooldown_secs: int = 90
-    val_cooldown_secs: int = 120
-    eval_cooldown_secs: int = 600
-    fig_chunk_cooldown_ms: int = 600
+    epoch_cooldown_secs: int = 9
+    val_cooldown_secs: int = 12
+    eval_cooldown_secs: int = 60
+    fig_chunk_cooldown_ms: int = 60
 
 
 @dataclass

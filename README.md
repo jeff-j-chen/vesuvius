@@ -26,22 +26,46 @@ python precompute_norm.py --scroll-id 20260206000001
 
 ## Training data
 
-All four fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113 keV, 1.2 m detector distance). Raw volume ID: `20250728140407`.
+All fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113 keV, 1.2 m detector distance). Raw volume ID: `20250728140407`. The training set is **14 fragments**: the original 4 plus 10 added 2026-07-21.
 
-| ID | Fragment | Scroll | Zarr shape (D,H,W) | Mask valid frac | Split |
-|---|---|---|---|---|---|
-| `20260115000000` | **w044** | PHerc0139 | (28, 6021, 8141) | 0.882 | horizontal (top 80.55% train) |
-| `20250223000000` | **w059** | PHerc0139 | (28, 7220, 10020) | 0.295 (1.1 µm overlap band) | vertical (left 75% train) |
-| `20260206000001` | **w047** | PHerc0139 | (28, 5821, 8421) | 0.402 (1.1 µm overlap band) | vertical (left 75% train) |
-| `20260115000001` | **w056** | PHerc0139 | (28, 7161, 9721) | 0.866 (rendered from tifxyz; label coverage ~full footprint) | horizontal (top 50% train) |
+**Original 4:**
 
-The masks for **w059** and **w047** are intersected with the 1.1 µm ink-detection footprint (ROI2). Only the portion of the 9.4 µm surface that was also scanned at high resolution carries reliable ink labels. Full 9.4 µm masks are preserved as `masks/<id>_full9um.png`.
+| ID | Fragment | Zarr shape (D,H,W) | Mask valid frac | Split |
+|---|---|---|---|---|
+| `20250223000000` | **w059** | (28, 7220, 10020) | 0.295 (1.1 µm overlap band) | vertical (left 75% train) |
+| `20260115000001` | **w056** | (28, 7161, 9721) | 0.866 | horizontal (top 50% train) |
+| `20260206000001` | **w047** | (28, 5821, 8421) | 0.402 (1.1 µm overlap band) | vertical (left 75% train) |
+| `20260115000000` | **w044** | (28, 6021, 8141) | 0.882 | horizontal (top 80.55% train) |
 
-Ink labels (1.129 µm source, 59 keV) live in `inklabels/` (continuous 0–255 ink probability) and `eroded_inklabels/` (binary, conservative — what training uses for ring negatives).
+**New 10 (2026-07-21)** — all vertical split (left 75% train / right 25% valid), full 9.4 µm masks (see caveat below):
+
+| ID | Fragment | Zarr shape (D,H,W) | Mask valid frac | Ink footprint |
+|---|---|---|---|---|
+| `20260210000000` | **w058** | (28, 7500, 9880) | 0.841 | 0.305 |
+| `20260227000000` | **w052** | (28, 7700, 9760) | 0.880 | 0.315 |
+| `20260318000000` | **w049** | (28, 5660, 9400) | 0.879 | 0.420 |
+| `20260325000000` | **w046** | (28, 5980, 8260) | 0.872 | 0.395 |
+| `20260108000000` | **w041** | (28, 6200, 8020) | 0.863 | 0.379 |
+| `20250831000000` | **w040** | (28, 6400, 7980) | 0.851 | 0.365 |
+| `20260302000000` | **w039** | (28, 8560, 7720) | 0.622 | 0.271 |
+| `20260306000000` | **w038** | (28, 6200, 7440) | 0.844 | 0.374 |
+| `20260310000000` | **w037** | (28, 6140, 7200) | 0.838 | 0.376 |
+| `20260303000000` | **w034** | (28, 7040, 7720) | 0.85 | 0.37 |
+
+All 14 are wired into `DEFAULT_SCROLLS` in `utils/config.py`. Ink footprint = fraction of the frame with ink label > 0 (the 1.129 µm ink detection resized to the 9.4 µm frame; ink-in-mask coverage ≈ 0.99 for all new fragments, confirming alignment — see `fragment_qa.ipynb`).
+
+The masks for **w059** and **w047** are intersected with the 1.1 µm ink-detection footprint (ROI2). The **new 10 use the full 9.4 µm papyrus footprint** (not intersected), so ring negatives near the labeled band could in principle fall on un-scanned surface; in practice the ring hugs the ink so this is minor. The full-surface footprint is recoverable directly from the zarr (`z[mid] > 0`); no separate `_full9um.png` is stored.
+
+Ink labels (1.129 µm source, 59 keV) live in `inklabels/` (continuous 0–255 ink probability) and `eroded_inklabels/` (binary, conservative — what training uses for ring negatives; new-fragment eroded fraction ≈ 0.02–0.04).
+
+### Holdout sanity fragment — w055 (NOT trained on)
+
+**w055** (`20251226000000`, PHerc0139, 9.362 µm) is assembled exactly like the training fragments (zarr + mask + 1.1 µm inklabel) but is **deliberately excluded from `DEFAULT_SCROLLS`**. It is a pure hallucination check: the model never sees it during training, so if inference on w055 does **not** reproduce its known 1.1 µm text, we know the model is hallucinating rather than genuinely detecting ink. Assemble it with `python assemble_new_fragments.py --only w055`.
 
 ---
 
 ## Test segments
+
 
 Three VC3D-grown patches are configured as default test targets (`test_scroll_ids` in `utils/config.py`). Test figures are generated when `test_int` fires (currently set to 9999 — disabled until a sufficiently good model is found). The visualizer loads each segment sequentially with CUDA cache cleared between renders to keep VRAM bounded for the larger segments.
 

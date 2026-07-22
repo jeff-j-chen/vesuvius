@@ -274,11 +274,118 @@ class InkDetectorTwoStageLCN(nn.Module):
         )
 
 
+class InkDetectorTwoStageWide(InkDetectorTwoStageLCN):
+    """v15_twostage_wide: v15 with a higher-capacity stage-2 fusion CNN.
+
+    the original fusion (3->16->8->1) was only ~4.8k params -- a tiny bottleneck sitting
+    on top of three backbones. peak TRAIN PR-AUC plateaued ~0.66, i.e. the model underfits.
+    this widens/deepens the fusion (3->32->32->16->1) so cross-window patterns have more
+    capacity to be learned. backbone (stage 1) is unchanged / still tied across windows.
+    """
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.stage2 = nn.Sequential(
+            nn.Conv3d(3, 32, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm3d(32), nn.ReLU(inplace=True),
+            nn.Conv3d(32, 32, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm3d(32), nn.ReLU(inplace=True),
+            nn.Conv3d(32, 16, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm3d(16), nn.ReLU(inplace=True),
+            nn.Conv3d(16, 1, kernel_size=1, bias=True),
+        )
+
+
+class InkDetectorMILDeepLCNZGrad(InkDetectorMILDeepLCN):
+    """v14c backbone + depth-gradient input channel: stem sees [raw, lcn, dI/dz].
+
+    combines the LCN baseline-removal with the explicit ink-interface feature (dI/dz peaks
+    at the sheet boundary and is invariant to the slow 113keV bulk baseline).
+    """
+    def __init__(self, config: Config):
+        super().__init__(config)
+        # override the stem to accept 3 input channels: [raw, lcn, dz]
+        self.per_slice = nn.Sequential(
+            nn.Conv3d(3, 32, kernel_size=(1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.Conv3d(32, 64, kernel_size=(1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(64).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+
+    def _stem_in(self, x):
+        """build the [raw, lcn, dz] stem input for a (B,1,D,H,W) block."""
+        dz = torch.zeros_like(x)
+        dz[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
+        return torch.cat([x, _lcn2d(x, 5), dz], dim=1)
+
+    def get_voxel_logits(self, x, depth_offset=0):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(self._stem_in(x))
+        D = f.shape[2]
+        f = f + self.depth_pe[:, :, depth_offset:depth_offset + D]
+        f = self.depth_mix(f)
+        return self.voxel_head(self.head_drop(f))
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(self._stem_in(x))
+        f = f + self.depth_pe[:, :, :f.shape[2]]
+        f = self.depth_mix(f)
+        vmap = self.voxel_head(self.head_drop(f))
+        self.last_voxel_map = vmap.detach()
+        return _mil_lse(vmap, self.lse_r, x.device)
+
+
+class InkDetectorTwoStageZGrad(InkDetectorTwoStageLCN):
+    """v15_twostage_zgrad: v15 whose shared backbone also ingests dI/dz ([raw, lcn, dz])."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.stage1 = InkDetectorMILDeepLCNZGrad(config)
+
+
+class InkDetectorTwoStageDense(InkDetectorTwoStageLCN):
+    """v15_twostage_dense: emits a per-pixel (B,1,T,T) ink-prob logit map for DENSE BCE
+    supervision instead of a single tile logit.
+
+    dense supervision gives ~64x more gradient signal per tile (an 8x8 spatial grid vs one
+    scalar), directly targeting the underfitting seen with tile-scalar MIL. the fused voxel
+    map (B,1,D,H/2,W/2) is collapsed over depth (max = MIL over depth) then bilinearly
+    upsampled back to tile resolution. requires config.data.dense_labels=True.
+    """
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        voxel_maps = [
+            self.stage1.get_voxel_logits(x[:, :, z0:z1], depth_offset=pe_off)
+            for z0, z1, pe_off in self.WINDOWS
+        ]
+        v_cat = torch.cat(voxel_maps, dim=1)      # (B,3,8,H/2,W/2)
+        fused = self.stage2(v_cat)                 # (B,1,8,H/2,W/2)
+        self.last_voxel_map = fused.detach()
+        dmax = fused.max(dim=2).values             # collapse depth -> (B,1,H/2,W/2)
+        T = x.shape[-1]
+        return F.interpolate(dmax, size=(T, T), mode="bilinear", align_corners=False)
+
+
+class InkDetectorTwoStageWideZGrad(InkDetectorTwoStageWide):
+    """v15_twostage_wide_zgrad: wide stage-2 fusion (C) + zgrad backbone (E) combined.
+
+    inherits the wide 3->32->32->16->1 fusion from InkDetectorTwoStageWide, then swaps the
+    shared stage-1 backbone for the zgrad variant ([raw, lcn, dI/dz]). pair with the ranking
+    loss (config.tra.ranking_lambda) to get the full C+D+E combo.
+    """
+    def __init__(self, config: Config):
+        super().__init__(config)              # wide stage2 + default lcn stage1
+        self.stage1 = InkDetectorMILDeepLCNZGrad(config)   # swap in zgrad backbone
+
+
 _ARCH_MAP = {
-    "v14_mil_deep":      InkDetectorMILDeep,
-    "v14b_mil_zgrad":    InkDetectorMILDeepZGrad,
-    "v14c_mil_lcn":      InkDetectorMILDeepLCN,
-    "v15_twostage_lcn":  InkDetectorTwoStageLCN,
+    "v14_mil_deep":       InkDetectorMILDeep,
+    "v14b_mil_zgrad":     InkDetectorMILDeepZGrad,
+    "v14c_mil_lcn":       InkDetectorMILDeepLCN,
+    "v15_twostage_lcn":   InkDetectorTwoStageLCN,
+    "v15_twostage_wide":  InkDetectorTwoStageWide,
+    "v15_twostage_zgrad": InkDetectorTwoStageZGrad,
+    "v15_twostage_dense": InkDetectorTwoStageDense,
+    "v15_twostage_wide_zgrad": InkDetectorTwoStageWideZGrad,
 }
 
 

@@ -69,12 +69,17 @@ def group_by_depth(coords):
         grouped[d_off].append((d_off, y_off, x_off))
     return grouped
 
-def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max):
+def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False):
     """run batched prediction over given coords returning downsampled map.
 
     reads tiles as y-row strips: one zarr call per row of tiles instead of one
     per tile. for a scroll ~8000px wide at tile=16 this is ~500 fewer zarr calls
     per row, cutting read time by ~10-100x while producing identical results.
+
+    tta: when True, average the model output over the 6 spatial dihedral transforms
+    (identity, h/v flip, 180, +/-90 rot) of each tile. the model emits a tile scalar
+    (or a 4D map collapsed via max), so the transforms need no inverse -- we just mean
+    the sigmoid. suppresses hallucinations that are inconsistent across orientations.
     """
     from collections import defaultdict
 
@@ -256,7 +261,7 @@ class _ScopedWriter:
 
 class TensorboardVisualizer:
     def __init__(self, config: Config, mode: str = 'train', scroll_id=None, log_suffix: str = None,
-                 shared_writer=None, tag_prefix: str = ""):
+                 shared_writer=None, tag_prefix: str = "", load_test_frags: bool = True):
         """initialize tensorboard visualizer and precompute datasets and stats.
 
         scroll_id: which scroll fragment this visualizer renders figures for;
@@ -270,6 +275,10 @@ class TensorboardVisualizer:
         """
         self.c = config
         self.mode = mode
+        # only the primary per-scroll visualizer loads the (large) test-fragment assets;
+        # test figures are scroll-independent so loading them in every per-scroll vis would
+        # multiply RAM by the training-scroll count (OOM with many scrolls).
+        self._load_test_frags = load_test_frags
         self.scroll1_id = int(scroll_id) if scroll_id is not None else int(config.data.scrolls[0].scroll_id)
         # whether this scroll renders evaluation figures. vis_scroll_ids=None => all
         # scrolls render (default); otherwise only listed scrolls do. test/probe
@@ -397,7 +406,7 @@ class TensorboardVisualizer:
         self.scroll4_global_mean = self.scroll4_global_std = None
         self.scroll4_global_min = self.scroll4_global_max = None
         if getattr(self.c.data, 'test_show_scroll4', False) or (
-                not getattr(self.c.data, 'test_scroll_id', None) and self.c.data.test_on_scroll4):
+                not getattr(self.c.data, 'test_scroll_id', None) and getattr(self.c.data, 'test_on_scroll4', False)):
             try:
                 (self.scroll4_volume, self.scroll4_mask,
                  self.scroll4_y_range, self.scroll4_x_range) = self._load_scroll4_region()
@@ -413,7 +422,7 @@ class TensorboardVisualizer:
         self.scroll2_global_mean = self.scroll2_global_std = None
         self.scroll2_global_min = self.scroll2_global_max = None
         if getattr(self.c.data, 'test_show_scroll2', False) or (
-                not getattr(self.c.data, 'test_scroll_id', None) and not self.c.data.test_on_scroll4):
+                not getattr(self.c.data, 'test_scroll_id', None) and not getattr(self.c.data, 'test_on_scroll4', False)):
             try:
                 (self.scroll2_volume, self.scroll2_mask,
                  self.scroll2_y_range, self.scroll2_x_range) = self._load_scroll2_region()
@@ -445,8 +454,8 @@ class TensorboardVisualizer:
         # can iterate them one at a time, clearing CUDA cache between to prevent OOM
         # on large segments.
         self.testfrags = []
-        _tfs = list(getattr(self.c.data, 'test_scroll_ids', None) or [])
-        if not _tfs:
+        _tfs = list(getattr(self.c.data, 'test_scroll_ids', None) or []) if self._load_test_frags else []
+        if not _tfs and self._load_test_frags:
             _tf1 = getattr(self.c.data, 'test_scroll_id', None)
             if _tf1 is not None:
                 _tfs = [_tf1]
@@ -2293,7 +2302,7 @@ class TensorboardVisualizer:
                 print(f"[ERROR] Test (training-scroll) figure failed: {e}")
                 import traceback; traceback.print_exc()
 
-        if (not scroll2_only) and self.c.data.test_on_scroll4:
+        if (not scroll2_only) and getattr(self.c.data, 'test_on_scroll4', False):
             if self.scroll4_volume is not None:
                 try:
                     self._add_single_test_figure(epoch, model, self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range, self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max, "Scroll4")

@@ -7,13 +7,14 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 from utils.config import Config
 from utils.visualizer import TensorboardVisualizer
 from utils.hard_mining import HardMiningManager, HardMiningInjector
-from utils.dataloader import DataManager, get_dataloaders, calc_class_wgts, MultiScrollIterableDataset
+from utils.dataloader import DataManager, get_dataloaders, calc_class_wgts, calc_dense_pos_weight, MultiScrollIterableDataset
 from utils.model import create_model
 from utils.training_utils import (
     create_optimizer_and_scheduler, 
     create_loss_function,
     calculate_metrics,
-    save_model
+    save_model,
+    pairwise_ranking_loss,
 )
 
 import numpy as np
@@ -90,10 +91,11 @@ class Trainer:
             # ROIs stay global (rendered once, unprefixed).
             self.vis = TensorboardVisualizer(self.c, mode='metrics')
             self.scroll_vis = {}
-            for sid in scroll_ids:
+            for i, sid in enumerate(scroll_ids):
                 self.scroll_vis[sid] = TensorboardVisualizer(
                     self.c, mode='train', scroll_id=sid,
-                    shared_writer=self.vis.writer, tag_prefix=f"s{sid}/"
+                    shared_writer=self.vis.writer, tag_prefix=f"s{sid}/",
+                    load_test_frags=(i == 0),   # only primary loads the large test-frag assets
                 )
         else:
             self.vis = TensorboardVisualizer(self.c)
@@ -147,7 +149,10 @@ class Trainer:
             t_set_merged = MultiScrollIterableDataset(train_sets)
             v_set_merged = MultiScrollIterableDataset(valid_sets)
             t_loader, v_loader = get_dataloaders(t_set_merged, v_set_merged, self.c)
-            pos_weight = calc_class_wgts(t_set_merged, v_set_merged, scroll_id=None)
+            if getattr(self.c.data, "dense_labels", False):
+                pos_weight = calc_dense_pos_weight(t_set_merged)
+            else:
+                pos_weight = calc_class_wgts(t_set_merged, v_set_merged, scroll_id=None)
             self._t_set_full = t_set_merged
             self._t_set_ring = None
             print(f"[multi-scroll] merged train_tiles={len(t_set_merged)} valid_tiles={len(v_set_merged)}")
@@ -159,7 +164,10 @@ class Trainer:
 
         t_set_full, v_set = data_manager.get_datasets()
         t_loader, v_loader = get_dataloaders(t_set_full, v_set, self.c)
-        pos_weight = calc_class_wgts(t_set_full, v_set, scroll_id=None)
+        if getattr(self.c.data, "dense_labels", False):
+            pos_weight = calc_dense_pos_weight(t_set_full)
+        else:
+            pos_weight = calc_class_wgts(t_set_full, v_set, scroll_id=None)
         self._t_set_full = t_set_full
         self._t_set_ring = None
 
@@ -223,6 +231,19 @@ class Trainer:
             raw_loss_val = (raw_loss.sum() / mask.sum()).item()
             l1_loss = sum(p.abs().sum() for p in self.model.parameters())
             loss = (raw_loss.sum() / mask.sum()) + self.c.tra.l1_lambda * l1_loss
+
+            # optional pairwise-ranking term (AUC / partial-AUC surrogate). added on top of
+            # BCE to directly optimize tile ordering -- the objective PR-AUC actually rewards.
+            # well-matched to balanced ring data (unlike focal, which targets imbalance).
+            ranking_lambda = float(getattr(self.c.tra, "ranking_lambda", 0.0))
+            if ranking_lambda > 0:
+                probs = torch.sigmoid(outputs).reshape(-1)
+                rloss = pairwise_ranking_loss(
+                    probs, b_labels.reshape(-1),
+                    margin=float(getattr(self.c.tra, "ranking_margin", 0.3)),
+                    neg_frac=float(getattr(self.c.tra, "ranking_neg_frac", 1.0)),
+                )
+                loss = loss + ranking_lambda * rloss
 
         # backward pass and optimization step
         self.scaler.scale(loss).backward()
@@ -489,7 +510,7 @@ class Trainer:
                     except Exception as e:
                         print(f"[ERROR] eval figures failed for scroll {sid}: {e}")
                         import traceback; traceback.print_exc()
-                if test_due:
+                if test_due and idx == 0:
                     try:
                         svis.add_test_figures(epoch, self.model)
                     except Exception as e:
