@@ -100,23 +100,33 @@ def _aria2_fetch(base, level, jobs, cache_dir, workers):
         with open(listfile, "w") as f:
             for url, name in todo:
                 f.write(f"{url}\n  dir={cache_dir}\n  out={name}\n")
-        # -j parallel files; -x1/-s1 (chunks are tiny, no splitting); low max-tries so 404 air
-        # chunks fail fast. nonzero exit is EXPECTED (some chunks 404 = air) -> check=False.
+        # -j parallel files; -x1/-s1 (chunks are tiny, no splitting). -q + --download-result=hide
+        # SILENCE aria2c: most chunks 404 (= expected air), and its per-URL error lines + the final
+        # results table would spam thousands of lines. we print a one-line summary below instead.
         j = max(1, min(int(workers), 64))
+        print(f"[dl] aria2c: fetching {len(todo)} chunks with -j{j} (404s = air, output silenced)...", flush=True)
         subprocess.run(
             ["aria2c", "-i", listfile, f"-j{j}", "-x1", "-s1",
              "--max-tries=2", "--retry-wait=1", "--connect-timeout=20", "--timeout=120",
-             "--auto-file-renaming=false", "--allow-overwrite=true", "--console-log-level=warn"],
+             "--auto-file-renaming=false", "--allow-overwrite=true",
+             "-q", "--download-result=hide"],
             check=False)
         try:
             os.remove(listfile)
         except OSError:
             pass
-    # zero-byte air sentinel for anything still missing (skips re-fetch; assembler reads as air)
+    # zero-byte air sentinel for anything still missing; tally real vs air for a one-line summary
+    real = air = 0
     for (_b, _lvl, yc, xc, _cd) in jobs:
         p = os.path.join(cache_dir, f"{level}_{yc}_{xc}.raw")
         if not os.path.exists(p):
             open(p, "wb").close()
+            air += 1
+        elif os.path.getsize(p) > 0:
+            real += 1
+        else:
+            air += 1
+    print(f"[dl] aria2c done: {real} data chunks + {air} air (blank) chunks", flush=True)
     return True
 
 
