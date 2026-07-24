@@ -45,9 +45,11 @@ def _fetch_chunk(args):
     if os.path.exists(out):
         return (yc, xc, "cached")
     url = f"{base}/{level}/0/{yc}/{xc}"
+    # NO --retry-all-errors: a 404 here is an EXPECTED air chunk (sparse surface in a rect bbox);
+    # retrying it burned ~4x2s each and dominated runtime. --retry still covers transient 5xx/timeouts.
     r = subprocess.run(
         ["curl", "-s", "--fail", "--connect-timeout", "20", "--max-time", "120",
-         "--retry", "4", "--retry-delay", "2", "--retry-all-errors", url, "-o", out],
+         "--retry", "3", "--retry-delay", "1", url, "-o", out],
         capture_output=True)
     if r.returncode != 0:
         open(out, "wb").close()   # air sentinel
