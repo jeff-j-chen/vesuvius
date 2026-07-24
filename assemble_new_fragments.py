@@ -23,7 +23,11 @@ from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 
 BUCKET = "https://vesuvius-challenge-open-data.s3.amazonaws.com"
-ZARR_DIR = r"C:\Users\ChenJeff\Documents\ves_zarrs2"
+# output zarr dir: honor $VESUVIUS_ZARR_PATH (same var config/precompute read); default is
+# /vesuvius/ves_zarrs2 on linux, the local documents path on windows.
+ZARR_DIR = os.getenv("VESUVIUS_ZARR_PATH",
+                     "/vesuvius/ves_zarrs2" if os.name == "posix"
+                     else r"C:\Users\ChenJeff\Documents\ves_zarrs2")
 TMP = "_ves_tmp"
 
 # constant across all PHerc0139 segments
@@ -38,7 +42,7 @@ SEGMENTS = [
     # + (ROI2-restricted) masks are already final, so ink/overlap steps are skipped for them
     # (see FRAG_OPTS). w056 was mesh-rendered (not a pre-rendered surface-volume) -- its zarr
     # already exists so step1 skips; a fresh repro of w056 needs old/render_9um_surface.py.
-    ("w044", "PHerc0139/segments/20250115000000-w044_2025011500", "20260115000000"),
+    ("w044", "PHerc0139/segments/20260115000000-w044_2026011522", "20260115000000"),
     ("w059", "PHerc0139/segments/20250223000000-w059_2025022312", "20250223000000"),
     ("w047", "PHerc0139/segments/20260206000001-w047_2026020613", "20260206000001"),
     ("w056", "PHerc0139/segments/20260115000001-w056_2026011514", "20260115000001"),
@@ -91,7 +95,8 @@ def step1_volume(name, seg, zid, workers):
     url = f"{BUCKET}/{seg}/surface-volumes/{VOL9_NAME}"
     run([sys.executable, "old/download_surface_zarr.py",
          "--mode", "volume", "--level", "0",
-         "--url", url, "--out-id", zid, "--workers", str(workers)])
+         "--url", url, "--out-id", zid, "--out-zarr", zpath,
+         "--cache-dir", os.path.join(TMP, f"dl_{zid}"), "--workers", str(workers)])
 
 
 def step2_ink(name, seg, zid):
@@ -162,7 +167,7 @@ def step5_norm(name, seg, zid, skip):
                 return
         except Exception:
             pass
-    run([sys.executable, "precompute_norm.py", "--scroll-id", zid])
+    run([sys.executable, "precompute_norm.py", "--scroll-id", zid, "--zarr-path", ZARR_DIR])
 
 
 def process_fragment(name, seg, zid, workers, skip_norm, prefix=""):
