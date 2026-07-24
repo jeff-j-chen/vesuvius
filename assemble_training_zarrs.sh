@@ -41,13 +41,13 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# python + default output dir differ by OS. on linux the zarrs land in $VESUVIUS_ZARR_PATH
-# (the same env var precompute_norm/config read) or /vesuvius/ves_zarrs2; override with --out-dir DIR.
+# python: default to 'python' on PATH (the pod's docker provides it); override via $PYTHON.
+# output dir: linux -> $VESUVIUS_ZARR_PATH or /vesuvius/ves_zarrs2 (matches precompute_norm/config),
+# windows -> the local documents path; override either with --out-dir DIR.
+PYTHON="${PYTHON:-python}"
 if [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "win"* ]]; then
-    PYTHON="${SCRIPT_DIR}/.venv/Scripts/python.exe"
     OUT_DIR="C:/Users/ChenJeff/Documents/ves_zarrs2"
 else
-    PYTHON="${SCRIPT_DIR}/.venv/bin/python"
     OUT_DIR="${VESUVIUS_ZARR_PATH:-/vesuvius/ves_zarrs2}"
 fi
 DOWNLOADER="${SCRIPT_DIR}/old/download_surface_zarr.py"
@@ -73,7 +73,7 @@ echo "=== 1/3  w044  20260115000000  (primary labelled fragment) ==="
 # w044 has a pre-rendered surface volume on S3 -- use the downloader (fast, no mesh needed)
 "$PYTHON" "$DOWNLOADER" \
     --mode volume --level 0 \
-    --url "${SEG_BASE}/20250115000000-w044_2025011500/surface-volumes/9.362um-1.2m-113keV-volume-20250728140407.zarr" \
+    --url "${SEG_BASE}/20260115000000-w044_2026011522/surface-volumes/9.362um-1.2m-113keV-volume-20250728140407.zarr" \
     --out-id 20260115000000 --out-zarr "$OUT_DIR/20260115000000.zarr" \
     --cache-dir "_ves_tmp/dl_20260115000000" --workers "$WORKERS"
 # fallback: render from tifxyz if the surface volume URL differs on your VC3D version

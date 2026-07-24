@@ -109,7 +109,7 @@ def step2_ink(name, seg, zid):
     os.makedirs(TMP, exist_ok=True)
     if not os.path.exists(tmp_tif):
         print(f"  [2/5] downloading ink TIF ...")
-        run(["curl.exe", "-fL", "--connect-timeout", "20", "--max-time", "1800",
+        run(["curl", "-fL", "--connect-timeout", "20", "--max-time", "1800",
              "--retry", "5", "--retry-delay", "3", "--retry-all-errors",
              url, "-o", tmp_tif])
     print(f"  [2/5] loading + resizing ink TIF to ({H},{W}) ...")

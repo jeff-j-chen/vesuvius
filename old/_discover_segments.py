@@ -26,7 +26,7 @@ SEGMENTS = [
 
 
 def curl(url):
-    r = subprocess.run(["curl.exe", "-s", "--fail", "--max-time", "60", url],
+    r = subprocess.run(["curl", "-s", "--fail", "--max-time", "60", url],
                        capture_output=True)
     if r.returncode != 0:
         return None

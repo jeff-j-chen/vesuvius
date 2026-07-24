@@ -32,7 +32,7 @@ CHUNK_XY = 128
 
 
 def _get_json(url):
-    r = subprocess.run(["curl.exe", "-s", "--fail", "--max-time", "60", url], capture_output=True)
+    r = subprocess.run(["curl", "-s", "--fail", "--max-time", "60", url], capture_output=True)
     if r.returncode != 0:
         raise RuntimeError(f"failed to fetch {url}")
     return json.loads(r.stdout.decode("utf-8"))
@@ -46,7 +46,7 @@ def _fetch_chunk(args):
         return (yc, xc, "cached")
     url = f"{base}/{level}/0/{yc}/{xc}"
     r = subprocess.run(
-        ["curl.exe", "-s", "--fail", "--connect-timeout", "20", "--max-time", "120",
+        ["curl", "-s", "--fail", "--connect-timeout", "20", "--max-time", "120",
          "--retry", "4", "--retry-delay", "2", "--retry-all-errors", url, "-o", out],
         capture_output=True)
     if r.returncode != 0:

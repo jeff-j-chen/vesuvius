@@ -46,7 +46,7 @@ def _fetch_chunk(args):
         return (zc, yc, xc), "cached"
     url = f"{S3_BASE}/{zc}/{yc}/{xc}"
     r = subprocess.run(
-        ["curl.exe", "-s", "--fail", "--connect-timeout", "20", "--max-time", "120",
+        ["curl", "-s", "--fail", "--connect-timeout", "20", "--max-time", "120",
          "--retry", "4", "--retry-delay", "2", "--retry-all-errors", url, "-o", out],
         capture_output=True)
     if r.returncode != 0:

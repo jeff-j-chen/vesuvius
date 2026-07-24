@@ -50,7 +50,7 @@ def _curl_range(url, start, end, out):
     --retry handles transient drops; --connect-timeout caps the handshake; --max-time caps
     the whole transfer (a full-width 256-row layer band is ~16MB, so 180s is generous)."""
     subprocess.run(
-        ["curl.exe", "-s", "--fail",
+        ["curl", "-s", "--fail",
          "--connect-timeout", "20", "--max-time", "180",
          "--retry", "5", "--retry-delay", "2", "--retry-all-errors",
          "-r", f"{start}-{end}", url, "-o", out],

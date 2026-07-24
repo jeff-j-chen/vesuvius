@@ -24,13 +24,13 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# python + default output dir differ by OS. on linux the zarr lands in $VESUVIUS_ZARR_PATH
-# (the same env var precompute_norm/config read) or /vesuvius/ves_zarrs2; override with --out-dir DIR.
+# python: default to 'python' on PATH (the pod's docker provides it); override via $PYTHON.
+# output dir: linux -> $VESUVIUS_ZARR_PATH or /vesuvius/ves_zarrs2 (matches precompute_norm/config),
+# windows -> the local documents path; override either with --out-dir DIR.
+PYTHON="${PYTHON:-python}"
 if [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "win"* ]]; then
-    PYTHON="${SCRIPT_DIR}/.venv/Scripts/python.exe"
     OUT_DIR="C:/Users/ChenJeff/Documents/ves_zarrs2"
 else
-    PYTHON="${SCRIPT_DIR}/.venv/bin/python"
     OUT_DIR="${VESUVIUS_ZARR_PATH:-/vesuvius/ves_zarrs2}"
 fi
 RENDERER="${SCRIPT_DIR}/old/render_9um_surface.py"

@@ -42,7 +42,7 @@ def _curl_range(url, start, end, out):
     timeouts + retry are ESSENTIAL: without --max-time a single hung request from the public
     server freezes the whole reconstruction indefinitely (observed on the scroll4 run)."""
     subprocess.run(
-        ["curl.exe", "-s", "--fail",
+        ["curl", "-s", "--fail",
          "--connect-timeout", "20", "--max-time", "180",
          "--retry", "5", "--retry-delay", "2", "--retry-all-errors",
          "-r", f"{start}-{end}", url, "-o", out],
