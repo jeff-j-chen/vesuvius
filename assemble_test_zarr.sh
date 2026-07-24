@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# assemble_test_zarr.sh -- render the PHerc0813 test segment zarr from its tifxyz mesh.
+# assemble_test_zarr.sh -- render the 5 competition test-segment zarrs from their tifxyz meshes
+# (PHerc0813, PHerc0211 x2, PHerc1203, PHerc1447). the w055 HOLDOUT is a PHerc0139 segment and is
+# assembled by assemble_new_fragments.py (download path), not here.
 #
 # the tifxyz mesh is stored in:
 #   tifxyz/auto_grown_20260716083545968/   <- root level = latest state (max_gen=179)
@@ -44,37 +46,66 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 cd "$SCRIPT_DIR"
-mkdir -p "$OUT_DIR" masks _ves_tmp/pherc0813_test_chunks
+mkdir -p "$OUT_DIR" masks _ves_tmp
 echo "[assemble] python=$PYTHON  out_dir=$OUT_DIR  workers=$WORKERS"
 
-# the tifxyz root level = the most grown/latest version of the segment
-MESH_DIR="${SCRIPT_DIR}/tifxyz/auto_grown_20260716083545968"
+BUCKET="https://vesuvius-challenge-open-data.s3.amazonaws.com"
+# each entry: out_id | tifxyz mesh subdir | raw-volume base url (.zarr/0) | vol shape z,y,x.
+# the mesh voxel coords live in the listed volume's space, so vol-base + vol-shape MUST match the
+# mesh (verified against each mesh bbox). NOTE: 1447's only volume is 8.640um (not 9.362um) -- that
+# IS the volume its mesh was built on (vc3d folder 20250521151220_editable).
+FRAGMENTS=(
+    "20260716083545|auto_grown_20260716083545968|$BUCKET/PHerc0813/volumes/20250821151723-9.362um-1.2m-113keV-masked.zarr/0|16993,7947,7947"
+    "20260717193517|auto_grown_20260717193517520|$BUCKET/PHerc0211/volumes/20250821151803-9.362um-1.2m-113keV-masked.zarr/0|19416,7948,7948"
+    "20260719202304|auto_grown_20260719202304218|$BUCKET/PHerc0211/volumes/20250821151803-9.362um-1.2m-113keV-masked.zarr/0|19416,7948,7948"
+    "20260720090842|auto_grown_20260720090842117|$BUCKET/PHerc1203/volumes/20250820131727-9.362um-1.2m-113keV-masked.zarr/0|18977,6844,6844"
+    "20250703034159|20250703034159|$BUCKET/PHerc1447/volumes/20250521151220-8.640um-1.2m-116keV-masked.zarr/0|24297,8343,8343"
+)
 
-# PHerc0813 raw CT volume on S3 (single available resolution: 9.362um / 113keV)
-# shape (16993, 7947, 7947) -- z,y,x in voxel coordinates
-PHERC0813_RAW="https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0813/volumes/20250821151723-9.362um-1.2m-113keV-masked.zarr/0"
+n=${#FRAGMENTS[@]}
+i=0
+for entry in "${FRAGMENTS[@]}"; do
+    i=$((i + 1))
+    IFS='|' read -r ZID MESHSUB VOLBASE VOLSHAPE <<< "$entry"
+    MESH_DIR="${SCRIPT_DIR}/tifxyz/${MESHSUB}"
+    OUTZ="$OUT_DIR/${ZID}.zarr"
+    echo "=== ${i}/${n}  ${ZID}  (mesh ${MESHSUB}) ==="
+    # idempotent: skip if this zarr + mask already exist
+    if [[ -d "$OUTZ" && -f "masks/${ZID}.png" ]]; then
+        echo "  zarr + mask exist -> skip"
+        continue
+    fi
+    if [[ ! -d "$MESH_DIR" ]]; then
+        echo "  [WARN] mesh dir missing: $MESH_DIR -- skipping"
+        continue
+    fi
+    echo "  raw vol: $VOLBASE  shape=$VOLSHAPE"
+    echo "  (renders on-demand from S3 -- can take 10-30 min per fragment depending on size/speed)"
+    if ! "$PYTHON" "$RENDERER" \
+        --mesh-dir "$MESH_DIR" \
+        --cache-dir "_ves_tmp/render_${ZID}" \
+        --vol-base "$VOLBASE" \
+        --vol-shape "$VOLSHAPE" \
+        --layers 28 \
+        --workers "$WORKERS" \
+        --out-zarr "$OUTZ" \
+        --out-id "$ZID"; then
+        echo "  [WARN] render failed for ${ZID} -- continuing to next fragment"
+        continue
+    fi
+done
 
-echo "=== rendering PHerc0813 test segment 20260716083545 from tifxyz ==="
-echo "  mesh: $MESH_DIR  (max_gen=179, area~2.82cm2)"
-echo "  raw vol: $PHERC0813_RAW"
-echo "  this downloads chunks on demand from S3 -- may take 10-30 min depending on speed"
-
-"$PYTHON" "$RENDERER" \
-    --mesh-dir "$MESH_DIR" \
-    --cache-dir "_ves_tmp/pherc0813_test_chunks" \
-    --vol-base "$PHERC0813_RAW" \
-    --vol-shape "16993,7947,7947" \
-    --layers 28 \
-    --workers "$WORKERS" \
-    --out-zarr "$OUT_DIR/20260716083545.zarr" \
-    --out-id 20260716083545
-
-echo "=== precomputing normalization stats ==="
-"$PYTHON" precompute_norm.py --scroll-id 20260716083545 --zarr-path "$OUT_DIR"
+echo "=== precomputing normalization stats for all test fragments ==="
+"$PYTHON" precompute_norm.py \
+    --scroll-id 20260716083545 \
+    --scroll-id 20260717193517 \
+    --scroll-id 20260719202304 \
+    --scroll-id 20260720090842 \
+    --scroll-id 20250703034159 \
+    --zarr-path "$OUT_DIR" || echo "[WARN] norm precompute reported errors (a fragment may be missing)"
 
 echo "=== done ==="
-"$PYTHON" -c "
-import zarr
-z = zarr.open('$OUT_DIR/20260716083545.zarr')
-print(f'  20260716083545  shape={z.shape}  dtype={z.dtype}')
-"
+for entry in "${FRAGMENTS[@]}"; do
+    IFS='|' read -r ZID _REST <<< "$entry"
+    "$PYTHON" -c "import zarr; z=zarr.open('$OUT_DIR/${ZID}.zarr'); print(f'  ${ZID}  shape={z.shape}  dtype={z.dtype}')" 2>/dev/null || echo "  ${ZID}  (not assembled)"
+done
