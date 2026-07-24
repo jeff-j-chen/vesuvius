@@ -22,7 +22,7 @@ usage:
      --url ".../1.129um-0.22m-59keV-volume-20260413113053-L1.zarr"
 """
 from __future__ import annotations
-import argparse, json, os, subprocess, sys
+import argparse, json, os, shutil, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from PIL import Image
@@ -67,6 +67,42 @@ def _load_chunk(cache_dir, level, yc, xc, D):
     return None
 
 
+def _aria2_fetch(base, level, jobs, cache_dir, workers):
+    """batch-download all chunks with ONE aria2c process (connection reuse + -j parallel files).
+    hugely faster than spawning one curl per tiny chunk. returns False if aria2c is not on PATH
+    (caller falls back to the curl loop). a 404 = expected air chunk -> gets a zero-byte sentinel
+    so re-runs skip it and the assembler treats it as air."""
+    if shutil.which("aria2c") is None:
+        return False
+    # queue only chunks not already cached (a real file OR an air sentinel both count as done)
+    todo = [(f"{base}/{level}/0/{yc}/{xc}", f"{level}_{yc}_{xc}.raw")
+            for (_b, _lvl, yc, xc, _cd) in jobs
+            if not os.path.exists(os.path.join(cache_dir, f"{level}_{yc}_{xc}.raw"))]
+    if todo:
+        listfile = os.path.join(cache_dir, "_aria2_urls.txt")
+        with open(listfile, "w") as f:
+            for url, name in todo:
+                f.write(f"{url}\n  dir={cache_dir}\n  out={name}\n")
+        # -j parallel files; -x1/-s1 (chunks are tiny, no splitting); low max-tries so 404 air
+        # chunks fail fast. nonzero exit is EXPECTED (some chunks 404 = air) -> check=False.
+        j = max(1, min(int(workers), 64))
+        subprocess.run(
+            ["aria2c", "-i", listfile, f"-j{j}", "-x1", "-s1",
+             "--max-tries=2", "--retry-wait=1", "--connect-timeout=20", "--timeout=120",
+             "--auto-file-renaming=false", "--allow-overwrite=true", "--console-log-level=warn"],
+            check=False)
+        try:
+            os.remove(listfile)
+        except OSError:
+            pass
+    # zero-byte air sentinel for anything still missing (skips re-fetch; assembler reads as air)
+    for (_b, _lvl, yc, xc, _cd) in jobs:
+        p = os.path.join(cache_dir, f"{level}_{yc}_{xc}.raw")
+        if not os.path.exists(p):
+            open(p, "wb").close()
+    return True
+
+
 def download(base, level, mode, out_zarr, out_png, out_id, workers, cache_dir):
     base = base.rstrip("/")
     za = _get_json(f"{base}/{level}/.zarray")
@@ -79,12 +115,16 @@ def download(base, level, mode, out_zarr, out_png, out_id, workers, cache_dir):
     jobs = [(base, level, yc, xc, cache_dir) for yc in range(n_yc) for xc in range(n_xc)]
     print(f"[dl] fetching {len(jobs)} chunks ({n_yc}x{n_xc}) with {workers} workers "
           f"(~{len(jobs) * D * CHUNK_XY * CHUNK_XY / 1e9:.1f} GB max)")
-    done = 0
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        for _ in ex.map(_fetch_chunk, jobs):
-            done += 1
-            if done % 500 == 0:
-                print(f"[dl] fetched {done}/{len(jobs)}", flush=True)
+    # fast path: single aria2c process (connection reuse). falls back to per-chunk curl if absent.
+    if _aria2_fetch(base, level, jobs, cache_dir, workers):
+        print("[dl] aria2c batch fetch complete", flush=True)
+    else:
+        done = 0
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for _ in ex.map(_fetch_chunk, jobs):
+                done += 1
+                if done % 500 == 0:
+                    print(f"[dl] fetched {done}/{len(jobs)}", flush=True)
     print(f"[dl] all {len(jobs)} chunks present", flush=True)
 
     if mode == "midslice":
