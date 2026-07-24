@@ -31,6 +31,23 @@ Image.MAX_IMAGE_PIXELS = None
 CHUNK_XY = 128
 
 
+def _pbar(total, desc):
+    """progress reporter: a real tqdm bar if tqdm is importable, else periodic percent prints.
+    returns (update, close) callables so the caller doesn't care which backend is used."""
+    try:
+        from tqdm import tqdm
+        bar = tqdm(total=total, desc=f"[dl] {desc}", unit="it")
+        return (lambda n=1: bar.update(n)), bar.close
+    except Exception:
+        st = {"n": 0}
+        step = max(1, total // 10)
+        def upd(n=1):
+            st["n"] += n
+            if st["n"] % step == 0 or st["n"] >= total:
+                print(f"[dl] {desc} {st['n']}/{total}", flush=True)
+        return upd, (lambda: None)
+
+
 def _get_json(url):
     r = subprocess.run(["curl", "-s", "--fail", "--max-time", "60", url], capture_output=True)
     if r.returncode != 0:
@@ -148,18 +165,24 @@ def download(base, level, mode, out_zarr, out_png, out_id, workers, cache_dir):
     # volume mode -> assemble full uint8 (D,H,W), write local training zarr uint16 + mask
     import zarr
     vol = np.zeros((D, H, W), dtype=np.uint8)
+    upd, close = _pbar(n_yc * n_xc, "assembling chunks")
     for yc in range(n_yc):
         for xc in range(n_xc):
             ch = _load_chunk(cache_dir, level, yc, xc, D)
+            upd()
             if ch is None:
                 continue
             y0, x0 = yc * CHUNK_XY, xc * CHUNK_XY
             y1, x1 = min(y0 + CHUNK_XY, H), min(x0 + CHUNK_XY, W)
             vol[:, y0:y1, x0:x1] = ch[:, :y1 - y0, :x1 - x0]
+    close()
     store = zarr.open(out_zarr, mode="w", shape=(D, H, W), chunks=(min(8, D), 32, 32),
                       dtype="<u2", compressor=None, zarr_format=2)
+    upd, close = _pbar(D, "writing zarr layers")
     for li in range(D):
         store[li] = vol[li].astype(np.uint16)
+        upd()
+    close()
     print(f"[dl] wrote zarr {out_zarr} ({D},{H},{W}) uint16")
 
     # mask = footprint where ANY layer is nonzero (valid rendered surface)
