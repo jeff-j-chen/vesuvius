@@ -97,12 +97,22 @@ def compute_normals(Xu, Yu, Zu):
 
 
 def render(mesh_dir, cache_dir, layers, normal_step, upsample_factor, workers,
-           out_png=None, out_zarr=None, out_id=None):
+           out_png=None, out_zarr=None, out_id=None, crop_valid=False, crop_margin=8):
     os.makedirs(cache_dir, exist_ok=True)
     X, Y, Z, valid = load_mesh(mesh_dir)
+    # crop to the valid bounding box (+margin) FIRST. some meshes store a small compact
+    # sheet inside a huge mostly-empty padded grid (e.g. a 344x455 blob in a 6203x6203 grid);
+    # upsampling the full grid would make a ~124k x 124k canvas. cropping renders only the
+    # real surface. harmless for meshes whose valid region already fills the grid.
+    if crop_valid and valid.any():
+        ys, xs = np.where(valid)
+        y0 = max(0, int(ys.min()) - crop_margin); y1 = min(valid.shape[0], int(ys.max()) + 1 + crop_margin)
+        x0 = max(0, int(xs.min()) - crop_margin); x1 = min(valid.shape[1], int(xs.max()) + 1 + crop_margin)
+        print(f"[mesh] crop valid bbox grid[{y0}:{y1}, {x0}:{x1}] from {X.shape}", flush=True)
+        X = X[y0:y1, x0:x1]; Y = Y[y0:y1, x0:x1]; Z = Z[y0:y1, x0:x1]; valid = valid[y0:y1, x0:x1]
     gh, gw = X.shape
-    H = (gh - 1) * upsample_factor + 1
-    W = (gw - 1) * upsample_factor + 1
+    H = int(round((gh - 1) * upsample_factor)) + 1
+    W = int(round((gw - 1) * upsample_factor)) + 1
     print(f"[mesh] grid {gh}x{gw} -> flattened {H}x{W}  valid={valid.mean():.3f}", flush=True)
 
     Xu = upsample(X, W, H); Yu = upsample(Y, W, H); Zu = upsample(Z, W, H)
@@ -219,7 +229,9 @@ def main():
                     help="raw volume shape 'z,y,x' (level 0). default = PHerc0139 20974,6621,6621")
     ap.add_argument("--layers", type=int, default=1, help="depth layers (1 = mid slice only)")
     ap.add_argument("--normal-step", type=float, default=1.0, help="voxels between depth layers")
-    ap.add_argument("--upsample", type=int, default=20, help="flattened px per mesh grid step (1/scale)")
+    ap.add_argument("--upsample", type=float, default=20.0, help="flattened px per mesh grid step (1/scale); may be fractional")
+    ap.add_argument("--crop-valid", action="store_true", help="crop the mesh grid to the valid bbox before upsampling (needed for sparse padded grids)")
+    ap.add_argument("--crop-margin", type=int, default=8, help="grid cells of margin kept around the valid bbox when --crop-valid")
     ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--out-png", default=None)
     ap.add_argument("--out-zarr", default=None)
@@ -231,7 +243,8 @@ def main():
     if args.vol_shape:
         VOL_SHAPE = tuple(int(v) for v in args.vol_shape.split(","))
     render(args.mesh_dir, args.cache_dir, args.layers, args.normal_step, args.upsample,
-           args.workers, args.out_png, args.out_zarr, args.out_id)
+           args.workers, args.out_png, args.out_zarr, args.out_id,
+           crop_valid=args.crop_valid, crop_margin=args.crop_margin)
 
 
 if __name__ == "__main__":

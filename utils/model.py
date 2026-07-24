@@ -191,6 +191,15 @@ class InkDetectorMILDeepLCN(nn.Module):
         f = self.depth_mix(f)
         return self.voxel_head(self.head_drop(f))
 
+    def encode(self, x, depth_offset=0):
+        """feature extractor up to depth_mix (before the voxel head): (B,256,D,H/2,W/2).
+        used by MAE pretraining so the shared stage-1 backbone can be warm-started."""
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(torch.cat([x, _lcn2d(x, 5)], dim=1))
+        D = f.shape[2]
+        f = f + self.depth_pe[:, :, depth_offset:depth_offset + D]
+        return self.depth_mix(f)
+
     def forward(self, x):
         if x.dim() == 4: x = x.unsqueeze(1)
         f = self.per_slice(torch.cat([x, _lcn2d(x, 5)], dim=1))
@@ -265,7 +274,7 @@ class InkDetectorTwoStageLCN(nn.Module):
         self.last_voxel_map = fused.detach()
 
         # MIL-LSE aggregation on stage-2 output
-        r = self.lse_r2.clamp(min=0.5, max=10.0)
+        r = self.lse_r2.clamp(min=0.5, max=4.0)
         flat = fused.flatten(1)
         N = flat.shape[1]
         return (1.0 / r) * (
@@ -325,6 +334,15 @@ class InkDetectorMILDeepLCNZGrad(InkDetectorMILDeepLCN):
         f = self.depth_mix(f)
         return self.voxel_head(self.head_drop(f))
 
+    def encode(self, x, depth_offset=0):
+        """[raw, lcn, dz] feature extractor up to depth_mix (before the voxel head).
+        used by MAE pretraining so the shared stage-1 backbone can be warm-started."""
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(self._stem_in(x))
+        D = f.shape[2]
+        f = f + self.depth_pe[:, :, depth_offset:depth_offset + D]
+        return self.depth_mix(f)
+
     def forward(self, x):
         if x.dim() == 4: x = x.unsqueeze(1)
         f = self.per_slice(self._stem_in(x))
@@ -377,6 +395,41 @@ class InkDetectorTwoStageWideZGrad(InkDetectorTwoStageWide):
         self.stage1 = InkDetectorMILDeepLCNZGrad(config)   # swap in zgrad backbone
 
 
+class InkDetectorTwoStageWideZGradCtx(InkDetectorTwoStageWideZGrad):
+    """context-window variant of v15_twostage_wide_zgrad. the input crop is LARGER than the
+    label tile (config.data.context_size, e.g. 48px) and centered on the tile. the backbone
+    sees the surround, but the final MIL-LSE pools ONLY the central tile_size region of the
+    fused voxel map -- so the tile label / ring supervision is unchanged; context enters
+    purely via the conv receptive field. degrades gracefully to the plain model if fed a
+    tile-sized input (the center crop becomes the whole map)."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        # tile region in POOLED coords (depth_mix pools H,W by 2 once)
+        self._center = max(1, int(config.data.tile_size) // 2)
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        voxel_maps = [
+            self.stage1.get_voxel_logits(x[:, :, z0:z1], depth_offset=pe_off)
+            for z0, z1, pe_off in self.WINDOWS
+        ]
+        v_cat = torch.cat(voxel_maps, dim=1)               # (B,3,8,Hf,Wf)
+        fused = self.stage2(v_cat)                          # (B,1,8,Hf,Wf), Hf=context/2
+        # center-crop the fused map to the tile region so MIL reflects the CENTER tile only
+        Hf, Wf = fused.shape[-2], fused.shape[-1]
+        ch, cw = min(self._center, Hf), min(self._center, Wf)
+        oy, ox = (Hf - ch) // 2, (Wf - cw) // 2
+        center = fused[:, :, :, oy:oy + ch, ox:ox + cw]
+        self.last_voxel_map = center.detach()
+        r = self.lse_r2.clamp(min=0.5, max=10.0)
+        flat = center.flatten(1)
+        N = flat.shape[1]
+        return (1.0 / r) * (
+            torch.logsumexp(r * flat, dim=1, keepdim=True)
+            - torch.log(torch.tensor(float(N), device=fused.device))
+        )
+
+
 _ARCH_MAP = {
     "v14_mil_deep":       InkDetectorMILDeep,
     "v14b_mil_zgrad":     InkDetectorMILDeepZGrad,
@@ -386,6 +439,7 @@ _ARCH_MAP = {
     "v15_twostage_zgrad": InkDetectorTwoStageZGrad,
     "v15_twostage_dense": InkDetectorTwoStageDense,
     "v15_twostage_wide_zgrad": InkDetectorTwoStageWideZGrad,
+    "v15_twostage_wide_zgrad_ctx": InkDetectorTwoStageWideZGradCtx,
 }
 
 

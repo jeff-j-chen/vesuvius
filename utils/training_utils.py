@@ -70,6 +70,33 @@ class FocalBCELoss(nn.Module):
         return focal_weight * bce_loss          # same shape as input; caller handles masking/reduction
 
 
+class GCEBCELoss(nn.Module):
+    """generalized cross-entropy for binary labels (Zhang & Sabuncu, NeurIPS 2018).
+
+    loss = (1 - p_t**q) / q, where p_t is the probability mass the model assigns to the
+    TARGET class. q in (0,1] interpolates between cross-entropy (q->0, trusts every label)
+    and the bounded, noise-robust MAE loss (q=1). the point: a mislabeled tile has low p_t,
+    and (1 - p_t**q)/q SATURATES as p_t->0, so its gradient is bounded -- probable-wrong
+    labels can no longer dominate the update the way -log(p_t) does. the model fits the
+    self-consistent labels and effectively shrugs off the noisy ones. supports soft targets
+    (label smoothing) via p_t = y*p + (1-y)*(1-p). reduction='none' to match the BCE
+    interface (caller applies the mask + reduction)."""
+    def __init__(self, q=0.7, pos_weight=None):
+        super().__init__()
+        self.q = float(q)
+        self.pos_weight = pos_weight
+
+    def forward(self, logits, targets):
+        p = torch.sigmoid(logits)
+        p_t = targets * p + (1.0 - targets) * (1.0 - p)   # prob assigned to target class
+        p_t = p_t.clamp(min=1e-6)
+        loss = (1.0 - p_t ** self.q) / self.q
+        if self.pos_weight is not None:
+            # up-weight the positive class like BCEWithLogitsLoss(pos_weight=...)
+            loss = loss * (1.0 + (self.pos_weight - 1.0) * targets)
+        return loss
+
+
 def pairwise_ranking_loss(scores, labels, margin=0.3, neg_frac=1.0):
     """pairwise ranking loss (AUC / partial-AUC surrogate): positive tiles must
     outscore negatives by >= margin.
@@ -100,12 +127,18 @@ def pairwise_ranking_loss(scores, labels, margin=0.3, neg_frac=1.0):
 
 
 def create_loss_function(pos_weight, config: Config):
-    """creates the loss function; focal loss when focal_gamma > 0"""
-    gamma = float(getattr(config.tra, 'focal_gamma', 0.0))
+    """creates the loss function based on config.tra.loss_type (falls back to focal_gamma)."""
     pw = pos_weight.to(config.device) if pos_weight is not None else None
-    if gamma > 0:
-        print(f"using focal loss with gamma={gamma}")
-        return FocalBCELoss(pos_weight=pw, gamma=gamma)
+    loss_type = str(getattr(config.tra, 'loss_type', 'bce')).lower()
+    if loss_type == 'gce':
+        q = float(getattr(config.tra, 'gce_q', 0.7))
+        print(f"using GCE (noise-robust) loss with q={q}")
+        return GCEBCELoss(q=q, pos_weight=pw)
+    gamma = float(getattr(config.tra, 'focal_gamma', 0.0))
+    if loss_type == 'focal' or gamma > 0:
+        g = gamma if gamma > 0 else 2.0
+        print(f"using focal loss with gamma={g}")
+        return FocalBCELoss(pos_weight=pw, gamma=g)
     return nn.BCEWithLogitsLoss(pos_weight=pw, reduction='none')
 
 def calculate_metrics(y_true, y_pred, y_scores):

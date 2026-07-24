@@ -51,6 +51,10 @@ from utils.config import Config
 
 INTER_RUN_COOLDOWN_SECS = 120
 
+# MAE checkpoint every run warm-starts from (produced by run_mae_then_twostage.py -> mae_pretrain_twostage.py).
+# stage1.* transfers into the two-stage backbone; stage2 stays fresh. only applied if the file exists.
+MAE_CKPT = "models/mae_twostage.pth"
+
 
 def _base_config(exp_name: str) -> Config:
     """fresh config for the two-stage architecture sweep."""
@@ -70,19 +74,23 @@ def _base_config(exp_name: str) -> Config:
     c.model.head_drop  = 0.0
     c.tra.n_epochs     = 15
     c.tra.eval_int     = 15
-    c.tra.test_int     = 15
+    c.tra.test_int     = 999
     c.tra.probe_int    = 5
     c.tra.save_int     = 2       # save every 2 epochs so a crash doesn't wipe the run (BSODs ongoing)
-    c.tra.log_dir      = "./runs_reg"
+    c.tra.log_dir      = "./runs_ts_mae"
+    
     c.tra.deterministic = False   # exact reproducibility for seeded runs
     c.tra.l1_lambda    = 0.0
     c.tra.weight_decay = 0.0
-    c.dl.batch_size    = 128
+    c.dl.batch_size    = 96
     c.dl.num_workers   = 4
     c.dl.data_aug      = False
     c.data.mask_memmap       = True
     c.data.ring_negatives    = True
-    c.data.ring_label_source = "eroded"
+    c.data.ring_label_source = "closed"   # closed ring off (hand-cleaned) eroded map
+    c.data.ring_close_r      = 3
+    c.data.ring_gap_r        = 3
+    c.data.ring_shell_r      = 2
     # load the 4 default test scrolls; test figures fire once at epoch 30 (test_int).
     # only the primary scroll-vis loads them (see Trainer), so RAM stays bounded.
     c.tra.epoch_cooldown_secs   = 9
@@ -93,154 +101,96 @@ def _base_config(exp_name: str) -> Config:
 
 
 TESTS = [
-    # ARCHITECTURE / LOSS VARIANTS (2026-07-21): run these FIRST. all with NO augmentation
-    # and NO regularization (drops/L1/cutout off), 20 epochs, so any change is attributable
-    # purely to the arch/loss. peak TRAIN PR-AUC had plateaued ~0.66 => underfitting, so
-    # these target FIT (capacity, supervision density, matched objective, physical feature).
-    # (A) dense per-pixel supervision -- ~64x more gradient signal per tile than a tile scalar
-    # dict(tid="tsA", arch="v15_twostage_dense", dense=True,
-    #      flip=0.0, rotation=0.0, noise=0.0, brightness=0.0, contrast=0.0,
-    #      h_drop=0.0, c1_drop=0.0, c2_drop=0.0,
-    #      cutout_prob=0.0, cutout_max_frac=0.0, cutout_n_patches=0, depth_mask_prob=0.0,
-    #      l1=0.0, n_epochs=20, tag="dense"),
 
-    # (C) wider stage-2 fusion CNN (3->32->32->16->1) -- fixes the ~4.8k-param fusion bottleneck
-    # dict(tid="tsC", arch="v15_twostage_wide",
-    #      flip=0.0, rotation=0.0, noise=0.0, brightness=0.0, contrast=0.0,
-    #      h_drop=0.0, c1_drop=0.0, c2_drop=0.0,
-    #      cutout_prob=0.0, cutout_max_frac=0.0, cutout_n_patches=0, depth_mask_prob=0.0,
-    #      l1=0.0, n_epochs=20, tag="wide_fusion"),
+    # dict(tid="tsJ", arch="v15_twostage_wide_zgrad", context_size=0, init_weights=MAE_CKPT,
+    #      ranking_lambda=0.5, ranking_neg_frac=1.0,
+    #      flip=0.55, rotation=0.55, noise=0.2, brightness=0.5, contrast=0.5,
+    #      h_drop=0.4, c1_drop=0.15, c2_drop=0.15,
+    #      cutout_prob=0.4, cutout_max_frac=0.15, cutout_n_patches=2, depth_mask_prob=0.0,
+    #      l1=7e-5, tag="ts_gce_strongreg_mae"),
 
-    # (D) BCE + pairwise ranking (AUC surrogate) -- objective matched to PR-AUC on balanced
-    #     ring data (not focal, which targets imbalance we don't have)
-    # dict(tid="tsD", arch="v15_twostage_lcn", ranking_lambda=0.5, ranking_neg_frac=1.0,
-    #      flip=0.0, rotation=0.0, noise=0.0, brightness=0.0, contrast=0.0,
-    #      h_drop=0.0, c1_drop=0.0, c2_drop=0.0,
-    #      cutout_prob=0.0, cutout_max_frac=0.0, cutout_n_patches=0, depth_mask_prob=0.0,
-    #      l1=0.0, n_epochs=20, tag="ranking_auc"),
+    # 48x48 context-window duplicates (competition-legal limit): larger input crop centered on
+    # each tile, model center-pools MIL over the tile region so ring labels are unchanged.
 
-    # (E) shared backbone also ingests dI/dz ([raw, lcn, dz]) -- explicit ink-interface feature
-    # dict(tid="tsE", arch="v15_twostage_zgrad",
-    #      flip=0.0, rotation=0.0, noise=0.0, brightness=0.0, contrast=0.0,
-    #      h_drop=0.0, c1_drop=0.0, c2_drop=0.0,
-    #      cutout_prob=0.0, cutout_max_frac=0.0, cutout_n_patches=0, depth_mask_prob=0.0,
-    #      l1=0.0, n_epochs=20, tag="zgrad"),
+    # dict(tid="tsJc", arch="v15_twostage_wide_zgrad_ctx", context_size=48, init_weights=MAE_CKPT,
+    #      batch_size=24,   # 48px crops are ~9x the activations of a 16px tile -> shrink batch to avoid OOM
+    #      ranking_lambda=0.5, ranking_neg_frac=1.0,
+    #      flip=0.55, rotation=0.55, noise=0.2, brightness=0.5, contrast=0.5,
+    #      h_drop=0.4, c1_drop=0.15, c2_drop=0.15,
+    #      cutout_prob=0.4, cutout_max_frac=0.15, cutout_n_patches=2, depth_mask_prob=0.0,
+    #      l1=7e-5, tag="ts_gce_strongreg_ctx48_mae"),
 
-    # (F) COMBO C+D: wide stage-2 fusion + pairwise-ranking loss (both proven effective).
-    # #     no aug/reg, 20 epochs -- isolates the combined arch+loss effect.
-    # dict(tid="tsF", arch="v15_twostage_wide", ranking_lambda=0.5, ranking_neg_frac=1.0,
-    #      flip=0.0, rotation=0.0, noise=0.0, brightness=0.0, contrast=0.0,
-    #      h_drop=0.0, c1_drop=0.0, c2_drop=0.0,
-    #      cutout_prob=0.0, cutout_max_frac=0.0, cutout_n_patches=0, depth_mask_prob=0.0,
-    #      l1=0.0, n_epochs=20, tag="wide_ranking"),
 
-    # (G) COMBO C+D+E: wide fusion + zgrad backbone + ranking loss (E not yet proven).
-    # dict(tid="tsG", arch="v15_twostage_wide_zgrad", ranking_lambda=0.5, ranking_neg_frac=1.0,
-    #      flip=0.0, rotation=0.0, noise=0.0, brightness=0.0, contrast=0.0,
-    #      h_drop=0.0, c1_drop=0.0, c2_drop=0.0,
-    #      cutout_prob=0.0, cutout_max_frac=0.0, cutout_n_patches=0, depth_mask_prob=0.0,
-    #      l1=0.0, n_epochs=20, tag="wide_zgrad_ranking"),
+    dict(tid="tsJd", arch="v15_twostage_wide_zgrad_ctx", context_size=32, init_weights=MAE_CKPT,
+         batch_size=32,
+         ranking_lambda=0.5, ranking_neg_frac=1.0,
+         flip=0.66, rotation=0.66, noise=0.3, brightness=0.66, contrast=0.66,
+         h_drop=0.6, c1_drop=0.175, c2_drop=0.175,
+         cutout_prob=0.6, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
+         l1=2e-4, tag="ts_gce_vstrongreg_ctx32d_mae"),
 
-        
-    dict(tid="tsJ", arch="v15_twostage_wide_zgrad", ranking_lambda=0.5, ranking_neg_frac=1.0,
-         flip=0, rotation=0, noise=0, brightness=0, contrast=0,
-         h_drop=0, c1_drop=0, c2_drop=0,
-         cutout_prob=0.0, cutout_max_frac=0.0, cutout_n_patches=0, depth_mask_prob=0.0,
-         l1=0.0, n_epochs=30, tag="wide_zgrad_ranking_aug_noreg_alldata"),
-
-    dict(tid="tsH", arch="v15_twostage_wide_zgrad", ranking_lambda=0.5, ranking_neg_frac=1.0,
-         flip=0.3, rotation=0.1, noise=0.01, brightness=0.05, contrast=0.05,
-         h_drop=0.2, c1_drop=0.05, c2_drop=0.075,
-         cutout_prob=0.1, cutout_max_frac=0.15, cutout_n_patches=1, depth_mask_prob=0.0,
-         l1=7e-6, n_epochs=30, tag="wide_zgrad_ranking_aug_weakreg_alldata"),
-    
-    
-    dict(tid="tsI", arch="v15_twostage_wide_zgrad", ranking_lambda=0.5, ranking_neg_frac=1.0,
-         flip=0.4, rotation=0.4, noise=0.05, brightness=0.1, contrast=0.1,
-         h_drop=0.3, c1_drop=0.1, c2_drop=0.1,
-         cutout_prob=0.2, cutout_max_frac=0.15, cutout_n_patches=2, depth_mask_prob=0.0,
-         l1=7e-5, n_epochs=30, tag="wide_zgrad_ranking_aug_strongreg_alldata"),
-
-            # dict(tid="ts02",
-             #      flip=0.5, rotation=0.05, noise=0.0, brightness=0.05, contrast=0.05,
-             #      h_drop=0.2, c1_drop=0.05, c2_drop=0.075,
-             #      cutout_prob=0.15, cutout_max_frac=0.15, cutout_n_patches=1, depth_mask_prob=0.0,
-             #      l1=7e-6, n_epochs=20,
-             #      tag="veryweak_fullcombo"),
-
-    # ts00: PURE BASELINE -- no augmentation, no regularization (dropout/L1/cutout all off).
-    # 30 epochs to see how far the raw two-stage arch fits before overfitting. reference
-    # for how much the aug/reg in ts01/ts02 actually helps generalization.
-    # dict(tid="ts00",
-    #      flip=0.0, rotation=0.0, noise=0.0, brightness=0.0, contrast=0.0,
-    #      h_drop=0.0, c1_drop=0.0, c2_drop=0.0,
-    #      cutout_prob=0.0, cutout_max_frac=0.0, cutout_n_patches=0, depth_mask_prob=0.0,
-    #      l1=0.0, n_epochs=30,
-    #      tag="baseline_noreg"),
-
-    # FULL WEAKENED COMBO (2026-07-21): apply every regularizer at weak strength on the
-    # two-stage arch -- data aug + head/conv dropout + cutout patches + L1. mirrors the
-    # winning combo-campaign weak settings. ts_weak (aug-only) was the best performer and
-    # first to show validation loss dropping; these add the rest of the combo on top.
-    # ts01: weak full combo
-    # dict(tid="ts01",
-    #      flip=0.5, rotation=0.10, noise=0.05, brightness=0.10, contrast=0.10,
-    #      h_drop=0.3, c1_drop=0.05, c2_drop=0.075,
-    #      cutout_prob=0.25, cutout_max_frac=0.20, cutout_n_patches=1, depth_mask_prob=0.0,
-    #      l1=3e-5, n_epochs=20,
-    #      tag="weak_fullcombo"),
-
-    # # ts02: very weak full combo -- same knobs as ts01, lower values across the board
-    # dict(tid="ts02",
-    #      flip=0.5, rotation=0.05, noise=0.0, brightness=0.05, contrast=0.05,
-    #      h_drop=0.2, c1_drop=0.05, c2_drop=0.075,
-    #      cutout_prob=0.15, cutout_max_frac=0.15, cutout_n_patches=1, depth_mask_prob=0.0,
-    #      l1=7e-6, n_epochs=20,
-    #      tag="veryweak_fullcombo"),
 ]
 
 
+# dict-key -> (config-section, attribute). ONLY keys present in a test dict override the
+# matching _base_config value; every other field stays exactly as _base_config set it, so the
+# base is the single source of truth (not config.py's dataclass defaults).
+_OVERRIDES = {
+    "arch":             ("model", "arch"),
+    "n_epochs":         ("tra", "n_epochs"),
+    "eval_int":         ("tra", "eval_int"),
+    "test_int":         ("tra", "test_int"),
+    "probe_int":        ("tra", "probe_int"),
+    "l1":               ("tra", "l1_lambda"),
+    "weight_decay":     ("tra", "weight_decay"),
+    "ranking_lambda":   ("tra", "ranking_lambda"),
+    "ranking_neg_frac": ("tra", "ranking_neg_frac"),
+    "ranking_margin":   ("tra", "ranking_margin"),
+    "loss_type":        ("tra", "loss_type"),
+    "gce_q":            ("tra", "gce_q"),
+    "label_smooth":     ("tra", "label_smooth"),
+    "pos_weight_enabled": ("tra", "pos_weight_enabled"),
+    "focal_gamma":      ("tra", "focal_gamma"),
+    "h_drop":           ("model", "head_drop"),
+    "c1_drop":          ("model", "conv1_drop"),
+    "c2_drop":          ("model", "conv2_drop"),
+    "context_size":     ("data", "context_size"),
+    "dense":            ("data", "dense_labels"),
+    "batch_size":       ("dl", "batch_size"),
+    "num_workers":      ("dl", "num_workers"),
+    "flip":             ("dl", "flip_prob"),
+    "rotation":         ("dl", "rotation_prob"),
+    "noise":            ("dl", "noise_prob"),
+    "brightness":       ("dl", "brightness_prob"),
+    "contrast":         ("dl", "contrast_prob"),
+    "cutout_prob":      ("dl", "cutout_prob"),
+    "cutout_max_frac":  ("dl", "cutout_max_frac"),
+    "cutout_n_patches": ("dl", "cutout_n_patches"),
+    "depth_mask_prob":  ("dl", "depth_mask_prob"),
+}
+
+
 def build_config(t: dict) -> Config:
-    tid = t["tid"]
-    tag = t["tag"]
+    tid = t["tid"]; tag = t["tag"]
     c = _base_config(f"cmp_twostage_2026_07_21_{tid}_{tag}")
 
-    # optional arch / supervision / loss overrides (arch-variant tests)
-    if t.get("arch"):
-        c.model.arch = t["arch"]
-    if t.get("dense", False):
-        c.data.dense_labels = True
-    c.tra.ranking_lambda   = float(t.get("ranking_lambda", 0.0))
-    c.tra.ranking_neg_frac = float(t.get("ranking_neg_frac", 1.0))
+    # apply ONLY the keys present in this test dict; all else stays as _base_config set it
+    for k, (sec, attr) in _OVERRIDES.items():
+        if k in t:
+            setattr(getattr(c, sec), attr, t[k])
 
-    c.tra.l1_lambda    = t["l1"]
-    c.tra.n_epochs     = int(t.get("n_epochs", 20))
-    c.model.head_drop  = t["h_drop"]
-    c.model.conv1_drop = t["c1_drop"]
-    c.model.conv2_drop = t["c2_drop"]
+    # warm-start from an MAE checkpoint if the file exists (skips cleanly if MAE hasn't run)
+    iw = t.get("init_weights")
+    if iw and os.path.exists(iw):
+        c.init_weights = iw
+    elif iw:
+        print(f"[twostage] init_weights '{iw}' not found -- training {tid} from scratch")
 
-    flip       = t["flip"]
-    rotation   = t["rotation"]
-    noise      = t["noise"]
-    brightness = t["brightness"]
-    contrast   = t["contrast"]
-    cutout_prob      = t.get("cutout_prob", 0.0)
-    cutout_max_frac  = t.get("cutout_max_frac", 0.35)
-    cutout_n_patches = t.get("cutout_n_patches", 1)
-    depth_mask_prob  = t.get("depth_mask_prob", 0.0)
-
-    c.dl.data_aug = any([flip, rotation, noise, brightness, contrast,
-                         cutout_prob, depth_mask_prob])
+    # data_aug reflects the FINAL aug probabilities (base or overridden), not a hardcoded flag
+    c.dl.data_aug = any([c.dl.flip_prob, c.dl.rotation_prob, c.dl.noise_prob,
+                         c.dl.brightness_prob, c.dl.contrast_prob,
+                         c.dl.cutout_prob, c.dl.depth_mask_prob])
     c.dl.channel_mixing_prob = 0.0
-    c.dl.flip_prob        = flip
-    c.dl.rotation_prob    = rotation
-    c.dl.noise_prob       = noise
-    c.dl.brightness_prob  = brightness
-    c.dl.contrast_prob    = contrast
-    c.dl.cutout_prob      = cutout_prob
-    c.dl.cutout_max_frac  = cutout_max_frac
-    c.dl.cutout_n_patches = cutout_n_patches
-    c.dl.depth_mask_prob  = depth_mask_prob
 
     os.makedirs("models/twostage", exist_ok=True)
     c.save_final = f"models/twostage/{tid}_{tag}_final.pth"

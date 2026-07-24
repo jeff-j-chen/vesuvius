@@ -69,7 +69,7 @@ def group_by_depth(coords):
         grouped[d_off].append((d_off, y_off, x_off))
     return grouped
 
-def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False):
+def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False, also_tta=False):
     """run batched prediction over given coords returning downsampled map.
 
     reads tiles as y-row strips: one zarr call per row of tiles instead of one
@@ -96,6 +96,20 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     device = config.device if torch.cuda.is_available() else "cpu"
     mode = getattr(config.data, "input_mode", "single")
 
+    # context-window toggle: when context_size>tile (single mode only) each tile is read as a
+    # larger crop centered on it; the model center-pools MIL over the tile region. shrink the
+    # inference batch by the area ratio so the bigger crops don't blow VRAM.
+    ctx = int(getattr(config.data, "context_size", 0) or 0)
+    use_ctx = (ctx > tile and mode == "single")
+    if use_ctx:
+        infer_bs = max(1, int(infer_bs * (tile / float(ctx)) ** 2))
+
+    # optional manual override: crank this up to exploit spare VRAM (throughput is often
+    # launch/underutilization-bound, not memory-bound, on a large card). 0 = auto (above).
+    _ib = int(getattr(config.data, "eval_infer_bs", 0) or 0)
+    if _ib > 0:
+        infer_bs = _ib
+
     # group x offsets by y_off so each y-row becomes one contiguous zarr read
     by_y = defaultdict(list)
     for _, y_off, x_off in coords:
@@ -113,6 +127,21 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
             m = (mask[y_abs:y_abs + tile, x_abs_min:x_abs_min + width] > 0)
             s[:, ~m] = 0.0
         return np.clip((s - g_min) / (g_max - g_min + 1e-12), 0.0, 1.0)
+
+    def _read_ctx_strip(z_start, n_depth, y0, x0, hgt, wid):
+        """read a zero-padded (OOB-safe) strip of height hgt for the context-window model.
+        matches the dataloader: zero-pad in RAW space, then normalize the whole block."""
+        if z_start + n_depth > vol.shape[0] or wid <= 0 or hgt <= 0:
+            return None
+        H, W = int(vol.shape[1]), int(vol.shape[2])
+        out = np.zeros((n_depth, hgt, wid), dtype=np.float32)
+        ys, ye = max(0, y0), min(H, y0 + hgt)
+        xs, xe = max(0, x0), min(W, x0 + wid)
+        if ys < ye and xs < xe:
+            out[:, ys - y0:ye - y0, xs - x0:xe - x0] = np.array(
+                vol[z_start:z_start + n_depth, ys:ye, xs:xe], dtype=np.float32)
+        out = (out - g_mean) / g_std
+        return np.clip((out - g_min) / (g_max - g_min + 1e-12), 0.0, 1.0)
 
     valid = []
     n_rows = len(by_y)
@@ -153,51 +182,106 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
             if strip is None:
                 continue
         else:  # single
-            strip = _read_strip(depth_start, depth, y_abs, x_abs_min, width)
+            if use_ctx:
+                pad = (ctx - tile) // 2
+                strip = _read_ctx_strip(depth_start, depth, y_abs - pad, x_abs_min - pad,
+                                        ctx, width + 2 * pad)
+            else:
+                strip = _read_strip(depth_start, depth, y_abs, x_abs_min, width)
             if strip is None:
                 continue
 
         expected_d = strip.shape[0]
+        sp = ctx if use_ctx else tile
         for x_off in x_offs:
             xl = (x_range[0] + x_off) - x_abs_min
-            blk = strip[:, :, xl:xl + tile]
-            if blk.shape == (expected_d, tile, tile):
+            blk = strip[:, :, xl:xl + sp]
+            if blk.shape == (expected_d, sp, sp):
                 valid.append((np.ascontiguousarray(blk), y_off, x_off))
+
+    # TTA transforms (spatial dims are the last two; tiles are square so rot90 keeps shape).
+    # identity is first so it doubles as the plain (no-aug) prediction -- this lets also_tta
+    # produce BOTH the regular and TTA maps from a SINGLE read. default "flips" (4) drops the
+    # two 90-degree rotations: they are the expensive non-contiguous ops AND an unnatural view
+    # for oriented text; "dihedral" (6) restores them.
+    _flips = (
+        lambda t: t,
+        lambda t: torch.flip(t, dims=[4]),        # h-flip
+        lambda t: torch.flip(t, dims=[3]),        # v-flip
+        lambda t: torch.flip(t, dims=[3, 4]),     # 180
+    )
+    if str(getattr(config.data, "tta_mode", "flips")).lower() == "dihedral":
+        _tf = _flips + (
+            lambda t: torch.rot90(t, 1, dims=[3, 4]),   # +90
+            lambda t: torch.rot90(t, -1, dims=[3, 4]),  # -90
+        )
+    else:
+        _tf = _flips
+
+    def _collapse(lg):
+        return lg.flatten(1).max(dim=1, keepdim=True).values if lg.dim() == 4 else lg
+
+    pmap_tta = np.full((h_small, w_small), np.nan, dtype=np.float32) if also_tta else None
 
     with torch.no_grad():
         for i in tqdm(range(0, len(valid), infer_bs), desc=f"Predict {volume_name}", leave=True):
             chunk   = valid[i:i + infer_bs]
             b_blocks = [b for b, _, _ in chunk]
             b_idx    = [(yo, xo) for _, yo, xo in chunk]
+            bt = torch.from_numpy(np.stack(b_blocks)).float().unsqueeze(1).to(device)
 
-            bt     = torch.from_numpy(np.stack(b_blocks)).float().unsqueeze(1).to(device)
-            logits = model(bt)
-            if logits.dim() == 4:
-                logits = logits.flatten(1).max(dim=1, keepdim=True).values
-            preds  = torch.sigmoid(logits).cpu().numpy().flatten()
-
-            for (y_off, x_off), pred in zip(b_idx, preds):
-                yi = y_off // tile
-                xi = x_off // tile
-                if 0 <= yi < h_small and 0 <= xi < w_small:
-                    pmap[yi, xi] = float(pred)
+            if also_tta:
+                # ONE read of the blocks -> BOTH the regular (identity) and TTA-averaged maps.
+                # TTA re-augments the already-loaded tiles in-memory; it does NOT re-read disk.
+                prob_sum = None; id_probs = None
+                for j, op in enumerate(_tf):
+                    p = torch.sigmoid(_collapse(model(op(bt).contiguous())))
+                    if j == 0:
+                        id_probs = p
+                    prob_sum = p if prob_sum is None else prob_sum + p
+                reg_preds = id_probs.cpu().numpy().flatten()
+                tta_preds = (prob_sum / len(_tf)).cpu().numpy().flatten()
+                for (y_off, x_off), rp, tp in zip(b_idx, reg_preds, tta_preds):
+                    yi = y_off // tile; xi = x_off // tile
+                    if 0 <= yi < h_small and 0 <= xi < w_small:
+                        pmap[yi, xi] = float(rp); pmap_tta[yi, xi] = float(tp)
+            elif tta:
+                prob_sum = None
+                for op in _tf:
+                    p = torch.sigmoid(_collapse(model(op(bt).contiguous())))
+                    prob_sum = p if prob_sum is None else prob_sum + p
+                preds = (prob_sum / len(_tf)).cpu().numpy().flatten()
+                for (y_off, x_off), pred in zip(b_idx, preds):
+                    yi = y_off // tile; xi = x_off // tile
+                    if 0 <= yi < h_small and 0 <= xi < w_small:
+                        pmap[yi, xi] = float(pred)
+            else:
+                preds = torch.sigmoid(_collapse(model(bt))).cpu().numpy().flatten()
+                for (y_off, x_off), pred in zip(b_idx, preds):
+                    yi = y_off // tile; xi = x_off // tile
+                    if 0 <= yi < h_small and 0 <= xi < w_small:
+                        pmap[yi, xi] = float(pred)
             del bt
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # optional post-hoc spatial smoothing — only applied to valid (non-NaN) tiles
+    # optional post-hoc spatial smoothing -- only applied to valid (non-NaN) tiles
     sigma = float(getattr(config.data, "smooth_sigma", 0.0))
-    if sigma > 0:
-        valid_mask = np.isfinite(pmap)
-        filled = np.where(valid_mask, pmap, 0.0)
-        filled = ndimage.gaussian_filter(filled, sigma=sigma)
-        weight = ndimage.gaussian_filter(valid_mask.astype(np.float32), sigma=sigma)
-        # normalize by the contribution of valid neighbors; leave NaN positions as NaN
-        with np.errstate(invalid='ignore'):
-            smoothed = np.where(weight > 0, filled / weight, np.nan)
-        pmap = np.clip(smoothed, 0.0, 1.0)
 
+    def _smooth(pm):
+        if pm is None or sigma <= 0:
+            return pm
+        vmask = np.isfinite(pm)
+        filled = ndimage.gaussian_filter(np.where(vmask, pm, 0.0), sigma=sigma)
+        weight = ndimage.gaussian_filter(vmask.astype(np.float32), sigma=sigma)
+        with np.errstate(invalid='ignore'):
+            sm = np.where(weight > 0, filled / weight, np.nan)
+        return np.clip(sm, 0.0, 1.0)
+
+    pmap = _smooth(pmap)
+    if also_tta:
+        return pmap, _smooth(pmap_tta)
     return pmap
 
 class _ScopedWriter:
@@ -359,8 +443,11 @@ class TensorboardVisualizer:
             self.writer = SummaryWriter(self.log_path)
             self.writer.add_custom_scalars(self.layout)
 
-        print(f"TensorBoard logs will be saved to: {self.log_path}")
-        print(f"To view, run: tensorboard --logdir={config.tra.log_dir}")
+        # print the log location once (primary visualizer only; per-scroll secondaries
+        # share the same run dir, so repeating it per scroll is just noise)
+        if shared_writer is None:
+            print(f"TensorBoard logs will be saved to: {self.log_path}")
+            print(f"To view, run: tensorboard --logdir={config.tra.log_dir}")
 
     def _init_training_assets(self):
         """load training and auxiliary datasets and normalization stats"""
@@ -393,95 +480,50 @@ class TensorboardVisualizer:
         self.shared_range = getattr(dm, "shared_range", dm.y_range)
         self.global_mean, self.global_std, self.global_min, self.global_max = dm.norm_stats
 
-        # load test data region and scroll4 data with stats
+        # load test data region with stats
         self.test_volume, self.test_mask, self.test_y_range, self.test_x_range = self._load_test_region()
         self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max = self._get_or_compute_norm(
             self.test_volume, self.test_mask, str(self.scroll1_id)
         )
-
-        # scroll4/2/3: only loaded when test_show_scroll4/2/3 is explicitly enabled.
-        # default is False so these never print "not available" unless the user opts in.
-        self.scroll4_volume = self.scroll4_mask = None
-        self.scroll4_y_range = self.scroll4_x_range = None
-        self.scroll4_global_mean = self.scroll4_global_std = None
-        self.scroll4_global_min = self.scroll4_global_max = None
-        if getattr(self.c.data, 'test_show_scroll4', False) or (
-                not getattr(self.c.data, 'test_scroll_id', None) and getattr(self.c.data, 'test_on_scroll4', False)):
-            try:
-                (self.scroll4_volume, self.scroll4_mask,
-                 self.scroll4_y_range, self.scroll4_x_range) = self._load_scroll4_region()
-                (self.scroll4_global_mean, self.scroll4_global_std,
-                 self.scroll4_global_min, self.scroll4_global_max) = self._get_or_compute_norm(
-                    self.scroll4_volume, self.scroll4_mask, str(self.c.data.scroll4_id))
-            except Exception as e:
-                print(f"[scroll4] not available, skipping its test figure ({e})")
-                self.scroll4_volume = None
-
-        self.scroll2_volume = self.scroll2_mask = None
-        self.scroll2_y_range = self.scroll2_x_range = None
-        self.scroll2_global_mean = self.scroll2_global_std = None
-        self.scroll2_global_min = self.scroll2_global_max = None
-        if getattr(self.c.data, 'test_show_scroll2', False) or (
-                not getattr(self.c.data, 'test_scroll_id', None) and not getattr(self.c.data, 'test_on_scroll4', False)):
-            try:
-                (self.scroll2_volume, self.scroll2_mask,
-                 self.scroll2_y_range, self.scroll2_x_range) = self._load_scroll2_region()
-                (self.scroll2_global_mean, self.scroll2_global_std,
-                 self.scroll2_global_min, self.scroll2_global_max) = self._get_or_compute_norm(
-                    self.scroll2_volume, self.scroll2_mask, str(self.c.data.scroll2_id))
-            except Exception as e:
-                print(f"[scroll2] not available, skipping its test figure ({e})")
-                self.scroll2_volume = None
-
-        self.scroll3_volume = self.scroll3_mask = None
-        self.scroll3_y_range = self.scroll3_x_range = None
-        self.scroll3_global_mean = self.scroll3_global_std = None
-        self.scroll3_global_min = self.scroll3_global_max = None
-        if getattr(self.c.data, 'test_show_scroll3', False) or (
-                not getattr(self.c.data, 'test_scroll_id', None)):
-            try:
-                (self.scroll3_volume, self.scroll3_mask,
-                 self.scroll3_y_range, self.scroll3_x_range) = self._load_scroll3_region()
-                (self.scroll3_global_mean, self.scroll3_global_std,
-                 self.scroll3_global_min, self.scroll3_global_max) = self._get_or_compute_norm(
-                    self.scroll3_volume, self.scroll3_mask, str(self.c.data.scroll3_id))
-            except Exception as e:
-                print(f"[scroll3] not available, skipping its test figure ({e})")
-                self.scroll3_volume = None
 
         # test fragments: one entry per test_scroll_id. each is loaded defensively
         # (missing zarr/mask is skipped). stored as a list of dicts so add_test_figures
         # can iterate them one at a time, clearing CUDA cache between to prevent OOM
         # on large segments.
         self.testfrags = []
-        _tfs = list(getattr(self.c.data, 'test_scroll_ids', None) or []) if self._load_test_frags else []
-        if not _tfs and self._load_test_frags:
-            _tf1 = getattr(self.c.data, 'test_scroll_id', None)
-            if _tf1 is not None:
-                _tfs = [_tf1]
-        for _tf in _tfs:
+        # test fragments + holdout(s). holdouts are rendered as full-size test figures too
+        # (the hallucination sanity check) but are never in the training corpus.
+        _tfs = []
+        if self._load_test_frags:
+            _tfs = [(int(t), False) for t in (getattr(self.c.data, 'test_scroll_ids', None) or [])]
+            if not _tfs:
+                _tf1 = getattr(self.c.data, 'test_scroll_id', None)
+                if _tf1 is not None:
+                    _tfs = [(int(_tf1), False)]
+            _tfs += [(int(h), True) for h in (getattr(self.c.data, 'holdout_scroll_ids', None) or [])]
+        for _tf, _is_hold in _tfs:
             try:
                 import zarr as _zarr
-                _tv = _zarr.open(os.path.join(self.c.data.zarr_path, f'{int(_tf)}.zarr'), mode='r')
-                _tm = imread_gray(f'./masks/{int(_tf)}.png')
+                _tv = _zarr.open(os.path.join(self.c.data.zarr_path, f'{_tf}.zarr'), mode='r')
+                _tm = imread_gray(f'./masks/{_tf}.png')
                 if _tm is None:
-                    raise FileNotFoundError(f'./masks/{int(_tf)}.png missing')
+                    raise FileNotFoundError(f'./masks/{_tf}.png missing')
                 _tm = _tm / 255.0
                 _D, _H, _W = map(int, _tv.shape)
-                _norm = self._get_or_compute_norm(_tv, _tm, str(int(_tf)))
+                _norm = self._get_or_compute_norm(_tv, _tm, str(_tf))
                 self.testfrags.append({
-                    'id': int(_tf), 'volume': _tv, 'mask': _tm,
+                    'id': _tf, 'name': str(_tf), 'is_holdout': _is_hold,
+                    'volume': _tv, 'mask': _tm,
                     'y_range': (0, _H), 'x_range': (0, _W),
                     'mean': _norm[0], 'std': _norm[1],
                     'min': _norm[2], 'max': _norm[3],
                 })
-                print(f'[testfrag] loaded {int(_tf)} shape ({_D},{_H},{_W}) for test figures')
+                print(f'[testfrag] loaded {_tf}{" (holdout)" if _is_hold else ""} shape ({_D},{_H},{_W}) for test figures')
             except Exception as e:
-                print(f'[testfrag] {int(_tf)} not available, skipping ({e})')
+                print(f'[testfrag] {_tf} not available, skipping ({e})')
 
         self._segment_assets = {}
         self.probe_specs = self._build_probe_specs()
-        self._debug_scroll4_ranges_once()
 
         # dense probe specs: named ROIs rendered every probe_int epochs.
         # built once at init; add_dense_probe_figure iterates them all.
@@ -537,43 +579,6 @@ class TensorboardVisualizer:
                                "y0": py0, "x0": px0, "size": ps})
             except Exception as e:
                 print(f"[dense probe] auto-detect failed: {e}")
-
-        # scroll4_pi probe — uses the small scroll4 test segment (20231210132040),
-        # which HAS eroded inklabels. loaded defensively.
-        if self.scroll4_volume is not None:
-            sn = (self.scroll4_global_mean, self.scroll4_global_std,
-                  self.scroll4_global_min, self.scroll4_global_max)
-            scroll4_labels = _load_eroded(int(self.c.data.scroll4_id))
-            _d4, H4, W4 = (int(v) for v in self.scroll4_volume.shape)
-            # pi region: y=7968, x=1952 (already tile-aligned per legacy specs)
-            s4y, s4x = snap(7968), snap(1952)
-            # clamp in case this test scroll is smaller than expected
-            s4y = min(s4y, max(0, H4 - ps))
-            s4x = min(s4x, max(0, W4 - ps))
-            specs.append({"tag": "Scroll4_Pi", "vol": self.scroll4_volume,
-                          "norm": sn, "labels": scroll4_labels, "mask": self.scroll4_mask,
-                          "y0": s4y, "x0": s4x, "size": ps})
-
-        # scroll2 and scroll3: no inklabels — labels=None, no GT panel
-        if self.scroll2_volume is not None:
-            sn = (self.scroll2_global_mean, self.scroll2_global_std,
-                  self.scroll2_global_min, self.scroll2_global_max)
-            _d2, H2, W2 = (int(v) for v in self.scroll2_volume.shape)
-            cy = snap(max(0, (H2 - ps) // 2))
-            cx = snap(max(0, (W2 - ps) // 2))
-            specs.append({"tag": "Scroll2_Center", "vol": self.scroll2_volume,
-                          "norm": sn, "labels": None, "mask": self.scroll2_mask,
-                          "y0": cy, "x0": cx, "size": ps})
-
-        if self.scroll3_volume is not None:
-            sn = (self.scroll3_global_mean, self.scroll3_global_std,
-                  self.scroll3_global_min, self.scroll3_global_max)
-            _d3, H3, W3 = (int(v) for v in self.scroll3_volume.shape)
-            cy = snap(max(0, (H3 - ps) // 2))
-            cx = snap(max(0, (W3 - ps) // 2))
-            specs.append({"tag": "Scroll3_Center", "vol": self.scroll3_volume,
-                          "norm": sn, "labels": None, "mask": self.scroll3_mask,
-                          "y0": cy, "x0": cx, "size": ps})
 
         tags = [s['tag'] for s in specs]
         print(f"[dense probe] {len(specs)} probe specs: {tags}  (size={ps}px, snap_unit={T}px)")
@@ -641,8 +646,7 @@ class TensorboardVisualizer:
         layout (matches historical ProbeROIs style, adapted for dense inference):
           rows  : one per depth window (no half-step: z_step=depth), + final composite row
           cols  : two per probe — (pred, pred+inklabel overlay)
-                  scroll2/scroll3 (no GT) still get two columns; the overlay is pred only.
-          probes: Easy | Medium | Hard | Scroll4_Pi | Scroll2_Center | Scroll3_Center
+          probes: named training-scroll ROIs (Easy | Medium | Hard | Auto)
 
         each cell is a single forward pass on the probe's 512x512 region.
         no raw scan, no standalone GT column.
@@ -797,16 +801,15 @@ class TensorboardVisualizer:
         plt.close(fig)
 
         # READABILITY METRICS from training-scroll labeled probes only (Easy, Medium, Hard).
-        # Scroll4_Pi is a test segment, Scroll2/Scroll3 have no GT — all excluded.
         try:
             T = self.c.data.tile_size
             _TRAIN_TAGS = {"Easy", "Medium", "Hard"}
             agg_rm = []
             for spec, pd in zip(specs, probe_data):
                 if pd is None or pd.get("gt") is None:
-                    continue   # no GT (scroll2, scroll3)
+                    continue   # no GT
                 if spec.get("tag") not in _TRAIN_TAGS:
-                    continue   # scroll4_pi is test segment, not training corpus
+                    continue   # only labeled training-scroll ROIs contribute
                 py0   = int(spec["y0"]); px0 = int(spec["x0"]); ps = int(spec["size"])
                 tag   = spec.get("tag", "probe")
                 comp  = pd["composite"]  # (oh, ow) pixel-space composite prediction
@@ -983,117 +986,7 @@ class TensorboardVisualizer:
 
         return vol, mask, y_range, x_range
 
-    def _load_scroll4_region(self):
-        """load scroll4 region with predefined slicing"""
-        sid = self.c.data.scroll4_id
-        zarr_path = os.path.join(self.c.data.zarr_path, f"{sid}.zarr")
-        vol = None
-        try:
-            import zarr
-            vol = zarr.open(zarr_path, mode='r')
-        except Exception as e:
-            raise RuntimeError(f"could not open zarr at {zarr_path}: {e}")
-
-        D, H, W = map(int, vol.shape)
-
-        mask_path = f"./masks/{sid}.png"
-        mask = imread_gray(mask_path) / 255.0
-
-        y_range = (6500 if H > 6500 else 0, H)
-        x_range = (0, min(5000, W))
-
         return vol, mask, y_range, x_range
-
-    def _load_scroll2_region(self):
-        """load the ENTIRE scroll2 fragment as the goal-scroll test region.
-
-        scroll2 is our target scroll: we want to see whether a model trained on the
-        scroll1 fragments transfers any ink signal to it. the test figure renders the
-        full fragment over full depth (tiles outside the papyrus mask are skipped, so
-        cost tracks the actual segment area, not the bounding box)."""
-        sid = self.c.data.scroll2_id
-        zarr_path = os.path.join(self.c.data.zarr_path, f"{sid}.zarr")
-        try:
-            import zarr
-            vol = zarr.open(zarr_path, mode='r')
-        except Exception as e:
-            raise RuntimeError(f"could not open zarr at {zarr_path}: {e}")
-
-        mask_path = f"./masks/{sid}.png"
-        mask = imread_gray(mask_path) / 255.0
-
-        # full fragment extent (was a fixed 2048x1024 crop at x=3080,y=748)
-        D, H, W = map(int, vol.shape)
-        y_range = (0, H)
-        x_range = (0, W)
-
-        return vol, mask, y_range, x_range
-
-    def _load_scroll3_region(self):
-        """load the ENTIRE scroll3 fragment as a second goal-scroll test region.
-
-        scroll3 (PHerc332) is the same 7.91um modality as the scroll4 training run — the
-        real transfer target. long-and-skinny fragment; full extent over full depth (tiles
-        outside the papyrus mask are skipped). raises if its zarr/mask are missing so the
-        caller can skip the figure gracefully (it may still be downloading)."""
-        sid = self.c.data.scroll3_id
-        zarr_path = os.path.join(self.c.data.zarr_path, f"{sid}.zarr")
-        import zarr
-        vol = zarr.open(zarr_path, mode='r')
-
-        mask_path = f"./masks/{sid}.png"
-        mask = imread_gray(mask_path)
-        if mask is None:
-            raise FileNotFoundError(f"scroll3 mask not found at {mask_path}")
-        mask = mask / 255.0
-
-        D, H, W = map(int, vol.shape)
-        y_range = (0, H)
-        x_range = (0, W)
-
-        return vol, mask, y_range, x_range
-
-        """fixed readability probe regions, generated per active training scroll.
-
-        each training scroll listed in config.data.tra_scroll_ids contributes its own
-        easy/medium/hard ROIs (when defined below); the standard scroll4 and scroll2
-        transfer checks are always appended. so a big-scroll-only run yields 3 probes +
-        scroll4 + scroll2, while a small+big multiscroll run yields 6 probes + the two
-        standard checks. all x/y snap to a tile multiple so the probe grid is co-aligned
-        with the training tile grid (small-scroll values kept floor-aligned for
-        historical comparability; big-scroll values snap to NEAREST per request)."""
-        T = self.c.data.tile_size  # 32
-        def nearest(v): return int((v + T // 2) // T) * T
-
-        SMALL = 20230827161847
-        BIG   = 20230702185753
-
-        # per-training-scroll ROI definitions (already tile-aligned literals for SMALL)
-        per_scroll = {
-            SMALL: [
-                {"tag": "Easy",   "title": "small scroll easy",   "segment_id": SMALL, "x": 2080, "y": 4352, "size": 608},
-                {"tag": "Medium", "title": "small scroll medium", "segment_id": SMALL, "x": 2560, "y": 928,  "size": 608},
-                {"tag": "Hard",   "title": "small scroll hard",   "segment_id": SMALL, "x": 3744, "y": 3840, "size": 608},
-            ],
-            BIG: [
-                # coords snapped to nearest tile multiple; train/valid notes are the
-                # user's annotations. dataloader splits train=left 75% (split_x=13024),
-                # so easy/medium fall in train and hard (x~13344) is genuinely valid.
-                {"tag": "BigEasy",   "title": "big scroll easy (train)",   "segment_id": BIG, "x": nearest(1728),  "y": nearest(6749),  "size": 608},
-                {"tag": "BigMedium", "title": "big scroll medium (train)", "segment_id": BIG, "x": nearest(6285),  "y": nearest(10429), "size": 608},
-                {"tag": "BigHard",   "title": "big scroll hard (valid)",   "segment_id": BIG, "x": nearest(13349), "y": nearest(6372),  "size": 608},
-            ],
-        }
-
-        train_ids = [int(s.scroll_id) for s in self.c.data.scrolls]
-        specs = []
-        for sid in train_ids:
-            specs.extend(per_scroll.get(sid, []))
-
-        # always-on transfer checks (scroll4 pi region + scroll2 goal scroll)
-        specs.append({"tag": "Scroll4_Pi", "title": "scroll4 pi", "segment_id": self.c.data.scroll4_id, "x": 1952, "y": 7968, "size": 608})
-        specs.append({"tag": "Scroll2",    "title": "scroll2",    "segment_id": self.c.data.scroll2_id, "x": 3072, "y": 736,  "size": 608})
-        return specs
 
     def _build_probe_specs_legacy(self):
         """DEPRECATED — superseded by _build_probe_specs which reads from config.data.probe_rois."""
@@ -1158,28 +1051,6 @@ class TensorboardVisualizer:
                 "mask": self.mask,
                 "labels": self.labels,
                 "norm": (self.global_mean, self.global_std, self.global_min, self.global_max),
-            }
-        elif seg_id == self.c.data.scroll4_id:
-            asset = {
-                "volume": self.scroll4_volume,
-                "mask": self.scroll4_mask,
-                "labels": self._load_segment_labels(seg_id),
-                "norm": (
-                    self.scroll4_global_mean,
-                    self.scroll4_global_std,
-                    self.scroll4_global_min,
-                    self.scroll4_global_max,
-                ),
-            }
-        elif seg_id == self.c.data.scroll2_id:
-            # scroll2 has no ink labels — substitute zeros so overlay is prediction-only
-            labels = np.zeros(self.scroll2_mask.shape, dtype=np.float32)
-            asset = {
-                "volume": self.scroll2_volume,
-                "mask": self.scroll2_mask,
-                "labels": labels,
-                "norm": (self.scroll2_global_mean, self.scroll2_global_std,
-                         self.scroll2_global_min, self.scroll2_global_max),
             }
         else:
             import zarr
@@ -1879,26 +1750,30 @@ class TensorboardVisualizer:
         # ring+ink tiles — everything else stays NaN and renders black, matching
         # the actual training distribution instead of swamping the signal with OOD noise
         eval_mask = getattr(self, 'eval_mask', self.mask)
-        # axis-aware split: 'y' -> train=top rows / valid=bottom rows, shared x, stack vertically;
-        # 'x' -> legacy train=left / valid=right, shared y, stack horizontally.
+        # the train/valid split is PURELY VISUAL (a line drawn on the figure afterward); this is
+        # functionally a single eval over the whole region. so read+predict the FULL region in
+        # ONE pass instead of two (train then valid) -- half the per-call overhead, and for an
+        # x-split one wide strip read per row instead of two.
         if getattr(self, "split_axis", "x") == "y":
             tr_y, tr_x = self.train_range, self.shared_range
-            va_y, va_x = self.valid_range, self.shared_range
-            concat_axis = 0
+            full_y = (self.train_range[0], self.valid_range[1]); full_x = self.shared_range
         else:
             tr_y, tr_x = self.shared_range, self.train_range
-            va_y, va_x = self.shared_range, self.valid_range
-            concat_axis = 1
-        train_coords = self._gen_tile_coords(z_range, tr_y, tr_x, eval_mask, z_step=self.c.data.depth)
-        valid_coords = self._gen_tile_coords(z_range, va_y, va_x, eval_mask, z_step=self.c.data.depth)
-
-        train_grouped = group_by_depth(train_coords)
-        valid_grouped = group_by_depth(valid_coords)
-        depth_offsets = sorted(set(train_grouped.keys()) | set(valid_grouped.keys()))
-        all_pred_data = []
+            full_y = self.shared_range; full_x = (self.train_range[0], self.valid_range[1])
 
         hm_dir = self._hard_mining_dir()
         hm_enabled = getattr(self.c.hm, "enabled", True)
+
+        full_coords = self._gen_tile_coords(z_range, full_y, full_x, eval_mask, z_step=self.c.data.depth)
+        full_grouped = group_by_depth(full_coords)
+        # train-region coords (coord-only, no read) -- only needed to route hard-negative mining
+        # to the training portion; the full-region origin == train origin so indices line up.
+        train_grouped = group_by_depth(
+            self._gen_tile_coords(z_range, tr_y, tr_x, eval_mask, z_step=self.c.data.depth)
+        ) if hm_enabled else {}
+        depth_offsets = sorted(full_grouped.keys())
+        all_pred_data = []
+        all_tta_data = []
 
         if hm_enabled:
             os.makedirs(hm_dir, exist_ok=True)
@@ -1924,31 +1799,29 @@ class TensorboardVisualizer:
             depth_end = depth_start + self.c.data.depth
 
             t_coords = train_grouped.get(d_off, [])
-            v_coords = valid_grouped.get(d_off, [])
 
-            t_pred = predict_tiles(
-                self.c, model, self.volume, eval_mask, t_coords, tr_y, tr_x,
-                depth_start, "train", self.global_mean, self.global_std, self.global_min, self.global_max
-            )
-
-            v_pred = predict_tiles(
-                self.c, model, self.volume, eval_mask, v_coords, va_y, va_x,
-                depth_start, "valid", self.global_mean, self.global_std, self.global_min, self.global_max
+            # ONE read+predict pass over the full train+valid region (also_tta -> raw + TTA maps)
+            full_pred, full_tta = predict_tiles(
+                self.c, model, self.volume, eval_mask, full_grouped.get(d_off, []), full_y, full_x,
+                depth_start, "eval", self.global_mean, self.global_std, self.global_min, self.global_max,
+                also_tta=True
             )
 
             tile = self.c.data.tile_size
 
+            # hard-negative mining from the TRAIN portion only (full origin == train origin, so
+            # the train-tile indices line up directly with the full prediction map)
             for (_, y_off, x_off) in t_coords:
                 yi = y_off // tile
                 xi = x_off // tile
-                if yi < 0 or yi >= t_pred.shape[0] or xi < 0 or xi >= t_pred.shape[1]:
+                if yi < 0 or yi >= full_pred.shape[0] or xi < 0 or xi >= full_pred.shape[1]:
                     continue
 
-                score = float(t_pred[yi, xi])
+                score = float(full_pred[yi, xi])
 
                 z_global = depth_start
-                y_global = tr_y[0] + y_off
-                x_global = tr_x[0] + x_off
+                y_global = full_y[0] + y_off
+                x_global = full_x[0] + x_off
 
                 l_tile = self.labels[y_global:y_global + tile, x_global:x_global + tile]
                 has_ink = int(np.any(l_tile > 0.5))
@@ -1972,8 +1845,8 @@ class TensorboardVisualizer:
                         new_keys.add(key)
                         hp_cnt += 1
 
-            full_pred = np.concatenate([t_pred, v_pred], axis=concat_axis)
-            all_pred_data.append((full_pred, t_pred, depth_start, depth_end))
+            all_pred_data.append((full_pred, None, depth_start, depth_end))
+            all_tta_data.append(full_tta)
 
         if mining_f is not None:
             mining_f.write(json.dumps({"_type": "meta", "hard_negatives": hn_cnt, "hard_positives": hp_cnt}) + "\n")
@@ -2020,14 +1893,54 @@ class TensorboardVisualizer:
             self._log_readability_metrics(epoch, aggregate_metrics, per_depth_metrics, depth_labels)
 
             if getattr(self.c.tra, "eval_aggregate", True):
-                # size of the train portion in tile units + orientation of the split line
-                if getattr(self, "split_axis", "x") == "y":
-                    train_split_n = (self.train_range[1] - self.train_range[0]) // self.c.data.tile_size
-                    split_axis = "y"
+                train_split_n = (self.train_range[1] - self.train_range[0]) // self.c.data.tile_size
+                split_axis = "y" if getattr(self, "split_axis", "x") == "y" else "x"
+
+                # regular inference map (primary depth block)
+                reg_pred = all_pred_data[0][0]
+
+                # TTA map: computed in the SAME read pass as reg_pred (also_tta=True above),
+                # so we do NOT re-read the zarr -- TTA just re-augments the already-loaded tiles.
+                tta_pred = all_tta_data[0] if all_tta_data else None
+
+                # raw 1.1um / 2.4um inklabels (visual reference), cropped to the eval extent.
+                # width is aligned to the mask (download resized to mask width); height is mapped
+                # proportionally since the raw inklabel aspect differs slightly from the mask.
+                if split_axis == "y":
+                    ext_y = (self.train_range[0], self.valid_range[1]); ext_x = self.shared_range
                 else:
-                    train_split_n = (self.train_range[1] - self.train_range[0]) // self.c.data.tile_size
-                    split_axis = "x"
-                fig = self._create_aggregate_eval_figure(all_pred_data, train_split_n, label_binary, split_axis)
+                    ext_y = self.shared_range; ext_x = (self.train_range[0], self.valid_range[1])
+                mh, mw = self.mask.shape[:2]
+                def _raw_ink(sub):
+                    img = imread_gray(f"./inklabels/{sub}/{self.scroll1_id}.png")
+                    if img is None:
+                        return None
+                    rh, rw = img.shape[:2]
+                    ry0 = int(ext_y[0] * rh / max(mh, 1)); ry1 = int(ext_y[1] * rh / max(mh, 1))
+                    rx0 = int(ext_x[0] * rw / max(mw, 1)); rx1 = int(ext_x[1] * rw / max(mw, 1))
+                    crop = img[ry0:ry1, rx0:rx1]
+                    return crop if crop.size else None
+                raw_1_1 = _raw_ink("1_1um"); raw_2_4 = _raw_ink("2_4um")
+
+                fig = self._create_eval_figure_2x3(reg_pred, tta_pred, label_binary,
+                                                   raw_1_1, raw_2_4, train_split_n, split_axis)
+                if fig is not None:
+                    # ALWAYS save the full-size eval figure to <log>/eval_figs/ (highest res)
+                    try:
+                        _ed = os.path.join(self.log_path, "eval_figs"); os.makedirs(_ed, exist_ok=True)
+                        _lp = os.path.join(_ed, f"eval_s{self.scroll1_id}_ep{epoch+1:02d}.png")
+                        fig.savefig(_lp, dpi=200, bbox_inches="tight")
+                        print(f"[eval-fig] full-size -> {_lp}")
+                    except Exception as _e:
+                        print(f"[eval-fig] save failed: {_e}")
+                    # also drop a copy into ./output/visualizations/<exp>/ when save_vis is on
+                    if getattr(self.c.tra, "save_vis", False):
+                        try:
+                            _p = os.path.join(self._save_vis_dir(), f"eval_s{self.scroll1_id}_ep{epoch+1:02d}.png")
+                            fig.savefig(_p, dpi=200, bbox_inches="tight")
+                            print(f"[save-vis] eval figure -> {_p}")
+                        except Exception as _e:
+                            print(f"[save-vis] eval save failed: {_e}")
                 self.writer.add_figure('Evaluation/Aggregated', fig, epoch)
                 plt.close(fig)
 
@@ -2237,94 +2150,187 @@ class TensorboardVisualizer:
         self.writer.add_scalar(f"AUC/PR_AUC/{tag}", metrics['pr_auc'], current_epoch)
         print(f"Logged metrics for HM from epoch {source_epoch} at eval epoch {current_epoch}. F1: {metrics['f1']:.4f}")
 
+    def _save_vis_dir(self):
+        """per-run visualization output folder: ./output/visualizations/<exp_name>/.
+        each run (unique exp_name) gets its own folder so leave-one-out runs never collide."""
+        name = getattr(self.c, "exp_name", None) or "run"
+        d = os.path.join("output", "visualizations", str(name))
+        os.makedirs(d, exist_ok=True)
+        return d
+
     def add_test_figures(self, epoch, model):
-        """add test figures for test scroll and the active secondary target (scroll2 or scroll4)"""
-        print("Starting test figure generation...")
-        model.eval()
+        """FULL-SIZE, notebook-style 4-panel test figures for every test fragment + holdout.
 
-        # PRIMARY-FRAGMENT MODE: when test_scroll_ids (or legacy test_scroll_id) are set,
-        # render ALL loaded test fragments one at a time; CUDA cache is cleared between
-        # each to keep VRAM bounded even for very large segments.
-        _tf = getattr(self.c.data, 'test_scroll_id', None)
-        if _tf is not None:
-            d = self.c.data
-            for tf in self.testfrags:
-                try:
-                    self._add_single_test_figure(
-                        epoch, model,
-                        tf['volume'], tf['mask'],
-                        tf['y_range'], tf['x_range'],
-                        tf['mean'], tf['std'], tf['min'], tf['max'],
-                        f'Frag_{tf["id"]}')
-                except Exception as e:
-                    print(f'[ERROR] test-fragment {tf["id"]} figure failed: {e}')
-                    import traceback; traceback.print_exc()
-                finally:
-                    # free VRAM between large renders so subsequent segments don't OOM
-                    try:
-                        import torch as _torch
-                        if _torch.cuda.is_available():
-                            _torch.cuda.empty_cache()
-                    except Exception:
-                        pass
-            if getattr(d, 'test_show_train', False):
-                try:
-                    self._add_single_test_figure(epoch, model, self.test_volume, self.test_mask, self.test_y_range, self.test_x_range, self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max, 'Test')
-                except Exception as e:
-                    print(f'[ERROR] Test figure failed: {e}')
-            if getattr(d, 'test_show_scroll2', False) and self.scroll2_volume is not None:
-                try:
-                    self._add_single_test_figure(epoch, model, self.scroll2_volume, self.scroll2_mask, self.scroll2_y_range, self.scroll2_x_range, self.scroll2_global_mean, self.scroll2_global_std, self.scroll2_global_min, self.scroll2_global_max, 'Scroll2')
-                except Exception as e:
-                    print(f'[ERROR] Scroll2 figure failed: {e}')
-            if getattr(d, 'test_show_scroll3', False) and self.scroll3_volume is not None:
-                try:
-                    self._add_single_test_figure(epoch, model, self.scroll3_volume, self.scroll3_mask, self.scroll3_y_range, self.scroll3_x_range, self.scroll3_global_mean, self.scroll3_global_std, self.scroll3_global_min, self.scroll3_global_max, 'Scroll3')
-                except Exception as e:
-                    print(f'[ERROR] Scroll3 figure failed: {e}')
-            if getattr(d, 'test_show_scroll4', False) and self.scroll4_volume is not None:
-                try:
-                    self._add_single_test_figure(epoch, model, self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range, self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max, 'Scroll4')
-                except Exception as e:
-                    print(f'[ERROR] Scroll4 figure failed: {e}')
+        each figure (one per fragment): [raw pred | TTA pred | composite | overlay], inferno
+        heatmaps upsampled to native resolution, native-resolution VC3D-style composite,
+        cropped to the mask bbox with white padding on a black background. NO downscaling: the
+        model runs over the full-resolution fragment and the saved JPG is full size.
+
+        the FULL-SIZE JPG is written to <log>/test_figs/ AND ./output/test_visualizations/<exp>/;
+        a bounded copy (<=4096 px) is logged to tensorboard so event files stay small."""
+        if not self.testfrags:
             return
-
-        # cost-control: when test_scroll2_only is set, render ONLY the goal scroll2
-        # fragment. this skips the very expensive full training-scroll "Test" figure
-        # (e.g. the big fragment is ~2.3M tile reads / several hours) so end-of-training
-        # test inference stays affordable across a campaign.
-        scroll2_only = bool(getattr(self.c.data, "test_scroll2_only", False))
-
-        if not scroll2_only:
+        print(f"Generating {len(self.testfrags)} full-size test figures...")
+        model.eval()
+        for frag in self.testfrags:
             try:
-                self._add_single_test_figure(epoch, model, self.test_volume, self.test_mask, self.test_y_range, self.test_x_range, self.test_global_mean, self.test_global_std, self.test_global_min, self.test_global_max, "Test")
+                self._render_test_fragment(epoch, model, frag)
             except Exception as e:
-                print(f"[ERROR] Test (training-scroll) figure failed: {e}")
+                print(f"[ERROR] test fragment {frag.get('name', frag.get('id'))} figure failed: {e}")
                 import traceback; traceback.print_exc()
-
-        if (not scroll2_only) and getattr(self.c.data, 'test_on_scroll4', False):
-            if self.scroll4_volume is not None:
+            finally:
+                # free VRAM between large renders so subsequent (very large) segments don't OOM
                 try:
-                    self._add_single_test_figure(epoch, model, self.scroll4_volume, self.scroll4_mask, self.scroll4_y_range, self.scroll4_x_range, self.scroll4_global_mean, self.scroll4_global_std, self.scroll4_global_min, self.scroll4_global_max, "Scroll4")
-                except Exception as e:
-                    print(f"[ERROR] Scroll4 test figure failed: {e}")
-                    import traceback; traceback.print_exc()
+                    import torch as _torch
+                    if _torch.cuda.is_available():
+                        _torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
+    # ---- full-size test-fragment rendering (ported from test_inference.ipynb) ----
+    def _frag_project_depth(self, vol, d0, d1, method):
+        """memory-bounded depth projection over slices [d0, d1) (one slice at a time)."""
+        Z, H, W = int(vol.shape[0]), int(vol.shape[1]), int(vol.shape[2])
+        d0, d1 = max(0, d0), min(d1, Z)
+        if method == "meanproj":
+            acc = np.zeros((H, W), np.float64)
+            for d in range(d0, d1):
+                acc += np.asarray(vol[d])
+            return (acc / max(d1 - d0, 1)).astype(np.float32)
+        # default: maxproj (VC3D's max filter over the surface window)
+        acc = np.zeros((H, W), np.float32)
+        for d in range(d0, d1):
+            acc = np.maximum(acc, np.asarray(vol[d]).astype(np.float32))
+        return acc
+
+    def _frag_composite(self, vol, mask_bool, d0, d1, method, display):
+        """native-resolution fiber-visibility composite (uint8), matched to VC3D."""
+        proj = self._frag_project_depth(vol, d0, d1, method)
+        m = mask_bool if mask_bool.shape == proj.shape else (proj > 0)
+        if display == "raw":
+            img = np.clip(proj, 0, 255).astype(np.uint8)   # VC3D linear volume window
         else:
-            if self.scroll2_volume is not None:
-                try:
-                    self._add_single_test_figure(epoch, model, self.scroll2_volume, self.scroll2_mask, self.scroll2_y_range, self.scroll2_x_range, self.scroll2_global_mean, self.scroll2_global_std, self.scroll2_global_min, self.scroll2_global_max, "Scroll2")
-                except Exception as e:
-                    print(f"[ERROR] Scroll2 test figure failed: {e}")
-                    import traceback; traceback.print_exc()
+            lo, hi = (np.percentile(proj[m], [1, 99]) if m.any()
+                      else (float(proj.min()), float(proj.max())))
+            img = (np.clip((proj - lo) / max(hi - lo, 1e-6), 0, 1) * 255).astype(np.uint8)
+        return img * m.astype(np.uint8)
 
-        # scroll3 goal-scroll: its OWN separate figure, always rendered alongside scroll2 when
-        # available. skipped silently if scroll3 data was not loaded (e.g. still downloading).
-        if self.scroll3_volume is not None:
-            try:
-                self._add_single_test_figure(epoch, model, self.scroll3_volume, self.scroll3_mask, self.scroll3_y_range, self.scroll3_x_range, self.scroll3_global_mean, self.scroll3_global_std, self.scroll3_global_min, self.scroll3_global_max, "Scroll3")
-            except Exception as e:
-                print(f"[ERROR] Scroll3 test figure failed: {e}")
-                import traceback; traceback.print_exc()
+    def _frag_bbox(self, mask_bool, margin):
+        """outer bounding box of the mask (+margin), clamped to image bounds."""
+        ys, xs = np.where(mask_bool)
+        if ys.size == 0:
+            return 0, mask_bool.shape[0], 0, mask_bool.shape[1]
+        y0 = max(0, int(ys.min()) - margin); y1 = min(mask_bool.shape[0], int(ys.max()) + 1 + margin)
+        x0 = max(0, int(xs.min()) - margin); x1 = min(mask_bool.shape[1], int(xs.max()) + 1 + margin)
+        return y0, y1, x0, x1
+
+    def _frag_colorize(self, pmap, out_hw):
+        """tile-res prob map -> full-res inferno BGR; NaN (outside mask) -> gray."""
+        m = np.isfinite(pmap)
+        p8 = (np.clip(np.nan_to_num(pmap, nan=0.0), 0, 1) * 255).astype(np.uint8)
+        bgr = cv2.applyColorMap(p8, cv2.COLORMAP_INFERNO)
+        bgr[~m] = (115, 115, 115)
+        return cv2.resize(bgr, (out_hw[1], out_hw[0]), interpolation=cv2.INTER_NEAREST)
+
+    def _frag_scale_bar(self, bgr, voxel_um):
+        """draw a RED 1 cm scale bar bottom-right; oriented along the longer axis of the panel."""
+        H, W = bgr.shape[:2]
+        L = int(round(10000.0 / voxel_um))   # 1 cm in pixels at full res
+        red = (0, 0, 255)                    # BGR
+        th = max(4, min(H, W) // 250)
+        pad = int(0.05 * min(H, W)) + th
+        fs = 1.2; ft = 3
+        if W >= H:
+            x1 = W - pad; x0 = max(0, x1 - L); y = H - pad
+            cv2.rectangle(bgr, (x0, y - th), (x1, y), red, -1)
+            cv2.putText(bgr, "1 cm", (x0, y - th - 12), cv2.FONT_HERSHEY_SIMPLEX, fs, red, ft, cv2.LINE_AA)
+        else:
+            y1 = H - pad; y0 = max(0, y1 - L); x = W - pad
+            cv2.rectangle(bgr, (x - th, y0), (x, y1), red, -1)
+            cv2.putText(bgr, "1 cm", (max(0, x - th - int(4 * fs * 22)), y0 - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, fs, red, ft, cv2.LINE_AA)
+        return bgr
+
+    def _frag_pad(self, panel, pad_px):
+        """white border around a panel for visual separation."""
+        return cv2.copyMakeBorder(panel, pad_px, pad_px, pad_px, pad_px,
+                                  cv2.BORDER_CONSTANT, value=(255, 255, 255))
+
+    def _frag_label(self, img, text):
+        """prepend a black banner with white text above a BGR panel (orientation-independent
+        labeling so the mosaic reads name [ raw | TTA | composite | overlay ])."""
+        h, w = img.shape[:2]
+        bar = max(28, w // 40)
+        fs = bar / 34.0
+        strip = np.zeros((bar, w, 3), dtype=img.dtype)
+        cv2.putText(strip, str(text), (8, int(bar * 0.72)), cv2.FONT_HERSHEY_SIMPLEX,
+                    fs, (255, 255, 255), max(1, int(round(fs * 1.4))), cv2.LINE_AA)
+        return np.vstack([strip, img])
+
+    def _render_test_fragment(self, epoch, model, frag):
+        """render + save + log ONE full-size 4-panel test figure for a fragment."""
+        name = frag["name"]; sid = int(frag["id"])
+        vol = frag["volume"]
+        mask01 = np.asarray(frag["mask"], dtype=np.float32)
+        gm, gs, gmin, gmax = frag["mean"], frag["std"], frag["min"], frag["max"]
+        H, W = mask01.shape
+        mask_bool = mask01 > 0
+        T = int(self.c.data.tile_size)
+        d_start = int(self.c.data.d_start)
+
+        # full-fragment tile coords (only tiles that touch the mask)
+        coords = [(0, y, x) for y in range(0, H - T + 1, T) for x in range(0, W - T + 1, T)
+                  if mask01[y:y+T, x:x+T].sum() > 0]
+        # single read -> BOTH the raw and TTA maps (also_tta), matching the eval-figure
+        # optimization: TTA re-augments the already-loaded tiles instead of re-reading the zarr.
+        raw, ttp = predict_tiles(self.c, model, vol, mask01, coords, (0, H), (0, W),
+                                 d_start, f"Frag_{sid}", gm, gs, gmin, gmax, also_tta=True)
+
+        cm    = getattr(self.c.data, "composite_method", "maxproj")
+        cd0   = int(getattr(self.c.data, "composite_d0", 10))
+        cd1   = int(getattr(self.c.data, "composite_d1", 18))
+        cdisp = getattr(self.c.data, "composite_display", "raw")
+        comp  = self._frag_composite(vol, mask_bool, cd0, cd1, cm, cdisp)   # native-res uint8
+
+        y0, y1, x0, x1 = self._frag_bbox(mask_bool, 32)
+        Hc, Wc = y1 - y0, x1 - x0
+        p1 = self._frag_colorize(raw, (H, W))[y0:y1, x0:x1]
+        p2 = self._frag_colorize(ttp, (H, W))[y0:y1, x0:x1]
+        p3 = cv2.cvtColor(comp, cv2.COLOR_GRAY2BGR)[y0:y1, x0:x1]
+        panels = [p1, p2, p3.copy(), p3.copy()]
+        panels[3] = self._frag_scale_bar(panels[3], float(getattr(self.c.data, "voxel_um", 9.362)))
+        # label panels so the mosaic reads: name [ raw | TTA | composite | overlay ]
+        # (the 4th 'overlay' panel is the composite the user annotates by hand)
+        _labels = [f"{name}  raw", "TTA", "composite", "overlay"]
+        panels = [self._frag_label(p, lb) for p, lb in zip(panels, _labels)]
+        panels = [self._frag_pad(p, 24) for p in panels]
+        big = np.hstack(panels) if Hc >= Wc else np.vstack(panels)   # tall->side by side; wide->stacked
+
+        out_dir = os.path.join(self.log_path, "test_figs")
+        os.makedirs(out_dir, exist_ok=True)
+        tag = "holdout" if frag.get("is_holdout") else "test"
+        out_p = os.path.join(out_dir, f"{tag}_{name}_ep{epoch+1:02d}.jpg")
+        cv2.imwrite(out_p, big, [cv2.IMWRITE_JPEG_QUALITY, 92])   # FULL SIZE on disk
+        # ALWAYS save the full-size figure to ./output/test_visualizations/<exp>/ too
+        try:
+            _tv = os.path.join("output", "test_visualizations", str(self.c.exp_name or "run"))
+            os.makedirs(_tv, exist_ok=True)
+            cv2.imwrite(os.path.join(_tv, f"{tag}_{name}_ep{epoch+1:02d}.jpg"),
+                        big, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        except Exception as _e:
+            print(f"[test-vis] full-size save failed: {_e}")
+
+        # tensorboard preview: full-size event images are impractical (the big fragment is
+        # ~30k px wide). cap the longest side at 4096 for TB ONLY; the disk JPG stays full size.
+        prev = big
+        mx = max(big.shape[0], big.shape[1])
+        if mx > 4096:
+            s = 4096.0 / mx
+            prev = cv2.resize(big, (int(big.shape[1] * s), int(big.shape[0] * s)),
+                              interpolation=cv2.INTER_AREA)
+        self.writer.add_image(f"TestFrag/{tag}_{name}",
+                              cv2.cvtColor(prev, cv2.COLOR_BGR2RGB), epoch, dataformats="HWC")
+        print(f"[testfrag] {tag} {name} ep{epoch+1} FULL {big.shape[1]}x{big.shape[0]} -> {out_p}")
 
     def _add_single_test_figure(self, epoch, model, vol, mask, y_range, x_range, g_mean, g_std, g_min, g_max, name):
         """predict per depth and create a mosaic figure for a test dataset"""
@@ -2381,17 +2387,95 @@ class TensorboardVisualizer:
         plt.subplots_adjust(wspace=0.05, hspace=0.05, left=0.05, right=0.95, top=0.95, bottom=0.05)
         return fig
 
+    def _display_norm(self, pmap):
+        """display-only contrast for a prediction map (does NOT affect metrics or saved values).
+        raw: as-is. percentile: stretch [p2,p98] -> [0,1]. rank: histogram-equalize (rank/N) so
+        the relative ordering fills the colormap even when outputs saturate near 1.0."""
+        mode = getattr(self.c.data, "eval_cmap_norm", "raw")
+        if mode == "raw":
+            return pmap
+        m = np.isfinite(pmap)
+        if not m.any():
+            return pmap
+        out = pmap.copy()
+        vals = pmap[m].astype(np.float64)
+        if mode == "percentile":
+            lo, hi = np.percentile(vals, 2), np.percentile(vals, 98)
+            if hi - lo < 1e-6:
+                return pmap
+            out[m] = np.clip((vals - lo) / (hi - lo), 0.0, 1.0)
+        elif mode == "rank":
+            ranks = np.argsort(np.argsort(vals))
+            out[m] = ranks / max(len(vals) - 1, 1)
+        return out
+
+    def _create_eval_figure_2x3(self, reg_pred, tta_pred, label_binary,
+                                raw_1_1, raw_2_4, train_split_n, split_axis="x"):
+        """2-column x 3-row eval figure:
+            row 0: regular inference        | inference + inklabel overlay
+            row 1: TTA inference            | TTA + inklabel overlay
+            row 2: 1.1um inklabel_raw       | 2.4um inklabel_raw
+        every panel occupies the same cell footprint; predictions use SCROLL_CMAP (0-1),
+        the raw inklabel references are grayscale. split line = train/valid divider.
+        """
+        h_tiles, w_tiles = reg_pred.shape
+        aspect = w_tiles / max(h_tiles, 1)
+        panel_w = max(6.0, min(16.0, w_tiles * 0.06))
+        panel_h = max(2.0, min(12.0, panel_w / aspect))
+        panel_w = panel_h * aspect
+        fig_w = panel_w * 2 + 0.3
+        fig_h = panel_h * 3 + 0.5
+
+        fig, axes = plt.subplots(3, 2, figsize=(fig_w, fig_h), squeeze=False)
+        split_pos = train_split_n - 0.5
+
+        def _draw_split(ax):
+            if split_axis == "y":
+                ax.axhline(y=split_pos, color='red', linestyle='--', linewidth=0.8)
+            else:
+                ax.axvline(x=split_pos, color='red', linestyle='--', linewidth=0.8)
+
+        def _overlay(ax, pred):
+            if label_binary is not None:
+                ov = np.zeros((*pred.shape, 4))
+                h = min(label_binary.shape[0], ov.shape[0])
+                w = min(label_binary.shape[1], ov.shape[1])
+                ov[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
+                ax.imshow(ov)
+
+        def _pred_panel(ax, pmap, title, overlay=False):
+            ax.imshow(pmap, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
+            if overlay:
+                _overlay(ax, pmap)
+            _draw_split(ax)
+            ax.set_title(title, fontsize=8); ax.axis('off')
+
+        tp = tta_pred if tta_pred is not None else reg_pred
+        reg_disp = self._display_norm(reg_pred)
+        tp_disp = self._display_norm(tp)
+        _pred_panel(axes[0, 0], reg_disp, "inference")
+        _pred_panel(axes[0, 1], reg_disp, "inference + inklabel", overlay=True)
+        _pred_panel(axes[1, 0], tp_disp, "TTA inference")
+        _pred_panel(axes[1, 1], tp_disp, "TTA + inklabel", overlay=True)
+
+        for ax, raw, ttl in ((axes[2, 0], raw_1_1, "1.1um inklabel_raw"),
+                             (axes[2, 1], raw_2_4, "2.4um inklabel_raw")):
+            if raw is not None:
+                ax.imshow(raw, cmap="gray", vmin=0, vmax=255, aspect='equal')
+            ax.set_title(ttl, fontsize=8); ax.axis('off')
+
+        plt.subplots_adjust(wspace=0.04, hspace=0.12, left=0.01, right=0.99, top=0.98, bottom=0.01)
+        return fig
+
     def _create_aggregate_eval_figure(self, all_pred_data, train_split_n, label_binary, split_axis="x"):
-        """(n_blocks+1)-row × 2-col figure: left col = predictions, right col = overlay with inklabels.
+        """one row per depth block × 2 cols: left = prediction, right = prediction + inklabel overlay.
 
-        the final extra row is the MAX response across ALL depth layers at each coordinate
-        (element-wise nanmax over every depth block's prediction) — this is the readable
-        "collapsed" ink map, since ink at any depth should light up that coordinate. the
-        right panel of that row carries the same gold inklabel overlay as the per-depth rows.
+        with a single depth window (e.g. 4->28) this is exactly 1 row × 2 cols — the overlay IS the
+        full-depth prediction, so no separate "MAX across depths" row is drawn.
 
-        figure size adapts to the map's tile dimensions and aspect ratio so the image
-        is never distorted regardless of scroll geometry. split_axis controls whether the
-        train/valid divider is drawn as a vertical (x-split) or horizontal (y-split) line.
+        figure size adapts to the map's tile dimensions and aspect ratio so the image is never
+        distorted. split_axis controls whether the train/valid divider is vertical (x) or
+        horizontal (y).
         """
         n_blocks = len(all_pred_data)
         if n_blocks == 0:
@@ -2402,22 +2486,13 @@ class TensorboardVisualizer:
         h_tiles, w_tiles = sample_pred.shape
         aspect = w_tiles / max(h_tiles, 1)      # width / height of one panel
 
-        # target a panel width of ~0.06 in per tile column, capped [6, 16] in
         panel_w = max(6.0, min(16.0, w_tiles * 0.06))
         panel_h = max(2.0, min(12.0, panel_w / aspect))
-        # recompute panel_w in case panel_h was clamped
         panel_w = panel_h * aspect
 
-        # element-wise MAX response across every depth block (nanmax so out-of-mask
-        # NaNs are ignored; all-NaN coords stay NaN -> render black under inferno_nan)
-        stack = np.stack([pd[0] for pd in all_pred_data], axis=0)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            max_pred = np.nanmax(stack, axis=0)
-
-        n_rows = n_blocks + 1               # +1 for the max-across-depths row
+        n_rows = n_blocks                   # one row per depth block; NO extra max row
         fig_w = panel_w * 2 + 0.3           # two columns + small gap
-        fig_h = panel_h * n_rows + 0.4      # one row per depth block + max row + title margin
+        fig_h = panel_h * n_rows + 0.4      # one row per depth block + title margin
 
         fig, axes = plt.subplots(n_rows, 2, figsize=(fig_w, fig_h),
                                  squeeze=False)
@@ -2454,20 +2529,6 @@ class TensorboardVisualizer:
             _overlay(ax_ov, full_pred)
             _draw_split(ax_ov)
             ax_ov.axis('off')
-
-        # final row: MAX across all depth layers (left) + gold overlay (right)
-        ax_mp = axes[n_blocks, 0]
-        ax_mp.imshow(max_pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
-        ax_mp.set_title('MAX across all depths', fontsize=8)
-        _draw_split(ax_mp)
-        ax_mp.axis('off')
-
-        ax_mpo = axes[n_blocks, 1]
-        ax_mpo.imshow(max_pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
-        ax_mpo.set_title('MAX across all depths + overlay', fontsize=8)
-        _overlay(ax_mpo, max_pred)
-        _draw_split(ax_mpo)
-        ax_mpo.axis('off')
 
         plt.subplots_adjust(wspace=0.04, hspace=0.12,
                             left=0.01, right=0.99,
@@ -3184,47 +3245,6 @@ class TensorboardVisualizer:
         """close the tensorboard writer"""
         self.writer.close()
         print(f"TensorBoard logs saved to: {self.log_path}")
-
-    def _debug_scroll4_ranges_once(self):
-        """one time sanity checks for scroll4 alignment"""
-        if getattr(self, "scroll4_volume", None) is None:
-            return  # scroll4 not loaded (minimal setup) — nothing to sanity-check
-        try:
-            vol = self.scroll4_volume
-            mask = self.scroll4_mask
-            y_range = self.scroll4_y_range
-            x_range = self.scroll4_x_range
-            issues = []
-
-            if mask.shape != (vol.shape[1], vol.shape[2]):
-                issues.append(f"Mask shape {mask.shape} != volume spatial {(vol.shape[1], vol.shape[2])}")
-
-            if not (0 <= y_range[0] < y_range[1] <= vol.shape[1]):  # type: ignore
-                issues.append(f"Y range {y_range} out of bounds (0,{vol.shape[1]})")
-            if not (0 <= x_range[0] < x_range[1] <= vol.shape[2]):  # type: ignore
-                issues.append(f"X range {x_range} out of bounds (0,{vol.shape[2]})")
-
-            tile = self.c.data.tile_size
-            if (y_range[0] % tile != 0) or (x_range[0] % tile != 0):
-                issues.append(f"Ranges not tile aligned: y_start%tile={y_range[0]%tile}, x_start%tile={x_range[0]%tile}")
-
-            region_mask = mask[y_range[0]:y_range[1], x_range[0]:x_range[1]]
-            if region_mask.size == 0:
-                issues.append("Region mask slice empty")
-            else:
-                nz_frac = (region_mask > 0).mean()
-                print(f"[SCROLL4 DEBUG] Region mask non-zero fraction: {nz_frac:.4f}")
-                if nz_frac == 0:
-                    issues.append("Region mask entirely zero")
-
-            if issues:
-                print("[SCROLL4 DEBUG] Potential issues detected:")
-                for iss in issues:
-                    print(" -", iss)
-            else:
-                print("[SCROLL4 DEBUG] Scroll4 mask / range basic checks passed.")
-        except Exception as e:
-            print(f"[SCROLL4 DEBUG] Exception during range debug: {e}")
 
     def _load_existing_mined_keys(self):
         """scan all existing mining files and return a set of keys (z y x label) to prevent duplicates"""

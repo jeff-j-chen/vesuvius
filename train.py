@@ -197,7 +197,11 @@ class Trainer:
             print(f"[init-weights] loaded {len(compat)}/{len(sd)} tensors from {init_path} "
                   f"(shape-skipped={skipped} missing={len(missing)} unexpected={len(unexpected)})")
         optimizer, scheduler = create_optimizer_and_scheduler(model, self.c)
-        criterion = create_loss_function(self.pos_weight, self.c)
+        # pos_weight (neg/pos) upweights positives -> biases outputs toward 1.0. optionally drop it.
+        pw = self.pos_weight if getattr(self.c.tra, "pos_weight_enabled", True) else None
+        if pw is None and self.pos_weight is not None:
+            print("[loss] pos_weight DISABLED (pos_weight_enabled=False) -- using unweighted loss")
+        criterion = create_loss_function(pw, self.c)
         
         print(f" done in {time.time() - start_time:.2f}s")
         return model, params, optimizer, scheduler, criterion
@@ -219,7 +223,14 @@ class Trainer:
             # per-voxel models return (B,1,H,W) heatmap; apply MIL max for tile-level BCE
             if outputs.dim() == 4:
                 outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
-            raw_loss = self.criterion(outputs, b_labels)
+            # loss target: optional label smoothing (hard b_labels kept for metrics/ranking).
+            # softening 0/1 -> ls/(1-ls) stops the model driving logits to +/-inf on possibly
+            # mislabeled tiles -- a mild, targeted counter to memorizing label noise.
+            target = b_labels.float()
+            ls = float(getattr(self.c.tra, "label_smooth", 0.0))
+            if ls > 0:
+                target = target * (1.0 - 2.0 * ls) + ls
+            raw_loss = self.criterion(outputs, target)
             
             # apply mask to zero out loss in irrelevant regions
             raw_loss = raw_loss * mask
@@ -496,6 +507,10 @@ class Trainer:
             eval_due  = (epoch + 1) % self.c.tra.eval_int  == 0
             test_due  = (epoch + 1) % self.c.tra.test_int  == 0
             probe_due = (epoch + 1) % self.c.tra.probe_int == 0
+            # leave-one-out campaigns disable periodic tests (test_int=9999) but still want
+            # the held-out fragment inferred once at the end -> force test on the final epoch.
+            if getattr(self.c.tra, "test_on_final", False) and (epoch + 1) == self.c.tra.n_epochs:
+                test_due = True
             dense = getattr(self.c.data, 'dense_labels', False)
             for idx, (sid, svis) in enumerate(self.scroll_vis.items()):
                 if eval_due and getattr(svis, 'eval_enabled', True):

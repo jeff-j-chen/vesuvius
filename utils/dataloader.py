@@ -9,6 +9,7 @@ import os
 import uuid
 import atexit
 import tempfile
+from functools import partial
 from typing import Iterator
 from .config import Config
 import json
@@ -177,13 +178,13 @@ class Transform:
     def _apply_brightness_adjustment(self, block):
         """applies ONE brightness factor to the whole block (shared across depth).
         per-depth factors distort the through-depth intensity profile the model keys on."""
-        factor = random.uniform(0.85, 1.15)
+        factor = random.uniform(0.8, 1.2)
         return np.clip(block * factor, 0, 1)
     
     def _apply_contrast_adjustment(self, block):
         """applies ONE contrast factor across all depth slices (shared factor; per-slice
         mean preserved) so the depth profile is scaled uniformly, not warped per slice."""
-        factor = random.uniform(0.85, 1.15)
+        factor = random.uniform(0.8, 1.2)
         adj_block = block.copy()
         for i in range(block.shape[0]):
             channel = block[i]
@@ -437,6 +438,13 @@ class InkVolumeDataset(IterableDataset):
         tile = self.tile_size
         mode = getattr(self.c.data, "input_mode", "single")
 
+        # context window: for single mode, read a larger crop centered on the tile so the
+        # model sees the surround. the LABEL/mask stay the center tile (unchanged), so ring
+        # supervision is respected -- context enters only via the conv receptive field.
+        ctx = int(getattr(self.c.data, "context_size", 0) or 0)
+        use_ctx = (ctx > tile and mode == "single")
+        sp = ctx if use_ctx else tile
+
         expected_d = {"triple": self.depth * 3, "double": self.depth * 2,
                       "fulldepth": int(getattr(self.vol, 'shape', [64])[0])}.get(mode, self.depth)
         try:
@@ -461,16 +469,38 @@ class InkVolumeDataset(IterableDataset):
                 full_d = int(self.vol.shape[0])
                 block = np.array(self.vol[0:full_d, y:y+tile, x:x+tile]).astype(np.float32)
             else:
-                block = np.array(self.vol[z:z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
+                if use_ctx:
+                    pad = (ctx - tile) // 2
+                    block = self._read_ctx_block(z, self.depth, y - pad, x - pad, ctx)
+                else:
+                    block = np.array(self.vol[z:z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
         except Exception:
             # any read error (OSError, corrupt chunk, zarr internal error) — return zeros
-            block = np.zeros((expected_d, tile, tile), dtype=np.float32)
+            block = np.zeros((expected_d, sp, sp), dtype=np.float32)
 
         # guard: zarr can silently return wrong shape on Windows under load
-        if block.shape != (expected_d, tile, tile):
-            block = np.zeros((expected_d, tile, tile), dtype=np.float32)
+        if block.shape != (expected_d, sp, sp):
+            block = np.zeros((expected_d, sp, sp), dtype=np.float32)
 
         return self._normalize_block(block)
+
+    def _read_ctx_block(self, z, ndepth, y0, x0, ctx):
+        """read a ctx x ctx spatial crop starting at absolute (y0,x0), zero-padding any region
+        outside the volume/frame. used for the context-window input (centered on a tile)."""
+        vol = self.vol
+        D, H, W = int(vol.shape[0]), int(vol.shape[1]), int(vol.shape[2])
+        out = np.zeros((ndepth, ctx, ctx), dtype=np.float32)
+        if z + ndepth > D:
+            return out
+        ys, ye = max(0, y0), min(H, y0 + ctx)
+        xs, xe = max(0, x0), min(W, x0 + ctx)
+        if ys < ye and xs < xe:
+            try:
+                src = np.array(vol[z:z+ndepth, ys:ye, xs:xe]).astype(np.float32)
+                out[:, ys - y0:ye - y0, xs - x0:xe - x0] = src
+            except Exception:
+                pass
+        return out
 
     def _fetch_label(self, y_off, x_off, soft_override: float = -1.0):
         """fetches a label tile; soft_override replaces ink label if >= 0"""
@@ -764,7 +794,6 @@ class DataManager:
         seg_id = str(self.scroll_id)
         cached = load_cached_norm(seg_id, UNIFIED_CACHE_PATH)
         if cached is not None:
-            print(f"[info] using cached normalization for segment {seg_id}")
             return cached
         print(f"[info] computing normalization for segment {seg_id} (chunk-aligned pass)")
         zarr_path = getattr(self.c.data, "zarr_path", "./ves_zarrs2")
@@ -819,7 +848,7 @@ class DataManager:
 
         # determine which labels to use for ring boundary computation
         ring_source = getattr(self.c.data, 'ring_label_source', 'original')
-        if ring_source in ('original', 'closed'):
+        if ring_source == 'original':
             orig_path = f"./inklabels/{self.scroll_id}.png"
             orig_img = imread_gray(orig_path)
             if orig_img is not None:
@@ -829,7 +858,8 @@ class DataManager:
                 print(f"[ring] original inklabels not found at {orig_path}, falling back to eroded")
                 ring_labels = labels_crop
         else:
-            ring_labels = labels_crop  # 'eroded' — old behavior
+            # 'eroded' and 'closed' both build the ring off the (hand-cleaned) eroded map
+            ring_labels = labels_crop
 
         # build tile-level maps using ring_labels for boundary, eroded for positives
         n_ty = h // T
@@ -848,46 +878,59 @@ class DataManager:
                 if np.any(tile_lbl_ring > 0.5): ink_tile_ring[ty, tx]   = 1
                 if np.any(tile_mask     > 0.5): mask_tile[ty, tx]        = 1
 
-        # for 'closed': close letter holes then add explicit air gap before ring
+        # for 'closed': close letter holes then add explicit air gap before ring.
+        # base map is the (hand-cleaned) eroded ink (see ring_labels above). radii are in
+        # TILE units, config-driven; physical distance = radius * tile_size.
         if ring_source == 'closed':
+            CLOSE_R = int(getattr(self.c.data, 'ring_close_r', 3))
+            GAP_R   = int(getattr(self.c.data, 'ring_gap_r', 3))
             # stage 1: close interior holes in letters (mild closing)
-            CLOSE_R = 3  # tiles
-            k_close = 2 * CLOSE_R + 1
-            kern_close = cv2.getStructuringElement(cv2.MORPH_RECT, (k_close, k_close))
-            ink_tile_ring = cv2.erode(cv2.dilate(ink_tile_ring, kern_close), kern_close) & mask_tile
-            # stage 2: dilate closed region by GAP_R → exclusion zone; ring starts outside this
-            # GAP_R is searched dynamically like other ring sources
-            # we store it in ink_tile_ring as the "exclusion zone" for the binary search below
-            GAP_R = 3  # tiles of air gap between ink edge and ring start
-            k_gap = 2 * GAP_R + 1
-            kern_gap = cv2.getStructuringElement(cv2.MORPH_RECT, (k_gap, k_gap))
-            ink_tile_ring = cv2.dilate(ink_tile_ring, kern_gap) & mask_tile
-            print(f"[ring] closed: CLOSE_R={CLOSE_R} GAP_R={GAP_R} exclusion_tiles={ink_tile_ring.sum()}")
+            if CLOSE_R > 0:
+                k_close = 2 * CLOSE_R + 1
+                kern_close = cv2.getStructuringElement(cv2.MORPH_RECT, (k_close, k_close))
+                ink_tile_ring = cv2.erode(cv2.dilate(ink_tile_ring, kern_close), kern_close) & mask_tile
+            # stage 2: dilate closed region by GAP_R -> exclusion zone; ring starts outside this.
+            # ink_tile_ring now holds the exclusion zone used by the ring computation below.
+            if GAP_R > 0:
+                k_gap = 2 * GAP_R + 1
+                kern_gap = cv2.getStructuringElement(cv2.MORPH_RECT, (k_gap, k_gap))
+                ink_tile_ring = cv2.dilate(ink_tile_ring, kern_gap) & mask_tile
+            print(f"[ring] closed(base=eroded): CLOSE_R={CLOSE_R} GAP_R={GAP_R} exclusion_tiles={ink_tile_ring.sum()}")
 
         ink_count = int(ink_tile_eroded.sum())
         if ink_count == 0:
             return self.mask
 
-        # dilate ring_labels tile map until ring count >= eroded ink count
-        lo, hi = 1, 50
-        best_r = hi
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            k = 2 * mid + 1
+        shell_r = int(getattr(self.c.data, 'ring_shell_r', 0))
+        if shell_r > 0:
+            # fixed ring shell width (tiles): a shell_r-thick band just outside the ring
+            # boundary/exclusion zone. count is whatever the geometry yields (NOT balanced).
+            best_r  = shell_r
+            k       = 2 * best_r + 1
             kernel  = cv2.getStructuringElement(cv2.MORPH_RECT, (k, k))
             dilated = cv2.dilate(ink_tile_ring, kernel)
-            # ring: adjacent to ring-source ink, but contains NO ring-source ink
             ring    = ((dilated - ink_tile_ring) > 0) & (mask_tile > 0)
-            if int(ring.sum()) >= ink_count:
-                best_r = mid
-                hi = mid - 1
-            else:
-                lo = mid + 1
+        else:
+            # dilate ring_labels tile map until ring count >= eroded ink count (balanced)
+            lo, hi = 1, 50
+            best_r = hi
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                k = 2 * mid + 1
+                kernel  = cv2.getStructuringElement(cv2.MORPH_RECT, (k, k))
+                dilated = cv2.dilate(ink_tile_ring, kernel)
+                # ring: adjacent to ring-source ink, but contains NO ring-source ink
+                ring    = ((dilated - ink_tile_ring) > 0) & (mask_tile > 0)
+                if int(ring.sum()) >= ink_count:
+                    best_r = mid
+                    hi = mid - 1
+                else:
+                    lo = mid + 1
 
-        k       = 2 * best_r + 1
-        kernel  = cv2.getStructuringElement(cv2.MORPH_RECT, (k, k))
-        dilated = cv2.dilate(ink_tile_ring, kernel)
-        ring    = ((dilated - ink_tile_ring) > 0) & (mask_tile > 0)
+            k       = 2 * best_r + 1
+            kernel  = cv2.getStructuringElement(cv2.MORPH_RECT, (k, k))
+            dilated = cv2.dilate(ink_tile_ring, kernel)
+            ring    = ((dilated - ink_tile_ring) > 0) & (mask_tile > 0)
 
         ring_count = int(ring.sum())
         print(f"[ring_negatives] source='{ring_source}' tile_radius={best_r}  "
@@ -904,18 +947,19 @@ class DataManager:
 
         return train_mask
 
+def _worker_init(worker_id, base_seed):
+    """deterministic per-worker seeding: each spawned worker reseeds numpy+random from a
+    base seed + worker id, so the augmentations (which draw from the GLOBAL np.random /
+    random state) are reproducible across runs even with num_workers>0. MUST be module
+    level (not a closure) so it can be pickled for the Windows 'spawn' start method."""
+    s = base_seed + worker_id
+    np.random.seed(s)
+    random.seed(s)
+
 def get_dataloaders(train_dataset, valid_dataset, config: Config):
     """creates dataloader objects from datasets"""
-    # deterministic per-worker seeding: each spawned worker reseeds numpy+random from a
-    # base seed + worker id, so the augmentations (which draw from the GLOBAL np.random /
-    # random state) are reproducible across runs even with num_workers>0. with
-    # num_workers=0 this is unused and the main-process set_seed already covers it.
+    # with num_workers=0 the seeding is unused and the main-process set_seed already covers it.
     _base_seed = int(getattr(config.tra, "seed", 41))
-
-    def _worker_init(worker_id):
-        s = _base_seed + worker_id
-        np.random.seed(s)
-        random.seed(s)
 
     train_loader = DataLoader(
         train_dataset,
@@ -924,7 +968,7 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
         pin_memory=True,
         persistent_workers=config.dl.num_workers > 0,
         prefetch_factor=4 if config.dl.num_workers > 0 else None,
-        worker_init_fn=_worker_init if config.dl.num_workers > 0 else None,
+        worker_init_fn=partial(_worker_init, base_seed=_base_seed) if config.dl.num_workers > 0 else None,
         drop_last=True,   # prevents trailing batch of 1 from crashing BatchNorm
     )
 

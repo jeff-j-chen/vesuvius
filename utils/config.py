@@ -76,8 +76,7 @@ DEFAULT_SCROLLS: List[ScrollConfig] = [
     ScrollConfig(20260206000001, split_axis="x", train_split_frac=0.75),    # w047
     ScrollConfig(20260115000001, split_axis="y", train_split_frac=0.5),     # w056
     # 10 new PHerc0139 fragments (2026-07-21). vertical split, left 75% train / right 25% valid.
-    # HOLDOUT FOR SANITY:
-    # ScrollConfig(20260210000000, split_axis="x", train_split_frac=0.75),    # w058
+    ScrollConfig(20260210000000, split_axis="x", train_split_frac=0.75),    # w058
     ScrollConfig(20260227000000, split_axis="x", train_split_frac=0.75),    # w052
     ScrollConfig(20260318000000, split_axis="x", train_split_frac=0.75),    # w049
     ScrollConfig(20260325000000, split_axis="x", train_split_frac=0.75),    # w046
@@ -87,6 +86,8 @@ DEFAULT_SCROLLS: List[ScrollConfig] = [
     ScrollConfig(20260306000000, split_axis="x", train_split_frac=0.75),    # w038
     ScrollConfig(20260310000000, split_axis="x", train_split_frac=0.75),    # w037
     ScrollConfig(20260303000000, split_axis="x", train_split_frac=0.75),    # w034
+    # PHerc0814 segment 46527 (2026-07-22) — different scroll; horizontal split (top 75% train)
+    ScrollConfig(20260226000000, split_axis="y", train_split_frac=0.75),    # seg46527 P0814
 ]
 
 
@@ -106,7 +107,12 @@ class DataConfig:
         20260717193517,   # auto_grown_20260717193517520  11.49cm² max_gen=740  PHerc0211
         20260719202304,   # auto_grown_20260719202304218  10.74cm² max_gen=392  PHerc0211
         20260720090842,   # auto_grown_20260720090842117  7.90cm²  max_gen=345  PHerc1203
+        20250703034159,   # auto_grown_20250703034159599  51.27cm² max_gen=638  PHerc1447 (8.64µm src)
     ])
+
+    # holdout scroll(s): rendered as full-size test figures alongside test_scroll_ids but
+    # NEVER trained on — the hallucination sanity check. w055 = PHerc0139.
+    holdout_scroll_ids: List[int] = field(default_factory=lambda: [20251226000000])
 
     @property
     def test_scroll_id(self) -> Optional[int]:
@@ -120,23 +126,35 @@ class DataConfig:
     train_d_start: int = 0
     train_d_end: int = 28
 
+    # composite (fiber-visibility) test-figure render, matched to VC3D Compositing.hpp:
+    # a MAX filter over a limited ~8-layer surface window, displayed as raw 0-255.
+    composite_method: str = "maxproj"
+    composite_d0: int = 10
+    composite_d1: int = 18
+    composite_display: str = "raw"   # "raw" = linear 0-255 (VC3D); "stretch" = 1-99 in-mask
+    voxel_um: float = 9.362          # microns/pixel at full res (drives the 1 cm scale bar)
+
     mask_memmap: bool = True
     ring_negatives: bool = True
     ring_label_source: str = "eroded"
-    dense_labels: bool = False        # dense per-pixel BCE (model emits (B,1,T,T) map, not a tile scalar)
+    # 'closed' ring params (only used when ring_label_source == 'closed'). all radii are in
+    # TILE units, so physical distance = radius * tile_size (16px). closed now builds off the
+    # (hand-cleaned) eroded map, not original inklabels.
+    ring_close_r: int = 3      # tiles: close letter interior holes (dilate then erode)
+    ring_gap_r: int = 3        # tiles: air gap between ink edge and ring start (96px @ tile=16)
+    ring_shell_r: int = 2      # ring shell width; 0 = dynamic (balance to ink count), >0 = fixed    context_size: int = 0      # >0: input crop size (px) centered on each tile; model center-pools MIL
+                               # over the tile region. label/mask stay the center tile. 0 = off (plain tile)
+    eval_cmap_norm: str = "rank"   # display-only contrast for eval pred panels: "raw" | "percentile" | "rank"
+                                   # rank (histogram-equalize) best when outputs saturate at 1.0; raw = true prob
+    tta_mode: str = "flips"        # TTA transforms: "flips" (4: id,h,v,180 -- fast, contiguous, label-natural)
+                                   # or "dihedral" (6: adds +/-90 rot -- slower, non-contiguous, unnatural for text)
+    eval_infer_bs: int = 512         # 0 = auto-size the eval/test inference batch; >0 = manual override (use spare VRAM)    dense_labels: bool = False        # dense per-pixel BCE (model emits (B,1,T,T) map, not a tile scalar)
     dense_soft_labels: bool = False   # use soft_inklabels probability map as the dense target
     preload_to_ram: bool = False  # load full zarr into RAM; only useful if disk I/O is the bottleneck (it's not — chunks are uncompressed, OS caches them)
     # per-scroll probe ROIs: {scroll_id: [ProbeROI, ...]}
     probe_rois: Dict[int, List[ProbeROI]] = field(
         default_factory=lambda: {k: list(v) for k, v in DEFAULT_PROBE_ROIS.items()})
 
-    # scroll2/3/4 ids: legacy eval targets; not used in the new pipeline.
-    @property
-    def scroll2_id(self) -> Optional[int]: return None
-    @property
-    def scroll3_id(self) -> Optional[int]: return None
-    @property
-    def scroll4_id(self) -> Optional[int]: return None
     @property
     def vis_scroll_ids(self) -> Optional[list]: return None
 
@@ -156,7 +174,7 @@ class DataloaderConfig:
 @dataclass
 class TrainingConfig:
     n_epochs: int = 20
-    lr: float = 2e-4
+    lr: float = 1e-4
     weight_decay: float = 0.0
     l1_lambda: float = 3e-7
     grad_norm: float = 0.5
@@ -168,7 +186,10 @@ class TrainingConfig:
     test_int: int = 9999
     probe_int: int = 5               # render probe ROI figures every N epochs; set > n_epochs to disable
     probe_rois_enabled: bool = True
-    label_smooth: float = 0.0        # label smoothing: 0 = hard 0/1, 0.05 = soft 0.05/0.95
+    label_smooth: float = 0.1        # label smoothing: 0 = hard 0/1, 0.1 = soft 0.1/0.9 (default on)
+    pos_weight_enabled: bool = False  # False = ignore the neg/pos pos_weight (temper upward bias toward 1.0)
+    loss_type: str = "gce"           # "bce" | "focal" | "gce" (noise-robust generalized CE) -- default on
+    gce_q: float = 0.7               # GCE q in (0,1]: ->0 behaves like CE, =1 like noise-robust MAE loss
     focal_gamma: float = 0.0         # >0 = focal loss (down-weights easy tiles); 0 = plain BCE
     ranking_lambda: float = 0.0      # weight on pairwise ranking (AUC surrogate) added to BCE; 0 = off
     ranking_neg_frac: float = 1.0    # 1.0 = full-AUC ranking; <1.0 = partial-AUC (hardest negatives only)
@@ -181,6 +202,12 @@ class TrainingConfig:
     val_cooldown_secs: int = 12
     eval_cooldown_secs: int = 60
     fig_chunk_cooldown_ms: int = 60
+    # save the full-size eval figures (one per training scroll) to
+    # ./output/visualizations/<exp_name>/ at eval_int. off by default (TensorBoard only).
+    save_vis: bool = False
+    # render the test/holdout figure ONCE on the final epoch even when test_int never fires
+    # (e.g. test_int=9999). used by leave-one-out campaigns to infer the held-out fragment.
+    test_on_final: bool = False
 
 
 @dataclass
@@ -214,6 +241,7 @@ class Config:
     device: str = field(default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu")
     model_dir: str = "models"
     exp_name: Optional[str] = None
+    init_weights: Optional[str] = None   # path to a (MAE) checkpoint to warm-start from (strict=False)
 
     def scroll_ids(self) -> List[int]:
         return [s.scroll_id for s in self.data.scrolls]

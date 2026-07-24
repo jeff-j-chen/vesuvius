@@ -26,7 +26,7 @@ python precompute_norm.py --scroll-id 20260206000001
 
 ## Training data
 
-All fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113 keV, 1.2 m detector distance). Raw volume ID: `20250728140407`. The training set is **14 fragments**: the original 4 plus 10 added 2026-07-21.
+Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113 keV, 1.2 m detector distance, raw volume ID `20250728140407`). The training set is **15 fragments**: the original 4, plus 10 added 2026-07-21, plus 1 PHerc0814 segment added 2026-07-22.
 
 **Original 4:**
 
@@ -52,11 +52,19 @@ All fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113
 | `20260310000000` | **w037** | (28, 6140, 7200) | 0.838 | 0.376 |
 | `20260303000000` | **w034** | (28, 7040, 7720) | 0.85 | 0.37 |
 
-All 14 are wired into `DEFAULT_SCROLLS` in `utils/config.py`. Ink footprint = fraction of the frame with ink label > 0 (the 1.129 µm ink detection resized to the 9.4 µm frame; ink-in-mask coverage ≈ 0.99 for all new fragments, confirming alignment — see `fragment_qa.ipynb`).
+**PHerc0814 (2026-07-22)** — different scroll, horizontal split (top 75% train / bottom 25% valid):
+
+| ID | Fragment | Zarr shape (D,H,W) | Mask valid frac | Eroded ink frac |
+|---|---|---|---|---|
+| `20260226000000` | **seg46527** (PHerc0814) | (28, 2180, 3560) | 0.565 (content bbox 2110×3480) | 0.032 (in-mask) |
+
+All 15 are wired into `DEFAULT_SCROLLS` in `utils/config.py`. Ink footprint = fraction of the frame with ink label > 0 (the 1.129 µm ink detection resized to the 9.4 µm frame; ink-in-mask coverage ≈ 0.99 for all new fragments, confirming alignment — see `fragment_qa.ipynb`).
 
 The masks for **w059** and **w047** are intersected with the 1.1 µm ink-detection footprint (ROI2). The **new 10 use the full 9.4 µm papyrus footprint** (not intersected), so ring negatives near the labeled band could in principle fall on un-scanned surface; in practice the ring hugs the ink so this is minor. The full-surface footprint is recoverable directly from the zarr (`z[mid] > 0`); no separate `_full9um.png` is stored.
 
 Ink labels (1.129 µm source, 59 keV) live in `inklabels/` (continuous 0–255 ink probability) and `eroded_inklabels/` (binary, conservative — what training uses for ring negatives; new-fragment eroded fraction ≈ 0.02–0.04).
+
+**seg46527 (PHerc0814) caveat:** only `eroded_inklabels/20260226000000.png` and `masks/20260226000000.png` are present — there is no non-eroded `inklabels/20260226000000.png`. Training with `ring_label_source='original'` (the twostage default) will log a warning and fall back to the eroded map for the ring boundary; `ring_label_source='eroded'` (isolation campaign) uses it directly. Norm stats are cached in `norm_cache.json`.
 
 ### Holdout sanity fragment — w055 (NOT trained on)
 
@@ -67,7 +75,7 @@ Ink labels (1.129 µm source, 59 keV) live in `inklabels/` (continuous 0–255 i
 ## Test segments
 
 
-Three VC3D-grown patches are configured as default test targets (`test_scroll_ids` in `utils/config.py`). Test figures are generated when `test_int` fires (currently set to 9999 — disabled until a sufficiently good model is found). The visualizer loads each segment sequentially with CUDA cache cleared between renders to keep VRAM bounded for the larger segments.
+Five VC3D-grown patches are configured as default test targets (`test_scroll_ids` in `utils/config.py`): PHerc0813 ×1, PHerc0211 ×2, PHerc1203 ×1, PHerc1447 ×1. Test figures are generated when `test_int` fires (currently set to 9999 — disabled until a sufficiently good model is found). The visualizer loads each segment sequentially with CUDA cache cleared between renders to keep VRAM bounded for the larger segments.
 
 ### Segment 1 — original reference patch
 
@@ -77,6 +85,7 @@ Three VC3D-grown patches are configured as default test targets (`test_scroll_id
 | Scroll Source | Pherc0813 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151723`)
 | Zarr ID | `20260716083545` |
 | Zarr shape | (28, 4421, 4421) |
+| BBox | (1892×2111) |
 | Area | **2.98 cm²** |
 | max_gen | 175 (VC3D growth iterations, restored from autosave snap 9) |
 | Mask valid frac | 0.87 (compact rectangular patch) |
@@ -94,6 +103,7 @@ Three VC3D-grown patches are configured as default test targets (`test_scroll_id
 | Scroll Source | Pherc0211 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151803`)
 | Zarr ID | `20260717193517` |
 | Zarr shape | (28, 10821, 10821) |
+| BBox | (7147×1837) | 
 | Area | **11.49 cm²** |
 | max_gen | 740 (VC3D growth iterations) |
 | Mask valid frac | 0.055 (re-rendered from updated .VC3D mesh; mesh coverage unchanged) |
@@ -109,6 +119,7 @@ Three VC3D-grown patches are configured as default test targets (`test_scroll_id
 | Scroll Source | Pherc0211 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151803`)
 | Zarr ID | `20260719202304` |
 | Zarr shape | (28, 6741, 6741) |
+| BBox | (5265×1556) |
 | Area | **10.74 cm²** |
 | max_gen | 392 (VC3D growth iterations) |
 | Mask valid frac | 0.120 (re-rendered from updated .VC3D mesh; mesh coverage unchanged) |
@@ -123,15 +134,33 @@ Three VC3D-grown patches are configured as default test targets (`test_scroll_id
 | Segment name | `auto_grown_20260720090842117` |
 | Scroll Source | PHerc1203 (9.362 µm / 113 keV / 1.2 m, raw volume `20250820131727`) |
 | Zarr ID | `20260720090842` |
-| Zarr shape | (28, 13201, 13201) |
+| Zarr shape | (28, 15921, 15921) |
+| BBox | (4035×4455) |
 | Area | **7.90 cm²** |
 | max_gen | 345 (VC3D growth iterations) |
-| Mask valid frac | 0.049 (sparse strip within large bounding box) |
+| Mask valid frac | 0.047 (sparse strip within large bounding box; content bbox 4035×4455) |
 | tifxyz grid | 661 × 661 vertices |
 | tifxyz location | `~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260720090842117/` |
 | Notes | First PHerc1203 segment; different scroll entirely from training data |
 
-All four are rendered from their VC3D tifxyz mesh against their respective raw CT volume. The tifxyz format stores a 2D grid of 3D raw-volume voxel coordinates — the actual CT intensities are fetched at render time via `old/render_9um_surface.py`. See `assemble_test_zarr.sh` for the reproduction command for segment 1.
+### Segment 5 — PHerc1447 large patch (2026-07-22)
+
+| | |
+|---|---|
+| Segment name | `20250703034159` (editable mesh under `20250521151220_editable`) |
+| Scroll Source | PHerc1447 (**8.640 µm** / 116 keV / 1.2 m, raw volume `20250521151220`, shape 24297×8343×8343) |
+| Zarr ID | `20250703034159` |
+| Zarr shape | (28, 6592, 8630) |
+| BBox | (6264×8318) |
+| Area | **51.27 cm²** (largest test segment) |
+| max_gen | 638 (VC3D growth iterations) |
+| Mask valid frac | 0.700 (dense; content bbox 6264×8318) |
+| tifxyz grid | 360 × 471 vertices (cropped to valid from a 6203×6203 grid) |
+| Render | 8.640 µm source upsampled ×18.36 to the 9.362 µm training frame; 28 layers, normal-step 1.0, crop-valid margin 8 |
+| tifxyz location | `~/.VC3D/remote_cache/open_data/segments/PHerc1447/20250521151220_editable/20250703034159/` |
+| Notes | Large strip, first PHerc1447 segment. Source scan is a coarser 8.64 µm volume, hence the upsample. |
+
+All five are rendered from their VC3D tifxyz mesh against their respective raw CT volume. The tifxyz format stores a 2D grid of 3D raw-volume voxel coordinates — the actual CT intensities are fetched at render time via `old/render_9um_surface.py`. See `assemble_test_zarr.sh` for the reproduction command for segment 1.
 
 ---
 
