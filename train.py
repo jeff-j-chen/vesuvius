@@ -256,6 +256,24 @@ class Trainer:
                 )
                 loss = loss + ranking_lambda * rloss
 
+            # optional TTA-consistency regularizer: an extra FLIPPED view of the batch should
+            # yield the SAME tile score (ink-present is flip-invariant). penalizing the two
+            # predictions' disagreement makes the model invariant -> fewer holdout hallucinations
+            # than augmentation alone (which never forces two views to AGREE). ~1 extra forward.
+            tta_cons_lambda = float(getattr(self.c.tra, "tta_consistency_lambda", 0.0))
+            if getattr(self.c.tra, "tta_consistency", False) and tta_cons_lambda > 0:
+                # random flip among h / v / 180 over the spatial dims (last two axes)
+                fd = ([-1], [-2], [-1, -2])[int(torch.randint(0, 3, (1,)).item())]
+                out2 = self.model(torch.flip(b_imgs, dims=fd))
+                if out2.dim() == 4:
+                    out2 = out2.flatten(1).max(dim=1, keepdim=True).values
+                p1 = torch.sigmoid(outputs)
+                p2 = torch.sigmoid(out2)
+                # stop-grad on the clean view (teacher); pull the flipped view toward it
+                cons = ((p2 - p1.detach()) ** 2) * mask
+                cons = cons.sum() / mask.sum().clamp(min=1)
+                loss = loss + tta_cons_lambda * cons
+
         # backward pass and optimization step
         self.scaler.scale(loss).backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)

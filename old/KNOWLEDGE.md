@@ -914,6 +914,126 @@ Per-depth sweep (all 64 layers of 7.9um, same eroded labels):
 Native 2.4um sanity check (raw 2.4um chunks vs ink tif, native coords, no warp):
 - Best single layer: z=102 (of 109), r=+0.157
 - Mean |r|: 0.102
+
+## 15) Two-stage MIL era + receptive-field / dataset findings (2026-07-24)
+
+This section captures the current architecture and the hard-won lessons from the twostage
+context-window campaign. It supersedes the older 32x32-tile framing above (we now use 16px
+label tiles at 9.362um/px, depth 24 ingested 4->28).
+
+### 15.1 Current production architecture
+
+`v15_twostage_wide_zgrad` (and its context variant `..._ctx`), ~1.18M params:
+
+- Stage 1 (shared backbone, weights TIED across 3 depth windows 4-12 / 12-20 / 20-28):
+  stem ingests `[raw, lcn, dI/dz]` -> two per-slice (1x3x3) convs -> learnable absolute
+  depth positional encoding -> `depth_mix` (3D convs + CBAM + a single H,W maxpool) ->
+  per-voxel logit map. Each window gets its correct absolute depth-PE offset so depth bands
+  are genuinely distinguishable.
+- Stage 2: WIDE fusion CNN `3 -> 32 -> 32 -> 16 -> 1` over the 3 stacked window maps. The
+  original tiny fusion (3->16->8->1, ~4.8k params) UNDERFIT (train PR-AUC plateaued ~0.66);
+  widening fixed that.
+- Output: MIL log-sum-exp over voxels -> ONE scalar per 16px tile. Learnable LSE `r`
+  interpolates mean(r->0) <-> max(r->inf). The tile-scalar MIL is what makes sparse thin-stroke
+  ink survive aggregation (global spatial pooling dilutes it ~1000x).
+
+### 15.2 The receptive-field / context window
+
+`InkDetectorTwoStageWideZGradCtx`:
+- Reads a `context_size` crop (e.g. 32px) centered on each 16px label tile.
+- Runs the FULL backbone + stage-2 fusion on the whole crop, then CENTER-CROPS the fused
+  voxel map to `tile_size//2` (pooled coords) before MIL-LSE.
+- So supervision is UNCHANGED (still the central tile's ring label); context enters purely
+  through the conv receptive field. Degrades gracefully to the plain model at ctx==tile.
+- Param count is IDENTICAL to the plain model (the center-crop is parameter-free).
+
+Cost/benefit observed:
+- ctx32 = 4x the voxels through the backbone (~3x wall-clock), 4x the unsupervised surround
+  the model can memorize (overfit amplifier), and inference OOM/crashes on the big fragments
+  (e.g. 15921^2 PHerc1203) even with predict_tiles' 0.25x batch auto-scaling.
+- Large RF clearly RAISES accuracy (context disambiguates a stroke continuing past the tile,
+  since a 16px tile ~150um is narrower than a stroke) but at a steep overfit + compute price.
+
+### 15.3 The shape-resolution problem (blob vs letters)
+
+- With the CLOSED ring dataset the model localizes ink well (WHERE) but resolves the letter
+  as a blob, not shapes. Root cause is shared with the overfit: the model memorizes
+  scroll-specific texture at TILE granularity rather than a transferable ink-vs-papyrus
+  boundary. The output is one scalar per 16px tile, so shape is inherently coarse.
+- eroded vs closed is a LABEL-level lever, not a resolution lever:
+  - closed (base=eroded, close=3, gap=3, shell=2) dilates positive tiles -> better balance +
+    coverage -> higher WHERE-metric but blobbier (positives spread past the letter).
+  - eroded keeps positives tight on the letter -> traces shape better at tile res but sparse
+    positives -> class imbalance / collapse risk.
+- IMPORTANT context correction: the historical "eroded gives sharper shapes" result was from
+  SCROLL1 ONLY (easy letters, 100% concrete labels) and PLAIN (tile-RF) models. We are now on
+  HARD letters with UNCERTAIN labels, so that tradeoff must be re-measured. eroded + large RF
+  (ctx) had never been run -> this is the tsJe experiment.
+
+### 15.4 DENSE SUPERVISION IS BANNED (do not revisit)
+
+- Every dense (per-pixel BCE / U-Net decoder) experiment TANKED performance, including the
+  researcher's exact dense-unet, which returned essentially nothing.
+- The tile-scalar / single-value MIL return is precisely what lets THIS model learn. Keep the
+  MIL-LSE tile output. `v15_twostage_dense` and `dense_labels` exist in the code but MUST NOT
+  be used.
+
+### 15.5 Regularization notes (for later)
+
+- AdamW WEIGHT DECAY (`tra.weight_decay`, currently 0.0) is the cheap, principled overfit
+  lever and is generally more effective here than L1 (`tra.l1_lambda`). Decoupled weight decay
+  shrinks every weight toward 0 each step (multiplicative), penalizing the large-magnitude
+  weights that memorization relies on, without adding a term to the loss/gradient. Nearly free.
+- TTA-CONSISTENCY loss (candidate, not yet added): during TRAINING, forward two augmented
+  views (e.g. a flip) of the same tile and penalize disagreement of their predictions, in
+  ADDITION to the supervised loss. Differs from plain flip/rotation augmentation: aug shows
+  each transformed view with its label independently (the model may still give inconsistent
+  answers across views -> the hallucinations we see on holdout); the consistency term directly
+  requires f(aug(x)) == f(x), regularizing the function to be invariant. Cost is ~2x forward
+  passes per step (one extra view), NOT the 4-6x of inference-time TTA, and no gradient through
+  a stop-gradient target if implemented that way. Deferred for now.
+
+### 15.6 Campaign bookkeeping
+
+- Two-stage runs log to `./runs_ts_mae`; finals saved to `models/twostage/{tid}_{tag}_final.pth`
+  only on completion. Periodic checkpoints (every save_int=2 epochs) + best_model_* dump to the
+  flat `models/` dir with GENERIC, non-namespaced names (model_epoch_N.pth) -> later runs
+  clobber them. Warm-start from MAE via `models/mae_twostage.pth` (stage1.* keys, strict=False).
+- Every finished twostage final uses `ring_label_source="closed"`; eroded+ctx was a genuine
+  testing gap. `campaign_runner_twostage._base_config` is the single source of truth; only keys
+  present in a TESTS dict override it (via `_OVERRIDES`).
+- Next campaign (tsJe, tsJf): single-variable changes off tsJd -- (1) tsJe = ctx32 + eroded
+  labels; (2) tsJf = closed + COARSE context (context_size stays 32 but context_downsample=2:
+  avg-pool the input 2x at the stem, keeping the full 32px extent at half resolution). Other
+  regularizers deferred.
+
+### 15.7 Coarse-context knob (context_downsample)
+
+Instead of shrinking the context window to reduce the receptive-field cost, keep the full extent
+and coarsen it. `config.data.context_downsample` (int, default 1 = off): when >1 the ctx model
+`InkDetectorTwoStageWideZGradCtx` avg-pools the input crop by that factor at the stem
+(`F.avg_pool3d` kernel/stride `(1,ds,ds)`, depth preserved), then adjusts the MIL center-crop to
+`tile_size // (2*ds)` (depth_mix's one H,W maxpool times the input downsample). Effect at ds=2 on
+ctx32: same 32px context EXTENT but half resolution -> ~1/4 the activations (near-plain compute),
+smaller overfit surface, and it removes the big-fragment inference CUDA OOM. Tradeoff: the CENTER
+label tile is coarsened too (unlike a foveated full-res-center design). Param-count is unchanged
+(avg-pool is parameter-free) so MAE warm-start and existing ctx checkpoints load cleanly. Verified
+forward shapes: ctx32/ds2 -> center 4, ds1 -> center 8 (backward compatible).
+
+### 15.8 Foveated context (arch v15_twostage_wide_zgrad_fovea)
+
+Coarsening everything (15.7) also blurs the CENTER tile, which is costly at ~10um where ink is
+already near the resolution limit (prior models resolved ink at 1-2um). The foveated arch keeps
+the middle full-res and coarsens only the surround. `InkDetectorTwoStageWideZGradFovea` runs TWO
+tied-backbone streams: (a) the full-resolution central tile_size crop, and (b) the whole
+context_size crop avg-pooled to tile res (coarse, full extent). The surround's center-tile region
+is upsampled and fused with the center stream via a tiny 1x1x1 `fovea_fuse` head (+41 params),
+then MIL-LSE aggregates. Cost ~2x a plain tile pass (two tile-sized backbone passes) vs ~4x for
+full-res ctx32. Requires context_size a multiple of tile_size (surround pools exactly to tile
+res, ds = ctx//tile). MAE warm-start still transfers stage1 (strict=False); stage2 + fovea_fuse
+init fresh. Verified: forward -> (B,1), params 1,183,117, warm-start loads 38 stage1 keys.
+Campaign test tsJg = tsJd (closed) with this arch. Caveat: stage1 BatchNorm sees two input scales
+per step (full-res tile + coarse full-extent) -> slightly noisier BN stats; acceptable, watch it.
 - Quadrant check: top-right r=+0.35, bot-left r=+0.01 — still partly confounded
 - Self-check (ink tif vs ink tif): r=1.000 — methodology sound
 - Signal is ~2.5x stronger at 2.4um than 7.9um, but even at 2.4um it is a local texture

@@ -144,6 +144,9 @@ class DataConfig:
     ring_gap_r: int = 3        # tiles: air gap between ink edge and ring start (96px @ tile=16)
     ring_shell_r: int = 2      # ring shell width; 0 = dynamic (balance to ink count), >0 = fixed    context_size: int = 0      # >0: input crop size (px) centered on each tile; model center-pools MIL
                                # over the tile region. label/mask stay the center tile. 0 = off (plain tile)
+    context_downsample: int = 1    # >1: avg-pool the context crop by this factor at the stem, so the
+                                   # model keeps the FULL context extent but at a coarser resolution
+                                   # (~1/ds^2 the activations -> near-plain compute, less overfit, no OOM)
     eval_cmap_norm: str = "rank"   # display-only contrast for eval pred panels: "raw" | "percentile" | "rank"
                                    # rank (histogram-equalize) best when outputs saturate at 1.0; raw = true prob
     tta_mode: str = "flips"        # TTA transforms: "flips" (4: id,h,v,180 -- fast, contiguous, label-natural)
@@ -175,7 +178,7 @@ class DataloaderConfig:
 class TrainingConfig:
     n_epochs: int = 20
     lr: float = 1e-4
-    weight_decay: float = 0.0
+    weight_decay: float = 0.0        # AdamW decoupled weight decay (overfit lever). 0 = off; sane on-value ~1e-2 for this small model
     l1_lambda: float = 3e-7
     grad_norm: float = 0.5
     patience: int = 5
@@ -194,6 +197,12 @@ class TrainingConfig:
     ranking_lambda: float = 0.0      # weight on pairwise ranking (AUC surrogate) added to BCE; 0 = off
     ranking_neg_frac: float = 1.0    # 1.0 = full-AUC ranking; <1.0 = partial-AUC (hardest negatives only)
     ranking_margin: float = 0.3      # margin for the ranking hinge
+    # TTA-consistency regularizer: each step forward an EXTRA flipped view and penalize the two
+    # tile predictions' disagreement (invariance regularizer -> fewer holdout hallucinations than
+    # augmentation alone, which never forces two views to AGREE). ~2x forward cost when on.
+    tta_consistency: bool = False         # master switch (False = off, no extra forward). on at run 4
+    tta_consistency_lambda: float = 0.5   # weight of the consistency term (sane default when enabled)
+    tta_consistency_mode: str = "flips"   # "flips" = random h/v/180 flip per step (label-natural for text)
     seed: int = 41                   # base RNG seed (torch/cuda/numpy/random + dataloader workers)
     deterministic: bool = False      # True = exact reproducibility (cudnn deterministic, no benchmark);
                                      # costs ~10-20% speed. False = fast path (cudnn benchmark, GPU atomics

@@ -401,14 +401,25 @@ class InkDetectorTwoStageWideZGradCtx(InkDetectorTwoStageWideZGrad):
     sees the surround, but the final MIL-LSE pools ONLY the central tile_size region of the
     fused voxel map -- so the tile label / ring supervision is unchanged; context enters
     purely via the conv receptive field. degrades gracefully to the plain model if fed a
-    tile-sized input (the center crop becomes the whole map)."""
+    tile-sized input (the center crop becomes the whole map).
+
+    config.data.context_downsample (>1) avg-pools the input crop at the stem, keeping the full
+    context EXTENT but at a coarser resolution -- cheaper + less overfit than shrinking the crop."""
     def __init__(self, config: Config):
         super().__init__(config)
-        # tile region in POOLED coords (depth_mix pools H,W by 2 once)
-        self._center = max(1, int(config.data.tile_size) // 2)
+        # coarse-context option: avg-pool the input by this factor at the stem so the model keeps
+        # the FULL context extent but at a coarser resolution (fewer activations -> ~plain compute,
+        # smaller overfit surface, no big-fragment inference OOM). 1 = off (full-res context).
+        self._ds = max(1, int(getattr(config.data, "context_downsample", 1)))
+        # tile region in POOLED coords: depth_mix pools H,W by 2 once, times the optional input
+        # downsample -> total spatial reduction is (2 * self._ds).
+        self._center = max(1, int(config.data.tile_size) // (2 * self._ds))
 
     def forward(self, x):
         if x.dim() == 4: x = x.unsqueeze(1)
+        # coarsen the whole context crop (depth preserved) before the backbone
+        if self._ds > 1:
+            x = F.avg_pool3d(x, kernel_size=(1, self._ds, self._ds), stride=(1, self._ds, self._ds))
         voxel_maps = [
             self.stage1.get_voxel_logits(x[:, :, z0:z1], depth_offset=pe_off)
             for z0, z1, pe_off in self.WINDOWS
@@ -430,6 +441,73 @@ class InkDetectorTwoStageWideZGradCtx(InkDetectorTwoStageWideZGrad):
         )
 
 
+class InkDetectorTwoStageWideZGradFovea(InkDetectorTwoStageWideZGrad):
+    """foveated-context variant of v15_twostage_wide_zgrad.
+
+    two tied-backbone streams, fused before MIL:
+      center   -- the FULL-RESOLUTION central tile_size crop. preserves fine detail, which
+                  matters at ~10um where ink is already near the resolution limit (prior models
+                  resolved ink at 1-2um); coarsening the middle throws that away.
+      surround -- the WHOLE context_size crop avg-pooled down to tile_size (coarse, but carries
+                  the wider context the convs need to see a stroke continue past the tile).
+    the surround's center-tile region is upsampled and fused with the center stream via a small
+    1x1x1 head, then MIL-LSE aggregates the fused center-tile map.
+
+    cost is ~2x a plain tile pass (two tile-sized backbone passes) vs the ~4x of full-res
+    context, and unlike context_downsample the MIDDLE stays full res. adds a tiny fovea-fusion
+    head (fresh weights); stage1 still warm-starts from MAE. requires context_size a multiple of
+    tile_size (surround pools exactly to tile res)."""
+
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self._ctx = int(config.data.context_size)
+        self._tile = int(config.data.tile_size)
+        self._ds = max(2, self._ctx // self._tile)   # surround downsample -> lands at tile res
+        # fuse [center_fused, surround_center_fused] (2 ch) -> 1 (fresh init, small)
+        self.fovea_fuse = nn.Sequential(
+            nn.Conv3d(2, 8, kernel_size=1, bias=False),
+            nn.BatchNorm3d(8), nn.ReLU(inplace=True),
+            nn.Conv3d(8, 1, kernel_size=1, bias=True),
+        )
+
+    def _fuse_windows(self, xin):
+        """stage1 (tied) over the 3 depth windows + wide stage2 fusion -> (B,1,8,h,w)."""
+        vms = [self.stage1.get_voxel_logits(xin[:, :, z0:z1], depth_offset=pe)
+               for z0, z1, pe in self.WINDOWS]
+        return self.stage2(torch.cat(vms, dim=1))
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        C, T, ds = self._ctx, self._tile, self._ds
+        off = (C - T) // 2
+        # center stream: full-resolution central tile
+        xc = x[:, :, :, off:off + T, off:off + T]
+        fused_c = self._fuse_windows(xc)                       # (B,1,8,T/2,T/2)
+        # surround stream: full extent, coarsened to tile res
+        xs = F.avg_pool3d(x, kernel_size=(1, ds, ds), stride=(1, ds, ds))
+        fused_s = self._fuse_windows(xs)                       # (B,1,8,T/2,T/2), covers full extent
+        # pull the center-tile region out of the surround map and upsample to the center grid
+        Hc, Wc = fused_c.shape[-2], fused_c.shape[-1]
+        hs = fused_s.shape[-1]
+        cc = max(1, hs // ds)
+        o = (hs - cc) // 2
+        s_c = fused_s[:, :, :, o:o + cc, o:o + cc]             # coarse center-tile
+        B_, Ch_, D_, h_, w_ = s_c.shape
+        s_c = s_c.permute(0, 2, 1, 3, 4).reshape(B_ * D_, Ch_, h_, w_)
+        s_c = F.interpolate(s_c, size=(Hc, Wc), mode="bilinear", align_corners=False)
+        s_c = s_c.reshape(B_, D_, Ch_, Hc, Wc).permute(0, 2, 1, 3, 4)
+        # fuse the two resolutions over the center tile, then MIL-LSE
+        fused = self.fovea_fuse(torch.cat([fused_c, s_c], dim=1))   # (B,1,8,T/2,T/2)
+        self.last_voxel_map = fused.detach()
+        r = self.lse_r2.clamp(min=0.5, max=10.0)
+        flat = fused.flatten(1)
+        N = flat.shape[1]
+        return (1.0 / r) * (
+            torch.logsumexp(r * flat, dim=1, keepdim=True)
+            - torch.log(torch.tensor(float(N), device=fused.device))
+        )
+
+
 _ARCH_MAP = {
     "v14_mil_deep":       InkDetectorMILDeep,
     "v14b_mil_zgrad":     InkDetectorMILDeepZGrad,
@@ -440,6 +518,7 @@ _ARCH_MAP = {
     "v15_twostage_dense": InkDetectorTwoStageDense,
     "v15_twostage_wide_zgrad": InkDetectorTwoStageWideZGrad,
     "v15_twostage_wide_zgrad_ctx": InkDetectorTwoStageWideZGradCtx,
+    "v15_twostage_wide_zgrad_fovea": InkDetectorTwoStageWideZGradFovea,
 }
 
 

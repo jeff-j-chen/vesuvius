@@ -72,8 +72,8 @@ def _base_config(exp_name: str) -> Config:
     c.model.conv1_drop = 0.05
     c.model.conv2_drop = 0.075
     c.model.head_drop  = 0.0
-    c.tra.n_epochs     = 15
-    c.tra.eval_int     = 15
+    c.tra.n_epochs     = 10
+    c.tra.eval_int     = 10
     c.tra.test_int     = 999
     c.tra.probe_int    = 5
     c.tra.save_int     = 2       # save every 2 epochs so a crash doesn't wipe the run (BSODs ongoing)
@@ -121,13 +121,63 @@ TESTS = [
     #      l1=7e-5, tag="ts_gce_strongreg_ctx48_mae"),
 
 
-    dict(tid="tsJd", arch="v15_twostage_wide_zgrad_ctx", context_size=32, init_weights=MAE_CKPT,
-         batch_size=32,
+    # tsJd baseline (closed ring, ctx32) -- already trained; kept here as the reference config
+    # dict(tid="tsJd", arch="v15_twostage_wide_zgrad_ctx", context_size=32, init_weights=MAE_CKPT,
+    #      batch_size=32,
+    #      ranking_lambda=0.5, ranking_neg_frac=1.0,
+    #      flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
+    #      h_drop=0.5, c1_drop=0.15, c2_drop=0.155,
+    #      cutout_prob=0.5, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
+    #      l1=1e-4, tag="ts_gce_vstrongreg_ctx32d_mae"),
+
+    # NEXT CAMPAIGN: two single-variable changes off the tsJd config (everything else identical).
+
+    # (1) tsJd (ctx32) but ERODED ring labels instead of closed. eroded positives trace the
+    #     letter tightly; this tests the eroded-vs-closed tradeoff UNDER the large receptive
+    #     field -- an untested combo (the old eroded/closed comparison was scroll1-only, easy
+    #     letters + concrete labels; we are now on hard letters + uncertain labels).
+    dict(tid="tsJe", arch="v15_twostage_wide_zgrad_ctx", context_size=32, init_weights=MAE_CKPT,
+         batch_size=32, ring_label_source="eroded",
          ranking_lambda=0.5, ranking_neg_frac=1.0,
-         flip=0.66, rotation=0.66, noise=0.3, brightness=0.66, contrast=0.66,
-         h_drop=0.6, c1_drop=0.175, c2_drop=0.175,
-         cutout_prob=0.6, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
-         l1=2e-4, tag="ts_gce_vstrongreg_ctx32d_mae"),
+         flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
+         h_drop=0.5, c1_drop=0.15, c2_drop=0.155,
+         cutout_prob=0.5, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
+         l1=1e-4, tag="ts_gce_vstrongreg_ctx32_eroded_mae"),
+
+    # (2) tsJd (closed ring) but a COARSER context at the SAME 32px extent: avg-pool the input
+    #     2x (context_downsample=2) so the model keeps the full context window but at half
+    #     resolution -> ~1/4 the activations (near-plain compute), smaller overfit surface, and
+    #     it should stop the big-fragment inference OOM. tradeoff: the center tile is coarsened too.
+    dict(tid="tsJf", arch="v15_twostage_wide_zgrad_ctx", context_size=32, context_downsample=2,
+         init_weights=MAE_CKPT, batch_size=32,
+         ranking_lambda=0.5, ranking_neg_frac=1.0,
+         flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
+         h_drop=0.5, c1_drop=0.15, c2_drop=0.155,
+         cutout_prob=0.5, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
+         l1=1e-4, tag="ts_gce_vstrongreg_ctx32ds2_closed_mae"),
+
+    # (3) tsJd (closed ring) but FOVEATED context: full-res central tile + coarse full-extent
+    #     surround, fused before MIL. keeps the middle at full 10um resolution (where the letter
+    #     detail lives; prior models resolved ink at 1-2um) while still giving the convs the wider
+    #     context. ~2x plain-tile compute (two tile passes) vs ~4x for full-res ctx32.
+    dict(tid="tsJg", arch="v15_twostage_wide_zgrad_fovea", context_size=32,
+         init_weights=MAE_CKPT, batch_size=32,
+         ranking_lambda=0.5, ranking_neg_frac=1.0,
+         flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
+         h_drop=0.5, c1_drop=0.15, c2_drop=0.155,
+         cutout_prob=0.5, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
+         l1=1e-4, tag="ts_gce_vstrongreg_ctx32fovea_closed_mae"),
+
+    # (4) [NOT YET ACTIVE] regularization run: take the RF winner from tsJe/tsJf/tsJg, then turn
+    #     ON the two new regularizers -- AdamW weight decay + TTA-consistency. fill in the winning
+    #     arch/labels/context knobs, drop l1 (weight_decay replaces it), then uncomment to run.
+    # dict(tid="tsJh", arch="<winner arch>", context_size=32, init_weights=MAE_CKPT, batch_size=32,
+    #      ranking_lambda=0.5, ranking_neg_frac=1.0,
+    #      flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
+    #      h_drop=0.5, c1_drop=0.15, c2_drop=0.155,
+    #      cutout_prob=0.5, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
+    #      l1=0.0, weight_decay=1e-2, tta_consistency=True, tta_cons_lambda=0.5,
+    #      tag="ts_gce_vstrongreg_regv2_mae"),
 
 ]
 
@@ -143,6 +193,8 @@ _OVERRIDES = {
     "probe_int":        ("tra", "probe_int"),
     "l1":               ("tra", "l1_lambda"),
     "weight_decay":     ("tra", "weight_decay"),
+    "tta_consistency":  ("tra", "tta_consistency"),
+    "tta_cons_lambda":  ("tra", "tta_consistency_lambda"),
     "ranking_lambda":   ("tra", "ranking_lambda"),
     "ranking_neg_frac": ("tra", "ranking_neg_frac"),
     "ranking_margin":   ("tra", "ranking_margin"),
@@ -155,7 +207,12 @@ _OVERRIDES = {
     "c1_drop":          ("model", "conv1_drop"),
     "c2_drop":          ("model", "conv2_drop"),
     "context_size":     ("data", "context_size"),
+    "context_downsample": ("data", "context_downsample"),
     "dense":            ("data", "dense_labels"),
+    "ring_label_source": ("data", "ring_label_source"),
+    "ring_close_r":     ("data", "ring_close_r"),
+    "ring_gap_r":       ("data", "ring_gap_r"),
+    "ring_shell_r":     ("data", "ring_shell_r"),
     "batch_size":       ("dl", "batch_size"),
     "num_workers":      ("dl", "num_workers"),
     "flip":             ("dl", "flip_prob"),
