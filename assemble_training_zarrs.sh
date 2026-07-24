@@ -41,21 +41,30 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON="${SCRIPT_DIR}/.venv/Scripts/python.exe"
-if [[ "$OSTYPE" != "msys"* && "$OSTYPE" != "win"* ]]; then
+# python + default output dir differ by OS. on linux the zarrs land in $VESUVIUS_ZARR_PATH
+# (the same env var precompute_norm/config read) or /vesuvius/ves_zarrs2; override with --out-dir DIR.
+if [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "win"* ]]; then
+    PYTHON="${SCRIPT_DIR}/.venv/Scripts/python.exe"
+    OUT_DIR="C:/Users/ChenJeff/Documents/ves_zarrs2"
+else
     PYTHON="${SCRIPT_DIR}/.venv/bin/python"
+    OUT_DIR="${VESUVIUS_ZARR_PATH:-/vesuvius/ves_zarrs2}"
 fi
 DOWNLOADER="${SCRIPT_DIR}/old/download_surface_zarr.py"
 RENDERER="${SCRIPT_DIR}/old/render_9um_surface.py"
-WORKERS=24
+# default workers = cpu count (nproc on linux, NUMBER_OF_PROCESSORS on windows) for the
+# multithreaded chunk fetch/render; override with --workers N
+if command -v nproc >/dev/null 2>&1; then WORKERS="$(nproc)"; else WORKERS="${NUMBER_OF_PROCESSORS:-24}"; fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --workers) WORKERS="$2"; shift 2 ;;
+        --out-dir) OUT_DIR="$2"; shift 2 ;;
         *) echo "unknown arg $1"; exit 1 ;;
     esac
 done
 cd "$SCRIPT_DIR"
-mkdir -p C:/Users/ChenJeff/Documents/ves_zarrs2 masks
+mkdir -p "$OUT_DIR" masks
+echo "[assemble] python=$PYTHON  out_dir=$OUT_DIR  workers=$WORKERS"
 
 PHERC0139_RAW="https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0139/volumes/20250728140407-9.362um-1.2m-113keV-masked.zarr/0"
 SEG_BASE="https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0139/segments"
@@ -65,7 +74,8 @@ echo "=== 1/3  w044  20260115000000  (primary labelled fragment) ==="
 "$PYTHON" "$DOWNLOADER" \
     --mode volume --level 0 \
     --url "${SEG_BASE}/20250115000000-w044_2025011500/surface-volumes/9.362um-1.2m-113keV-volume-20250728140407.zarr" \
-    --out-id 20260115000000 --workers "$WORKERS"
+    --out-id 20260115000000 --out-zarr "$OUT_DIR/20260115000000.zarr" \
+    --cache-dir "_ves_tmp/dl_20260115000000" --workers "$WORKERS"
 # fallback: render from tifxyz if the surface volume URL differs on your VC3D version
 # "$PYTHON" "$RENDERER" \
 #   --mesh-dir ~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260115000000 \
@@ -78,14 +88,16 @@ echo "=== 2/3  w059  20250223000000  (1.1um overlap band) ==="
 "$PYTHON" "$DOWNLOADER" \
     --mode volume --level 0 \
     --url "${SEG_BASE}/20250223000000-w059_2025022312/surface-volumes/9.362um-1.2m-113keV-volume-20250728140407.zarr" \
-    --out-id 20250223000000 --workers "$WORKERS"
+    --out-id 20250223000000 --out-zarr "$OUT_DIR/20250223000000.zarr" \
+    --cache-dir "_ves_tmp/dl_20250223000000" --workers "$WORKERS"
 
 echo "=== 3/4  w047  20260206000001  (larger wing patch) ==="
 # pre-rendered surface volume on S3 -- no local tifxyz needed
 "$PYTHON" "$DOWNLOADER" \
     --mode volume --level 0 \
     --url "${SEG_BASE}/20260206000001-w047_2026020613/surface-volumes/9.362um-1.2m-113keV-volume-20250728140407.zarr" \
-    --out-id 20260206000001 --workers "$WORKERS"
+    --out-id 20260206000001 --out-zarr "$OUT_DIR/20260206000001.zarr" \
+    --cache-dir "_ves_tmp/dl_20260206000001" --workers "$WORKERS"
 
 echo "=== 4/4  w056  20260115000001  (additional fragment) ==="
 # the pre-rendered surface volume on S3 is empty (metadata exists, no chunk data).
@@ -100,7 +112,7 @@ done
     --cache-dir _ves_tmp/w056_chunks \
     --vol-base "$PHERC0139_RAW" \
     --layers 28 --workers "$WORKERS" \
-    --out-zarr "C:/Users/ChenJeff/Documents/ves_zarrs2/20260115000001.zarr" \
+    --out-zarr "$OUT_DIR/20260115000001.zarr" \
     --out-id 20260115000001
 # restrict w056 mask to the 1.1um overlap band (labeled band y~1837-4472 at 9.4um resolution):
 #   python - <<'EOF'
@@ -116,10 +128,11 @@ echo "=== precomputing normalization stats for all 4 scrolls ==="
     --scroll-id 20260115000000 \
     --scroll-id 20250223000000 \
     --scroll-id 20260206000001 \
-    --scroll-id 20260115000001
+    --scroll-id 20260115000001 \
+    --zarr-path "$OUT_DIR"
 
 echo "=== done ==="
 echo "zarrs:"
 for id in 20260115000000 20250223000000 20260206000001 20260115000001; do
-    python -c "import zarr; z=zarr.open('C:/Users/ChenJeff/Documents/ves_zarrs2/$id.zarr'); print(f'  $id  {z.shape}')"
+    "$PYTHON" -c "import zarr; z=zarr.open('$OUT_DIR/$id.zarr'); print(f'  $id  {z.shape}')"
 done

@@ -24,20 +24,28 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON="${SCRIPT_DIR}/.venv/Scripts/python.exe"
-if [[ "$OSTYPE" != "msys"* && "$OSTYPE" != "win"* ]]; then
+# python + default output dir differ by OS. on linux the zarr lands in $VESUVIUS_ZARR_PATH
+# (the same env var precompute_norm/config read) or /vesuvius/ves_zarrs2; override with --out-dir DIR.
+if [[ "$OSTYPE" == "msys"* || "$OSTYPE" == "win"* ]]; then
+    PYTHON="${SCRIPT_DIR}/.venv/Scripts/python.exe"
+    OUT_DIR="C:/Users/ChenJeff/Documents/ves_zarrs2"
+else
     PYTHON="${SCRIPT_DIR}/.venv/bin/python"
+    OUT_DIR="${VESUVIUS_ZARR_PATH:-/vesuvius/ves_zarrs2}"
 fi
 RENDERER="${SCRIPT_DIR}/old/render_9um_surface.py"
-WORKERS=24
+# default workers = cpu count; override with --workers N
+if command -v nproc >/dev/null 2>&1; then WORKERS="$(nproc)"; else WORKERS="${NUMBER_OF_PROCESSORS:-24}"; fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --workers) WORKERS="$2"; shift 2 ;;
+        --out-dir) OUT_DIR="$2"; shift 2 ;;
         *) echo "unknown arg $1"; exit 1 ;;
     esac
 done
 cd "$SCRIPT_DIR"
-mkdir -p C:/Users/ChenJeff/Documents/ves_zarrs2 masks _ves_tmp/pherc0813_test_chunks
+mkdir -p "$OUT_DIR" masks _ves_tmp/pherc0813_test_chunks
+echo "[assemble] python=$PYTHON  out_dir=$OUT_DIR  workers=$WORKERS"
 
 # the tifxyz root level = the most grown/latest version of the segment
 MESH_DIR="${SCRIPT_DIR}/tifxyz/auto_grown_20260716083545968"
@@ -58,15 +66,15 @@ echo "  this downloads chunks on demand from S3 -- may take 10-30 min depending 
     --vol-shape "16993,7947,7947" \
     --layers 28 \
     --workers "$WORKERS" \
-    --out-zarr "C:/Users/ChenJeff/Documents/ves_zarrs2/20260716083545.zarr" \
+    --out-zarr "$OUT_DIR/20260716083545.zarr" \
     --out-id 20260716083545
 
 echo "=== precomputing normalization stats ==="
-"$PYTHON" precompute_norm.py --scroll-id 20260716083545
+"$PYTHON" precompute_norm.py --scroll-id 20260716083545 --zarr-path "$OUT_DIR"
 
 echo "=== done ==="
 "$PYTHON" -c "
 import zarr
-z = zarr.open('C:/Users/ChenJeff/Documents/ves_zarrs2/20260716083545.zarr')
+z = zarr.open('$OUT_DIR/20260716083545.zarr')
 print(f'  20260716083545  shape={z.shape}  dtype={z.dtype}')
 "
