@@ -186,6 +186,7 @@ class TrainingConfig:
     save_int: int = 10
     log_dir: str = "./runs_p0139_triple"
     eval_int: int = 20
+    eval_int_scrolls: int = 2         # eval figures: render only the FIRST N scrolls (the slow part); probes/test unaffected
     test_int: int = 9999
     probe_int: int = 5               # render probe ROI figures every N epochs; set > n_epochs to disable
     probe_rois_enabled: bool = True

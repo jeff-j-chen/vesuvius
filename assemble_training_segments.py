@@ -1,4 +1,8 @@
-"""assemble_new_fragments.py -- download + assemble new PHerc0139 training fragments.
+"""assemble_training_segments.py -- download + assemble training segments.
+
+mostly PHerc0139 fragments, plus a PHerc0814 segment (seg46527). the surface-volume URL
+and its raw-volume id differ per scroll, so the 9.362um volume name is overridable per
+fragment via FRAG_OPTS['vol9_name'] (defaults to the PHerc0139 constant VOL9_NAME).
 
 per fragment, in order (each step skips if its output already exists):
   1. download 9.362um surface volume (level 0)  -> ves_zarrs2/<id>.zarr + masks/<id>.png
@@ -10,10 +14,10 @@ per fragment, in order (each step skips if its output already exists):
   5. precompute normalization stats
 
 usage:
-  python assemble_new_fragments.py --only w058          # one fragment (pilot)
-  python assemble_new_fragments.py                       # all fragments
-  python assemble_new_fragments.py --from w039           # resume from a fragment
-  python assemble_new_fragments.py --skip-norm           # skip the (slow) norm precompute
+  python assemble_training_segments.py --only w058          # one fragment (pilot)
+  python assemble_training_segments.py                       # all fragments
+  python assemble_training_segments.py --from w039           # resume from a fragment
+  python assemble_training_segments.py --skip-norm           # skip the (slow) norm precompute
 """
 from __future__ import annotations
 import argparse, os, subprocess, sys
@@ -60,6 +64,10 @@ SEGMENTS = [
     # HOLDOUT sanity fragment -- assembled but NOT added to DEFAULT_SCROLLS. exclusive
     # hallucination check: if inference on w055 doesn't match its 1.1um text, we hallucinated.
     ("w055", "PHerc0139/segments/20251226000000-w055_2025122611", "20251226000000"),
+    # PHerc0814 segment (2026-07-22). DIFFERENT scroll -> different surface-volume name
+    # (raw vol 20250804134230, see FRAG_OPTS['vol9_name']). only mask + eroded label exist
+    # (no non-eroded 1um ink), so skip_labels keeps those and just fetches the zarr + norm.
+    ("seg46527", "PHerc0814/segments/20260226000000-46527_2um_try2", "20260226000000"),
 ]
 
 # per-fragment behaviour overrides. the original 4 already have final labels/masks
@@ -71,6 +79,10 @@ FRAG_OPTS = {
     "w047": {"skip_labels": True},
     "w056": {"skip_labels": True},
     "w055": {"holdout": True},
+    # PHerc0814: its surface volume is a different raw scan than the PHerc0139 constant,
+    # and its labels are already final (eroded only), so keep them and only fetch the zarr.
+    "seg46527": {"skip_labels": True,
+                 "vol9_name": "9.362um-1.2m-113keV-volume-20250804134230.zarr"},
 }
 
 # eroded-label generation: ink prob threshold (0-255) then erosion
@@ -92,7 +104,9 @@ def step1_volume(name, seg, zid, workers):
     if os.path.exists(zpath) and os.path.exists(mpath):
         print(f"  [1/5] volume+mask exist -> skip")
         return
-    url = f"{BUCKET}/{seg}/surface-volumes/{VOL9_NAME}"
+    # per-fragment volume name override (non-PHerc0139 scrolls have a different raw vol id)
+    vol9 = FRAG_OPTS.get(name, {}).get("vol9_name", VOL9_NAME)
+    url = f"{BUCKET}/{seg}/surface-volumes/{vol9}"
     run([sys.executable, "old/download_surface_zarr.py",
          "--mode", "volume", "--level", "0",
          "--url", url, "--out-id", zid, "--out-zarr", zpath,

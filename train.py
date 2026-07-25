@@ -82,6 +82,14 @@ class Trainer:
         # setup logging and visualization
         print("Initializing Tensorboard...")
         scroll_ids = self._scroll_ids
+        # will a test/holdout figure ever fire? periodic tests need test_int <= n_epochs;
+        # the one-shot final render needs test_on_final. campaigns set test_int > n_epochs
+        # (e.g. 9999) and no final, so skip opening every test/holdout zarr for nothing.
+        tra = self.c.tra
+        will_test = (tra.test_int <= tra.n_epochs) or bool(getattr(tra, "test_on_final", False))
+        if not will_test:
+            print(f"[test] test_int={tra.test_int} > n_epochs={tra.n_epochs} and "
+                  f"test_on_final={getattr(tra, 'test_on_final', False)} -> skipping test-frag load")
         if len(scroll_ids) > 1:
             # merged training stream: the main visualizer owns the single tensorboard
             # run folder and logs scalar metrics; one figure-visualizer per scroll
@@ -95,10 +103,11 @@ class Trainer:
                 self.scroll_vis[sid] = TensorboardVisualizer(
                     self.c, mode='train', scroll_id=sid,
                     shared_writer=self.vis.writer, tag_prefix=f"s{sid}/",
-                    load_test_frags=(i == 0),   # only primary loads the large test-frag assets
+                    # only primary loads the large test-frag assets, and only if a test can fire
+                    load_test_frags=(i == 0 and will_test),
                 )
         else:
-            self.vis = TensorboardVisualizer(self.c)
+            self.vis = TensorboardVisualizer(self.c, load_test_frags=will_test)
             self.scroll_vis = None
         
         # initialize training components
@@ -530,8 +539,10 @@ class Trainer:
             if getattr(self.c.tra, "test_on_final", False) and (epoch + 1) == self.c.tra.n_epochs:
                 test_due = True
             dense = getattr(self.c.data, 'dense_labels', False)
+            # eval figures are the slow part -> render only the first N scrolls (probes/test unaffected)
+            max_eval_scrolls = getattr(self.c.tra, "eval_int_scrolls", 2)
             for idx, (sid, svis) in enumerate(self.scroll_vis.items()):
-                if eval_due and getattr(svis, 'eval_enabled', True):
+                if eval_due and idx < max_eval_scrolls and getattr(svis, 'eval_enabled', True):
                     try:
                         # dense models produce per-pixel maps -> dense figure; else tile figure.
                         # each per-scroll visualizer loaded its own volume/labels, so the two

@@ -72,8 +72,8 @@ def _base_config(exp_name: str) -> Config:
     c.model.conv1_drop = 0.05
     c.model.conv2_drop = 0.075
     c.model.head_drop  = 0.0
-    c.tra.n_epochs     = 10
-    c.tra.eval_int     = 10
+    c.tra.n_epochs     = 15
+    c.tra.eval_int     = 15
     c.tra.test_int     = 999
     c.tra.probe_int    = 5
     c.tra.save_int     = 2       # save every 2 epochs so a crash doesn't wipe the run (BSODs ongoing)
@@ -97,6 +97,9 @@ def _base_config(exp_name: str) -> Config:
     c.tra.val_cooldown_secs     = 12
     c.tra.eval_cooldown_secs    = 60
     c.tra.fig_chunk_cooldown_ms = 60
+    # SEG46527 ISOLATION: drop PHerc0814 (20260226000000) so training matches the original
+    # 14-scroll tsJd corpus. remove this line to restore the full 15-scroll set.
+    c.data.scrolls = [s for s in c.data.scrolls if int(s.scroll_id) != 20260226000000]
     return c
 
 
@@ -136,37 +139,55 @@ TESTS = [
     #     letter tightly; this tests the eroded-vs-closed tradeoff UNDER the large receptive
     #     field -- an untested combo (the old eroded/closed comparison was scroll1-only, easy
     #     letters + concrete labels; we are now on hard letters + uncertain labels).
-    dict(tid="tsJe", arch="v15_twostage_wide_zgrad_ctx", context_size=32, init_weights=MAE_CKPT,
-         batch_size=32, ring_label_source="eroded",
-         ranking_lambda=0.5, ranking_neg_frac=1.0,
-         flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
-         h_drop=0.5, c1_drop=0.15, c2_drop=0.155,
-         cutout_prob=0.5, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
-         l1=1e-4, tag="ts_gce_vstrongreg_ctx32_eroded_mae"),
+    # dict(tid="tsJe", arch="v15_twostage_wide_zgrad_ctx", context_size=32, init_weights=MAE_CKPT,
+    #      batch_size=32, ring_label_source="eroded",
+    #      ranking_lambda=0.5, ranking_neg_frac=1.0,
+    #      flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
+    #      h_drop=0.5, c1_drop=0.15, c2_drop=0.155,
+    #      cutout_prob=0.5, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
+    #      l1=1e-4, tag="ts_gce_vstrongreg_ctx32_eroded_mae"),
 
     # (2) tsJd (closed ring) but a COARSER context at the SAME 32px extent: avg-pool the input
     #     2x (context_downsample=2) so the model keeps the full context window but at half
     #     resolution -> ~1/4 the activations (near-plain compute), smaller overfit surface, and
     #     it should stop the big-fragment inference OOM. tradeoff: the center tile is coarsened too.
-    dict(tid="tsJf", arch="v15_twostage_wide_zgrad_ctx", context_size=32, context_downsample=2,
-         init_weights=MAE_CKPT, batch_size=32,
+    # dict(tid="tsJf", arch="v15_twostage_wide_zgrad_ctx", context_size=32, context_downsample=2,
+    #      init_weights=MAE_CKPT, batch_size=32,
+    #      ranking_lambda=0.5, ranking_neg_frac=1.0,
+    #      flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
+    #      h_drop=0.5, c1_drop=0.15, c2_drop=0.155,
+    #      cutout_prob=0.5, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
+    #      l1=1e-4, tag="ts_gce_vstrongreg_ctx32ds2_closed_mae"),
+
+    # ==== SEG46527 ISOLATION (5 epochs, probes only, NO eval figs, seg46527 dropped in _base_config) ====
+    #      reproduce the original good runs on the 14-scroll corpus to rule out the added PHerc0814
+    #      fragment. tsJdISO = ctx32 (matches tsJd); tsJISO = no-context (matches tsJ, which performed well).
+    dict(tid="tsJdISO", arch="v15_twostage_wide_zgrad_ctx", context_size=32, init_weights=MAE_CKPT,
+         batch_size=32, n_epochs=5, eval_int=999, probe_int=5,
          ranking_lambda=0.5, ranking_neg_frac=1.0,
          flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
-         h_drop=0.5, c1_drop=0.15, c2_drop=0.155,
-         cutout_prob=0.5, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
-         l1=1e-4, tag="ts_gce_vstrongreg_ctx32ds2_closed_mae"),
+         h_drop=0.4, c1_drop=0.15, c2_drop=0.155,
+         cutout_prob=0.4, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
+         l1=7e-5, tag="ctx32d_ISO_noseg_lowerreg"),
+    # dict(tid="tsJISO", arch="v15_twostage_wide_zgrad", context_size=0, init_weights=MAE_CKPT,
+    #      n_epochs=5, eval_int=999, probe_int=5,
+    #      ranking_lambda=0.5, ranking_neg_frac=1.0,
+    #      flip=0.55, rotation=0.55, noise=0.2, brightness=0.5, contrast=0.5,
+    #      h_drop=0.4, c1_drop=0.15, c2_drop=0.15,
+    #      cutout_prob=0.4, cutout_max_frac=0.15, cutout_n_patches=2, depth_mask_prob=0.0,
+    #      l1=7e-5, tag="noctx_ISO_noseg"),
 
     # (3) tsJd (closed ring) but FOVEATED context: full-res central tile + coarse full-extent
     #     surround, fused before MIL. keeps the middle at full 10um resolution (where the letter
     #     detail lives; prior models resolved ink at 1-2um) while still giving the convs the wider
     #     context. ~2x plain-tile compute (two tile passes) vs ~4x for full-res ctx32.
-    dict(tid="tsJg", arch="v15_twostage_wide_zgrad_fovea", context_size=32,
-         init_weights=MAE_CKPT, batch_size=32,
-         ranking_lambda=0.5, ranking_neg_frac=1.0,
-         flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
-         h_drop=0.5, c1_drop=0.15, c2_drop=0.155,
-         cutout_prob=0.5, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
-         l1=1e-4, tag="ts_gce_vstrongreg_ctx32fovea_closed_mae"),
+    # dict(tid="tsJg", arch="v15_twostage_wide_zgrad_fovea", context_size=32,
+    #      init_weights=MAE_CKPT, batch_size=32,
+    #      ranking_lambda=0.5, ranking_neg_frac=1.0,
+    #      flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
+    #      h_drop=0.5, c1_drop=0.15, c2_drop=0.15,
+    #      cutout_prob=0.5, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
+    #      l1=1e-4, tag="ts_gce_vstrongreg_ctx32fovea_closed_mae"),
 
     # (4) [NOT YET ACTIVE] regularization run: take the RF winner from tsJe/tsJf/tsJg, then turn
     #     ON the two new regularizers -- AdamW weight decay + TTA-consistency. fill in the winning
@@ -189,6 +210,7 @@ _OVERRIDES = {
     "arch":             ("model", "arch"),
     "n_epochs":         ("tra", "n_epochs"),
     "eval_int":         ("tra", "eval_int"),
+    "eval_int_scrolls": ("tra", "eval_int_scrolls"),
     "test_int":         ("tra", "test_int"),
     "probe_int":        ("tra", "probe_int"),
     "l1":               ("tra", "l1_lambda"),

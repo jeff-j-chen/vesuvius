@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # assemble_test_zarr.sh -- render the 5 competition test-segment zarrs from their tifxyz meshes
 # (PHerc0813, PHerc0211 x2, PHerc1203, PHerc1447). the w055 HOLDOUT is a PHerc0139 segment and is
-# assembled by assemble_new_fragments.py (download path), not here.
+# assembled by assemble_training_segments.py (download path), not here.
 #
 # the tifxyz mesh is stored in:
 #   tifxyz/auto_grown_20260716083545968/   <- root level = latest state (max_gen=179)
