@@ -172,7 +172,18 @@ class DataloaderConfig:
     noise_prob: float = 0.30
     brightness_prob: float = 0.50
     contrast_prob: float = 0.50
-
+    # --- augmentation MAGNITUDES (were hardcoded in dataloader.Transform; now tracked here) ---
+    # brightness/contrast: factor ~ uniform(1-delta, 1+delta), one shared factor across depth.
+    brightness_delta: float = 0.15
+    contrast_delta: float = 0.15
+    # gaussian noise: per-voxel std ~ uniform(noise_std_min, noise_std_max) on [0,1] data.
+    noise_std_min: float = 0.001
+    noise_std_max: float = 0.005
+    # specaugment-style masking (were untracked loose attrs; declared so they hit config.json).
+    cutout_prob: float = 0.0        # prob of applying XY cutout patches to a block
+    cutout_max_frac: float = 0.35   # each patch side up to this fraction of H/W
+    cutout_n_patches: int = 1       # number of cutout patches per block
+    depth_mask_prob: float = 0.0    # per-depth-slice independent zero-out probability
 
 @dataclass
 class TrainingConfig:
@@ -205,7 +216,7 @@ class TrainingConfig:
     tta_consistency_lambda: float = 0.5   # weight of the consistency term (sane default when enabled)
     tta_consistency_mode: str = "flips"   # "flips" = random h/v/180 flip per step (label-natural for text)
     seed: int = 41                   # base RNG seed (torch/cuda/numpy/random + dataloader workers)
-    deterministic: bool = False      # True = exact reproducibility (cudnn deterministic, no benchmark);
+    deterministic: bool = True      # True = exact reproducibility (cudnn deterministic, no benchmark);
                                      # costs ~10-20% speed. False = fast path (cudnn benchmark, GPU atomics
                                      # -> tiny run-to-run differences even with a fixed seed)
     epoch_cooldown_secs: int = 9

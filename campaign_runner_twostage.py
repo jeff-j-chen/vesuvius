@@ -131,7 +131,7 @@ TESTS = [
     #      flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
     #      h_drop=0.5, c1_drop=0.15, c2_drop=0.155,
     #      cutout_prob=0.5, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
-    #      l1=1e-4, tag="ts_gce_vstrongreg_ctx32d_mae"),
+    #      l1=1e-4, tag=" "),
 
     # NEXT CAMPAIGN: two single-variable changes off the tsJd config (everything else identical).
 
@@ -162,20 +162,20 @@ TESTS = [
     # ==== SEG46527 ISOLATION (5 epochs, probes only, NO eval figs, seg46527 dropped in _base_config) ====
     #      reproduce the original good runs on the 14-scroll corpus to rule out the added PHerc0814
     #      fragment. tsJdISO = ctx32 (matches tsJd); tsJISO = no-context (matches tsJ, which performed well).
+    dict(tid="tsJISO", arch="v15_twostage_wide_zgrad", context_size=0, init_weights=MAE_CKPT,
+         n_epochs=15, eval_int=999, probe_int=5,
+         ranking_lambda=0.5, ranking_neg_frac=1.0,
+         flip=0.55, rotation=0.55, noise=0.2, brightness=0.5, contrast=0.5,
+         h_drop=0.4, c1_drop=0.15, c2_drop=0.15,
+         cutout_prob=0.4, cutout_max_frac=0.15, cutout_n_patches=2, depth_mask_prob=0.0,
+         l1=7e-5, tag="noctx_ISO_noseg_homepc"),
     dict(tid="tsJdISO", arch="v15_twostage_wide_zgrad_ctx", context_size=32, init_weights=MAE_CKPT,
-         batch_size=32, n_epochs=5, eval_int=999, probe_int=5,
+         batch_size=32, n_epochs=15, eval_int=999, probe_int=5,
          ranking_lambda=0.5, ranking_neg_frac=1.0,
          flip=0.6, rotation=0.6, noise=0.3, brightness=0.6, contrast=0.6,
-         h_drop=0.4, c1_drop=0.15, c2_drop=0.155,
+         h_drop=0.4, c1_drop=0.15, c2_drop=0.15,
          cutout_prob=0.4, cutout_max_frac=0.2, cutout_n_patches=2, depth_mask_prob=0.0,
-         l1=7e-5, tag="ctx32d_ISO_noseg_lowerreg"),
-    # dict(tid="tsJISO", arch="v15_twostage_wide_zgrad", context_size=0, init_weights=MAE_CKPT,
-    #      n_epochs=5, eval_int=999, probe_int=5,
-    #      ranking_lambda=0.5, ranking_neg_frac=1.0,
-    #      flip=0.55, rotation=0.55, noise=0.2, brightness=0.5, contrast=0.5,
-    #      h_drop=0.4, c1_drop=0.15, c2_drop=0.15,
-    #      cutout_prob=0.4, cutout_max_frac=0.15, cutout_n_patches=2, depth_mask_prob=0.0,
-    #      l1=7e-5, tag="noctx_ISO_noseg"),
+         l1=7e-5, tag="ctx32d_ISO_noseg_lowerreg_homepc"),
 
     # (3) tsJd (closed ring) but FOVEATED context: full-res central tile + coarse full-extent
     #     surround, fused before MIL. keeps the middle at full 10um resolution (where the letter
@@ -242,6 +242,10 @@ _OVERRIDES = {
     "noise":            ("dl", "noise_prob"),
     "brightness":       ("dl", "brightness_prob"),
     "contrast":         ("dl", "contrast_prob"),
+    "brightness_delta": ("dl", "brightness_delta"),
+    "contrast_delta":   ("dl", "contrast_delta"),
+    "noise_std_min":    ("dl", "noise_std_min"),
+    "noise_std_max":    ("dl", "noise_std_max"),
     "cutout_prob":      ("dl", "cutout_prob"),
     "cutout_max_frac":  ("dl", "cutout_max_frac"),
     "cutout_n_patches": ("dl", "cutout_n_patches"),

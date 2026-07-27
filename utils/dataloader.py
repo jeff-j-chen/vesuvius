@@ -117,6 +117,11 @@ class Transform:
         self.noise_prob = float(getattr(config.dl, "noise_prob", 0.30))
         self.brightness_prob = float(getattr(config.dl, "brightness_prob", 0.50))
         self.contrast_prob = float(getattr(config.dl, "contrast_prob", 0.50))
+        # augmentation magnitudes (config-tracked; see DataloaderConfig)
+        self.brightness_delta = float(getattr(config.dl, "brightness_delta", 0.15))
+        self.contrast_delta   = float(getattr(config.dl, "contrast_delta", 0.15))
+        self.noise_std_min    = float(getattr(config.dl, "noise_std_min", 0.001))
+        self.noise_std_max    = float(getattr(config.dl, "noise_std_max", 0.005))
         # specaugment-style masking
         self.cutout_prob      = float(getattr(config.dl, "cutout_prob", 0.0))
         self.cutout_max_frac  = float(getattr(config.dl, "cutout_max_frac", 0.35))
@@ -178,13 +183,13 @@ class Transform:
     def _apply_brightness_adjustment(self, block):
         """applies ONE brightness factor to the whole block (shared across depth).
         per-depth factors distort the through-depth intensity profile the model keys on."""
-        factor = random.uniform(0.8, 1.2)
+        factor = random.uniform(1.0 - self.brightness_delta, 1.0 + self.brightness_delta)
         return np.clip(block * factor, 0, 1)
     
     def _apply_contrast_adjustment(self, block):
         """applies ONE contrast factor across all depth slices (shared factor; per-slice
         mean preserved) so the depth profile is scaled uniformly, not warped per slice."""
-        factor = random.uniform(0.8, 1.2)
+        factor = random.uniform(1.0 - self.contrast_delta, 1.0 + self.contrast_delta)
         adj_block = block.copy()
         for i in range(block.shape[0]):
             channel = block[i]
@@ -194,7 +199,7 @@ class Transform:
     
     def _apply_gaussian_noise(self, block):
         """applies gaussian noise to each channel independently"""
-        std = random.uniform(0.005, 0.015)
+        std = random.uniform(self.noise_std_min, self.noise_std_max)
         noise = np.random.normal(0, std, block.shape)
         return np.clip(block + noise, 0, 1)
     

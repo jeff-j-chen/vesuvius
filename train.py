@@ -109,7 +109,11 @@ class Trainer:
         else:
             self.vis = TensorboardVisualizer(self.c, load_test_frags=will_test)
             self.scroll_vis = None
-        
+
+        # persist the EXACT resolved config into this run's tensorboard folder (config.json)
+        # + a TB "Text" tab, so every run is fully reproducible from its own dir.
+        self._dump_run_config()
+
         # initialize training components
         self.scaler = GradScaler()
         self.hard_manager = HardMiningManager(self.c.hm.dir)
@@ -214,6 +218,26 @@ class Trainer:
         
         print(f" done in {time.time() - start_time:.2f}s")
         return model, params, optimizer, scheduler, criterion
+
+    def _dump_run_config(self):
+        """write the full resolved config as config.json into this run's tensorboard dir and add
+        it to the TB 'Text' tab, so every run is reproducible from its own folder. best-effort --
+        config logging must never break a training run."""
+        import json, dataclasses
+        try:
+            run_dir = getattr(self.vis, "log_path", None) or getattr(self.vis.writer, "log_dir", None)
+            if not run_dir:
+                print("[config] no run dir resolved -- skipping config dump", flush=True)
+                return
+            cfg = dataclasses.asdict(self.c) if dataclasses.is_dataclass(self.c) else vars(self.c)
+            txt = json.dumps(cfg, indent=2, default=str, sort_keys=True)
+            os.makedirs(run_dir, exist_ok=True)
+            with open(os.path.join(run_dir, "config.json"), "w", encoding="utf-8") as f:
+                f.write(txt)
+            self.vis.writer.add_text("config", "```json\n" + txt + "\n```", 0)
+            print(f"[config] saved run config -> {os.path.join(run_dir, 'config.json')}", flush=True)
+        except Exception as e:
+            print(f"[config] WARN could not dump run config: {e}", flush=True)
 
     def _train_batch(self, b_imgs, b_labels, mask):
         """trains the model on a single batch of data"""

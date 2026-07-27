@@ -22,7 +22,7 @@ usage:
      --url ".../1.129um-0.22m-59keV-volume-20260413113053-L1.zarr"
 """
 from __future__ import annotations
-import argparse, json, os, shutil, subprocess, sys
+import argparse, json, os, shutil, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from PIL import Image
@@ -55,23 +55,43 @@ def _get_json(url):
     return json.loads(r.stdout.decode("utf-8"))
 
 
+def _curl_code(url, out, tries=3):
+    """curl one url -> out, returning the HTTP status code as a string. retries TRANSIENT
+    failures (5xx / timeout / connection reset) with backoff, but never retries a 404, and
+    leaves NO file behind on any non-200 (removes 404 error-xml / partial bodies). this
+    http-code-aware classification is what stops a transient failure from being silently
+    treated as an 'air' (blank) chunk -- the bug that corrupted the aria2c/runpod volumes."""
+    code = "000"
+    for _i in range(max(1, tries)):
+        r = subprocess.run(
+            ["curl", "-s", "--connect-timeout", "20", "--max-time", "120",
+             "-o", out, "-w", "%{http_code}", url], capture_output=True)
+        code = (r.stdout.decode("utf-8", "ignore").strip() or "000")[-3:]
+        if code == "200":
+            return code
+        if os.path.exists(out):
+            try: os.remove(out)
+            except OSError: pass
+        if code == "404":
+            return code
+        time.sleep(1)                 # transient -> brief backoff, then retry
+    return code
+
+
 def _fetch_chunk(args):
-    """download one chunk file to cache. 404 (air) -> empty sentinel. returns (yc,xc,status)."""
+    """download one chunk. 200 -> data file; 404 -> zero-byte air sentinel; any OTHER failure
+    -> NO file left, so _verify_repair re-checks/aborts instead of silently blanking it."""
     base, level, yc, xc, cache_dir = args
     out = os.path.join(cache_dir, f"{level}_{yc}_{xc}.raw")
     if os.path.exists(out):
         return (yc, xc, "cached")
-    url = f"{base}/{level}/0/{yc}/{xc}"
-    # NO --retry-all-errors: a 404 here is an EXPECTED air chunk (sparse surface in a rect bbox);
-    # retrying it burned ~4x2s each and dominated runtime. --retry still covers transient 5xx/timeouts.
-    r = subprocess.run(
-        ["curl", "-s", "--fail", "--connect-timeout", "20", "--max-time", "120",
-         "--retry", "3", "--retry-delay", "1", url, "-o", out],
-        capture_output=True)
-    if r.returncode != 0:
-        open(out, "wb").close()   # air sentinel
+    code = _curl_code(f"{base}/{level}/0/{yc}/{xc}", out)
+    if code == "200":
+        return (yc, xc, "ok")
+    if code == "404":
+        open(out, "wb").close()       # confirmed air
         return (yc, xc, "air")
-    return (yc, xc, "ok")
+    return (yc, xc, "fail")           # transient -> leave missing for _verify_repair
 
 
 def _load_chunk(cache_dir, level, yc, xc, D):
@@ -85,49 +105,80 @@ def _load_chunk(cache_dir, level, yc, xc, D):
 
 
 def _aria2_fetch(base, level, jobs, cache_dir, workers):
-    """batch-download all chunks with ONE aria2c process (connection reuse + -j parallel files).
-    hugely faster than spawning one curl per tiny chunk. returns False if aria2c is not on PATH
-    (caller falls back to the curl loop). a 404 = expected air chunk -> gets a zero-byte sentinel
-    so re-runs skip it and the assembler treats it as air."""
+    """bulk-download all not-yet-cached chunks with ONE aria2c process (fast, connection reuse).
+    aria2c CANNOT distinguish a 404 from a transient failure, so it writes NO air sentinels here
+    -- _verify_repair afterwards http-code-classifies everything aria2c left missing. returns
+    False if aria2c is not on PATH (caller uses the per-chunk curl path instead)."""
     if shutil.which("aria2c") is None:
         return False
-    # queue only chunks not already cached (a real file OR an air sentinel both count as done)
     todo = [(f"{base}/{level}/0/{yc}/{xc}", f"{level}_{yc}_{xc}.raw")
             for (_b, _lvl, yc, xc, _cd) in jobs
             if not os.path.exists(os.path.join(cache_dir, f"{level}_{yc}_{xc}.raw"))]
-    if todo:
-        listfile = os.path.join(cache_dir, "_aria2_urls.txt")
-        with open(listfile, "w") as f:
-            for url, name in todo:
-                f.write(f"{url}\n  dir={cache_dir}\n  out={name}\n")
-        # -j parallel files; -x1/-s1 (chunks are tiny, no splitting). -q + --download-result=hide
-        # SILENCE aria2c: most chunks 404 (= expected air), and its per-URL error lines + the final
-        # results table would spam thousands of lines. we print a one-line summary below instead.
-        j = max(1, min(int(workers), 64))
-        print(f"[dl] aria2c: fetching {len(todo)} chunks with -j{j} (404s = air, output silenced)...", flush=True)
-        subprocess.run(
-            ["aria2c", "-i", listfile, f"-j{j}", "-x1", "-s1",
-             "--max-tries=2", "--retry-wait=1", "--connect-timeout=20", "--timeout=120",
-             "--auto-file-renaming=false", "--allow-overwrite=true",
-             "-q", "--download-result=hide"],
-            check=False)
-        try:
-            os.remove(listfile)
-        except OSError:
-            pass
-    # zero-byte air sentinel for anything still missing; tally real vs air for a one-line summary
-    real = air = 0
+    if not todo:
+        return True
+    listfile = os.path.join(cache_dir, "_aria2_urls.txt")
+    with open(listfile, "w") as f:
+        for url, name in todo:
+            f.write(f"{url}\n  dir={cache_dir}\n  out={name}\n")
+    j = max(1, min(int(workers), 64))
+    print(f"[dl] aria2c: bulk-fetching {len(todo)} chunks with -j{j} (missing chunks verified below)...", flush=True)
+    subprocess.run(
+        ["aria2c", "-i", listfile, f"-j{j}", "-x1", "-s1",
+         "--max-tries=2", "--retry-wait=1", "--connect-timeout=20", "--timeout=120",
+         "--auto-file-renaming=false", "--allow-overwrite=true",
+         "-q", "--download-result=hide"],
+        check=False)
+    try:
+        os.remove(listfile)
+    except OSError:
+        pass
+    return True
+
+
+def _verify_repair(base, level, jobs, cache_dir, D, workers):
+    """CORRECTNESS GATE. verify every expected chunk is EITHER a correctly-sized data file OR a
+    confirmed-404 air chunk (zero-byte sentinel). anything missing or wrong-sized is re-fetched
+    with an http-code-aware curl and classified 200->data / 404->air / else->hard failure. raises
+    RuntimeError if any chunk cannot be resolved -- we refuse to assemble a silently-blanked
+    volume (better to fail loudly and retry than train on corrupt data). returns (data, air)."""
+    expected = D * CHUNK_XY * CHUNK_XY
+    need = []
+    data_n = air_n = 0
     for (_b, _lvl, yc, xc, _cd) in jobs:
         p = os.path.join(cache_dir, f"{level}_{yc}_{xc}.raw")
-        if not os.path.exists(p):
-            open(p, "wb").close()
-            air += 1
-        elif os.path.getsize(p) > 0:
-            real += 1
-        else:
-            air += 1
-    print(f"[dl] aria2c done: {real} data chunks + {air} air (blank) chunks", flush=True)
-    return True
+        if os.path.exists(p):
+            sz = os.path.getsize(p)
+            if sz == expected:
+                data_n += 1; continue          # valid data
+            if sz == 0:
+                air_n += 1; continue           # confirmed-404 air sentinel
+            try: os.remove(p)                  # partial/corrupt -> re-fetch
+            except OSError: pass
+        need.append((yc, xc))
+    if need:
+        print(f"[dl] verify: re-checking {len(need)} missing/partial chunk(s) with http-code...", flush=True)
+        def _chk(coord):
+            yc, xc = coord
+            p = os.path.join(cache_dir, f"{level}_{yc}_{xc}.raw")
+            code = _curl_code(f"{base}/{level}/0/{yc}/{xc}", p, tries=4)
+            if code == "200" and os.path.exists(p) and os.path.getsize(p) == expected:
+                return (coord, "data")
+            if code == "404":
+                open(p, "wb").close()
+                return (coord, "air")
+            return (coord, f"ERR:{code}")
+        results = {}
+        with ThreadPoolExecutor(max_workers=max(1, min(int(workers), 32))) as ex:
+            for coord, status in ex.map(_chk, need):
+                results[coord] = status
+        errs = [(c, s) for c, s in results.items() if s.startswith("ERR")]
+        if errs:
+            raise RuntimeError(
+                f"[dl] {len(errs)} chunk(s) failed to download for a NON-404 reason, e.g. {errs[:5]}. "
+                f"refusing to assemble a blanked volume -- re-run to retry (S3 may be rate-limiting).")
+        data_n += sum(1 for s in results.values() if s == "data")
+        air_n += sum(1 for s in results.values() if s == "air")
+    return data_n, air_n
 
 
 def download(base, level, mode, out_zarr, out_png, out_id, workers, cache_dir):
@@ -143,16 +194,18 @@ def download(base, level, mode, out_zarr, out_png, out_id, workers, cache_dir):
     print(f"[dl] fetching {len(jobs)} chunks ({n_yc}x{n_xc}) with {workers} workers "
           f"(~{len(jobs) * D * CHUNK_XY * CHUNK_XY / 1e9:.1f} GB max)")
     # fast path: single aria2c process (connection reuse). falls back to per-chunk curl if absent.
-    if _aria2_fetch(base, level, jobs, cache_dir, workers):
-        print("[dl] aria2c batch fetch complete", flush=True)
-    else:
+    if not _aria2_fetch(base, level, jobs, cache_dir, workers):
         done = 0
         with ThreadPoolExecutor(max_workers=workers) as ex:
             for _ in ex.map(_fetch_chunk, jobs):
                 done += 1
                 if done % 500 == 0:
                     print(f"[dl] fetched {done}/{len(jobs)}", flush=True)
-    print(f"[dl] all {len(jobs)} chunks present", flush=True)
+    # CORRECTNESS GATE: verify every chunk is valid data or a confirmed-404 air chunk, re-fetching
+    # anything missing/partial and ABORTING on a non-404 failure. this is what stops a transient
+    # download error from being silently baked into the volume as a blank region.
+    data_n, air_n = _verify_repair(base, level, jobs, cache_dir, D, workers)
+    print(f"[dl] all {len(jobs)} chunks verified: {data_n} data + {air_n} air (blank)", flush=True)
 
     if mode == "midslice":
         zc_plane = D // 2
