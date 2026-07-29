@@ -1928,20 +1928,33 @@ class TensorboardVisualizer:
                 full_y_range,
                 full_x_range,
             )
-            per_depth_metrics = []
-            depth_labels = []
+            # split the tile-grid maps into train/valid along the split axis so readability is
+            # reported PER SPLIT (the combined region was ~75% train, masking the valid signal).
+            # each depth's TTA map (all_tta_data, from the same read) yields the *_tta groups.
+            n_split = (self.train_range[1] - self.train_range[0]) // self.c.data.tile_size
+            _ax = "y" if getattr(self, "split_axis", "x") == "y" else "x"
+            def _sp(m):
+                return (m[:n_split], m[n_split:]) if _ax == "y" else (m[:, :n_split], m[:, n_split:])
+            lb_t, lb_v = _sp(label_binary); lf_t, lf_v = _sp(label_fraction); vt_t, vt_v = _sp(valid_tiles)
 
-            for pred_data in all_pred_data:
-                depth_start = pred_data[2]
-                depth_end = pred_data[3]
+            depth_labels = [f"{pd[2]}-{pd[3]}" for pd in all_pred_data]
+            groups = {"Train": [], "Valid": [], "Train_tta": [], "Valid_tta": []}
+            for i, pd in enumerate(all_pred_data):
+                rp = pd[0]
+                tp = all_tta_data[i] if (i < len(all_tta_data) and all_tta_data[i] is not None) else rp
+                rp_t, rp_v = _sp(rp); tp_t, tp_v = _sp(tp)
+                groups["Train"].append(self._compute_readability_metrics(rp_t, lb_t, lf_t, vt_t))
+                groups["Valid"].append(self._compute_readability_metrics(rp_v, lb_v, lf_v, vt_v))
+                groups["Train_tta"].append(self._compute_readability_metrics(tp_t, lb_t, lf_t, vt_t))
+                groups["Valid_tta"].append(self._compute_readability_metrics(tp_v, lb_v, lf_v, vt_v))
+            group_aggr = {k: self._aggregate_metric_dicts(v) for k, v in groups.items()}
 
-                per_depth_metrics.append(
-                    self._compute_readability_metrics(pred_data[0], label_binary, label_fraction, valid_tiles)
-                )
-                depth_labels.append(f"{depth_start}-{depth_end}")
-
-            aggregate_metrics = self._aggregate_metric_dicts(per_depth_metrics)
-            self._log_readability_metrics(epoch, aggregate_metrics, per_depth_metrics, depth_labels)
+            for gname, aggr in group_aggr.items():
+                self._log_readability_scalars(epoch, aggr, gname)
+            self._log_readability_compass(epoch, group_aggr)
+            # per-depth summary heatmap for the train split (representative)
+            _sumfig = self._create_readability_summary_figure(group_aggr["Train"], groups["Train"], depth_labels)
+            self.writer.add_figure("Readability/Summary", _sumfig, epoch); plt.close(_sumfig)
 
             if getattr(self.c.tra, "eval_aggregate", True):
                 train_split_n = (self.train_range[1] - self.train_range[0]) // self.c.data.tile_size
@@ -2630,36 +2643,36 @@ class TensorboardVisualizer:
         plt.subplots_adjust(wspace=0.05, hspace=0.18, left=0.03, right=0.97, top=0.97, bottom=0.03)
         return fig
 
-    def _log_readability_metrics(self, epoch, aggregate_metrics, per_depth_metrics, depth_labels):
-        """log readability-aligned scalar and figure summaries"""
+    def _log_readability_scalars(self, epoch, aggregate_metrics, prefix):
+        """log the readability scalar set for one split/tta group under R_M/<prefix>/* (prefix is
+        Train / Valid / Train_tta / Valid_tta)."""
         if not aggregate_metrics:
             return
-
+        p = f"R_M/{prefix}"
         scalar_tags = {
-            "R_M/LocalContrast":            aggregate_metrics.get("local_contrast", np.nan),
-            "R_M/LocalRanking":             aggregate_metrics.get("local_ranking", np.nan),
-            "R_M/RecallAt1PctFPR":          aggregate_metrics.get("recall_at_1pct_fpr", np.nan),
-            "R_M/PartialAUCAt1PctFPR":      aggregate_metrics.get("partial_auc_at_1pct_fpr", np.nan),
-            "R_M/RecallAt5PctFPR":          aggregate_metrics.get("recall_at_5pct_fpr", np.nan),
-            "R_M/PartialAUCAt5PctFPR":      aggregate_metrics.get("partial_auc_at_5pct_fpr", np.nan),
-            "R_M/CoverageRecall":           aggregate_metrics.get("coverage_recall", np.nan),
-            "R_M/TopKPrecision":            aggregate_metrics.get("topk_precision", np.nan),
-            "R_M/InkFractionSpearman":      aggregate_metrics.get("ink_fraction_corr_spearman", np.nan),
-            "R_M/SpillRatio":               aggregate_metrics.get("spill_ratio", np.nan),
-            "R_M/ComponentCount":           aggregate_metrics.get("component_count", np.nan),
-            "R_M/MeanComponentSize":        aggregate_metrics.get("mean_component_size", np.nan),
-            "R_M/ReadabilityComposite":     aggregate_metrics.get("readability_composite", np.nan),
+            f"{p}/LocalContrast":         aggregate_metrics.get("local_contrast", np.nan),
+            f"{p}/LocalRanking":          aggregate_metrics.get("local_ranking", np.nan),
+            f"{p}/RecallAt1PctFPR":       aggregate_metrics.get("recall_at_1pct_fpr", np.nan),
+            f"{p}/PartialAUCAt1PctFPR":   aggregate_metrics.get("partial_auc_at_1pct_fpr", np.nan),
+            f"{p}/RecallAt5PctFPR":       aggregate_metrics.get("recall_at_5pct_fpr", np.nan),
+            f"{p}/PartialAUCAt5PctFPR":   aggregate_metrics.get("partial_auc_at_5pct_fpr", np.nan),
+            f"{p}/CoverageRecall":        aggregate_metrics.get("coverage_recall", np.nan),
+            f"{p}/TopKPrecision":         aggregate_metrics.get("topk_precision", np.nan),
+            f"{p}/InkFractionSpearman":   aggregate_metrics.get("ink_fraction_corr_spearman", np.nan),
+            f"{p}/SpillRatio":            aggregate_metrics.get("spill_ratio", np.nan),
+            f"{p}/ComponentCount":        aggregate_metrics.get("component_count", np.nan),
+            f"{p}/MeanComponentSize":     aggregate_metrics.get("mean_component_size", np.nan),
+            f"{p}/ReadabilityComposite":  aggregate_metrics.get("readability_composite", np.nan),
         }
-
         for tag, value in scalar_tags.items():
             if np.isfinite(value):
                 self.writer.add_scalar(tag, float(value), epoch)
 
-        fig = self._create_readability_summary_figure(aggregate_metrics, per_depth_metrics, depth_labels)
-        self.writer.add_figure("Readability/Summary", fig, epoch)
-        plt.close(fig)
-
-        fig = self._create_readability_compass_figure(aggregate_metrics, per_depth_metrics, depth_labels)
+    def _log_readability_compass(self, epoch, group_aggr):
+        """one radar chart with a series per split/tta group (Train/Valid/Train_tta/Valid_tta)."""
+        if not group_aggr:
+            return
+        fig = self._create_readability_compass_figure(group_aggr)
         self.writer.add_figure("Readability/Compass", fig, epoch)
         plt.close(fig)
 
@@ -2699,8 +2712,8 @@ class TensorboardVisualizer:
             "readability_composite":      0.60,
         }
 
-    def _create_readability_compass_figure(self, aggregate_metrics, per_depth_metrics, depth_labels):
-        """create a readability-focused radar chart using normalized readability terms"""
+    def _create_readability_compass_figure(self, group_aggr):
+        """radar chart of the readability terms, one series per split/tta group."""
         categories = [
             "local contrast",
             "local ranking",
@@ -2714,23 +2727,10 @@ class TensorboardVisualizer:
 
         fig, ax = plt.subplots(1, 1, figsize=(8, 8), subplot_kw={"projection": "polar"})
 
-        series = [
-            ("aggregate", self._readability_compass_values(aggregate_metrics), "teal"),
-        ]
-
-        best_idx = None
-        best_value = float("-inf")
-        for idx, metrics in enumerate(per_depth_metrics):
-            value = float(np.nan_to_num(metrics.get("readability_composite", np.nan), nan=-1.0))
-            if value > best_value:
-                best_value = value
-                best_idx = idx
-
-        if best_idx is not None:
-            best_label = "best depth"
-            if best_idx < len(depth_labels):
-                best_label = f"best depth ({depth_labels[best_idx]})"
-            series.append((best_label, self._readability_compass_values(per_depth_metrics[best_idx]), "darkorange"))
+        _colors = {"Train": "teal", "Valid": "darkorange",
+                   "Train_tta": "steelblue", "Valid_tta": "crimson"}
+        series = [(name, self._readability_compass_values(aggr), _colors.get(name, "gray"))
+                  for name, aggr in group_aggr.items()]
 
         self._plot_radar_chart(
             ax,
@@ -2869,6 +2869,18 @@ class TensorboardVisualizer:
                     if np.isfinite(value):
                         self.writer.add_scalar(key, float(value), epoch)
 
+            aggregate_tta = probe_data.get("aggregate_metrics_tta")
+            if aggregate_tta:
+                probe_tag = spec["tag"]
+                for key, value in {
+                    f"R_M/Probe/{probe_tag}/tta/LocalContrast":        aggregate_tta.get("local_contrast", np.nan),
+                    f"R_M/Probe/{probe_tag}/tta/CoverageRecall":       aggregate_tta.get("coverage_recall", np.nan),
+                    f"R_M/Probe/{probe_tag}/tta/RecallAt5PctFPR":      aggregate_tta.get("recall_at_5pct_fpr", np.nan),
+                    f"R_M/Probe/{probe_tag}/tta/ReadabilityComposite": aggregate_tta.get("readability_composite", np.nan),
+                }.items():
+                    if np.isfinite(value):
+                        self.writer.add_scalar(key, float(value), epoch)
+
         if probe_data_list:
             fig = self._create_combined_probe_depth_figure(probe_data_list)
             # patch the epoch number into the suptitle (avoids passing epoch deep into the figure method)
@@ -2930,6 +2942,7 @@ class TensorboardVisualizer:
             )
 
             metrics = self._compute_readability_metrics(pred, label_binary, label_fraction, valid_tiles)
+            metrics_tta = self._compute_readability_metrics(pred_tta, label_binary, label_fraction, valid_tiles)
             depth_rows.append(
                 {
                     "depth_start": depth_start,
@@ -2937,15 +2950,18 @@ class TensorboardVisualizer:
                     "pred": pred,
                     "pred_tta": pred_tta,
                     "metrics": metrics,
+                    "metrics_tta": metrics_tta,
                 }
             )
 
         aggregate_metrics = self._aggregate_metric_dicts([row["metrics"] for row in depth_rows])
+        aggregate_metrics_tta = self._aggregate_metric_dicts([row["metrics_tta"] for row in depth_rows])
         return {
             "spec": spec,
             "label_binary": label_binary,
             "depth_rows": depth_rows,
             "aggregate_metrics": aggregate_metrics,
+            "aggregate_metrics_tta": aggregate_metrics_tta,
             "x0": x0,
             "y0": y0,
             "size": size,
