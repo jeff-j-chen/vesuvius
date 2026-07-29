@@ -95,6 +95,54 @@ class _RegionCache:
         return self.vol[idx]   # outside the cached box (shouldn't happen for a probe)
 
 
+def _process_chunk(valid, pmap, pmap_tta, model, device, tile, h_small, w_small, 
+                   transforms, collapse_fn, infer_bs, also_tta, tta):
+    """helper for predict_tiles: run inference on a chunk of tiles and update pmaps.
+    extracted to enable chunked processing that prevents OOM from loading all tiles at once."""
+    import torch
+    from tqdm import tqdm
+    
+    with torch.no_grad():
+        for i in tqdm(range(0, len(valid), infer_bs), desc="Predict chunk", leave=False):
+            chunk   = valid[i:i + infer_bs]
+            b_blocks = [b for b, _, _ in chunk]
+            b_idx    = [(yo, xo) for _, yo, xo in chunk]
+            bt = torch.from_numpy(np.stack(b_blocks)).float().unsqueeze(1).to(device)
+
+            if also_tta:
+                # ONE read of the blocks -> BOTH the regular (identity) and TTA-averaged maps.
+                # TTA re-augments the already-loaded tiles in-memory; it does NOT re-read disk.
+                prob_sum = None; id_probs = None
+                for j, op in enumerate(transforms):
+                    p = torch.sigmoid(collapse_fn(model(op(bt).contiguous())))
+                    if j == 0:
+                        id_probs = p
+                    prob_sum = p if prob_sum is None else prob_sum + p
+                reg_preds = id_probs.cpu().numpy().flatten()
+                tta_preds = (prob_sum / len(transforms)).cpu().numpy().flatten()
+                for (y_off, x_off), rp, tp in zip(b_idx, reg_preds, tta_preds):
+                    yi = y_off // tile; xi = x_off // tile
+                    if 0 <= yi < h_small and 0 <= xi < w_small:
+                        pmap[yi, xi] = float(rp); pmap_tta[yi, xi] = float(tp)
+            elif tta:
+                prob_sum = None
+                for op in transforms:
+                    p = torch.sigmoid(collapse_fn(model(op(bt).contiguous())))
+                    prob_sum = p if prob_sum is None else prob_sum + p
+                preds = (prob_sum / len(transforms)).cpu().numpy().flatten()
+                for (y_off, x_off), pred in zip(b_idx, preds):
+                    yi = y_off // tile; xi = x_off // tile
+                    if 0 <= yi < h_small and 0 <= xi < w_small:
+                        pmap[yi, xi] = float(pred)
+            else:
+                preds = torch.sigmoid(collapse_fn(model(bt))).cpu().numpy().flatten()
+                for (y_off, x_off), pred in zip(b_idx, preds):
+                    yi = y_off // tile; xi = x_off // tile
+                    if 0 <= yi < h_small and 0 <= xi < w_small:
+                        pmap[yi, xi] = float(pred)
+            del bt
+
+
 def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False, also_tta=False):
     """run batched prediction over given coords returning downsampled map.
 
@@ -171,8 +219,21 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
 
     valid = []
     n_rows = len(by_y)
-    print(f"[predict] reading {sum(len(v) for v in by_y.values())} tiles in {n_rows} row-strips ({volume_name})")
-    for y_off in tqdm(sorted(by_y), desc=f"Read {volume_name}", leave=False):
+    total_tiles = sum(len(v) for v in by_y.values())
+    print(f"[predict] reading {total_tiles} tiles in {n_rows} row-strips ({volume_name})")
+    
+    # MEMORY FIX: process tiles in chunks to avoid OOM. at 48x48x24, 170k tiles = ~37GB RAM.
+    # instead of loading all tiles then inferring, we read+infer in batches of ~20k tiles
+    # (~4GB), keeping peak RAM bounded. batch size scales with tile/depth (smaller tiles/depth
+    # -> more tiles per GB, so larger batch allowed).
+    tile_area = (ctx if (ctx > tile and mode == "single") else tile) ** 2
+    depth_eff = {"triple": depth * 3, "double": depth * 2, "fulldepth": int(vol.shape[0])}.get(mode, depth)
+    tiles_per_gb = 1e9 / (tile_area * depth_eff * 4)  # 4 bytes per float32
+    chunk_tiles = max(5000, int(tiles_per_gb * 4))     # target ~4GB per chunk
+    
+    pbar_read = tqdm(sorted(by_y), desc=f"Read {volume_name}", leave=False)
+    
+    for y_off in pbar_read:
         x_offs    = sorted(by_y[y_off])
         y_abs     = y_range[0] + y_off
         x_abs_min = x_range[0] + min(x_offs)
@@ -224,6 +285,26 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
             blk = strip[:, :, xl:xl + sp]
             if blk.shape == (expected_d, sp, sp):
                 valid.append((np.ascontiguousarray(blk), y_off, x_off))
+        
+        # CHUNKED INFERENCE: when buffer reaches chunk_tiles, run inference and clear buffer.
+        # this keeps peak RAM bounded instead of accumulating all 170k tiles before inference.
+        if len(valid) >= chunk_tiles:
+            _process_chunk(valid, pmap, pmap_tta, model, device, tile, h_small, w_small,
+                           _tf, _collapse, infer_bs, also_tta, tta)
+            valid.clear()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+    
+    pbar_read.close()
+    
+    # process remaining tiles
+    if valid:
+        _process_chunk(valid, pmap, pmap_tta, model, device, tile, h_small, w_small,
+                       _tf, _collapse, infer_bs, also_tta, tta)
+        valid.clear()
+    
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     # TTA transforms (spatial dims are the last two; tiles are square so rot90 keeps shape).
     # identity is first so it doubles as the plain (no-aug) prediction -- this lets also_tta
@@ -249,48 +330,8 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
 
     pmap_tta = np.full((h_small, w_small), np.nan, dtype=np.float32) if also_tta else None
 
-    with torch.no_grad():
-        for i in tqdm(range(0, len(valid), infer_bs), desc=f"Predict {volume_name}", leave=True):
-            chunk   = valid[i:i + infer_bs]
-            b_blocks = [b for b, _, _ in chunk]
-            b_idx    = [(yo, xo) for _, yo, xo in chunk]
-            bt = torch.from_numpy(np.stack(b_blocks)).float().unsqueeze(1).to(device)
-
-            if also_tta:
-                # ONE read of the blocks -> BOTH the regular (identity) and TTA-averaged maps.
-                # TTA re-augments the already-loaded tiles in-memory; it does NOT re-read disk.
-                prob_sum = None; id_probs = None
-                for j, op in enumerate(_tf):
-                    p = torch.sigmoid(_collapse(model(op(bt).contiguous())))
-                    if j == 0:
-                        id_probs = p
-                    prob_sum = p if prob_sum is None else prob_sum + p
-                reg_preds = id_probs.cpu().numpy().flatten()
-                tta_preds = (prob_sum / len(_tf)).cpu().numpy().flatten()
-                for (y_off, x_off), rp, tp in zip(b_idx, reg_preds, tta_preds):
-                    yi = y_off // tile; xi = x_off // tile
-                    if 0 <= yi < h_small and 0 <= xi < w_small:
-                        pmap[yi, xi] = float(rp); pmap_tta[yi, xi] = float(tp)
-            elif tta:
-                prob_sum = None
-                for op in _tf:
-                    p = torch.sigmoid(_collapse(model(op(bt).contiguous())))
-                    prob_sum = p if prob_sum is None else prob_sum + p
-                preds = (prob_sum / len(_tf)).cpu().numpy().flatten()
-                for (y_off, x_off), pred in zip(b_idx, preds):
-                    yi = y_off // tile; xi = x_off // tile
-                    if 0 <= yi < h_small and 0 <= xi < w_small:
-                        pmap[yi, xi] = float(pred)
-            else:
-                preds = torch.sigmoid(_collapse(model(bt))).cpu().numpy().flatten()
-                for (y_off, x_off), pred in zip(b_idx, preds):
-                    yi = y_off // tile; xi = x_off // tile
-                    if 0 <= yi < h_small and 0 <= xi < w_small:
-                        pmap[yi, xi] = float(pred)
-            del bt
-
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    # NOTE: old code used to accumulate all tiles in `valid` then process them here in one loop.
+    # now we process in chunks during the read loop above to avoid OOM. this section is removed.
 
     # optional post-hoc spatial smoothing -- only applied to valid (non-NaN) tiles
     sigma = float(getattr(config.data, "smooth_sigma", 0.0))
