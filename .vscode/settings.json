@@ -5,7 +5,7 @@
     "python.terminal.activateEnvironment": true,
     "cursorpyright.analysis.typeCheckingMode": "standard",
     "python-envs.pythonProjects": [],
-    "github.copilot.advanced": {
-        "authProvider": "github-enterprise"
-    },
+    // "github.copilot.advanced": {
+    //     "authProvider": "github-enterprise"
+    // },
 }

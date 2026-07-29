@@ -95,14 +95,14 @@ for entry in "${FRAGMENTS[@]}"; do
     fi
 done
 
-echo "=== precomputing normalization stats for all test fragments ==="
-"$PYTHON" precompute_norm.py \
-    --scroll-id 20260716083545 \
-    --scroll-id 20260717193517 \
-    --scroll-id 20260719202304 \
-    --scroll-id 20260720090842 \
-    --scroll-id 20250703034159 \
-    --zarr-path "$OUT_DIR" || echo "[WARN] norm precompute reported errors (a fragment may be missing)"
+# echo "=== precomputing normalization stats for all test fragments ==="
+# "$PYTHON" precompute_norm.py \
+#     --scroll-id 20260716083545 \
+#     --scroll-id 20260717193517 \
+#     --scroll-id 20260719202304 \
+#     --scroll-id 20260720090842 \
+#     --scroll-id 20250703034159 \
+#     --zarr-path "$OUT_DIR" || echo "[WARN] norm precompute reported errors (a fragment may be missing)"
 
 echo "=== done ==="
 for entry in "${FRAGMENTS[@]}"; do

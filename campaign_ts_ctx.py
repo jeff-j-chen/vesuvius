@@ -73,10 +73,10 @@ def _base_config(exp_name: str) -> Config:
     c.data.ring_close_r      = 3
     c.data.ring_gap_r        = 3
     c.data.ring_shell_r      = 2
-    c.tra.epoch_cooldown_secs   = 9*5
-    c.tra.val_cooldown_secs     = 12*5
-    c.tra.eval_cooldown_secs    = 60*5
-    c.tra.fig_chunk_cooldown_ms = 60*5
+    c.tra.epoch_cooldown_secs   = 9*5 * 0
+    c.tra.val_cooldown_secs     = 12*5 * 0
+    c.tra.eval_cooldown_secs    = 60*5 * 0
+    c.tra.fig_chunk_cooldown_ms = 60*5 * 0
     # NOTE: seg46527 (20260226000000) is INTENTIONALLY kept in for this whole campaign.
     return c
 
@@ -149,26 +149,30 @@ TESTS = [
     # baseline for comparison is the already-trained c8c48closed (same config, no consistency, wd=0).
     # ========================================================================================
 
-    # --- tests 0-4: does TTA-consistency help? (keeps the baseline l1=7e-5; adds the cons term) ---
-    _mk48("cons025f",  "ctx48_cons0p25_flips",    tta_consistency=True, tta_cons_lambda=0.25, tta_cons_mode="flips"),
-    _mk48("cons05f",   "ctx48_cons0p5_flips",     tta_consistency=True, tta_cons_lambda=0.5,  tta_cons_mode="flips"),
-    _mk48("cons05d",   "ctx48_cons0p5_dihedral",  tta_consistency=True, tta_cons_lambda=0.5,  tta_cons_mode="dihedral"),
-    _mk48("cons075f",  "ctx48_cons0p75_flips",    tta_consistency=True, tta_cons_lambda=0.75, tta_cons_mode="flips"),
-    _mk48("cons075d",  "ctx48_cons0p75_dihedral", tta_consistency=True, tta_cons_lambda=0.75, tta_cons_mode="dihedral"),
+    # --- TTA-consistency sweep (eroded ring labels, ctx48 ds2) ---
+    _mk48("cons025f",  "ctx48_cons0p25_flips_eroded",    tta_consistency=True, tta_cons_lambda=0.25, tta_cons_mode="flips", ring_label_source="eroded"),
+    _mk48("cons025d",  "ctx48_cons0p25_dihedral_eroded", tta_consistency=True, tta_cons_lambda=0.25, tta_cons_mode="dihedral", ring_label_source="eroded"),
+    _mk48("cons01f",   "ctx48_cons0p1_flips_eroded",     tta_consistency=True, tta_cons_lambda=0.1,  tta_cons_mode="flips", ring_label_source="eroded"),
+    _mk48("cons05f",   "ctx48_cons0p5_flips_eroded",     tta_consistency=True, tta_cons_lambda=0.5,  tta_cons_mode="flips", ring_label_source="eroded"),
+    _mk48("cons05d",   "ctx48_cons0p5_dihedral_eroded",  tta_consistency=True, tta_cons_lambda=0.5,  tta_cons_mode="dihedral", ring_label_source="eroded"),
 
-    # --- tests 5-12: AdamW weight-decay sweep. l1=7e-5 is the l1 CEILING (>that stops learning),
-    #     so the pure-wd legs DROP l1 (=0) to let weight decay be the sole regularizer. l1 (drives
-    #     weights to exactly 0 -> sparsity) and wd (shrinks all weights -> smoothness) regularize
-    #     DIFFERENTLY, so a mix is worth testing -- but stacking wd on the FULL l1 likely exceeds
-    #     the total-reg ceiling, so combos use a REDUCED l1 (3e-5); l1max_wd1e3 probes that edge. ---
-    _mk48("wd1e3",     "ctx48_wd1e3_nol1",   weight_decay=1e-3, l1=0.0),
-    _mk48("wd3e3",     "ctx48_wd3e3_nol1",   weight_decay=3e-3, l1=0.0),
-    _mk48("wd1e2",     "ctx48_wd1e2_nol1",   weight_decay=1e-2, l1=0.0),
-    _mk48("wd3e2",     "ctx48_wd3e2_nol1",   weight_decay=3e-2, l1=0.0),
-    _mk48("wd1e1",     "ctx48_wd1e1_nol1",   weight_decay=1e-1, l1=0.0),
-    _mk48("l1r_wd3e3", "ctx48_l1_3e5_wd3e3", l1=3e-5, weight_decay=3e-3),   # combo: reduced l1 + light wd
-    _mk48("l1r_wd1e2", "ctx48_l1_3e5_wd1e2", l1=3e-5, weight_decay=1e-2),   # combo: reduced l1 + moderate wd
-    _mk48("l1max_wd1e3", "ctx48_l1_7e5_wd1e3", l1=7e-5, weight_decay=1e-3), # combo: full l1 + a touch of wd
+    # # --- [COMMENTED OUT] tests for different consistency modes/lambdas with closed ring ---
+    # _mk48("cons075f",  "ctx48_cons0p75_flips",    tta_consistency=True, tta_cons_lambda=0.75, tta_cons_mode="flips"),
+    # _mk48("cons075d",  "ctx48_cons0p75_dihedral", tta_consistency=True, tta_cons_lambda=0.75, tta_cons_mode="dihedral"),
+
+    # # --- [COMMENTED OUT] AdamW weight-decay sweep. l1=7e-5 is the l1 CEILING (>that stops learning),
+    # #     so the pure-wd legs DROP l1 (=0) to let weight decay be the sole regularizer. l1 (drives
+    # #     weights to exactly 0 -> sparsity) and wd (shrinks all weights -> smoothness) regularize
+    # #     DIFFERENTLY, so a mix is worth testing -- but stacking wd on the FULL l1 likely exceeds
+    # #     the total-reg ceiling, so combos use a REDUCED l1 (3e-5); l1max_wd1e3 probes that edge. ---
+    # _mk48("wd1e3",     "ctx48_wd1e3_nol1",   weight_decay=1e-3, l1=0.0),
+    # _mk48("wd3e3",     "ctx48_wd3e3_nol1",   weight_decay=3e-3, l1=0.0),
+    # _mk48("wd1e2",     "ctx48_wd1e2_nol1",   weight_decay=1e-2, l1=0.0),
+    # _mk48("wd3e2",     "ctx48_wd3e2_nol1",   weight_decay=3e-2, l1=0.0),
+    # _mk48("wd1e1",     "ctx48_wd1e1_nol1",   weight_decay=1e-1, l1=0.0),
+    # _mk48("l1r_wd3e3", "ctx48_l1_3e5_wd3e3", l1=3e-5, weight_decay=3e-3),   # combo: reduced l1 + light wd
+    # _mk48("l1r_wd1e2", "ctx48_l1_3e5_wd1e2", l1=3e-5, weight_decay=1e-2),   # combo: reduced l1 + moderate wd
+    # _mk48("l1max_wd1e3", "ctx48_l1_7e5_wd1e3", l1=7e-5, weight_decay=1e-3), # combo: full l1 + a touch of wd
 ]
 
 

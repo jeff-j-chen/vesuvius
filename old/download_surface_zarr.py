@@ -225,34 +225,40 @@ def download(base, level, mode, out_zarr, out_png, out_id, workers, cache_dir):
         print(f"[dl] wrote midslice {out_png} ({H}x{W}) z={zc_plane} + mask {mp}")
         return
 
-    # volume mode -> assemble full uint8 (D,H,W), write local training zarr uint16 + mask
+    # volume mode -> write zarr directly from cache chunks (avoids ~2GB intermediate array).
+    # writing full-z columns means each zarr z-chunk gets all its data in one shot,
+    # eliminating the read-modify-write that layer-by-layer writes cause (~7x redundant
+    # reads per z-chunk group). columns are disjoint in zarr chunk space and mask space,
+    # so parallel writes are safe with DirectoryStore (one file per chunk, no shared state).
     import zarr
-    vol = np.zeros((D, H, W), dtype=np.uint8)
-    upd, close = _pbar(n_yc * n_xc, "assembling chunks")
-    for yc in range(n_yc):
-        for xc in range(n_xc):
-            ch = _load_chunk(cache_dir, level, yc, xc, D)
-            upd()
-            if ch is None:
-                continue
-            y0, x0 = yc * CHUNK_XY, xc * CHUNK_XY
-            y1, x1 = min(y0 + CHUNK_XY, H), min(x0 + CHUNK_XY, W)
-            vol[:, y0:y1, x0:x1] = ch[:, :y1 - y0, :x1 - x0]
-    close()
     store = zarr.open(out_zarr, mode="w", shape=(D, H, W), chunks=(min(8, D), 32, 32),
                       dtype="<u2", compressor=None, zarr_format=2)
-    upd, close = _pbar(D, "writing zarr layers")
-    for li in range(D):
-        store[li] = vol[li].astype(np.uint16)
-        upd()
+    mask_buf = np.zeros((H, W), dtype=np.uint8)
+
+    def _write_col(yx):
+        yc, xc = yx
+        ch = _load_chunk(cache_dir, level, yc, xc, D)
+        y0, x0 = yc * CHUNK_XY, xc * CHUNK_XY
+        y1, x1 = min(y0 + CHUNK_XY, H), min(x0 + CHUNK_XY, W)
+        if ch is None:
+            return
+        data = ch[:, :y1-y0, :x1-x0]
+        store[:, y0:y1, x0:x1] = data.astype(np.uint16)
+        mask_buf[y0:y1, x0:x1] = (data.max(axis=0) > 0).astype(np.uint8) * 255
+
+    pairs = [(yc, xc) for yc in range(n_yc) for xc in range(n_xc)]
+    upd, close = _pbar(len(pairs), "writing zarr")
+    # 32 threads is a practical sweet spot: more causes small-file write contention
+    with ThreadPoolExecutor(max_workers=min(workers, 32)) as ex:
+        for _ in ex.map(_write_col, pairs):
+            upd()
     close()
     print(f"[dl] wrote zarr {out_zarr} ({D},{H},{W}) uint16")
 
     # mask = footprint where ANY layer is nonzero (valid rendered surface)
-    mask = (vol.max(axis=0) > 0).astype(np.uint8) * 255
     os.makedirs("masks", exist_ok=True)
-    Image.fromarray(mask).save(f"masks/{out_id}.png")
-    print(f"[dl] wrote masks/{out_id}.png  valid_frac={(mask > 0).mean():.3f}")
+    Image.fromarray(mask_buf).save(f"masks/{out_id}.png")
+    print(f"[dl] wrote masks/{out_id}.png  valid_frac={(mask_buf > 0).mean():.3f}")
 
 
 def main():
