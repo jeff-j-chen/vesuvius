@@ -2911,7 +2911,8 @@ class TensorboardVisualizer:
         for d_off in depth_offsets:
             depth_start = self.c.data.d_start + d_off
             depth_end = depth_start + self.c.data.depth
-            pred = predict_tiles(
+            # single read -> raw + TTA maps (TTA re-augments the loaded tiles; no extra disk read)
+            pred, pred_tta = predict_tiles(
                 self.c,
                 model,
                 volume,
@@ -2925,6 +2926,7 @@ class TensorboardVisualizer:
                 g_std,
                 g_min,
                 g_max,
+                also_tta=True,
             )
 
             metrics = self._compute_readability_metrics(pred, label_binary, label_fraction, valid_tiles)
@@ -2933,6 +2935,7 @@ class TensorboardVisualizer:
                     "depth_start": depth_start,
                     "depth_end": depth_end,
                     "pred": pred,
+                    "pred_tta": pred_tta,
                     "metrics": metrics,
                 }
             )
@@ -2949,24 +2952,25 @@ class TensorboardVisualizer:
         }
 
     def _create_combined_probe_depth_figure(self, probe_data_list):
-        """5 rows x 12 cols: 3 scrolls per row, each scroll = easy | easy+overlay | hard |
-        hard+overlay. 15 scrolls x 2 probes x (raw + overlay) = 60 cells.
+        """10 rows x 12 cols: 3 scrolls per row-pair, each scroll = easy | easy+overlay | hard |
+        hard+overlay. every scroll-row is DOUBLED -- top sub-row = raw prediction, bottom sub-row
+        = TTA prediction. 15 scrolls x 2 probes x (raw+overlay) x (plain+TTA) = 120 cells.
 
-        predictions use the SAME display normalization as the eval figure (_display_norm) so the
-        two are directly comparable -- the probe was only ever 'more confident' because it showed
-        raw values while the eval rank-normalized. overlay cells dim the base to half brightness
-        and paint the eroded inklabel in white. probe_data_list is ordered easy,hard per scroll.
+        predictions use the SAME display normalization as the eval figure (_display_norm). overlay
+        cells dim the base to half brightness and paint the eroded inklabel in white. the list is
+        ordered easy,hard per scroll; each probe_data carries per-depth 'pred' and 'pred_tta'.
         """
-        n_rows, n_cols = 5, 12
+        n_scroll_rows, n_cols = 5, 12
+        n_rows = n_scroll_rows * 2
         fig, axes = plt.subplots(n_rows, n_cols, figsize=(1.6 * n_cols, 1.9 * n_rows),
-                                 gridspec_kw={"hspace": 0.22, "wspace": 0.03})
+                                 gridspec_kw={"hspace": 0.28, "wspace": 0.03})
         axes = np.array(axes).reshape(n_rows, n_cols)
         cmap = plt.get_cmap(SCROLL_CMAP)
         alpha = 0.45   # inklabel overlay strength
         import warnings
 
-        def _maxpred(pd):
-            preds = [row["pred"] for row in pd["depth_rows"]]
+        def _maxpred(pd, key):
+            preds = [row.get(key) for row in pd["depth_rows"] if row.get(key) is not None]
             if not preds:
                 return None
             with warnings.catch_warnings():
@@ -2974,17 +2978,20 @@ class TensorboardVisualizer:
                 mp = np.nanmax(np.stack(preds, axis=0), axis=0)
             return self._display_norm(np.nan_to_num(mp, nan=0.0))
 
-        for r in range(n_rows):
+        for pr in range(n_rows):
+            scroll_row = pr // 2
+            is_tta = (pr % 2 == 1)                  # each scroll-row: raw on top, TTA below
+            key = "pred_tta" if is_tta else "pred"
             for col in range(n_cols):
-                ax = axes[r, col]
+                ax = axes[pr, col]
                 ax.axis("off")
                 sub = col % 4                       # 0 easy-raw 1 easy-ov 2 hard-raw 3 hard-ov
-                scroll_idx = r * 3 + (col // 4)
+                scroll_idx = scroll_row * 3 + (col // 4)
                 pidx = 2 * scroll_idx + (0 if sub < 2 else 1)
                 if pidx >= len(probe_data_list):
                     continue
                 pd = probe_data_list[pidx]
-                mp = _maxpred(pd)
+                mp = _maxpred(pd, key)
                 if mp is None:
                     continue
                 overlay = sub in (1, 3)
@@ -2997,8 +3004,11 @@ class TensorboardVisualizer:
                     rgb[:h, :w][g] = (1.0 - alpha) * rgb[:h, :w][g] + alpha * np.array([1.0, 1.0, 1.0])
                 ax.imshow(rgb, aspect="equal", interpolation="nearest")
                 lab = pd["spec"].get("label") or pd["spec"]["tag"]
+                suf = "-tta" if is_tta else ""
                 if overlay:
-                    ax.set_title(f"{lab}+GT", fontsize=5, pad=2)
+                    ax.set_title(f"{lab}{suf}+GT", fontsize=5, pad=2)
+                elif is_tta:
+                    ax.set_title(f"{lab}{suf} {pd['spec']['segment_id']}", fontsize=5, pad=2)
                 else:
                     c_val = np.nan_to_num(
                         pd["aggregate_metrics"].get("local_contrast", float("nan")), nan=0.0)
