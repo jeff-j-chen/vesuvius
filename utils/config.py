@@ -39,11 +39,13 @@ class ScrollConfig:
 
 @dataclass
 class ProbeROI:
-    """a fixed readability probe: a window of tiles centred on (x, y) in pixel coords.
-    x/y are snapped to tile_size multiples at render time so they align with the training grid."""
+    """a fixed readability probe: a square window whose TOP-LEFT corner is (x, y) in full-res
+    pixel coords. x/y are snapped to the model grid (max(tile_size, context_size)) at render
+    time so the window's tiles land exactly on the grid the model trains on."""
     x: int
     y: int
     label: str = ""   # e.g. 'easy' or 'hard'; used as tag prefix in TensorBoard
+    size: int = 576   # window side in px; 576 = LCM(16,32,48)*6 so it fits any model grid
 
 
 # default per-scroll probe ROIs — the same window size and grid snapping apply to all.
@@ -67,6 +69,43 @@ DEFAULT_PROBE_ROIS: Dict[int, List[ProbeROI]] = {
         ProbeROI(4870, 4000, "hard"),   # validation half
     ],
 }
+
+
+def _load_probe_rois_from_disk(cache_path: str = "probe_rois.json") -> Dict[int, List[ProbeROI]]:
+    """read the unified probe-ROI cache written by roi.py (a single file, like norm_cache.json).
+
+    structure: {"<scroll_id>": {"easy": {x,y,size}, "hard": {x,y,size}}} with top-left coords in
+    full-res px. returns {} when the file is missing so the hardcoded DEFAULT_PROBE_ROIS remain
+    the fallback."""
+    out: Dict[int, List[ProbeROI]] = {}
+    if not os.path.isfile(cache_path):
+        return out
+    import json as _json
+    try:
+        with open(cache_path) as f:
+            data = _json.load(f)
+    except Exception:
+        return out
+    for sid_str, boxes in (data or {}).items():
+        try:
+            sid = int(sid_str)
+        except (ValueError, TypeError):
+            continue
+        rois: List[ProbeROI] = []
+        for label in ("easy", "hard"):
+            b = (boxes or {}).get(label)
+            if b and "x" in b and "y" in b:
+                rois.append(ProbeROI(int(b["x"]), int(b["y"]), label, int(b.get("size", 576))))
+        if rois:
+            out[sid] = rois
+    return out
+
+
+def _default_probe_rois() -> Dict[int, List[ProbeROI]]:
+    """disk-annotated ROIs (roi.py) override the hardcoded defaults per scroll."""
+    merged = {k: list(v) for k, v in DEFAULT_PROBE_ROIS.items()}
+    merged.update(_load_probe_rois_from_disk())
+    return merged
 
 
 DEFAULT_SCROLLS: List[ScrollConfig] = [
@@ -142,21 +181,24 @@ class DataConfig:
     # (hand-cleaned) eroded map, not original inklabels.
     ring_close_r: int = 3      # tiles: close letter interior holes (dilate then erode)
     ring_gap_r: int = 3        # tiles: air gap between ink edge and ring start (96px @ tile=16)
-    ring_shell_r: int = 2      # ring shell width; 0 = dynamic (balance to ink count), >0 = fixed    context_size: int = 0      # >0: input crop size (px) centered on each tile; model center-pools MIL
+    ring_shell_r: int = 2      # ring shell width; 0 = dynamic (balance to ink count), >0 = fixed
+    context_size: int = 0      # >0: input crop size (px) centered on each tile; model center-pools MIL
                                # over the tile region. label/mask stay the center tile. 0 = off (plain tile)
     context_downsample: int = 1    # >1: avg-pool the context crop by this factor at the stem, so the
                                    # model keeps the FULL context extent but at a coarser resolution
                                    # (~1/ds^2 the activations -> near-plain compute, less overfit, no OOM)
-    eval_cmap_norm: str = "rank"   # display-only contrast for eval pred panels: "raw" | "percentile" | "rank"
-                                   # rank (histogram-equalize) best when outputs saturate at 1.0; raw = true prob
+    eval_cmap_norm: str = "raw"    # display-only contrast for eval pred panels: "raw" | "percentile" | "rank"
+                                   # raw = true probability (DEFAULT; pool-independent, matches test figs).
+                                   # rank (histogram-equalize) spreads saturated outputs but is pool-relative;
+                                   # percentile stretches [p2,p98]
     tta_mode: str = "flips"        # TTA transforms: "flips" (4: id,h,v,180 -- fast, contiguous, label-natural)
                                    # or "dihedral" (6: adds +/-90 rot -- slower, non-contiguous, unnatural for text)
-    eval_infer_bs: int = 512         # 0 = auto-size the eval/test inference batch; >0 = manual override (use spare VRAM)    dense_labels: bool = False        # dense per-pixel BCE (model emits (B,1,T,T) map, not a tile scalar)
+    eval_infer_bs: int = 128         # 0 = auto-size the eval/test inference batch; >0 = manual override (use spare VRAM)
+    dense_labels: bool = False        # dense per-pixel BCE (model emits (B,1,T,T) map, not a tile scalar)
     dense_soft_labels: bool = False   # use soft_inklabels probability map as the dense target
     preload_to_ram: bool = False  # load full zarr into RAM; only useful if disk I/O is the bottleneck (it's not — chunks are uncompressed, OS caches them)
     # per-scroll probe ROIs: {scroll_id: [ProbeROI, ...]}
-    probe_rois: Dict[int, List[ProbeROI]] = field(
-        default_factory=lambda: {k: list(v) for k, v in DEFAULT_PROBE_ROIS.items()})
+    probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_default_probe_rois)
 
     @property
     def vis_scroll_ids(self) -> Optional[list]: return None

@@ -20,6 +20,7 @@ every run auto-saves its full resolved config to config.json in its own TB run d
 run all:   python campaign_ts_ctx.py
 dry-run:   python campaign_ts_ctx.py --dry-run
 run one:   python campaign_ts_ctx.py --only c2eroded
+run some:  python campaign_ts_ctx.py --only c2eroded,c7ctx48   (comma-separated, runs in TESTS order)
 run from:  python campaign_ts_ctx.py --from c3coarse
 """
 from __future__ import annotations
@@ -54,7 +55,7 @@ def _base_config(exp_name: str) -> Config:
     c.model.conv2_drop = 0.075
     c.model.head_drop  = 0.0
     c.tra.n_epochs     = 15
-    c.tra.eval_int     = 999     # probes only; no expensive eval figures (scalars still log per-epoch)
+    c.tra.eval_int     = 15
     c.tra.test_int     = 999
     c.tra.probe_int    = 5
     c.tra.save_int     = 2
@@ -72,10 +73,10 @@ def _base_config(exp_name: str) -> Config:
     c.data.ring_close_r      = 3
     c.data.ring_gap_r        = 3
     c.data.ring_shell_r      = 2
-    c.tra.epoch_cooldown_secs   = 9
-    c.tra.val_cooldown_secs     = 12
-    c.tra.eval_cooldown_secs    = 60
-    c.tra.fig_chunk_cooldown_ms = 60
+    c.tra.epoch_cooldown_secs   = 9*5
+    c.tra.val_cooldown_secs     = 12*5
+    c.tra.eval_cooldown_secs    = 60*5
+    c.tra.fig_chunk_cooldown_ms = 60*5
     # NOTE: seg46527 (20260226000000) is INTENTIONALLY kept in for this whole campaign.
     return c
 
@@ -98,25 +99,76 @@ def _mk(tid, tag, **overrides):
     return d
 
 
+# closed ctx48/ds2 baseline for the regularization sweep (= _CTX32 aug/reg block + 48px coarse
+# context + 10ep/eval10/probe5, matching c8c48closed). eval_cmap_norm defaults to raw (config).
+_CTX48 = dict(context_size=48, context_downsample=2, n_epochs=10, eval_int=10, probe_int=5)
+
+
+def _mk48(tid, tag, **overrides):
+    """closed ctx48/ds2 baseline + per-test overrides (regularization sweep)."""
+    d = dict(_CTX48); d.update(overrides)
+    return _mk(tid, tag, **d)
+
+
 TESTS = [
-    # 1) SANITY: exact ctx32 ISO config but seg46527 ON + only 5 epochs. final check that the
-    #    extra PHerc0814 fragment is not the source of past discrepancies.
-    _mk("c1sanity", "ctx32_closed_segON_5ep_sanity", n_epochs=5, eval_int=999, probe_int=5),
+    # # 1) SANITY: exact ctx32 ISO config but seg46527 ON + only 5 epochs. final check that the
+    # #    extra PHerc0814 fragment is not the source of past discrepancies.
+    # _mk("c1sanity", "ctx32_closed_segON_5ep_sanity"),
 
-    # 2) ERODED ring labels instead of closed -- tighter positives that trace the letter.
-    _mk("c2eroded", "ctx32_eroded_segON", ring_label_source="eroded"),
+    # # 2) ERODED ring labels instead of closed -- tighter positives that trace the letter.
+    # _mk("c2eroded", "ctx32_eroded_segON", ring_label_source="eroded"),
 
-    # 3) COARSE context at the same 32px extent (avg-pool input 2x) -- full window, half res.
-    _mk("c3coarse", "ctx32ds2_closed_segON", context_downsample=2),
+    # # 2b) WIDER context: 48px extent at half res (ds2) -- larger surround, same closed ring.
+    # _mk("c7ctx48", "ctx48ds2_closed_segON", context_size=48, context_downsample=2),
 
-    # 4) FOVEATED context -- full-res central tile + coarse full-extent surround, fused pre-MIL.
-    _mk("c4fovea", "ctx32fovea_closed_segON", arch="v15_twostage_wide_zgrad_fovea"),
+    # # 3) COARSE context at the same 32px extent (avg-pool input 2x) -- full window, half res.
+    # _mk("c3coarse", "ctx32ds2_closed_segON", context_downsample=2),
+
+    # # 4) FOVEATED context -- full-res central tile + coarse full-extent surround, fused pre-MIL.
+    # _mk("c4fovea", "ctx32fovea_closed_segON", arch="v15_twostage_wide_zgrad_fovea"),
+
+    # # 8) 48px COARSE (ds2) CLOSED, 10ep -- readability A/B leg 1 (probe@5, eval@10).
+    # _mk("c8c48closed", "ctx48ds2_closed_10ep", context_size=48, context_downsample=2,
+    #     n_epochs=10, eval_int=10, probe_int=5, eval_cmap_norm="raw"),
+
+    # # 9) 48px COARSE (ds2) ERODED, 10ep -- readability A/B leg 2. eroded reads far better than
+    # #    its counting stats suggest; verify that holds at the wider coarse context.
+    # _mk("c9c48eroded", "ctx48ds2_eroded_10ep", context_size=48, context_downsample=2,
+    #     ring_label_source="eroded", n_epochs=10, eval_int=10, probe_int=5, eval_cmap_norm="raw"),
 
     # 5) [COMMENTED] winner of 1-4 + AdamW weight decay (drop l1). set arch/context to the winner.
     # _mk("c5wd", "WINNER_wd", weight_decay=1e-2, l1=0.0),
 
     # 6) [COMMENTED] winner of 1-4 + TTA-consistency. set arch/context to the winner.
     # _mk("c6tta", "WINNER_tta", tta_consistency=True, tta_cons_lambda=0.5),
+
+    # ========================================================================================
+    # REGULARIZATION SWEEP  (baseline = closed ctx48/ds2, 10ep, l1=7e-5).  run in two batches:
+    #   python campaign_ts_ctx.py --only cons025f,cons05f,cons05d,cons075f,cons075d
+    #   python campaign_ts_ctx.py --only wd1e3,wd3e3,wd1e2,wd3e2,wd1e1,l1r_wd3e3,l1r_wd1e2,l1max_wd1e3
+    # baseline for comparison is the already-trained c8c48closed (same config, no consistency, wd=0).
+    # ========================================================================================
+
+    # --- tests 0-4: does TTA-consistency help? (keeps the baseline l1=7e-5; adds the cons term) ---
+    _mk48("cons025f",  "ctx48_cons0p25_flips",    tta_consistency=True, tta_cons_lambda=0.25, tta_cons_mode="flips"),
+    _mk48("cons05f",   "ctx48_cons0p5_flips",     tta_consistency=True, tta_cons_lambda=0.5,  tta_cons_mode="flips"),
+    _mk48("cons05d",   "ctx48_cons0p5_dihedral",  tta_consistency=True, tta_cons_lambda=0.5,  tta_cons_mode="dihedral"),
+    _mk48("cons075f",  "ctx48_cons0p75_flips",    tta_consistency=True, tta_cons_lambda=0.75, tta_cons_mode="flips"),
+    _mk48("cons075d",  "ctx48_cons0p75_dihedral", tta_consistency=True, tta_cons_lambda=0.75, tta_cons_mode="dihedral"),
+
+    # --- tests 5-12: AdamW weight-decay sweep. l1=7e-5 is the l1 CEILING (>that stops learning),
+    #     so the pure-wd legs DROP l1 (=0) to let weight decay be the sole regularizer. l1 (drives
+    #     weights to exactly 0 -> sparsity) and wd (shrinks all weights -> smoothness) regularize
+    #     DIFFERENTLY, so a mix is worth testing -- but stacking wd on the FULL l1 likely exceeds
+    #     the total-reg ceiling, so combos use a REDUCED l1 (3e-5); l1max_wd1e3 probes that edge. ---
+    _mk48("wd1e3",     "ctx48_wd1e3_nol1",   weight_decay=1e-3, l1=0.0),
+    _mk48("wd3e3",     "ctx48_wd3e3_nol1",   weight_decay=3e-3, l1=0.0),
+    _mk48("wd1e2",     "ctx48_wd1e2_nol1",   weight_decay=1e-2, l1=0.0),
+    _mk48("wd3e2",     "ctx48_wd3e2_nol1",   weight_decay=3e-2, l1=0.0),
+    _mk48("wd1e1",     "ctx48_wd1e1_nol1",   weight_decay=1e-1, l1=0.0),
+    _mk48("l1r_wd3e3", "ctx48_l1_3e5_wd3e3", l1=3e-5, weight_decay=3e-3),   # combo: reduced l1 + light wd
+    _mk48("l1r_wd1e2", "ctx48_l1_3e5_wd1e2", l1=3e-5, weight_decay=1e-2),   # combo: reduced l1 + moderate wd
+    _mk48("l1max_wd1e3", "ctx48_l1_7e5_wd1e3", l1=7e-5, weight_decay=1e-3), # combo: full l1 + a touch of wd
 ]
 
 
@@ -132,6 +184,7 @@ _OVERRIDES = {
     "weight_decay":     ("tra", "weight_decay"),
     "tta_consistency":  ("tra", "tta_consistency"),
     "tta_cons_lambda":  ("tra", "tta_consistency_lambda"),
+    "tta_cons_mode":    ("tra", "tta_consistency_mode"),
     "ranking_lambda":   ("tra", "ranking_lambda"),
     "ranking_neg_frac": ("tra", "ranking_neg_frac"),
     "ranking_margin":   ("tra", "ranking_margin"),
@@ -145,6 +198,7 @@ _OVERRIDES = {
     "c2_drop":          ("model", "conv2_drop"),
     "context_size":     ("data", "context_size"),
     "context_downsample": ("data", "context_downsample"),
+    "eval_cmap_norm":   ("data", "eval_cmap_norm"),
     "dense":            ("data", "dense_labels"),
     "ring_label_source": ("data", "ring_label_source"),
     "ring_close_r":     ("data", "ring_close_r"),
@@ -230,9 +284,11 @@ def main():
 
     selected = TESTS
     if args.only:
-        selected = [t for t in TESTS if t["tid"] == args.only]
-        if not selected:
-            print(f"[ABORT] --only '{args.only}' not found; valid: {[t['tid'] for t in TESTS]}")
+        want = {s.strip() for s in args.only.split(",") if s.strip()}
+        selected = [t for t in TESTS if t["tid"] in want]  # keeps TESTS order
+        missing = want - {t["tid"] for t in selected}
+        if missing:
+            print(f"[ABORT] --only id(s) {sorted(missing)} not found; valid: {[t['tid'] for t in TESTS]}")
             return
     elif args.from_id:
         ids = [t["tid"] for t in TESTS]

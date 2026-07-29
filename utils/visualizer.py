@@ -69,6 +69,32 @@ def group_by_depth(coords):
         grouped[d_off].append((d_off, y_off, x_off))
     return grouped
 
+
+class _RegionCache:
+    """serves a preloaded [:, ry0:ry1, rx0:rx1] crop of a (zarr or ndarray) volume from RAM.
+    lets probe inference read its small fixed region ONCE and reuse it every epoch instead of
+    hitting zarr each time. any read outside the cached box transparently falls back to the
+    underlying volume. exposes .shape/.dtype so predict_tiles treats it like the real volume."""
+
+    def __init__(self, vol, ry0, ry1, rx0, rx1):
+        self.vol = vol
+        self.shape = tuple(int(s) for s in vol.shape)
+        self.dtype = getattr(vol, "dtype", None)
+        self.ry0, self.ry1, self.rx0, self.rx1 = ry0, ry1, rx0, rx1
+        self._buf = np.asarray(vol[:, ry0:ry1, rx0:rx1])   # (D, h, w) raw crop held in RAM
+
+    def __getitem__(self, idx):
+        zs, ys, xs = idx
+        if (isinstance(ys, slice) and isinstance(xs, slice)
+                and ys.start is not None and ys.stop is not None
+                and xs.start is not None and xs.stop is not None
+                and ys.start >= self.ry0 and ys.stop <= self.ry1
+                and xs.start >= self.rx0 and xs.stop <= self.rx1):
+            return self._buf[zs, ys.start - self.ry0:ys.stop - self.ry0,
+                                 xs.start - self.rx0:xs.stop - self.rx0]
+        return self.vol[idx]   # outside the cached box (shouldn't happen for a probe)
+
+
 def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False, also_tta=False):
     """run batched prediction over given coords returning downsampled map.
 
@@ -523,6 +549,7 @@ class TensorboardVisualizer:
                 print(f'[testfrag] {_tf} not available, skipping ({e})')
 
         self._segment_assets = {}
+        self._probe_vol_cache = {}
         self.probe_specs = self._build_probe_specs()
 
         # dense probe specs: named ROIs rendered every probe_int epochs.
@@ -995,28 +1022,32 @@ class TensorboardVisualizer:
     def _build_probe_specs(self):
         """build probe specs from config.data.probe_rois for ALL training scrolls.
 
-        each ProbeROI is a fixed readability window centred on (x, y) in pixel coords.
-        x/y are snapped to tile_size multiples so they align with the training grid.
+        each ProbeROI's (x, y) is the window TOP-LEFT in full-res px. it is snapped to the
+        effective model grid unit G = max(tile_size, context_size) -- i.e. 16, 32 or 48 --
+        so the probe window's tiles land on the exact grid the model trains/infers on. the
+        full-scroll eval grid is already anchored to the same multiples (crop origin snapped
+        to tile_size, tiles stepped by tile_size), so probe and scroll stay phase-aligned.
         returns a list of spec-dicts understood by _collect_probe_region_predictions.
-        iterates all scrolls in config.data.scrolls so multi-scroll runs produce one
-        column-group per scroll (e.g. 3 scrolls × 2 ROIs each = 6 probes = 12 cols).
         """
         T = self.c.data.tile_size
+        ctx = int(getattr(self.c.data, "context_size", 0) or 0)
+        G = ctx if ctx > T else T          # model grid unit: 16 (plain), 32 or 48 (context)
         probe_rois = getattr(self.c.data, "probe_rois", {}) or {}
 
-        def align(v): return (v // T) * T
-
-        # probe window: 16 tiles wide → 16*T pixels; same for all probes.
-        size = 16 * T
+        def align(v): return (int(v) // G) * G
 
         specs = []
         for scroll in self.c.data.scrolls:
             sid = int(scroll.scroll_id)
             rois = probe_rois.get(sid, probe_rois.get(str(sid), []))
             for roi in rois:
+                # snap the window side to a whole number of grid cells (576 already fits any G)
+                size = int(getattr(roi, "size", 576) or 576)
+                size = max(G, (size // G) * G)
                 specs.append({
                     "tag": f"{roi.label}_{sid}" if roi.label else str(sid),
                     "title": f"{roi.label} (scroll {sid})" if roi.label else f"probe {sid}",
+                    "label": roi.label,
                     "segment_id": sid,
                     "x": align(roi.x),
                     "y": align(roi.y),
@@ -1025,20 +1056,22 @@ class TensorboardVisualizer:
         return specs
 
     def _load_segment_labels(self, seg_id):
-        """load eroded labels for a segment"""
+        """load eroded labels as a compact binary (uint8 0/1) map. only the >0.5 threshold
+        is ever used downstream (label_fraction is the mean of the binarized ink), so the old
+        float64 /255 was 8x wasted RAM. >127 matches the prior `/255 > 0.5` cut exactly."""
         path = f"./eroded_inklabels/{seg_id}.png"
         labels = imread_gray(path)
         if labels is None:
             raise RuntimeError(f"could not read labels at {path}")
-        return labels / 255.0
+        return (labels > 127).astype(np.uint8)
 
     def _load_segment_mask(self, seg_id):
-        """load mask for a segment"""
+        """load mask as a compact binary (uint8 0/1) map (only >0 is ever tested)."""
         path = f"./masks/{seg_id}.png"
         mask = imread_gray(path)
         if mask is None:
             raise RuntimeError(f"could not read mask at {path}")
-        return mask / 255.0
+        return (mask > 127).astype(np.uint8)
 
     def _get_segment_asset(self, seg_id):
         """return cached volume mask labels and normalization stats for a segment"""
@@ -1068,6 +1101,24 @@ class TensorboardVisualizer:
 
         self._segment_assets[seg_id] = asset
         return asset
+
+    def _get_probe_volume(self, spec, vol):
+        """RAM-cached volume crop covering a probe's read region (ROI + context margin, full
+        depth). built once per (segment,x,y,size) and reused every render, so probe inference
+        stops re-reading zarr each epoch. ~23 MB per probe (uint16); ~0.7 GB for all 30."""
+        key = (spec["segment_id"], spec["x"], spec["y"], spec["size"])
+        rc = self._probe_vol_cache.get(key)
+        if rc is not None:
+            return rc
+        D, H, W = (int(s) for s in vol.shape)
+        M = 32   # margin >= max context pad (ctx<=48 -> pad 16); covers ctx up to 80
+        ry0 = max(0, spec["y"] - M); ry1 = min(H, spec["y"] + spec["size"] + M)
+        rx0 = max(0, spec["x"] - M); rx1 = min(W, spec["x"] + spec["size"] + M)
+        rc = _RegionCache(vol, ry0, ry1, rx0, rx1)
+        self._probe_vol_cache[key] = rc
+        print(f"[probe-cache] {spec['tag']}: preloaded {rc._buf.shape} {rc._buf.dtype} "
+              f"({rc._buf.nbytes / 1e6:.1f} MB)")
+        return rc
 
     def _compute_tile_maps(self, labels, mask, y_range, x_range):
         """derive tile-aligned label fraction and validity maps anchored to the eval grid"""
@@ -2806,8 +2857,7 @@ class TensorboardVisualizer:
 
             probe_data_list.append(probe_data)
 
-            _, aggregate_metrics = self._create_probe_region_figure(probe_data)
-
+            aggregate_metrics = probe_data["aggregate_metrics"]
             if aggregate_metrics:
                 probe_tag = spec["tag"]
                 for key, value in {
@@ -2823,8 +2873,7 @@ class TensorboardVisualizer:
             fig = self._create_combined_probe_depth_figure(probe_data_list)
             # patch the epoch number into the suptitle (avoids passing epoch deep into the figure method)
             fig.texts[0].set_text(fig.texts[0].get_text().format(epoch + 1))
-            # render at full resolution internally, then save at 60dpi to keep tensorboard size small
-            self.writer.add_figure("ProbeROIs/AllPatches_ByDepth", fig, epoch)
+            self.writer.add_figure("ProbeROIs/Grid", fig, epoch)
             plt.close(fig)
 
     def _collect_probe_region_predictions(self, model, spec):
@@ -2835,7 +2884,7 @@ class TensorboardVisualizer:
             print(f"[PROBE] Skipping {spec['tag']} due to asset load error: {e}")
             return None
 
-        volume = asset["volume"]
+        volume = self._get_probe_volume(spec, asset["volume"])
         mask = asset["mask"]
         labels = asset["labels"]
         g_mean, g_std, g_min, g_max = asset["norm"]
@@ -2899,157 +2948,63 @@ class TensorboardVisualizer:
             "size": size,
         }
 
-    def _create_probe_region_figure(self, probe_data):
-        """predict a fixed roi across depth blocks and render prediction plus label overlay"""
-        spec = probe_data["spec"]
-        label_binary = probe_data["label_binary"]
-        depth_rows = probe_data["depth_rows"]
-        aggregate_metrics = probe_data["aggregate_metrics"]
-
-        if not depth_rows:
-            return None, None
-
-        fig, axes = plt.subplots(len(depth_rows), 2, figsize=(10, max(4, 4 * len(depth_rows))))
-        axes = np.array(axes).reshape(len(depth_rows), 2)
-
-        for idx, row in enumerate(depth_rows):
-            depth_start = row["depth_start"]
-            depth_end = row["depth_end"]
-            pred = row["pred"]
-            metrics = row["metrics"]
-
-            axes[idx, 0].imshow(pred, cmap="inferno", vmin=0, vmax=1, aspect="equal")
-            axes[idx, 0].set_title(f"pred {depth_start}-{depth_end}", fontsize=9)
-            axes[idx, 0].axis("off")
-
-            overlay = np.zeros((*pred.shape, 4), dtype=np.float32)
-            h = min(label_binary.shape[0], pred.shape[0])
-            w = min(label_binary.shape[1], pred.shape[1])
-            overlay[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
-            axes[idx, 1].imshow(pred, cmap="inferno", vmin=0, vmax=1, aspect="equal")
-            axes[idx, 1].imshow(overlay)
-            axes[idx, 1].set_title(
-                f"overlay {depth_start}-{depth_end}\nC={np.nan_to_num(metrics['local_contrast'], nan=0.0):.3f} P@K={np.nan_to_num(metrics['topk_precision'], nan=0.0):.3f}",
-                fontsize=9,
-            )
-            axes[idx, 1].axis("off")
-
-        x0 = probe_data["x0"]
-        y0 = probe_data["y0"]
-        size = probe_data["size"]
-        fig.suptitle(
-            f"{spec['title']} | seg={spec['segment_id']} | x={x0}, y={y0}, size={size} | composite={np.nan_to_num(aggregate_metrics.get('readability_composite', np.nan), nan=0.0):.3f}",
-            fontsize=11,
-        )
-        plt.tight_layout(rect=[0, 0, 1, 0.97])
-        return fig, aggregate_metrics
-
     def _create_combined_probe_depth_figure(self, probe_data_list):
-        """render all probe ROIs horizontally stacked, one row per depth + MAX row.
+        """5 rows x 12 cols: 3 scrolls per row, each scroll = easy | easy+overlay | hard |
+        hard+overlay. 15 scrolls x 2 probes x (raw + overlay) = 60 cells.
 
-        layout: rows = depth windows + 1 MAX row, cols = 2 × n_probes (pred | GT overlay).
-        figure is inferred at full resolution then downsampled to keep tensorboard size small.
+        predictions use the SAME display normalization as the eval figure (_display_norm) so the
+        two are directly comparable -- the probe was only ever 'more confident' because it showed
+        raw values while the eval rank-normalized. overlay cells dim the base to half brightness
+        and paint the eroded inklabel in white. probe_data_list is ordered easy,hard per scroll.
         """
-        depth_values = sorted({
-            row["depth_start"]
-            for probe_data in probe_data_list
-            for row in probe_data["depth_rows"]
-        })
-
-        n_probes = len(probe_data_list)
-        n_depth_rows = max(1, len(depth_values))
-        n_rows = n_depth_rows + 1   # +1 for MAX row
-        n_cols = 2 * n_probes
-
-        # tight cell sizing: 1.6" wide, 1.4" tall per cell; minimal padding
-        cell_w, cell_h = 1.6, 1.4
-        fig_w = cell_w * n_cols
-        fig_h = cell_h * n_rows + 0.4  # 0.4" for suptitle
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_w, fig_h),
-                                 gridspec_kw={"hspace": 0.04, "wspace": 0.02})
+        n_rows, n_cols = 5, 12
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(1.6 * n_cols, 1.9 * n_rows),
+                                 gridspec_kw={"hspace": 0.22, "wspace": 0.03})
         axes = np.array(axes).reshape(n_rows, n_cols)
+        cmap = plt.get_cmap(SCROLL_CMAP)
+        alpha = 0.45   # inklabel overlay strength
+        import warnings
 
-        # collect per-probe pred maps per depth for MAX aggregation
-        probe_depth_preds = [{} for _ in probe_data_list]
-
-        for row_idx, depth_start in enumerate(depth_values):
-            for probe_idx, probe_data in enumerate(probe_data_list):
-                spec = probe_data["spec"]
-                label_binary = probe_data["label_binary"]
-                by_depth = {row["depth_start"]: row for row in probe_data["depth_rows"]}
-                pred_ax = axes[row_idx, 2 * probe_idx]
-                ov_ax   = axes[row_idx, 2 * probe_idx + 1]
-
-                if depth_start not in by_depth:
-                    pred_ax.axis("off"); ov_ax.axis("off"); continue
-
-                row = by_depth[depth_start]
-                pred = row["pred"]
-                probe_depth_preds[probe_idx][depth_start] = pred
-                metrics = row["metrics"]
-
-                pred_ax.imshow(pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect="auto",
-                               interpolation="nearest")
-                pred_ax.axis("off")
-
-                ov_ax.imshow(pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect="auto",
-                             interpolation="nearest")
-                ov = np.zeros((*pred.shape, 4), dtype=np.float32)
-                h = min(label_binary.shape[0], pred.shape[0])
-                w = min(label_binary.shape[1], pred.shape[1])
-                ov[:h, :w][label_binary[:h, :w] > 0.5] = [1.0, 1.0, 1.0, 0.45]
-                ov_ax.imshow(ov)
-                ov_ax.axis("off")
-
-                c_val = np.nan_to_num(metrics.get("local_contrast", float("nan")), nan=0.0)
-                ov_ax.text(0.02, 0.02, f"C{c_val:.2f}", transform=ov_ax.transAxes,
-                           fontsize=5, color="white",
-                           bbox=dict(facecolor="black", alpha=0.45, edgecolor="none", pad=1))
-
-                if row_idx == 0:
-                    tag = spec.get("label", spec["tag"])
-                    pred_ax.set_title(tag, fontsize=6, pad=2)
-                    ov_ax.set_title(f"{tag}+GT", fontsize=6, pad=2)
-
-            # depth label on left edge
-            axes[row_idx, 0].set_ylabel(f"z{depth_start}", fontsize=6, labelpad=2)
-
-        # MAX row
-        max_row_idx = n_depth_rows
-        for probe_idx, probe_data in enumerate(probe_data_list):
-            spec = probe_data["spec"]
-            label_binary = probe_data["label_binary"]
-            preds = list(probe_depth_preds[probe_idx].values())
-            pred_ax = axes[max_row_idx, 2 * probe_idx]
-            ov_ax   = axes[max_row_idx, 2 * probe_idx + 1]
-
+        def _maxpred(pd):
+            preds = [row["pred"] for row in pd["depth_rows"]]
             if not preds:
-                pred_ax.axis("off"); ov_ax.axis("off"); continue
-
-            import warnings
+                return None
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
-                max_pred = np.nanmax(np.stack(preds, axis=0), axis=0)
+                mp = np.nanmax(np.stack(preds, axis=0), axis=0)
+            return self._display_norm(np.nan_to_num(mp, nan=0.0))
 
-            pred_ax.imshow(max_pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect="auto",
-                           interpolation="nearest")
-            pred_ax.axis("off")
+        for r in range(n_rows):
+            for col in range(n_cols):
+                ax = axes[r, col]
+                ax.axis("off")
+                sub = col % 4                       # 0 easy-raw 1 easy-ov 2 hard-raw 3 hard-ov
+                scroll_idx = r * 3 + (col // 4)
+                pidx = 2 * scroll_idx + (0 if sub < 2 else 1)
+                if pidx >= len(probe_data_list):
+                    continue
+                pd = probe_data_list[pidx]
+                mp = _maxpred(pd)
+                if mp is None:
+                    continue
+                overlay = sub in (1, 3)
+                rgb = cmap(np.clip(mp, 0.0, 1.0))[..., :3]
+                if overlay:
+                    rgb = rgb * 0.5             # dim base so the white inklabel pops
+                    lb = pd["label_binary"]
+                    h = min(lb.shape[0], rgb.shape[0]); w = min(lb.shape[1], rgb.shape[1])
+                    g = lb[:h, :w] > 0.5
+                    rgb[:h, :w][g] = (1.0 - alpha) * rgb[:h, :w][g] + alpha * np.array([1.0, 1.0, 1.0])
+                ax.imshow(rgb, aspect="equal", interpolation="nearest")
+                lab = pd["spec"].get("label") or pd["spec"]["tag"]
+                if overlay:
+                    ax.set_title(f"{lab}+GT", fontsize=5, pad=2)
+                else:
+                    c_val = np.nan_to_num(
+                        pd["aggregate_metrics"].get("local_contrast", float("nan")), nan=0.0)
+                    ax.set_title(f"{lab} {pd['spec']['segment_id']} C{c_val:.2f}", fontsize=5, pad=2)
 
-            ov_ax.imshow(max_pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect="auto",
-                         interpolation="nearest")
-            ov = np.zeros((*max_pred.shape, 4), dtype=np.float32)
-            h = min(label_binary.shape[0], max_pred.shape[0])
-            w = min(label_binary.shape[1], max_pred.shape[1])
-            ov[:h, :w][label_binary[:h, :w] > 0.5] = [1.0, 1.0, 1.0, 0.45]
-            ov_ax.imshow(ov)
-            ov_ax.axis("off")
-
-            if probe_idx == 0:
-                pred_ax.set_ylabel("MAX", fontsize=6, labelpad=2, color="crimson",
-                                   fontweight="bold")
-
-        sid_str = str(self.scroll1_id)
-        fig.suptitle(f"Probe ROIs s{sid_str} ep{{}}", fontsize=7, y=0.995)
+        fig.suptitle("Probe ROIs ep{}", fontsize=9, y=0.997)
         return fig
 
     def log_model_graph(self, model, example_input):

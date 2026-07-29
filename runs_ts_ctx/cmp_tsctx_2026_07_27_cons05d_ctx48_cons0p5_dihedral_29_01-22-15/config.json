@@ -4,13 +4,15 @@
     "composite_d1": 18,
     "composite_display": "raw",
     "composite_method": "maxproj",
-    "context_downsample": 1,
+    "context_downsample": 2,
+    "context_size": 48,
     "d_end": 28,
     "d_start": 4,
+    "dense_labels": false,
     "dense_soft_labels": false,
     "depth": 24,
-    "eval_cmap_norm": "rank",
-    "eval_infer_bs": 512,
+    "eval_cmap_norm": "raw",
+    "eval_infer_bs": 128,
     "holdout_scroll_ids": [
       20251226000000
     ],
@@ -20,55 +22,217 @@
       "20250223000000": [
         {
           "label": "easy",
-          "x": 3826,
-          "y": 4096
+          "size": 576,
+          "x": 4320,
+          "y": 3456
         },
         {
           "label": "hard",
-          "x": 5210,
+          "size": 576,
+          "x": 8352,
           "y": 2496
+        }
+      ],
+      "20250831000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 2784,
+          "y": 1632
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 6144,
+          "y": 2016
+        }
+      ],
+      "20260108000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 576,
+          "y": 1824
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5664,
+          "y": 3072
         }
       ],
       "20260115000000": [
         {
           "label": "easy",
-          "x": 3702,
-          "y": 3885
+          "size": 576,
+          "x": 4224,
+          "y": 3744
         },
         {
           "label": "hard",
-          "x": 2612,
-          "y": 4900
+          "size": 576,
+          "x": 5856,
+          "y": 4800
         }
       ],
       "20260115000001": [
         {
           "label": "easy",
-          "x": 4870,
-          "y": 2500
+          "size": 576,
+          "x": 6816,
+          "y": 1056
         },
         {
           "label": "hard",
-          "x": 4870,
-          "y": 4000
+          "size": 576,
+          "x": 7008,
+          "y": 5376
         }
       ],
       "20260206000001": [
         {
           "label": "easy",
-          "x": 5858,
-          "y": 1585
+          "size": 576,
+          "x": 672,
+          "y": 960
         },
         {
           "label": "hard",
-          "x": 6419,
-          "y": 2431
+          "size": 576,
+          "x": 6336,
+          "y": 2304
+        }
+      ],
+      "20260210000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 4128,
+          "y": 2592
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 4032,
+          "y": 3168
+        }
+      ],
+      "20260226000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 480,
+          "y": 960
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 480,
+          "y": 1536
+        }
+      ],
+      "20260227000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 4512,
+          "y": 4224
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 7296,
+          "y": 3456
+        }
+      ],
+      "20260302000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 3936,
+          "y": 3744
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5856,
+          "y": 4224
+        }
+      ],
+      "20260303000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 5088,
+          "y": 2784
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5760,
+          "y": 3744
+        }
+      ],
+      "20260306000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 3744,
+          "y": 2016
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5664,
+          "y": 2976
+        }
+      ],
+      "20260310000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 192,
+          "y": 864
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5856,
+          "y": 1824
+        }
+      ],
+      "20260318000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 4128,
+          "y": 960
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 7680,
+          "y": 864
+        }
+      ],
+      "20260325000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 3168,
+          "y": 2112
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5376,
+          "y": 2976
         }
       ]
     },
     "ring_close_r": 3,
     "ring_gap_r": 3,
-    "ring_label_source": "eroded",
+    "ring_label_source": "closed",
     "ring_negatives": true,
     "ring_shell_r": 2,
     "scrolls": [
@@ -302,7 +466,7 @@
     "num_workers": 4,
     "rotation_prob": 0.6
   },
-  "exp_name": "cmp_tsctx_2026_07_27_c2eroded_ctx32_eroded_segON",
+  "exp_name": "cmp_tsctx_2026_07_27_cons05d_ctx48_cons0p5_dihedral",
   "hm": {
     "dir": "./hard_negs",
     "enabled": false,
@@ -320,11 +484,11 @@
   "model_dir": "models",
   "tra": {
     "deterministic": false,
-    "epoch_cooldown_secs": 9,
-    "eval_cooldown_secs": 60,
-    "eval_int": 999,
+    "epoch_cooldown_secs": 45,
+    "eval_cooldown_secs": 300,
+    "eval_int": 10,
     "eval_int_scrolls": 2,
-    "fig_chunk_cooldown_ms": 60,
+    "fig_chunk_cooldown_ms": 300,
     "focal_gamma": 0.0,
     "gce_q": 0.7,
     "grad_norm": 0.5,
@@ -334,7 +498,7 @@
     "loss_type": "gce",
     "lr": 0.0001,
     "lr_decay": 0.5,
-    "n_epochs": 15,
+    "n_epochs": 10,
     "patience": 5,
     "pos_weight_enabled": false,
     "probe_int": 5,
@@ -347,10 +511,10 @@
     "seed": 41,
     "test_int": 999,
     "test_on_final": false,
-    "tta_consistency": false,
+    "tta_consistency": true,
     "tta_consistency_lambda": 0.5,
-    "tta_consistency_mode": "flips",
-    "val_cooldown_secs": 12,
+    "tta_consistency_mode": "dihedral",
+    "val_cooldown_secs": 60,
     "weight_decay": 0.0
   }
 }

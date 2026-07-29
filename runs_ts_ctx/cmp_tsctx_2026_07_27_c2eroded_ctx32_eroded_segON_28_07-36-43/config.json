@@ -68,7 +68,7 @@
     },
     "ring_close_r": 3,
     "ring_gap_r": 3,
-    "ring_label_source": "closed",
+    "ring_label_source": "eroded",
     "ring_negatives": true,
     "ring_shell_r": 2,
     "scrolls": [
@@ -302,7 +302,7 @@
     "num_workers": 4,
     "rotation_prob": 0.6
   },
-  "exp_name": "cmp_tsctx_2026_07_27_c1sanity_ctx32_closed_segON_5ep_sanity",
+  "exp_name": "cmp_tsctx_2026_07_27_c2eroded_ctx32_eroded_segON",
   "hm": {
     "dir": "./hard_negs",
     "enabled": false,
@@ -320,11 +320,11 @@
   "model_dir": "models",
   "tra": {
     "deterministic": false,
-    "epoch_cooldown_secs": 9,
-    "eval_cooldown_secs": 60,
-    "eval_int": 999,
+    "epoch_cooldown_secs": 45,
+    "eval_cooldown_secs": 300,
+    "eval_int": 15,
     "eval_int_scrolls": 2,
-    "fig_chunk_cooldown_ms": 60,
+    "fig_chunk_cooldown_ms": 300,
     "focal_gamma": 0.0,
     "gce_q": 0.7,
     "grad_norm": 0.5,
@@ -334,7 +334,7 @@
     "loss_type": "gce",
     "lr": 0.0001,
     "lr_decay": 0.5,
-    "n_epochs": 5,
+    "n_epochs": 15,
     "patience": 5,
     "pos_weight_enabled": false,
     "probe_int": 5,
@@ -350,7 +350,7 @@
     "tta_consistency": false,
     "tta_consistency_lambda": 0.5,
     "tta_consistency_mode": "flips",
-    "val_cooldown_secs": 12,
+    "val_cooldown_secs": 60,
     "weight_decay": 0.0
   }
 }

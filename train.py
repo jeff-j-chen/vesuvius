@@ -295,14 +295,28 @@ class Trainer:
             # than augmentation alone (which never forces two views to AGREE). ~1 extra forward.
             tta_cons_lambda = float(getattr(self.c.tra, "tta_consistency_lambda", 0.0))
             if getattr(self.c.tra, "tta_consistency", False) and tta_cons_lambda > 0:
-                # random flip among h / v / 180 over the spatial dims (last two axes)
-                fd = ([-1], [-2], [-1, -2])[int(torch.randint(0, 3, (1,)).item())]
-                out2 = self.model(torch.flip(b_imgs, dims=fd))
+                # a transformed view of the batch should yield the SAME tile score (ink presence
+                # is transform-invariant). "flips" = random h/v/180; "dihedral" also allows +/-90
+                # rotations (valid: tiles/context crops are square and the label is a scalar).
+                cons_mode = str(getattr(self.c.tra, "tta_consistency_mode", "flips")).lower()
+                if cons_mode == "dihedral":
+                    _cops = (
+                        lambda t: torch.flip(t, dims=[-1]),
+                        lambda t: torch.flip(t, dims=[-2]),
+                        lambda t: torch.flip(t, dims=[-1, -2]),
+                        lambda t: torch.rot90(t, 1, dims=[-2, -1]),
+                        lambda t: torch.rot90(t, -1, dims=[-2, -1]),
+                    )
+                    view = _cops[int(torch.randint(0, len(_cops), (1,)).item())](b_imgs)
+                else:
+                    fd = ([-1], [-2], [-1, -2])[int(torch.randint(0, 3, (1,)).item())]
+                    view = torch.flip(b_imgs, dims=fd)
+                out2 = self.model(view.contiguous())
                 if out2.dim() == 4:
                     out2 = out2.flatten(1).max(dim=1, keepdim=True).values
                 p1 = torch.sigmoid(outputs)
                 p2 = torch.sigmoid(out2)
-                # stop-grad on the clean view (teacher); pull the flipped view toward it
+                # stop-grad on the clean view (teacher); pull the transformed view toward it
                 cons = ((p2 - p1.detach()) ** 2) * mask
                 cons = cons.sum() / mask.sum().clamp(min=1)
                 loss = loss + tta_cons_lambda * cons
