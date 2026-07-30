@@ -658,7 +658,13 @@ class Trainer:
             return self._validate_epoch_dense()
 
         with torch.no_grad(), autocast(self.c.device):
-            for b_imgs, b_labels, mask in tqdm(self.valid_loader, desc="Validating", mininterval=5, miniters=1, file=sys.stderr):
+            for batch in tqdm(self.valid_loader, desc="Validating", mininterval=5, miniters=1, file=sys.stderr):
+                # unpack batch: 3-tuple (normal) or 4-tuple (dann=True, dataset appends scroll_id)
+                if len(batch) == 4:
+                    b_imgs, b_labels, mask, _ = batch  # ignore scroll_id in validation
+                else:
+                    b_imgs, b_labels, mask = batch
+                
                 if mask.view(mask.size(0), -1).sum() <= 0:
                     print("[ERROR] Encountered batch with mask sum == 0 in validation. This block should not be loaded!")
                     continue
@@ -697,7 +703,13 @@ class Trainer:
         loss, nb = 0.0, 0
         labels, preds, scores = [], [], []
         with torch.no_grad(), autocast(device):
-            for b_imgs, b_labels, mask in tqdm(self.valid_loader, desc="Validating", mininterval=5, miniters=1, file=sys.stderr):
+            for batch in tqdm(self.valid_loader, desc="Validating", mininterval=5, miniters=1, file=sys.stderr):
+                # unpack batch: 3-tuple (normal) or 4-tuple (dann=True, dataset appends scroll_id)
+                if len(batch) == 4:
+                    b_imgs, b_labels, mask, _ = batch  # ignore scroll_id in validation
+                else:
+                    b_imgs, b_labels, mask = batch
+                
                 pmask = (mask.to(device) > 0).float().unsqueeze(1)     # (B,1,T,T)
                 if pmask.sum() <= 0:
                     continue

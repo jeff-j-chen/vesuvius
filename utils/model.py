@@ -711,6 +711,7 @@ class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
                 - torch.log(torch.tensor(float(N), device=fused.device))
             )
 
+        # embedding returned for DANN/SupCon (heads called separately in train.py with proper params)
         dom_logits = None
         supcon_z = None
         return tile_score, emb, dom_logits, supcon_z

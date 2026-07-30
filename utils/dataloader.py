@@ -217,12 +217,16 @@ class Transform:
 
 class InkVolumeDataset(IterableDataset):
     """iterable dataset for ink volume data"""
-    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None):
+    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None):
         """initializes the dataset.
         soft_labels: optional full-res float [0,1] ink-probability map (expanded+blurred
         eroded labels). when given AND config.data.dense_soft_labels is set, the dense
         per-pixel target uses these CONTINUOUS values instead of the hard binary label —
-        calibrated soft edges (see _fetch/__next__ dense path). stored as uint8 0-255."""
+        calibrated soft edges (see _fetch/__next__ dense path). stored as uint8 0-255.
+        scroll_id: integer scroll id; stored so __next__ can emit it as the 4th element
+        of the batch when config.tra.dann=True (for domain-adversarial training)."""
+        # scroll id used by DANN (domain-adversarial) domain label yield
+        self.scroll_id = int(scroll_id) if scroll_id is not None else 0
         # store zarr path + segment id instead of the open zarr object so that
         # the dataset can be safely pickled for multiprocessing workers on Windows;
         # each worker opens its own zarr handle lazily on first access
@@ -827,8 +831,8 @@ class DataManager:
         else:
             train_x, train_y = self.train_range, self.shared_range
             valid_x, valid_y = self.valid_range, self.shared_range
-        train_set = InkVolumeDataset(self.vol, train_mask, self.labels, self.c, train_x, train_y, self.norm_stats, shuffle=True, soft_labels=getattr(self, "soft_labels", None))
-        valid_set = InkVolumeDataset(self.vol, valid_mask, self.labels, self.c, valid_x, valid_y, self.norm_stats, shuffle=False, soft_labels=getattr(self, "soft_labels", None))
+        train_set = InkVolumeDataset(self.vol, train_mask, self.labels, self.c, train_x, train_y, self.norm_stats, shuffle=True, soft_labels=getattr(self, "soft_labels", None), scroll_id=self.scroll_id)
+        valid_set = InkVolumeDataset(self.vol, valid_mask, self.labels, self.c, valid_x, valid_y, self.norm_stats, shuffle=False, soft_labels=getattr(self, "soft_labels", None), scroll_id=self.scroll_id)
         # the datasets have already copied what they need as uint8. the manager's own
         # float64 mask/labels (mask/255.0) are not used on the training side afterward
         # — for the big scroll they are ~1.9 GB EACH, so a many-scroll run would carry
@@ -1000,8 +1004,9 @@ def _sample_labels(dataset, sample_size):
     dataset_iter = iter(dataset)
     for _ in range(sample_size):
         try:
-            # get next item and only consider it if the mask is valid
-            _, label, mask = next(dataset_iter)
+            # get next item; when dann=True the dataset yields a 4-tuple (block, label, mask, sid)
+            batch = next(dataset_iter)
+            _, label, mask = batch[0], batch[1], batch[2]
             if mask.sum() > 0:
                 labels.append(int(label.item()))
         except StopIteration:
@@ -1017,7 +1022,8 @@ def calc_dense_pos_weight(dataset, n_samples=200, clamp=(1.0, 20.0)):
     it = iter(dataset)
     for _ in range(n_samples):
         try:
-            _, label_map, mask = next(it)
+            batch = next(it)
+            _, label_map, mask = batch[0], batch[1], batch[2]
         except StopIteration:
             break
         m = (mask > 0)

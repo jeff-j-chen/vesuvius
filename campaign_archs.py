@@ -35,8 +35,8 @@ from utils.config import Config
 INTER_RUN_COOLDOWN_SECS = 120
 MAE_CKPT = "models/mae_twostage.pth"
 LOG_DIR = "./runs_archs"
-N_EP = 15
-EVAL_INT = 15
+N_EP = 10
+EVAL_INT = 10
 PROBE_INT = 5
 
 
@@ -69,16 +69,17 @@ def _base_config(exp_name: str) -> Config:
     # set weight_decay to the best-performing value from the wd sweep.
     c.tra.weight_decay = 3e-1
     # set ring_label_source to "eroded" or "closed" based on c8/c9 comparison.
-    c.data.ring_label_source = "eroded"
+    c.data.ring_label_source = "closed"
     # set tta_consistency_lambda and mode based on cons sweep results.
-    c.tra.tta_consistency = True
-    c.tra.tta_consistency_lambda = 0.1
+    # conclusion: tta consistency adds significant time for little benefit
+    c.tra.tta_consistency = False 
+    c.tra.tta_consistency_lambda = 0.5
     c.tra.tta_consistency_mode   = "dihedral"
     # ---- END SENTINELS ----
 
     c.tra.l1_lambda    = 0.0           # proven inert in Adam -- keep off
-    c.dl.batch_size    = 32
-    c.dl.num_workers   = 4
+    c.dl.batch_size    = 128
+    c.dl.num_workers   = 12
     c.dl.data_aug      = True          # set by build_config below based on aug probs
     c.data.mask_memmap       = True
     c.data.ring_negatives    = True
@@ -96,10 +97,10 @@ def _base_config(exp_name: str) -> Config:
     c.dl.cutout_max_frac     = 0.2
     c.dl.cutout_n_patches    = 2
     c.dl.depth_mask_prob     = 0.0
-    c.tra.epoch_cooldown_secs   = 9*5
-    c.tra.val_cooldown_secs     = 12*5
-    c.tra.eval_cooldown_secs    = 60*5
-    c.tra.fig_chunk_cooldown_ms = 60*5
+    c.tra.epoch_cooldown_secs   = 9 * 2
+    c.tra.val_cooldown_secs     = 12 * 2
+    c.tra.eval_cooldown_secs    = 60 * 2
+    c.tra.fig_chunk_cooldown_ms = 60 * 2
     # DANN: 15 scrolls in the training set
     c.tra.dann_n_domains = 15
     # seg46527 (20260226000000) intentionally kept in for this whole campaign
@@ -126,7 +127,7 @@ TESTS = [
     # ==============================================================================
     # c0: BASELINE — all new features OFF. establishes the v16_arch_ctx reference curve
     # with the sentinel wd/ring/tta filled in. every other test is a delta off this.
-    _mk("c0base",  "ctx48_baseline_arch"),
+    # _mk("c0base",  "ctx48_baseline_arch_closed"),
 
     # dann1-3: domain-adversarial network. backbone is penalized for predicting which scroll
     # a tile comes from -> forced to learn scroll-invariant (transferable) ink features.
@@ -325,11 +326,11 @@ def run_test(c: Config, dry_run: bool) -> bool:
           f"  attn_mil={c.model.attn_mil}")
     print(f"  ring={c.data.ring_label_source}  n_epochs={c.tra.n_epochs}"
           f"  wd={c.tra.weight_decay:.1e}  l1={c.tra.l1_lambda:.1e}")
-    print(f"  dann={c.tra.dann} λ={c.tra.dann_lambda}"
-          f"  supcon={c.tra.supcon} λ={c.tra.supcon_lambda} T={c.tra.supcon_temp}")
-    print(f"  mt={c.tra.mean_teacher} λ={c.tra.mean_teacher_lambda} α={c.tra.mean_teacher_alpha}"
-          f"  tc={c.tra.test_consistency} λ={c.tra.test_consistency_lambda}")
-    print(f"  tta_cons={c.tra.tta_consistency} λ={c.tra.tta_consistency_lambda}"
+    print(f"  dann={c.tra.dann} lam={c.tra.dann_lambda}"
+          f"  supcon={c.tra.supcon} lam={c.tra.supcon_lambda} T={c.tra.supcon_temp}")
+    print(f"  mt={c.tra.mean_teacher} lam={c.tra.mean_teacher_lambda} alpha={c.tra.mean_teacher_alpha}"
+          f"  tc={c.tra.test_consistency} lam={c.tra.test_consistency_lambda}")
+    print(f"  tta_cons={c.tra.tta_consistency} lam={c.tra.tta_consistency_lambda}"
           f"  mode={c.tra.tta_consistency_mode}")
     print(f"  scrolls={len(c.data.scrolls)}")
     if dry_run:
