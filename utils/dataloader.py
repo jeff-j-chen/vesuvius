@@ -611,6 +611,11 @@ class InkVolumeDataset(IterableDataset):
         block_tensor = torch.tensor(block, dtype=torch.float32).unsqueeze(0)
         
         self.current_idx += 1
+        # when domain-adversarial training is enabled, append the scroll_id as a 4th tensor
+        # so train_epoch can build per-sample domain labels without modifying the loader API.
+        if getattr(self.c.tra, "dann", False):
+            sid_t = torch.tensor(int(self.scroll_id), dtype=torch.long)
+            return block_tensor, label, mask, sid_t
         return block_tensor, label, mask
 
 
@@ -646,7 +651,7 @@ class MultiScrollIterableDataset(IterableDataset):
         while active:
             i = random.choice(active)
             try:
-                yield next(iters[i])
+                yield next(iters[i])   # passes through the optional 4th (scroll_id) element
             except StopIteration:
                 active.remove(i)
 

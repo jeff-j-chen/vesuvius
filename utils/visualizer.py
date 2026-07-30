@@ -230,7 +230,27 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     depth_eff = {"triple": depth * 3, "double": depth * 2, "fulldepth": int(vol.shape[0])}.get(mode, depth)
     tiles_per_gb = 1e9 / (tile_area * depth_eff * 4)  # 4 bytes per float32
     chunk_tiles = max(5000, int(tiles_per_gb * 4))     # target ~4GB per chunk
-    
+
+    # TTA transforms — defined HERE (before the read loop) so _process_chunk can use them.
+    _flips = (
+        lambda t: t,
+        lambda t: torch.flip(t, dims=[4]),        # h-flip
+        lambda t: torch.flip(t, dims=[3]),        # v-flip
+        lambda t: torch.flip(t, dims=[3, 4]),     # 180
+    )
+    if str(getattr(config.data, "tta_mode", "flips")).lower() == "dihedral":
+        _tf = _flips + (
+            lambda t: torch.rot90(t, 1, dims=[3, 4]),   # +90
+            lambda t: torch.rot90(t, -1, dims=[3, 4]),  # -90
+        )
+    else:
+        _tf = _flips
+
+    def _collapse(lg):
+        return lg.flatten(1).max(dim=1, keepdim=True).values if lg.dim() == 4 else lg
+
+    pmap_tta = np.full((h_small, w_small), np.nan, dtype=np.float32) if also_tta else None
+
     pbar_read = tqdm(sorted(by_y), desc=f"Read {volume_name}", leave=False)
     
     for y_off in pbar_read:
@@ -305,33 +325,6 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-
-    # TTA transforms (spatial dims are the last two; tiles are square so rot90 keeps shape).
-    # identity is first so it doubles as the plain (no-aug) prediction -- this lets also_tta
-    # produce BOTH the regular and TTA maps from a SINGLE read. default "flips" (4) drops the
-    # two 90-degree rotations: they are the expensive non-contiguous ops AND an unnatural view
-    # for oriented text; "dihedral" (6) restores them.
-    _flips = (
-        lambda t: t,
-        lambda t: torch.flip(t, dims=[4]),        # h-flip
-        lambda t: torch.flip(t, dims=[3]),        # v-flip
-        lambda t: torch.flip(t, dims=[3, 4]),     # 180
-    )
-    if str(getattr(config.data, "tta_mode", "flips")).lower() == "dihedral":
-        _tf = _flips + (
-            lambda t: torch.rot90(t, 1, dims=[3, 4]),   # +90
-            lambda t: torch.rot90(t, -1, dims=[3, 4]),  # -90
-        )
-    else:
-        _tf = _flips
-
-    def _collapse(lg):
-        return lg.flatten(1).max(dim=1, keepdim=True).values if lg.dim() == 4 else lg
-
-    pmap_tta = np.full((h_small, w_small), np.nan, dtype=np.float32) if also_tta else None
-
-    # NOTE: old code used to accumulate all tiles in `valid` then process them here in one loop.
-    # now we process in chunks during the read loop above to avoid OOM. this section is removed.
 
     # optional post-hoc spatial smoothing -- only applied to valid (non-NaN) tiles
     sigma = float(getattr(config.data, "smooth_sigma", 0.0))
@@ -455,20 +448,36 @@ class TensorboardVisualizer:
         # layout for dashboards unchanged to keep metric names
         self.layout = {
             "Training_Overview": {
-                "loss": ["Multiline", ["G_M/Loss/Train", "G_M/Loss/Train_Raw", "G_M/Loss/Valid"]],
-                "accuracy": ["Multiline", ["G_M/Acc/Train", "G_M/Acc/Valid"]],
-            },
-            "P_M_Metrics": {
-                "precision_recall": [
+                "loss": [
                     "Multiline", [
-                        "P_M/Precision/Train", "P_M/Precision/Valid",
-                        "P_M/Recall/Train", "P_M/Recall/Valid"
+                        "G_M/Loss/Train", 
+                        # "G_M/Loss/Train_Raw", 
+                        "G_M/Loss/Valid"
                     ]
                 ],
-                "f1_specificity": [
+                "accuracy": [
                     "Multiline", [
-                        "P_M/F1_Score/Train", "P_M/F1_Score/Valid",
-                        "P_M/Specificity/Train", "P_M/Specificity/Valid"
+                        "G_M/Acc/Train",
+                        "G_M/Acc/Valid"
+                    ]
+                ],
+            },
+            "P_M_Metrics": {
+                # "precision_recall": [
+                #     "Multiline", [
+                #         "P_M/Precision/Train", "P_M/Precision/Valid",
+                #         "P_M/Recall/Train", "P_M/Recall/Valid"
+                #     ]
+                # ],
+                # "f1_specificity": [
+                #     "Multiline", [
+                #         "P_M/F1_Score/Train", "P_M/F1_Score/Valid",
+                #         "P_M/Specificity/Train", "P_M/Specificity/Valid"
+                #     ]
+                # ],
+                "F1": [
+                    "Multiline", [
+                        "P_M/F1_Score/Train", "P_M/F1_Score/Valid"
                     ]
                 ],
             },
@@ -477,20 +486,36 @@ class TensorboardVisualizer:
                 "pr_auc": ["Multiline", ["AUC/PR_AUC/Train", "AUC/PR_AUC/Valid"]],
             },
             "Readability": {
-                "contrast_ranking": [
+                # "contrast_ranking": [
+                #     "Multiline", [
+                #         "R_M/Train/LocalContrast",
+                #         "R_M/Valid/LocalContrast",
+                #         "R_M/Train/LocalRanking",
+                #         "R_M/Valid/LocalRanking",
+                #     ]
+                # ],
+                # "composite": [
+                #     "Multiline", [
+                #         "R_M/Train/ReadabilityComposite",
+                #         "R_M/Valid/ReadabilityComposite",
+                #         "R_M/Train_tta/ReadabilityComposite",
+                #         "R_M/Valid_tta/ReadabilityComposite",
+                #     ]
+                # ],
+                # pinnable aggregate: mean ReadabilityComposite across all 30 probe ROIs,
+                # split by probe label (easy = letter-tracing, hard = ambiguous region)
+                "probe_aggregate": [
                     "Multiline", [
-                        "R_M/LocalContrast",
-                        "R_M/LocalRanking",
-                        "R_M/TopKPrecision",
-                        "R_M/InkFractionSpearman"
+                        "R_M/Probe/ALL/ReadabilityComposite",
+                        "R_M/Probe/Easy/ReadabilityComposite",
+                        "R_M/Probe/Hard/ReadabilityComposite",
                     ]
                 ],
-                "low_fpr_spill": [
+                "probe_aggregate_tta": [
                     "Multiline", [
-                        "R_M/RecallAt1PctFPR",
-                        "R_M/PartialAUCAt1PctFPR",
-                        "R_M/SpillRatio",
-                        "R_M/ReadabilityComposite"
+                        "R_M/Probe/ALL/ReadabilityComposite_tta",
+                        "R_M/Probe/Easy/ReadabilityComposite_tta",
+                        "R_M/Probe/Hard/ReadabilityComposite_tta",
                     ]
                 ],
             },
@@ -2899,28 +2924,11 @@ class TensorboardVisualizer:
             probe_data_list.append(probe_data)
 
             aggregate_metrics = probe_data["aggregate_metrics"]
-            if aggregate_metrics:
-                probe_tag = spec["tag"]
-                for key, value in {
-                    f"R_M/Probe/{probe_tag}/LocalContrast":        aggregate_metrics.get("local_contrast", np.nan),
-                    f"R_M/Probe/{probe_tag}/CoverageRecall":       aggregate_metrics.get("coverage_recall", np.nan),
-                    f"R_M/Probe/{probe_tag}/RecallAt5PctFPR":      aggregate_metrics.get("recall_at_5pct_fpr", np.nan),
-                    f"R_M/Probe/{probe_tag}/ReadabilityComposite": aggregate_metrics.get("readability_composite", np.nan),
-                }.items():
-                    if np.isfinite(value):
-                        self.writer.add_scalar(key, float(value), epoch)
+            # per-scroll probe composites removed — only the ALL aggregate is logged below
 
             aggregate_tta = probe_data.get("aggregate_metrics_tta")
-            if aggregate_tta:
-                probe_tag = spec["tag"]
-                for key, value in {
-                    f"R_M/Probe/{probe_tag}/tta/LocalContrast":        aggregate_tta.get("local_contrast", np.nan),
-                    f"R_M/Probe/{probe_tag}/tta/CoverageRecall":       aggregate_tta.get("coverage_recall", np.nan),
-                    f"R_M/Probe/{probe_tag}/tta/RecallAt5PctFPR":      aggregate_tta.get("recall_at_5pct_fpr", np.nan),
-                    f"R_M/Probe/{probe_tag}/tta/ReadabilityComposite": aggregate_tta.get("readability_composite", np.nan),
-                }.items():
-                    if np.isfinite(value):
-                        self.writer.add_scalar(key, float(value), epoch)
+            # tta ReadabilityComposite rolled into the ALL/ReadabilityComposite_tta aggregate;
+            # skip per-probe tta scalars to avoid 30 more clutter tags.
 
         if probe_data_list:
             fig = self._create_combined_probe_depth_figure(probe_data_list)
@@ -2928,6 +2936,37 @@ class TensorboardVisualizer:
             fig.texts[0].set_text(fig.texts[0].get_text().format(epoch + 1))
             self.writer.add_figure("ProbeROIs/Grid", fig, epoch)
             plt.close(fig)
+
+            # aggregate readability composite across all probes — total + per-label splits
+            all_composites = {
+                "ALL":  [], "Easy": [], "Hard": []
+            }
+            all_composites_tta = {
+                "ALL":  [], "Easy": [], "Hard": []
+            }
+            for pd in probe_data_list:
+                lbl   = (pd["spec"].get("label") or "").capitalize()  # "easy"->"Easy" etc.
+                rc    = pd["aggregate_metrics"].get("readability_composite", float("nan"))
+                rc_t  = pd.get("aggregate_metrics_tta", {}).get("readability_composite", float("nan"))
+                all_composites["ALL"].append(rc)
+                all_composites_tta["ALL"].append(rc_t)
+                if lbl in all_composites:
+                    all_composites[lbl].append(rc)
+                    all_composites_tta[lbl].append(rc_t)
+
+            for group, vals in all_composites.items():
+                finite = [v for v in vals if np.isfinite(v)]
+                if finite:
+                    self.writer.add_scalar(f"R_M/Probe/{group}/ReadabilityComposite",
+                                          float(np.mean(finite)), epoch)
+                    if group == "ALL":
+                        print(f"[probe-agg] {group}: {np.mean(finite):.4f} "
+                              f"({len(finite)} probes)")
+            for group, vals in all_composites_tta.items():
+                finite = [v for v in vals if np.isfinite(v)]
+                if finite:
+                    self.writer.add_scalar(f"R_M/Probe/{group}/ReadabilityComposite_tta",
+                                          float(np.mean(finite)), epoch)
 
     def _collect_probe_region_predictions(self, model, spec):
         """prepare per-depth predictions and readability stats for one fixed probe region"""

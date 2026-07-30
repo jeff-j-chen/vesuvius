@@ -519,7 +519,209 @@ _ARCH_MAP = {
     "v15_twostage_wide_zgrad": InkDetectorTwoStageWideZGrad,
     "v15_twostage_wide_zgrad_ctx": InkDetectorTwoStageWideZGradCtx,
     "v15_twostage_wide_zgrad_fovea": InkDetectorTwoStageWideZGradFovea,
+    # v16_arch_ctx registered below AFTER InkDetectorArch is defined
 }
+
+
+# ============================================================================
+# CAMPAIGN ARCHS: DANN, SupCon projection head, Attention-MIL
+# ============================================================================
+
+class _GradientReversal(torch.autograd.Function):
+    """forward = identity, backward = multiply gradient by -lambda.
+    lets the backbone be trained to FOOL the domain classifier (scroll id head)."""
+    @staticmethod
+    def forward(ctx, x, lam):
+        ctx.save_for_backward(torch.tensor(lam))
+        return x.view_as(x)
+    @staticmethod
+    def backward(ctx, grad):
+        lam, = ctx.saved_tensors
+        return -lam * grad, None
+
+def _grad_reversal(x, lam: float):
+    return _GradientReversal.apply(x, lam)
+
+
+class DomainHead(nn.Module):
+    """2-layer MLP domain classifier (n_domains-way): takes the flattened tile embedding
+    (the pre-aggregation features from stage-2 output, after center-crop) and predicts
+    which scroll it came from. trained via a gradient-reversal layer so the backbone learns
+    SCROLL-INVARIANT features. n_in = embedding dim = D*H*W from the center voxel map."""
+    def __init__(self, n_in: int, n_domains: int, hidden: int = 128):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_in, hidden), nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(hidden, n_domains),
+        )
+    def forward(self, emb, lam: float):
+        return self.net(_grad_reversal(emb, lam))
+
+
+class SupConHead(nn.Module):
+    """2-layer projection head for supervised contrastive learning. takes the flattened tile
+    embedding and projects to a unit-norm vector for the contrastive loss. follows Khosla 2020:
+    linear -> relu -> linear -> l2-norm. proj_dim usually 128."""
+    def __init__(self, n_in: int, proj_dim: int = 128, hidden: int = 256):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_in, hidden), nn.ReLU(inplace=True),
+            nn.Linear(hidden, proj_dim),
+        )
+    def forward(self, emb):
+        z = self.net(emb)
+        return F.normalize(z, dim=-1)
+
+
+def supcon_loss(z: torch.Tensor, labels: torch.Tensor, temp: float = 0.07) -> torch.Tensor:
+    """supervised contrastive loss (Khosla et al., 2020) for binary labels.
+    z: (B, D) L2-normalized projections; labels: (B,) binary {0,1} long tensor.
+    positives = same class, negatives = different class. returns scalar loss mean per anchor."""
+    B = z.shape[0]
+    if B < 2:
+        return z.new_zeros(())
+    # cosine sim matrix / temperature
+    sim = torch.mm(z, z.T) / temp          # (B, B)
+    # mask: same label (pos pairs), excluding self
+    labels = labels.view(-1)
+    pos_mask = (labels.unsqueeze(0) == labels.unsqueeze(1)) & (~torch.eye(B, dtype=torch.bool, device=z.device))
+    # if no positive pair for any anchor, skip gracefully
+    if not pos_mask.any():
+        return z.new_zeros(())
+    # log-softmax denominator: all j != i
+    self_mask = torch.eye(B, dtype=torch.bool, device=z.device)
+    exp_sim = torch.exp(sim - sim.max(dim=1, keepdim=True).values.detach())
+    exp_sim = exp_sim.masked_fill(self_mask, 0.0)
+    log_denom = torch.log(exp_sim.sum(dim=1, keepdim=True).clamp(min=1e-12))
+    log_prob = sim - sim.max(dim=1, keepdim=True).values.detach() - log_denom
+    # mean log-prob over POSITIVE pairs for each anchor
+    pos_count = pos_mask.float().sum(dim=1).clamp(min=1.0)
+    loss_per_anchor = -(log_prob * pos_mask.float()).sum(dim=1) / pos_count
+    return loss_per_anchor.mean()
+
+
+class GatedAttentionMIL(nn.Module):
+    """gated attention-MIL aggregation (Ilse, Tomczak & Welling 2018).
+
+    replaces the fixed LSE pooling with a LEARNED per-voxel attention: the tile score is
+    the attention-weighted sum of projected voxel features.
+
+    a_i = softmax(wᵀ (tanh(V hᵢ) ⊙ σ(U hᵢ)))
+    score = Σ aᵢ · (Wout hᵢ)
+
+    benefits over LSE:
+      (1) discovers WHICH voxels carry ink signal -> better SNR on faint strokes.
+      (2) attention map is a free sub-tile soft segmentation (shape improvement).
+      (3) still returns ONE scalar per tile (MIL ban respected).
+    """
+    def __init__(self, feat_dim: int = 1, att_dim: int = 32):
+        super().__init__()
+        self.V = nn.Linear(feat_dim, att_dim, bias=False)
+        self.U = nn.Linear(feat_dim, att_dim, bias=False)
+        self.w = nn.Linear(att_dim, 1, bias=False)
+        self.out = nn.Linear(feat_dim, 1, bias=True)
+        nn.init.xavier_uniform_(self.V.weight)
+        nn.init.xavier_uniform_(self.U.weight)
+        nn.init.zeros_(self.w.weight)
+        self.last_attn_weights = None   # (B, N) saved for visualization
+
+    def forward(self, vmap: torch.Tensor) -> torch.Tensor:
+        """vmap: (B, 1, D, H, W) or (B, C, D, H, W) voxel feature map.
+        returns (B, 1) tile score."""
+        B = vmap.shape[0]
+        h = vmap.flatten(2).permute(0, 2, 1)   # (B, N, C)
+        gate = torch.tanh(self.V(h)) * torch.sigmoid(self.U(h))   # (B, N, att_dim)
+        a = self.w(gate).squeeze(-1)            # (B, N) raw logits
+        a = torch.softmax(a, dim=-1)            # (B, N) attention weights
+        self.last_attn_weights = a.detach()
+        score = (a.unsqueeze(-1) * self.out(h)).sum(dim=1)  # (B, 1)
+        return score
+
+
+class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
+    """v16_arch_ctx: campaign_archs baseline — ctx48/ds2 + optional DANN, SupCon,
+    and Attention-MIL. all three features are gated by config flags so each can be
+    tested individually and in combination. architecture core is UNCHANGED from
+    InkDetectorTwoStageWideZGradCtx (same backbone / stage2 / center-crop / MIL-LSE).
+
+    new config flags (all in config.tra or config.model):
+      tra.dann              bool    False   DANN domain-adversarial head
+      tra.dann_n_domains    int     15      number of scroll-id classes
+      tra.supcon            bool    False   supervised contrastive projection head
+      model.attn_mil        bool    False   replace LSE with gated attention-MIL
+    """
+    def __init__(self, config: Config):
+        super().__init__(config)
+        # pre-MIL center embedding dim (D * ch * cw after center-crop in pooled coords)
+        # for ctx48/ds2: input 48/2=24 -> depth_mix maxpool -> Hf=12; center=tile//(2*ds)=4
+        # so D=8, ch=cw=4 -> emb_dim = 8*4*4 = 128
+        _ds = max(1, int(getattr(config.data, "context_downsample", 1)))
+        _tile = int(config.data.tile_size)
+        _ctr = max(1, _tile // (2 * _ds))
+        self._emb_dim = 8 * _ctr * _ctr   # always 8 depth slices per window (after depth_mix)
+
+        # DANN domain head
+        self._use_dann = bool(getattr(config.tra, "dann", False))
+        if self._use_dann:
+            n_dom = int(getattr(config.tra, "dann_n_domains", 15))
+            self.domain_head = DomainHead(self._emb_dim, n_dom, hidden=64)
+
+        # SupCon projection head
+        self._use_supcon = bool(getattr(config.tra, "supcon", False))
+        if self._use_supcon:
+            self.supcon_head = SupConHead(self._emb_dim, proj_dim=128, hidden=256)
+
+        # Attention-MIL (replaces LSE)
+        self._use_attn_mil = bool(getattr(config.model, "attn_mil", False))
+        if self._use_attn_mil:
+            self.attn_mil = GatedAttentionMIL(feat_dim=1, att_dim=32)
+
+    def forward_with_extras(self, x):
+        """like forward() but also returns (embedding, domain_logits, supcon_proj).
+        used by train.py when DANN or SupCon is active to compute aux losses.
+        non-active outputs are None. embedding is always returned (for DANN/SupCon)."""
+        if x.dim() == 4: x = x.unsqueeze(1)
+        if self._ds > 1:
+            x = F.avg_pool3d(x, kernel_size=(1, self._ds, self._ds), stride=(1, self._ds, self._ds))
+        voxel_maps = [
+            self.stage1.get_voxel_logits(x[:, :, z0:z1], depth_offset=pe_off)
+            for z0, z1, pe_off in self.WINDOWS
+        ]
+        v_cat = torch.cat(voxel_maps, dim=1)
+        fused = self.stage2(v_cat)
+        Hf, Wf = fused.shape[-2], fused.shape[-1]
+        ch, cw = min(self._center, Hf), min(self._center, Wf)
+        oy, ox = (Hf - ch) // 2, (Wf - cw) // 2
+        center = fused[:, :, :, oy:oy + ch, ox:ox + cw]
+        self.last_voxel_map = center.detach()
+
+        # embedding: flatten center features for DANN / SupCon
+        emb = center.flatten(1)   # (B, emb_dim)
+
+        # tile score: attention-MIL or LSE
+        if self._use_attn_mil:
+            tile_score = self.attn_mil(center)
+        else:
+            r = self.lse_r2.clamp(min=0.5, max=10.0)
+            flat = center.flatten(1)
+            N = flat.shape[1]
+            tile_score = (1.0 / r) * (
+                torch.logsumexp(r * flat, dim=1, keepdim=True)
+                - torch.log(torch.tensor(float(N), device=fused.device))
+            )
+
+        dom_logits = None
+        supcon_z = None
+        return tile_score, emb, dom_logits, supcon_z
+
+    def forward(self, x):
+        score, _, _, _ = self.forward_with_extras(x)
+        return score
+
+
+# register v16_arch_ctx AFTER the class is defined
+_ARCH_MAP["v16_arch_ctx"] = InkDetectorArch
 
 
 def create_model(config: Config):

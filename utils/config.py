@@ -272,6 +272,33 @@ class TrainingConfig:
     # (e.g. test_int=9999). used by leave-one-out campaigns to infer the held-out fragment.
     test_on_final: bool = False
 
+    # ---- campaign_archs: architectural regularization levers (all off by default) ----
+    # DANN: domain-adversarial head + gradient reversal (DANN, Ganin 2015). forces the backbone
+    # to produce scroll-invariant features by training a domain classifier adversarially.
+    dann: bool = False
+    dann_lambda: float = 0.1           # gradient reversal strength (ramps up over dann_ramp_epochs)
+    dann_ramp_epochs: int = 5          # linear ramp from 0 -> dann_lambda over this many epochs
+    dann_n_domains: int = 15           # number of scroll-id classes (= number of training scrolls)
+
+    # SupCon: supervised contrastive learning auxiliary head (Khosla 2020). pulls same-class tile
+    # embeddings together and pushes cross-class ones apart -> transferable ink boundary.
+    supcon: bool = False
+    supcon_lambda: float = 0.1         # weight of the supcon loss term
+    supcon_temp: float = 0.07          # temperature for the contrastive softmax
+
+    # mean-teacher self-training on verified negatives from 2.4um inklabels + test scrolls.
+    # VERIFIED NEGATIVES: tiles where 2.4um inklabel < verified_neg_threshold are trusted
+    # papyrus -> hard-negative supervision reinforced during training.
+    mean_teacher: bool = False
+    mean_teacher_alpha: float = 0.999  # EMA decay for teacher weights (higher = slower update)
+    mean_teacher_ramp_epochs: int = 3  # ramp consistency weight from 0 over this many epochs
+    mean_teacher_lambda: float = 0.1   # consistency loss weight (student vs teacher, unlabeled)
+    verified_neg_threshold: int = 26   # 2.4um label < this = definite papyrus (~0.1 ink prob)
+    verified_neg_lambda: float = 0.2   # extra weight on verified-negative supervised tiles
+    # test-scroll consistency: enforce student==teacher on unlabeled test-scroll tiles
+    test_consistency: bool = False
+    test_consistency_lambda: float = 0.1
+
 
 @dataclass
 class ModelConfig:
@@ -279,6 +306,7 @@ class ModelConfig:
     conv1_drop: float = 0.05   # Dropout3d between depth-mix conv blocks (channel-wise)
     conv2_drop: float = 0.075  # Dropout3d at end of depth-mix stage (channel-wise)
     head_drop:  float = 0.0    # Dropout3d before voxel head (closest to old FC-head dropout)
+    attn_mil:   bool  = False  # use gated attention-MIL instead of fixed LSE aggregation
 
 
 @dataclass

@@ -8,7 +8,7 @@ from utils.config import Config
 from utils.visualizer import TensorboardVisualizer
 from utils.hard_mining import HardMiningManager, HardMiningInjector
 from utils.dataloader import DataManager, get_dataloaders, calc_class_wgts, calc_dense_pos_weight, MultiScrollIterableDataset
-from utils.model import create_model
+from utils.model import create_model, supcon_loss, InkDetectorArch
 from utils.training_utils import (
     create_optimizer_and_scheduler, 
     create_loss_function,
@@ -215,9 +215,78 @@ class Trainer:
         if pw is None and self.pos_weight is not None:
             print("[loss] pos_weight DISABLED (pos_weight_enabled=False) -- using unweighted loss")
         criterion = create_loss_function(pw, self.c)
-        
+
+        # mean teacher: EMA copy of the model (no gradients; updated in run() after each step)
+        self._teacher_model = None
+        if getattr(self.c.tra, "mean_teacher", False):
+            import copy
+            self._teacher_model = copy.deepcopy(model)
+            self._teacher_model.eval()
+            for p in self._teacher_model.parameters():
+                p.requires_grad_(False)
+            print("[mean-teacher] EMA teacher initialized")
+
+        # load verified-negative masks (2.4um inklabel < threshold = definite papyrus).
+        # resized to each scroll's zarr dims via cv2; stored as binary uint8 per scroll.
+        self._verified_neg_masks = {}
+        if getattr(self.c.tra, "mean_teacher", False) or getattr(self.c.tra, "verified_neg_lambda", 0.0) > 0:
+            self._load_verified_neg_masks()
+
+        # load test-scroll zarrs for teacher-student consistency (if enabled). these are NOT
+        # used for labels -- only unlabeled consistency forward passes.
+        self._test_vols = {}
+        if getattr(self.c.tra, "test_consistency", False):
+            self._load_test_consistency_vols()
+
         print(f" done in {time.time() - start_time:.2f}s")
         return model, params, optimizer, scheduler, criterion
+
+    def _load_verified_neg_masks(self):
+        """for each training scroll, load the 2.4µm inklabel, resize to zarr dims (W,H),
+        and binarize with threshold < verified_neg_threshold -> 1 (definite papyrus)."""
+        import cv2 as _cv2, zarr as _zarr
+        thr = int(getattr(self.c.tra, "verified_neg_threshold", 26))
+        zp = self.c.data.zarr_path
+        for sc in self.c.data.scrolls:
+            sid = int(sc.scroll_id)
+            lpath = f"./inklabels/2_4um/{sid}.png"
+            if not os.path.exists(lpath):
+                continue
+            lbl = _cv2.imread(lpath, _cv2.IMREAD_GRAYSCALE)
+            if lbl is None:
+                continue
+            # resize label to exact zarr spatial dims
+            zpath = os.path.join(zp, f"{sid}.zarr")
+            if not os.path.isdir(zpath):
+                continue
+            z = _zarr.open(zpath, mode='r'); _, zH, zW = map(int, z.shape)
+            lH, lW = lbl.shape[:2]
+            if (lH, lW) != (zH, zW):
+                lbl = _cv2.resize(lbl, (zW, zH), interpolation=_cv2.INTER_NEAREST)
+            vn = (lbl < thr).astype('uint8')
+            self._verified_neg_masks[sid] = vn
+        print(f"[verified-neg] loaded {len(self._verified_neg_masks)} masks (thr<{thr})")
+
+    def _load_test_consistency_vols(self):
+        """open zarrs for the test scrolls used in teacher-student consistency. masks loaded too."""
+        import zarr as _zarr, cv2 as _cv2
+        zp = self.c.data.zarr_path
+        for sid in getattr(self.c.data, 'test_scroll_ids', []):
+            sid = int(sid)
+            zpath = os.path.join(zp, f"{sid}.zarr")
+            mpath = f"./masks/{sid}.png"
+            if not os.path.isdir(zpath) or not os.path.exists(mpath):
+                continue
+            try:
+                vol = _zarr.open(zpath, mode='r')
+                mask_img = _cv2.imread(mpath, _cv2.IMREAD_GRAYSCALE)
+                mask_bin = (mask_img > 127).astype('uint8') if mask_img is not None else None
+                self._test_vols[sid] = {'vol': vol, 'mask': mask_bin}
+                D, H, W = map(int, vol.shape)
+                print(f"[test-consistency] loaded {sid} ({W}x{H})")
+            except Exception as e:
+                print(f"[test-consistency] skipping {sid}: {e}")
+        print(f"[test-consistency] {len(self._test_vols)} test vols loaded for EMA consistency")
 
     def _dump_run_config(self):
         """write the full resolved config as config.json into this run's tensorboard dir and add
@@ -239,7 +308,7 @@ class Trainer:
         except Exception as e:
             print(f"[config] WARN could not dump run config: {e}", flush=True)
 
-    def _train_batch(self, b_imgs, b_labels, mask):
+    def _train_batch(self, b_imgs, b_labels, mask, scroll_ids_batch=None, epoch=0):
         """trains the model on a single batch of data"""
         if getattr(self.c.data, "dense_labels", False):
             return self._train_batch_dense(b_imgs, b_labels, mask)
@@ -252,7 +321,14 @@ class Trainer:
 
         # forward pass with automatic mixed precision
         with autocast(self.c.device):
-            outputs = self.model(b_imgs)
+            # v16_arch_ctx exposes DANN/SupCon embeddings; other archs fall back gracefully
+            use_extras = isinstance(self.model, InkDetectorArch) and (
+                getattr(self.c.tra, "dann", False) or getattr(self.c.tra, "supcon", False))
+            if use_extras:
+                outputs, emb, _, _ = self.model.forward_with_extras(b_imgs)
+            else:
+                outputs = self.model(b_imgs)
+                emb = None
             # per-voxel models return (B,1,H,W) heatmap; apply MIL max for tile-level BCE
             if outputs.dim() == 4:
                 outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
@@ -289,15 +365,9 @@ class Trainer:
                 )
                 loss = loss + ranking_lambda * rloss
 
-            # optional TTA-consistency regularizer: an extra FLIPPED view of the batch should
-            # yield the SAME tile score (ink-present is flip-invariant). penalizing the two
-            # predictions' disagreement makes the model invariant -> fewer holdout hallucinations
-            # than augmentation alone (which never forces two views to AGREE). ~1 extra forward.
+            # optional TTA-consistency regularizer
             tta_cons_lambda = float(getattr(self.c.tra, "tta_consistency_lambda", 0.0))
             if getattr(self.c.tra, "tta_consistency", False) and tta_cons_lambda > 0:
-                # a transformed view of the batch should yield the SAME tile score (ink presence
-                # is transform-invariant). "flips" = random h/v/180; "dihedral" also allows +/-90
-                # rotations (valid: tiles/context crops are square and the label is a scalar).
                 cons_mode = str(getattr(self.c.tra, "tta_consistency_mode", "flips")).lower()
                 if cons_mode == "dihedral":
                     _cops = (
@@ -316,16 +386,55 @@ class Trainer:
                     out2 = out2.flatten(1).max(dim=1, keepdim=True).values
                 p1 = torch.sigmoid(outputs)
                 p2 = torch.sigmoid(out2)
-                # stop-grad on the clean view (teacher); pull the transformed view toward it
                 cons = ((p2 - p1.detach()) ** 2) * mask
                 cons = cons.sum() / mask.sum().clamp(min=1)
                 loss = loss + tta_cons_lambda * cons
+
+            # DANN: domain-adversarial head. linearly ramp lambda from 0 -> dann_lambda
+            if getattr(self.c.tra, "dann", False) and emb is not None and scroll_ids_batch is not None:
+                n_ep = max(1, self.c.tra.n_epochs)
+                ramp = min(1.0, epoch / max(1, getattr(self.c.tra, "dann_ramp_epochs", 5)))
+                dann_lam = float(getattr(self.c.tra, "dann_lambda", 0.1)) * ramp
+                dom_logits = self.model.domain_head(emb, dann_lam)
+                dom_labels = torch.tensor(scroll_ids_batch, device=self.c.device, dtype=torch.long)
+                dann_loss = torch.nn.functional.cross_entropy(dom_logits, dom_labels)
+                loss = loss + dann_lam * dann_loss
+
+            # SupCon: supervised contrastive loss on the projected tile embeddings
+            if getattr(self.c.tra, "supcon", False) and emb is not None:
+                supcon_lam = float(getattr(self.c.tra, "supcon_lambda", 0.1))
+                supcon_temp = float(getattr(self.c.tra, "supcon_temp", 0.07))
+                z = self.model.supcon_head(emb)
+                sc_loss = supcon_loss(z, b_labels.view(-1).long(), temp=supcon_temp)
+                loss = loss + supcon_lam * sc_loss
+
+            # mean-teacher consistency on labeled tiles (train with verified-neg upweighting)
+            if getattr(self.c.tra, "mean_teacher", False) and self._teacher_model is not None:
+                mt_lam = float(getattr(self.c.tra, "mean_teacher_lambda", 0.1))
+                ramp = min(1.0, epoch / max(1, getattr(self.c.tra, "mean_teacher_ramp_epochs", 3)))
+                mt_lam = mt_lam * ramp
+                if mt_lam > 0:
+                    with torch.no_grad():
+                        t_out = self._teacher_model(b_imgs)
+                        if t_out.dim() == 4:
+                            t_out = t_out.flatten(1).max(dim=1, keepdim=True).values
+                        t_prob = torch.sigmoid(t_out)
+                    s_prob = torch.sigmoid(outputs)
+                    mt_cons = ((s_prob - t_prob.detach()) ** 2) * mask
+                    loss = loss + mt_lam * mt_cons.sum() / mask.sum().clamp(min=1)
 
         # backward pass and optimization step
         self.scaler.scale(loss).backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()
+
+        # EMA teacher update after each step (alpha * teacher + (1-alpha) * student)
+        if getattr(self.c.tra, "mean_teacher", False) and self._teacher_model is not None:
+            alpha = float(getattr(self.c.tra, "mean_teacher_alpha", 0.999))
+            with torch.no_grad():
+                for t_p, s_p in zip(self._teacher_model.parameters(), self.model.parameters()):
+                    t_p.data.mul_(alpha).add_(s_p.data, alpha=1.0 - alpha)
 
         # calculate scores and labels for metrics
         scores = torch.sigmoid(outputs).cpu().detach().numpy().flatten()
@@ -408,27 +517,54 @@ class Trainer:
         
         return injected_n
 
-    def train_epoch(self, hard_injector):
+    def train_epoch(self, hard_injector, epoch=0):
         """runs a single training epoch"""
         self.model.train()
         loss, raw_loss = 0.0, 0.0
         labels, preds, scores = [], [], []
         total_inj = 0
 
-        for batch_idx, (b_imgs, b_labels, mask) in enumerate(tqdm(self.train_loader, desc="Training", mininterval=5, miniters=1, file=sys.stderr)):
+        # build scroll-id -> domain-index map once per epoch for DANN
+        _scroll_domain_map = {}
+        if getattr(self.c.tra, "dann", False):
+            for i, sc in enumerate(self.c.data.scrolls):
+                _scroll_domain_map[int(sc.scroll_id)] = i
+
+        for batch_idx, batch in enumerate(tqdm(self.train_loader, desc="Training", mininterval=5, miniters=1, file=sys.stderr)):
+            # unpack batch: 3-tuple (normal) or 4-tuple (dann=True, dataset appends scroll_id).
+            # when dann=True the dataset emits (block, label, mask, scroll_id_tensor) so every
+            # sample has its own ground-truth domain label for the adversarial head.
+            sid_batch = None
+            if len(batch) == 4:
+                b_imgs, b_labels, mask, b_sid_tensors = batch
+                if _scroll_domain_map:
+                    sid_batch = [_scroll_domain_map.get(int(s.item()), 0) for s in b_sid_tensors]
+            else:
+                b_imgs, b_labels, mask = batch
+                # single-scroll fallback: assign all samples to the same domain index
+                if _scroll_domain_map and len(self._scroll_ids) == 1:
+                    dom = _scroll_domain_map.get(int(self._scroll_ids[0]), 0)
+                    sid_batch = [dom] * b_imgs.shape[0]
+
             # inject hard-mined samples into the batch
             total_inj += self._ins_hard_samples(
                 b_imgs, b_labels, mask, hard_injector, len(self.train_loader) - batch_idx
             )
 
             # train on the (potentially modified) batch
-            b_scores, b_labels, b_loss, b_raw_loss = self._train_batch(b_imgs, b_labels, mask)
+            b_scores, b_labels_out, b_loss, b_raw_loss = self._train_batch(
+                b_imgs, b_labels, mask, scroll_ids_batch=sid_batch, epoch=epoch)
+
+            # test-scroll consistency: sample a small batch from test vols, apply through
+            # student + teacher, penalize disagreement (no class assertion, unlabeled only)
+            if getattr(self.c.tra, "test_consistency", False) and self._test_vols and batch_idx % 4 == 0:
+                self._apply_test_consistency(epoch)
 
             # accumulate results for epoch-level metrics
-            if b_scores.size > 0:  # check if the batch was skipped
+            if b_scores.size > 0:
                 loss += b_loss
                 raw_loss += b_raw_loss
-                labels.extend(b_labels)
+                labels.extend(b_labels_out)
                 preds.extend((b_scores > 0.5).astype(int))
                 scores.extend(b_scores)
 
@@ -444,6 +580,73 @@ class Trainer:
             print(f"[HARD][Epoch Summary] injected={total_inj} "
                   f"injector_used={st['used']} injector_skipped={st['skipped']}")
         return metrics
+
+    def _apply_test_consistency(self, epoch):
+        """apply teacher-student consistency loss on a small random batch from one test scroll.
+        no labels, no class assertion -- pure function-smoothness on the target domain."""
+        if not self._test_vols or self._teacher_model is None:
+            return
+        tc_lam = float(getattr(self.c.tra, "test_consistency_lambda", 0.1))
+        ramp = min(1.0, epoch / max(1, getattr(self.c.tra, "mean_teacher_ramp_epochs", 3)))
+        tc_lam = tc_lam * ramp
+        if tc_lam <= 0:
+            return
+        import zarr as _zarr
+        from utils.visualizer import predict_tiles
+        # pick one test scroll at random
+        sid = random.choice(list(self._test_vols.keys()))
+        tv = self._test_vols[sid]
+        vol = tv['vol']; mask_bin = tv['mask']
+        if mask_bin is None:
+            return
+        D, H, W = map(int, vol.shape)
+        T = self.c.data.tile_size
+        ctx = int(getattr(self.c.data, "context_size", 0) or 0)
+        sp = ctx if (ctx > T) else T
+        # sample up to batch_size random masked tiles
+        bs = self.c.dl.batch_size
+        ys = np.random.randint(0, max(1, H - sp), size=bs * 4)
+        xs = np.random.randint(0, max(1, W - sp), size=bs * 4)
+        tiles = []
+        for y, x in zip(ys, xs):
+            if mask_bin[y:y+sp, x:x+sp].sum() == 0:
+                continue
+            d_start = self.c.data.d_start
+            try:
+                blk = np.array(vol[d_start:d_start + self.c.data.depth, y:y+sp, x:x+sp], dtype=np.float32)
+            except Exception:
+                continue
+            if blk.shape == (self.c.data.depth, sp, sp):
+                tiles.append(blk)
+            if len(tiles) >= bs:
+                break
+        if not tiles:
+            return
+        bt = torch.from_numpy(np.stack(tiles)).float().unsqueeze(1).to(self.c.device)
+        try:
+            with torch.no_grad():
+                t_out = self._teacher_model(bt)
+                if t_out.dim() == 4:
+                    t_out = t_out.flatten(1).max(dim=1, keepdim=True).values
+                t_prob = torch.sigmoid(t_out)
+            self.optimizer.zero_grad()
+            with autocast(self.c.device):
+                s_out = self.model(bt)
+                if s_out.dim() == 4:
+                    s_out = s_out.flatten(1).max(dim=1, keepdim=True).values
+                s_prob = torch.sigmoid(s_out)
+                tc_loss = tc_lam * ((s_prob - t_prob.detach()) ** 2).mean()
+            self.scaler.scale(tc_loss).backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            # EMA teacher update
+            alpha = float(getattr(self.c.tra, "mean_teacher_alpha", 0.999))
+            with torch.no_grad():
+                for t_p, s_p in zip(self._teacher_model.parameters(), self.model.parameters()):
+                    t_p.data.mul_(alpha).add_(s_p.data, alpha=1.0 - alpha)
+        except Exception as e:
+            pass   # test-scroll consistency must never crash training
 
     def validate_epoch(self):
         """runs a single validation epoch"""
@@ -729,7 +932,7 @@ class Trainer:
                     self.vis.writer.add_scalar("HardMining/InjectedSamplesPlanned", len(self.hard_samples), epoch)
 
             # run training and validation for the epoch
-            train_metrics = self.train_epoch(hard_injector)
+            train_metrics = self.train_epoch(hard_injector, epoch=epoch)
 
             # brief thermal cooldown between train and validation every epoch
             _val_cool = int(getattr(self.c.tra, 'val_cooldown_secs', 0))
