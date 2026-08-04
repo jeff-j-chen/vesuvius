@@ -25,6 +25,7 @@ expected batch sequences:
 from __future__ import annotations
 import argparse, gc, os, sys, time, traceback
 from pathlib import Path
+import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
@@ -35,8 +36,8 @@ from utils.config import Config
 INTER_RUN_COOLDOWN_SECS = 120
 MAE_CKPT = "models/mae_twostage.pth"
 LOG_DIR = "./runs_archs"
-N_EP = 10
-EVAL_INT = 10
+N_EP = 15
+EVAL_INT = 15
 PROBE_INT = 5
 
 
@@ -63,7 +64,8 @@ def _base_config(exp_name: str) -> Config:
     c.tra.probe_int    = PROBE_INT
     c.tra.save_int     = 2
     c.tra.log_dir      = LOG_DIR
-    c.tra.deterministic = False
+    c.tra.deterministic = False  # disabled to reduce memory overhead (TPM errors)
+    c.data.eval_infer_bs = 32  # reduced to 32 for mean-teacher stability
 
     # ---- SENTINEL VALUES: MUST be replaced with winners before running ----
     # set weight_decay to the best-performing value from the wd sweep.
@@ -78,10 +80,11 @@ def _base_config(exp_name: str) -> Config:
     # ---- END SENTINELS ----
 
     c.tra.l1_lambda    = 0.0           # proven inert in Adam -- keep off
-    c.dl.batch_size    = 128
-    c.dl.num_workers   = 12
+    c.dl.batch_size    = 32            # restored to 32 (skipping mean-teacher tests)
+    c.dl.num_workers   = 4             # disabled on Windows to prevent process spawn overhead
     c.dl.data_aug      = True          # set by build_config below based on aug probs
-    c.data.mask_memmap       = True
+    c.data.mask_memmap       = False   # disabled: memmap + BitLocker causes system lockup
+    c.data.mask_bitpack      = True    # bit-packing: 1 bit/pixel (8x smaller, saves 6GB)
     c.data.ring_negatives    = True
     c.data.ring_close_r      = 3
     c.data.ring_gap_r        = 3
@@ -110,6 +113,8 @@ def _base_config(exp_name: str) -> Config:
 # shared baseline knobs for the arch sweep (ctx48/ds2, no new arch features enabled)
 _BASE = dict(
     init_weights=MAE_CKPT,
+    n_epochs=15,
+    eval_int=15,
     dann=False,    supcon=False,    attn_mil=False,
     mean_teacher=False, test_consistency=False,
 )
@@ -127,14 +132,14 @@ TESTS = [
     # ==============================================================================
     # c0: BASELINE — all new features OFF. establishes the v16_arch_ctx reference curve
     # with the sentinel wd/ring/tta filled in. every other test is a delta off this.
-    # _mk("c0base",  "ctx48_baseline_arch_closed"),
+    # _mk("c0base",  "ctx48_baseline_arch_closed", n_epochs=5),
 
     # dann1-3: domain-adversarial network. backbone is penalized for predicting which scroll
     # a tile comes from -> forced to learn scroll-invariant (transferable) ink features.
     # lambda ramps 0->dann_lambda over dann_ramp_epochs=5. three sane values tested.
-    _mk("dann1",   "ctx48_dann_lam01",  dann=True, dann_lambda=0.1,  dann_ramp_epochs=5),
-    _mk("dann2",   "ctx48_dann_lam03",  dann=True, dann_lambda=0.3,  dann_ramp_epochs=5),
-    _mk("dann3",   "ctx48_dann_lam05",  dann=True, dann_lambda=0.5,  dann_ramp_epochs=5),
+    # _mk("dann1",   "ctx48_dann_lam01",  dann=True, dann_lambda=0.1,  dann_ramp_epochs=5),
+    # _mk("dann2",   "ctx48_dann_lam04",  dann=True, dann_lambda=0.4,  dann_ramp_epochs=5),
+    # _mk("dann3",   "ctx48_dann_lam05",  dann=True, dann_lambda=0.5,  dann_ramp_epochs=5),
 
     # ==============================================================================
     # BATCH B: SupCon sweep (supervised contrastive, temp and lambda)
@@ -143,7 +148,7 @@ TESTS = [
     # together and pushes papyrus apart -> transferable boundary geometry. tested over
     # (temperature, lambda) combinations. temp=0.07 is the standard (Khosla 2020); higher
     # temp softens the distribution. lambda sets the tradeoff vs the primary BCE/ranking.
-    _mk("sc1",    "ctx48_supcon_t007_lam01",  supcon=True, supcon_temp=0.07,  supcon_lambda=0.1),
+    # _mk("sc1",    "ctx48_supcon_t007_lam01",  supcon=True, supcon_temp=0.07,  supcon_lambda=0.1),
     _mk("sc2",    "ctx48_supcon_t007_lam03",  supcon=True, supcon_temp=0.07,  supcon_lambda=0.3),
     _mk("sc3",    "ctx48_supcon_t02_lam01",   supcon=True, supcon_temp=0.2,   supcon_lambda=0.1),
     _mk("sc4",    "ctx48_supcon_t02_lam03",   supcon=True, supcon_temp=0.2,   supcon_lambda=0.3),
@@ -155,7 +160,7 @@ TESTS = [
     # SupCon builds the shared ink cluster -> should be additive in principle.
     # use the best values from batches A+B (update before running from results).
     _mk("dann_sc1", "ctx48_dann03_sc_t007_lam01",
-        dann=True, dann_lambda=0.3,
+        dann=True, dann_lambda=0.4,
         supcon=True, supcon_temp=0.07, supcon_lambda=0.1),
     _mk("dann_sc2", "ctx48_dann05_sc_t007_lam03",
         dann=True, dann_lambda=0.5,
@@ -168,12 +173,12 @@ TESTS = [
 
     # dann+attn, sc+attn, dann+sc+attn: does attention-MIL compose well with the invariance/
     # contrastive regularizers?
-    _mk("dann_attn",    "ctx48_dann03_attnmil",
-        dann=True, dann_lambda=0.3, attn_mil=True),
+    _mk("dann_attn",    "ctx48_dann04_attnmil",
+        dann=True, dann_lambda=0.4, attn_mil=True),
     _mk("sc_attn",      "ctx48_sc_t007_lam01_attnmil",
         supcon=True, supcon_temp=0.07, supcon_lambda=0.1, attn_mil=True),
-    _mk("dann_sc_attn", "ctx48_dann03_sc_t007_attnmil",
-        dann=True, dann_lambda=0.3,
+    _mk("dann_sc_attn", "ctx48_dann04_sc_t007_attnmil",
+        dann=True, dann_lambda=0.4,
         supcon=True, supcon_temp=0.07, supcon_lambda=0.1, attn_mil=True),
 
     # ==============================================================================
@@ -186,9 +191,6 @@ TESTS = [
     _mk("mt_vn1", "ctx48_mt_vn_lam01",
         mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.1,
         mean_teacher_ramp_epochs=3, verified_neg_lambda=0.2, test_consistency=False),
-    _mk("mt_vn2", "ctx48_mt_vn_lam02",
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3, test_consistency=False),
     _mk("mt_vn3", "ctx48_mt_vn_lam03",
         mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.3,
         mean_teacher_ramp_epochs=3, verified_neg_lambda=0.4, test_consistency=False),
@@ -206,36 +208,36 @@ TESTS = [
 
     # mt_full: mean-teacher + DANN + SupCon all together (kitchen-sink on the best arch
     # variant so far from batch C). update arch flags from batch C winner.
-    _mk("mt_full", "ctx48_mt_dann_sc",
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3,
-        test_consistency=True, test_consistency_lambda=0.1,
-        dann=True, dann_lambda=0.3,
-        supcon=True, supcon_temp=0.07, supcon_lambda=0.1),
+    # _mk("mt_full", "ctx48_mt_dann_sc",
+    #     mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
+    #     mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3,
+    #     test_consistency=True, test_consistency_lambda=0.1,
+    #     dann=True, dann_lambda=0.4,
+    #     supcon=True, supcon_temp=0.07, supcon_lambda=0.1),
 
     # ==============================================================================
     # BATCH F: attention-MIL combos + grand finale
     # ==============================================================================
     # attn+mean-teacher verified-neg: the two most orthogonal levers (attention = where-to-look;
     # verified-neg = what-counts-as-papyrus). should be cleanly additive.
-    _mk("attn_mt",   "ctx48_attnmil_mt_vn",
-        attn_mil=True,
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3, test_consistency=False),
+    # _mk("attn_mt",   "ctx48_attnmil_mt_vn",
+    #     attn_mil=True,
+    #     mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
+    #     mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3, test_consistency=False),
 
-    # attn+DANN: does attention make domain-adversarial more effective (attention focuses
-    # on ink voxels; DANN removes scroll-identity -> cleaner invariant ink detection)?
-    _mk("attn_dann",  "ctx48_attnmil_dann03",
-        attn_mil=True, dann=True, dann_lambda=0.3),
+    # # attn+DANN: does attention make domain-adversarial more effective (attention focuses
+    # # on ink voxels; DANN removes scroll-identity -> cleaner invariant ink detection)?
+    # _mk("attn_dann",  "ctx48_attnmil_dann04",
+    #     attn_mil=True, dann=True, dann_lambda=0.4),
 
-    # grand finale: all proven components combined. use the winners from A-F.
-    _mk("grand",     "ctx48_grand_all",
-        attn_mil=True,
-        dann=True, dann_lambda=0.3,
-        supcon=True, supcon_temp=0.07, supcon_lambda=0.1,
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3,
-        test_consistency=True, test_consistency_lambda=0.1),
+    # # grand finale: all proven components combined. use the winners from A-F.
+    # _mk("grand",     "ctx48_grand_all",
+    #     attn_mil=True,
+    #     dann=True, dann_lambda=0.4,
+    #     supcon=True, supcon_temp=0.07, supcon_lambda=0.1,
+    #     mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
+    #     mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3,
+    #     test_consistency=True, test_consistency_lambda=0.1),
 ]
 
 # dict-key -> (config-section, attribute)
@@ -344,6 +346,9 @@ def run_test(c: Config, dry_run: bool) -> bool:
     except Exception:
         print("[ERROR] training raised an exception:", flush=True)
         traceback.print_exc()
+        # force GPU cleanup on failure
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
         return False
 
 
@@ -385,6 +390,9 @@ def main():
         results[tid] = "OK" if ok else "FAIL"
         if not args.dry_run:
             del c; gc.collect()
+            # force GPU memory release between tests
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
         if i < len(selected) - 1 and not args.dry_run:
             cooldown(INTER_RUN_COOLDOWN_SECS, f"after {tid}")
 

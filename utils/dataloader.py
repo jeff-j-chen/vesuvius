@@ -60,10 +60,20 @@ def _mmap_scratch_dir():
     return d
 
 
-def _write_memmap(arr):
-    """persist a (binary uint8) array to a unique .npy and return its path"""
+def _write_memmap(arr, pack_bits=False, original_shape=None):
+    """persist a (binary uint8) array to a unique .npy and return its path.
+    if pack_bits=True, packs to 1 bit/pixel (8x smaller) and saves shape separately."""
     path = os.path.join(_mmap_scratch_dir(), f"mm_{os.getpid()}_{uuid.uuid4().hex}.npy")
-    np.save(path, np.ascontiguousarray(arr))
+    if pack_bits:
+        # pack to 1 bit per pixel (8x compression)
+        packed = np.packbits(arr.ravel())
+        np.save(path, packed)
+        # save shape separately so we can unpack correctly
+        shape_path = path.replace('.npy', '_shape.npy')
+        np.save(shape_path, np.array(original_shape or arr.shape, dtype=np.int32))
+        _MMAP_FILES.append(shape_path)
+    else:
+        np.save(path, np.ascontiguousarray(arr))
     _MMAP_FILES.append(path)
     return path
 
@@ -256,24 +266,35 @@ class InkVolumeDataset(IterableDataset):
         # rather than data. _mask_path/_labels_path is the on-disk source of truth;
         # _mask_arr/_labels_arr is the per-process handle (real array when not memmapped,
         # a lazily-opened read-only memmap when memmapped). see the mask/labels properties.
+        # CRITICAL: use bit-packing (1 bit/pixel) to save 8x RAM -> 6GB saved for 15 scrolls
+        use_bitpack = getattr(config.data, "mask_bitpack", True)  # default ON
         if getattr(config.data, "mask_memmap", False):
-            self._mask_path = _write_memmap(mask_u8)
-            self._labels_path = _write_memmap(labels_u8)
+            self._mask_path = _write_memmap(mask_u8, pack_bits=use_bitpack, original_shape=mask_u8.shape)
+            self._labels_path = _write_memmap(labels_u8, pack_bits=use_bitpack, original_shape=labels_u8.shape)
             self._mask_arr = None
             self._labels_arr = None
+            self._mask_shape = mask_u8.shape
+            self._labels_shape = labels_u8.shape
+            self._use_bitpack = use_bitpack
         else:
             self._mask_path = None
             self._labels_path = None
             self._mask_arr = mask_u8
             self._labels_arr = labels_u8
+            self._mask_shape = None
+            self._labels_shape = None
+            self._use_bitpack = False
         # optional soft labels (continuous ink probability, 0-255 uint8). stored parallel
         # to the hard labels; used only by the dense target path when dense_soft_labels is on.
         self._soft_path = None
         self._soft_arr = None
+        self._soft_shape = None
         if soft_labels is not None:
             soft_u8 = np.clip(np.asarray(soft_labels) * 255.0, 0, 255).astype(np.uint8)
             if getattr(config.data, "mask_memmap", False):
-                self._soft_path = _write_memmap(soft_u8)
+                # soft labels are uint8 0-255, not binary, so don't bitpack
+                self._soft_path = _write_memmap(soft_u8, pack_bits=False)
+                self._soft_shape = soft_u8.shape
             else:
                 self._soft_arr = soft_u8
         self.c = config
@@ -310,14 +331,29 @@ class InkVolumeDataset(IterableDataset):
         """binary uint8 mask; a real array unless memmapped, in which case the
         read-only memmap is opened lazily per process (main or worker)."""
         if self._mask_arr is None and self._mask_path is not None:
-            self._mask_arr = np.load(self._mask_path, mmap_mode='r')
+            packed = np.load(self._mask_path, mmap_mode='r')
+            if self._use_bitpack:
+                # unpack bits and reshape to original dimensions
+                unpacked = np.unpackbits(packed)
+                # trim to exact size (packbits pads to byte boundary)
+                total_pixels = int(np.prod(self._mask_shape))
+                self._mask_arr = unpacked[:total_pixels].reshape(self._mask_shape)
+            else:
+                self._mask_arr = packed
         return self._mask_arr
 
     @property
     def labels(self):
         """binary uint8 labels; lazily memmapped per process when memmap is enabled."""
         if self._labels_arr is None and self._labels_path is not None:
-            self._labels_arr = np.load(self._labels_path, mmap_mode='r')
+            packed = np.load(self._labels_path, mmap_mode='r')
+            if self._use_bitpack:
+                # unpack bits and reshape to original dimensions
+                unpacked = np.unpackbits(packed)
+                total_pixels = int(np.prod(self._labels_shape))
+                self._labels_arr = unpacked[:total_pixels].reshape(self._labels_shape)
+            else:
+                self._labels_arr = packed
         return self._labels_arr
 
     @property
@@ -528,7 +564,7 @@ class InkVolumeDataset(IterableDataset):
         
         # slice the mask tile
         mask_tile = self.mask[y:y+self.tile_size, x:x+self.tile_size]
-        return torch.tensor(mask_tile, dtype=torch.float32)
+        return torch.from_numpy(np.asarray(mask_tile, dtype=np.float32))
 
     def __iter__(self) -> Iterator:
         """sets up the iterator for an epoch"""
@@ -572,7 +608,7 @@ class InkVolumeDataset(IterableDataset):
         if getattr(self.c.data, "dense_labels", False):
             block = self._fetch_block(z_off, y_off, x_off)
             block = np.ascontiguousarray(block, dtype=np.float32)
-            block_tensor = torch.tensor(block, dtype=torch.float32).unsqueeze(0)
+            block_tensor = torch.from_numpy(block).unsqueeze(0)
             y = self.y_start + y_off
             x = self.x_start + x_off
             soft = self.soft_labels
@@ -581,7 +617,7 @@ class InkVolumeDataset(IterableDataset):
                 lbl = np.asarray(soft[y:y+self.tile_size, x:x+self.tile_size]).astype(np.float32) / 255.0
             else:
                 lbl = (np.asarray(self.labels[y:y+self.tile_size, x:x+self.tile_size]) > 0.5).astype(np.float32)
-            label_map = torch.tensor(lbl, dtype=torch.float32).unsqueeze(0)
+            label_map = torch.from_numpy(lbl).unsqueeze(0)
             self.current_idx += 1
             return block_tensor, label_map, mask
 
@@ -612,14 +648,18 @@ class InkVolumeDataset(IterableDataset):
         block = np.ascontiguousarray(block, dtype=np.float32)
             
         # convert to tensor for the model
-        block_tensor = torch.tensor(block, dtype=torch.float32).unsqueeze(0)
+        block_tensor = torch.from_numpy(block).unsqueeze(0)
         
         self.current_idx += 1
         # when domain-adversarial training is enabled, append the scroll_id as a 4th tensor
         # so train_epoch can build per-sample domain labels without modifying the loader API.
-        if getattr(self.c.tra, "dann", False):
+        # when verified_neg is enabled, append (scroll_id, y_global, x_global) for mask lookup
+        if getattr(self.c.tra, "dann", False) or getattr(self.c.tra, "verified_neg_lambda", 0.0) > 0:
             sid_t = torch.tensor(int(self.scroll_id), dtype=torch.long)
-            return block_tensor, label, mask, sid_t
+            y_global = self.y_start + y_off
+            x_global = self.x_start + x_off
+            coords_t = torch.tensor([y_global, x_global], dtype=torch.long)
+            return block_tensor, label, mask, sid_t, coords_t
         return block_tensor, label, mask
 
 
@@ -712,7 +752,7 @@ class DataManager:
         if mask is None:
             raise FileNotFoundError(f"mask not found for scroll {self.scroll_id}")
 
-        labels = labels / 255.0
+        labels = (labels.astype(np.float32) / 255.0)  # force float32 to avoid float64 OOM
         mask = mask / 255.0
 
         # optional soft labels (continuous ink probability) for dense soft-label training.
@@ -980,8 +1020,8 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
         batch_size=config.dl.batch_size,
         num_workers=config.dl.num_workers,
         pin_memory=True,
-        persistent_workers=config.dl.num_workers > 0,
-        prefetch_factor=4 if config.dl.num_workers > 0 else None,
+        persistent_workers=False,  # disabled on Windows - spawn deadlocks with persistent workers
+        prefetch_factor=3 if config.dl.num_workers > 0 else None,
         worker_init_fn=partial(_worker_init, base_seed=_base_seed) if config.dl.num_workers > 0 else None,
         drop_last=True,   # prevents trailing batch of 1 from crashing BatchNorm
     )

@@ -308,7 +308,7 @@ class Trainer:
         except Exception as e:
             print(f"[config] WARN could not dump run config: {e}", flush=True)
 
-    def _train_batch(self, b_imgs, b_labels, mask, scroll_ids_batch=None, epoch=0):
+    def _train_batch(self, b_imgs, b_labels, mask, scroll_ids_batch=None, coords_batch=None, epoch=0):
         """trains the model on a single batch of data"""
         if getattr(self.c.data, "dense_labels", False):
             return self._train_batch_dense(b_imgs, b_labels, mask)
@@ -535,7 +535,14 @@ class Trainer:
             # when dann=True the dataset emits (block, label, mask, scroll_id_tensor) so every
             # sample has its own ground-truth domain label for the adversarial head.
             sid_batch = None
-            if len(batch) == 4:
+            # unpack batch: 3-tuple (basic), 4-tuple (dann), or 5-tuple (dann+verified_neg)
+            coords_batch = None
+            if len(batch) == 5:
+                b_imgs, b_labels, mask, b_sid_tensors, b_coords = batch
+                coords_batch = b_coords
+                if _scroll_domain_map:
+                    sid_batch = [_scroll_domain_map.get(int(s.item()), 0) for s in b_sid_tensors]
+            elif len(batch) == 4:
                 b_imgs, b_labels, mask, b_sid_tensors = batch
                 if _scroll_domain_map:
                     sid_batch = [_scroll_domain_map.get(int(s.item()), 0) for s in b_sid_tensors]
@@ -553,7 +560,7 @@ class Trainer:
 
             # train on the (potentially modified) batch
             b_scores, b_labels_out, b_loss, b_raw_loss = self._train_batch(
-                b_imgs, b_labels, mask, scroll_ids_batch=sid_batch, epoch=epoch)
+                b_imgs, b_labels, mask, scroll_ids_batch=sid_batch, coords_batch=coords_batch, epoch=epoch)
 
             # test-scroll consistency: sample a small batch from test vols, apply through
             # student + teacher, penalize disagreement (no class assertion, unlabeled only)
@@ -659,18 +666,20 @@ class Trainer:
 
         with torch.no_grad(), autocast(self.c.device):
             for batch in tqdm(self.valid_loader, desc="Validating", mininterval=5, miniters=1, file=sys.stderr):
-                # unpack batch: 3-tuple (normal) or 4-tuple (dann=True, dataset appends scroll_id)
-                if len(batch) == 4:
-                    b_imgs, b_labels, mask, _ = batch  # ignore scroll_id in validation
+                # unpack: validation can return 3/4/5-tuple depending on config
+                if len(batch) == 5:
+                    b_imgs, b_labels, mask, _, _ = batch  # ignore scroll_id and coords in validation
+                elif len(batch) == 4:
+                    b_imgs, b_labels, mask, _ = batch  # ignore scroll_id
                 else:
                     b_imgs, b_labels, mask = batch
-                
+                    
                 if mask.view(mask.size(0), -1).sum() <= 0:
                     print("[ERROR] Encountered batch with mask sum == 0 in validation. This block should not be loaded!")
                     continue
 
-                b_imgs = b_imgs.to(self.c.device)
-                b_labels = b_labels.to(self.c.device).view(-1, 1)
+                b_imgs = b_imgs.to(self.c.device, non_blocking=True)
+                b_labels = b_labels.to(self.c.device, non_blocking=True).view(-1, 1)
                 # collapse per-pixel mask to per-tile (B, 1)
                 mask = (mask.to(self.c.device).view(b_imgs.size(0), -1).sum(dim=1) > 0).float().unsqueeze(1)
 
@@ -703,13 +712,7 @@ class Trainer:
         loss, nb = 0.0, 0
         labels, preds, scores = [], [], []
         with torch.no_grad(), autocast(device):
-            for batch in tqdm(self.valid_loader, desc="Validating", mininterval=5, miniters=1, file=sys.stderr):
-                # unpack batch: 3-tuple (normal) or 4-tuple (dann=True, dataset appends scroll_id)
-                if len(batch) == 4:
-                    b_imgs, b_labels, mask, _ = batch  # ignore scroll_id in validation
-                else:
-                    b_imgs, b_labels, mask = batch
-                
+            for b_imgs, b_labels, mask in tqdm(self.valid_loader, desc="Validating", mininterval=5, miniters=1, file=sys.stderr):
                 pmask = (mask.to(device) > 0).float().unsqueeze(1)     # (B,1,T,T)
                 if pmask.sum() <= 0:
                     continue

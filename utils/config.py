@@ -293,7 +293,7 @@ class TrainingConfig:
     mean_teacher_alpha: float = 0.999  # EMA decay for teacher weights (higher = slower update)
     mean_teacher_ramp_epochs: int = 3  # ramp consistency weight from 0 over this many epochs
     mean_teacher_lambda: float = 0.1   # consistency loss weight (student vs teacher, unlabeled)
-    verified_neg_threshold: int = 26   # 2.4um label < this = definite papyrus (~0.1 ink prob)
+    verified_neg_threshold: int = 31   # 2.4um label < this = definite papyrus (p05-p10, ~5-10%)
     verified_neg_lambda: float = 0.2   # extra weight on verified-negative supervised tiles
     # test-scroll consistency: enforce student==teacher on unlabeled test-scroll tiles
     test_consistency: bool = False

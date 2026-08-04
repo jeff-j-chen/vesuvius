@@ -1,0 +1,91 @@
+# disambiguator.yaml - Titan Entity Linker Configuration File
+# 
+# This file should be referenced by the TITAN_ENTITY_LINK_CONFIG environment 
+# variable. Note: Only the "disamb" section is processed; all other sections 
+# will be ignored.
+# 
+# Copyright (c) 2025 Titan Technologies, LLC
+# All rights reserved.
+
+disamb:
+  # @description Bonus applied to custom entities. Example: When choosing 
+  # between custom entity "ch#physics" and Wikidata entity "Q413", the custom 
+  # entity receives this bonus, making it more likely to be selected.
+  boostCustomEntity: 100000
+
+  # @description Maximum distance to other entities considered for context.
+  contextRadius: 10
+
+  # @description When enabled, adds detailed information to the debug field 
+  # and attempts to disambiguate all possible terms (noting this in the debug 
+  # output).
+  debug: False
+
+  # @description Bonus applied when entities have a direct relationship. 
+  # Example: If Entity1 and Entity2 are connected by property Pnn, both 
+  # receive this context bonus.
+  contextBonusDirectLink: 100
+
+  # @description Bonus applied for transitive relationships. Example: If 
+  # Entity1 and Entity2 both connect to the same Qnnnnn via property Pnn, 
+  # both receive this bonus.
+  contextBonusTransitiveLink: 1
+
+  # @description Penalty applied when the candidate does not match cases with the KB.
+  penaltyCaseMismatch: 1000
+
+  # @description Minimum character length for entity consideration. Setting 
+  # this to 4 would ignore short entities like "S", "US", or "USA".
+  minEntityLen: 3
+
+  # @description Penalty applied when SpaCy identifies an entity of different type
+  # than the expected candidate. List of items. The first term of the item is the
+  # type in the KB, the second term is a list of types identified by spacy, the third
+  # term is the score.
+  penaltyTypeEntityMismatch: "PERSON:PERSON:1 GEO:GPE,LOC:1 ORG:ORG:1"
+
+
+  # @description Penalty for matching part of a larger entity. Example: When 
+  # SpaCy identifies "Scouts of Michigan" as an entity not in the database, 
+  # the system may try to match "Scouts" and "Michigan" separately with this 
+  # penalty applied.
+  penaltyMiddleOfEntity: 100
+
+  # @description Penalty for part-of-speech mismatches. Example: "experiment" 
+  # is a common noun in the knowledge base, but if SpaCy correctly identifies 
+  # "The Experiment" as a proper noun (movie title), this penalty is applied. 
+  # Note that SpaCy errors may affect decisions.
+  penaltyPOSMismatch: 10000
+
+  # @description Boost applied to a specific candidate entity type.
+  boostByType: "PERSON:50 GEO:50 ORG:50"
+
+  # @description Minimum score of a candidate required before establishing
+  # context.
+  minScoreUntilContext: -999
+
+  # @description Minimum context score of a candidate required in order to consider
+  # additional score factors.
+  minContextScore: 1
+
+  # @description Minimum final score in order to be considered for disambiguation.
+  # If the candidate does not meet this score, the span is not being disambiguated.
+  minCandidateScore: 0
+
+  # @description  The URL of the OpenAI API to use. If empty, the LLM disambiguation will not be triggered.
+  urlOpenAIAPI: ""
+
+  # @description  The key for the OpenAI API, leave empty if there is no key.
+  llmAuthenticationKey: ""
+
+  # @description  The number of sentences around the sentence containing the disambiguation term to establish context. This text is sent to the LLM.
+  llmContextSentences: 2
+
+  # @description All final disambiguation scores under this value will trigger the LLM disambiguation.
+  llmRunThreshold: 100
+
+  # @description  The name of the LLM, needs to be available on the server.  If empty, the LLM disambiguation will not be triggered.
+  llmModel: ""
+
+  # @description The prompt to use for disambiguation. The prompt must be designed to return XML enriched text.
+  disambiguationLLMPrompt: "You are a text annotator. Your job is to identity the provided entities in the provided text.  The entities may not match exactly, your job is to focus on the context. You answer with the original text only, enriched with XML tags, like <entity id=\"KB ID\">.\nYour knowledge base is provided in the format: KB ID: Lemma - Description"
