@@ -73,10 +73,11 @@ def _base_config(exp_name: str) -> Config:
     c.data.ring_close_r      = 3
     c.data.ring_gap_r        = 3
     c.data.ring_shell_r      = 2
-    c.tra.epoch_cooldown_secs   = 9*2
-    c.tra.val_cooldown_secs     = 12*2
-    c.tra.eval_cooldown_secs    = 60*2
-    c.tra.fig_chunk_cooldown_ms = 60*2
+    c.tra.epoch_cooldown_secs   = 0 if on_linux else 9*2
+    c.tra.val_cooldown_secs     = 0 if on_linux else 12*2
+    c.tra.eval_cooldown_secs    = 0 if on_linux else 60*2
+    c.tra.fig_chunk_cooldown_ms = 0 if on_linux else 60*2
+    c.data.eval_infer_bs = 256 if on_linux else 32
     # NOTE: seg46527 (20260226000000) is INTENTIONALLY kept in for this whole campaign.
     return c
 

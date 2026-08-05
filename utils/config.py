@@ -140,11 +140,10 @@ class DataConfig:
     scrolls: List[ScrollConfig] = field(default_factory=lambda: list(DEFAULT_SCROLLS))
 
     # test/inference scrolls (all rendered when test_int fires).
-    # default = VC3D segments grown so far (PHerc0813 x3, PHerc1203 x1).
+    # default = VC3D segments grown so far (PHerc0813 x1, PHerc0211 x1, PHerc1203 x1, PHerc1447 x1).
     test_scroll_ids: List[int] = field(default_factory=lambda: [
         20260716083545,   # auto_grown_20260716083545968  2.98cm²  max_gen=175  PHerc0813
-        20260717193517,   # auto_grown_20260717193517520  11.49cm² max_gen=740  PHerc0211
-        20260719202304,   # auto_grown_20260719202304218  10.74cm² max_gen=392  PHerc0211
+        20260717193517,   # auto_grown_20260717193517520_0_1_2_3_4_merged  (5-patch merge)  PHerc0211
         20260720090842,   # auto_grown_20260720090842117  7.90cm²  max_gen=345  PHerc1203
         20250703034159,   # auto_grown_20250703034159599  51.27cm² max_gen=638  PHerc1447 (8.64µm src)
     ])
@@ -285,6 +284,14 @@ class TrainingConfig:
     supcon: bool = False
     supcon_lambda: float = 0.1         # weight of the supcon loss term
     supcon_temp: float = 0.07          # temperature for the contrastive softmax
+    supcon_proj_dim: int = 128         # projection head output dimension (128=baseline, 512=high-capacity)
+    supcon_hidden_dim: int = 256       # projection head hidden layer dimension
+    # SupCon curriculum: progressive transfer learning (start low, focus on ink detection, 
+    # then gradually increase lambda to focus on cross-scroll transfer)
+    supcon_curriculum: bool = False
+    supcon_lambda_start: float = 0.1   # starting lambda value
+    supcon_lambda_end: float = 0.5     # ending lambda value
+    supcon_curriculum_epochs: int = 15 # epochs to ramp from start to end
 
     # mean-teacher self-training on verified negatives from 2.4um inklabels + test scrolls.
     # VERIFIED NEGATIVES: tiles where 2.4um inklabel < verified_neg_threshold are trusted
@@ -298,6 +305,13 @@ class TrainingConfig:
     # test-scroll consistency: enforce student==teacher on unlabeled test-scroll tiles
     test_consistency: bool = False
     test_consistency_lambda: float = 0.1
+    # same-scroll pseudo-labeling: use teacher predictions on validation split (same scrolls)
+    # instead of test scrolls (different scrolls). reduces domain shift in pseudo-labels.
+    pseudo_label_same_scroll: bool = False
+    pseudo_label_threshold: float = 0.95  # confidence threshold for pseudo-labels
+    # consistency on labeled tiles: original MeanTeacher formulation (Tarvainen 2017).
+    # enforce student-teacher consistency on labeled tiles under different augmentations.
+    consistency_on_labeled: bool = False
 
 
 @dataclass
@@ -307,6 +321,9 @@ class ModelConfig:
     conv2_drop: float = 0.075  # Dropout3d at end of depth-mix stage (channel-wise)
     head_drop:  float = 0.0    # Dropout3d before voxel head (closest to old FC-head dropout)
     attn_mil:   bool  = False  # use gated attention-MIL instead of fixed LSE aggregation
+    # attention entropy regularization: penalize low-entropy attention distributions to force
+    # coverage across voxels (prevents attention from collapsing to a single peak)
+    attn_entropy_weight: float = 0.0  # weight for entropy regularization term (0 = off)
 
 
 @dataclass

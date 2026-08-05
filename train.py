@@ -237,6 +237,13 @@ class Trainer:
         self._test_vols = {}
         if getattr(self.c.tra, "test_consistency", False):
             self._load_test_consistency_vols()
+        
+        # for pseudo-label same-scroll: we'll sample from training scrolls' unlabeled regions
+        # (regions where mask == 0, outside inklabels). no separate loader needed - just use
+        # the existing scroll zarrs from the dataloader.
+        self._pseudo_label_scrolls = {}
+        if getattr(self.c.tra, "pseudo_label_same_scroll", False):
+            self._init_pseudo_label_scrolls()
 
         print(f" done in {time.time() - start_time:.2f}s")
         return model, params, optimizer, scheduler, criterion
@@ -245,7 +252,7 @@ class Trainer:
         """for each training scroll, load the 2.4µm inklabel, resize to zarr dims (W,H),
         and binarize with threshold < verified_neg_threshold -> 1 (definite papyrus)."""
         import cv2 as _cv2, zarr as _zarr
-        thr = int(getattr(self.c.tra, "verified_neg_threshold", 26))
+        thr = int(getattr(self.c.tra, "verified_neg_threshold", 31))
         zp = self.c.data.zarr_path
         for sc in self.c.data.scrolls:
             sid = int(sc.scroll_id)
@@ -266,6 +273,8 @@ class Trainer:
             vn = (lbl < thr).astype('uint8')
             self._verified_neg_masks[sid] = vn
         print(f"[verified-neg] loaded {len(self._verified_neg_masks)} masks (thr<{thr})")
+        if not self._verified_neg_masks:
+            print("[verified-neg] WARN no 2.4um masks loaded; verified-negative weighting will be inert")
 
     def _load_test_consistency_vols(self):
         """open zarrs for the test scrolls used in teacher-student consistency. masks loaded too."""
@@ -287,6 +296,38 @@ class Trainer:
             except Exception as e:
                 print(f"[test-consistency] skipping {sid}: {e}")
         print(f"[test-consistency] {len(self._test_vols)} test vols loaded for EMA consistency")
+        if not self._test_vols:
+            print("[test-consistency] WARN no test vols loaded; EMA test consistency will be inert")
+    
+    def _init_pseudo_label_scrolls(self):
+        """initialize access to training scrolls for same-scroll pseudo-labeling.
+        we sample from unlabeled regions (mask==0) of training scrolls, not test scrolls."""
+        import zarr as _zarr, cv2 as _cv2
+        zp = self.c.data.zarr_path
+        for sc in self.c.data.scrolls:
+            sid = int(sc['scroll_id'])
+            zpath = os.path.join(zp, f"{sid}.zarr")
+            # use eroded or regular inklabel mask to identify LABELED regions
+            # (we want to sample from UNlabeled regions, i.e., where mask==0)
+            if self.c.data.ring_label_source == "eroded":
+                mpath = f"./eroded_inklabels/{sid}.png"
+            else:
+                mpath = f"./inklabels/{self.c.data.label_folder}/{sid}.png"
+            
+            if not os.path.isdir(zpath):
+                continue
+            try:
+                vol = _zarr.open(zpath, mode='r')
+                mask_img = _cv2.imread(mpath, _cv2.IMREAD_GRAYSCALE) if os.path.exists(mpath) else None
+                # binary mask: 1=labeled (ink or ring), 0=unlabeled
+                mask_bin = (mask_img > 0).astype('uint8') if mask_img is not None else None
+                self._pseudo_label_scrolls[sid] = {'vol': vol, 'label_mask': mask_bin}
+                D, H, W = map(int, vol.shape)
+                print(f"[pseudo-label] loaded {sid} ({W}x{H}) for same-scroll pseudo-labeling")
+            except Exception as e:
+                print(f"[pseudo-label] skipping {sid}: {e}")
+        if not self._pseudo_label_scrolls:
+            print("[pseudo-label] WARN no training scrolls loaded; pseudo-labeling will be inert")
 
     def _dump_run_config(self):
         """write the full resolved config as config.json into this run's tensorboard dir and add
@@ -308,7 +349,8 @@ class Trainer:
         except Exception as e:
             print(f"[config] WARN could not dump run config: {e}", flush=True)
 
-    def _train_batch(self, b_imgs, b_labels, mask, scroll_ids_batch=None, coords_batch=None, epoch=0):
+    def _train_batch(self, b_imgs, b_labels, mask, scroll_ids_batch=None,
+                     sample_scroll_ids_batch=None, coords_batch=None, epoch=0):
         """trains the model on a single batch of data"""
         if getattr(self.c.data, "dense_labels", False):
             return self._train_batch_dense(b_imgs, b_labels, mask)
@@ -346,6 +388,28 @@ class Trainer:
             if mask.sum() <= 0:
                 print("[ERROR] Mask sum is zero, skipping loss calculation.")
                 return np.empty([]), np.empty([]), 0.0, 0.0
+
+            # verified negatives: extra supervised weight on tiles whose resized 2.4um
+            # label map is confidently papyrus across the whole center tile
+            vn_lam = float(getattr(self.c.tra, "verified_neg_lambda", 0.0))
+            if (vn_lam > 0 and coords_batch is not None and sample_scroll_ids_batch is not None
+                    and self._verified_neg_masks):
+                tile = int(self.c.data.tile_size)
+                coords_iter = coords_batch.cpu().numpy() if torch.is_tensor(coords_batch) else np.asarray(coords_batch)
+                vn_flags = []
+                for sid, (y0, x0) in zip(sample_scroll_ids_batch, coords_iter):
+                    vn = self._verified_neg_masks.get(int(sid))
+                    if vn is None:
+                        vn_flags.append(0.0)
+                        continue
+                    y0 = int(y0)
+                    x0 = int(x0)
+                    patch = vn[y0:y0 + tile, x0:x0 + tile]
+                    vn_flags.append(1.0 if patch.shape == (tile, tile) and patch.min() > 0 else 0.0)
+                if any(vn_flags):
+                    vn_mask = torch.tensor(vn_flags, device=self.c.device, dtype=raw_loss.dtype).unsqueeze(1)
+                    neg_mask = (b_labels <= 0.5).float()
+                    raw_loss = raw_loss * (1.0 + vn_lam * vn_mask * neg_mask)
             
             # normalize loss and add l1 regularization
             raw_loss_val = (raw_loss.sum() / mask.sum()).item()
@@ -399,10 +463,25 @@ class Trainer:
                 dom_labels = torch.tensor(scroll_ids_batch, device=self.c.device, dtype=torch.long)
                 dann_loss = torch.nn.functional.cross_entropy(dom_logits, dom_labels)
                 loss = loss + dann_lam * dann_loss
+            
+            # attention entropy regularization (if using attention-MIL)
+            if hasattr(self.model, 'last_attn_entropy_loss'):
+                attn_entropy_loss = self.model.last_attn_entropy_loss
+                if attn_entropy_loss.item() != 0.0:
+                    loss = loss + attn_entropy_loss
 
             # SupCon: supervised contrastive loss on the projected tile embeddings
             if getattr(self.c.tra, "supcon", False) and emb is not None:
-                supcon_lam = float(getattr(self.c.tra, "supcon_lambda", 0.1))
+                # curriculum: progressive lambda scheduling
+                if getattr(self.c.tra, "supcon_curriculum", False):
+                    curriculum_epochs = int(getattr(self.c.tra, "supcon_curriculum_epochs", 15))
+                    lambda_start = float(getattr(self.c.tra, "supcon_lambda_start", 0.1))
+                    lambda_end = float(getattr(self.c.tra, "supcon_lambda_end", 0.5))
+                    progress = min(1.0, epoch / max(1, curriculum_epochs))
+                    supcon_lam = lambda_start + (lambda_end - lambda_start) * progress
+                else:
+                    supcon_lam = float(getattr(self.c.tra, "supcon_lambda", 0.1))
+                
                 supcon_temp = float(getattr(self.c.tra, "supcon_temp", 0.07))
                 z = self.model.supcon_head(emb)
                 sc_loss = supcon_loss(z, b_labels.view(-1).long(), temp=supcon_temp)
@@ -414,14 +493,28 @@ class Trainer:
                 ramp = min(1.0, epoch / max(1, getattr(self.c.tra, "mean_teacher_ramp_epochs", 3)))
                 mt_lam = mt_lam * ramp
                 if mt_lam > 0:
-                    with torch.no_grad():
-                        t_out = self._teacher_model(b_imgs)
-                        if t_out.dim() == 4:
-                            t_out = t_out.flatten(1).max(dim=1, keepdim=True).values
-                        t_prob = torch.sigmoid(t_out)
-                    s_prob = torch.sigmoid(outputs)
-                    mt_cons = ((s_prob - t_prob.detach()) ** 2) * mask
-                    loss = loss + mt_lam * mt_cons.sum() / mask.sum().clamp(min=1)
+                    # consistency on labeled tiles: apply different augmentations
+                    if getattr(self.c.tra, "consistency_on_labeled", False):
+                        # student already has augmented input, teacher uses same input
+                        with torch.no_grad():
+                            t_out = self._teacher_model(b_imgs)
+                            if t_out.dim() == 4:
+                                t_out = t_out.flatten(1).max(dim=1, keepdim=True).values
+                            t_prob = torch.sigmoid(t_out)
+                        s_prob = torch.sigmoid(outputs)
+                        # MSE consistency loss on labeled tiles only
+                        consistency_loss = ((s_prob - t_prob.detach()) ** 2) * mask
+                        loss = loss + mt_lam * consistency_loss.sum() / mask.sum().clamp(min=1)
+                    else:
+                        # original: unlabeled consistency (test scrolls or validation)
+                        with torch.no_grad():
+                            t_out = self._teacher_model(b_imgs)
+                            if t_out.dim() == 4:
+                                t_out = t_out.flatten(1).max(dim=1, keepdim=True).values
+                            t_prob = torch.sigmoid(t_out)
+                        s_prob = torch.sigmoid(outputs)
+                        mt_cons = ((s_prob - t_prob.detach()) ** 2) * mask
+                        loss = loss + mt_lam * mt_cons.sum() / mask.sum().clamp(min=1)
 
         # backward pass and optimization step
         self.scaler.scale(loss).backward()
@@ -535,15 +628,18 @@ class Trainer:
             # when dann=True the dataset emits (block, label, mask, scroll_id_tensor) so every
             # sample has its own ground-truth domain label for the adversarial head.
             sid_batch = None
+            sample_sid_batch = None
             # unpack batch: 3-tuple (basic), 4-tuple (dann), or 5-tuple (dann+verified_neg)
             coords_batch = None
             if len(batch) == 5:
                 b_imgs, b_labels, mask, b_sid_tensors, b_coords = batch
                 coords_batch = b_coords
+                sample_sid_batch = [int(s.item()) for s in b_sid_tensors]
                 if _scroll_domain_map:
                     sid_batch = [_scroll_domain_map.get(int(s.item()), 0) for s in b_sid_tensors]
             elif len(batch) == 4:
                 b_imgs, b_labels, mask, b_sid_tensors = batch
+                sample_sid_batch = [int(s.item()) for s in b_sid_tensors]
                 if _scroll_domain_map:
                     sid_batch = [_scroll_domain_map.get(int(s.item()), 0) for s in b_sid_tensors]
             else:
@@ -560,7 +656,11 @@ class Trainer:
 
             # train on the (potentially modified) batch
             b_scores, b_labels_out, b_loss, b_raw_loss = self._train_batch(
-                b_imgs, b_labels, mask, scroll_ids_batch=sid_batch, coords_batch=coords_batch, epoch=epoch)
+                b_imgs, b_labels, mask,
+                scroll_ids_batch=sid_batch,
+                sample_scroll_ids_batch=sample_sid_batch,
+                coords_batch=coords_batch,
+                epoch=epoch)
 
             # test-scroll consistency: sample a small batch from test vols, apply through
             # student + teacher, penalize disagreement (no class assertion, unlabeled only)
@@ -598,8 +698,6 @@ class Trainer:
         tc_lam = tc_lam * ramp
         if tc_lam <= 0:
             return
-        import zarr as _zarr
-        from utils.visualizer import predict_tiles
         # pick one test scroll at random
         sid = random.choice(list(self._test_vols.keys()))
         tv = self._test_vols[sid]
@@ -618,7 +716,7 @@ class Trainer:
         for y, x in zip(ys, xs):
             if mask_bin[y:y+sp, x:x+sp].sum() == 0:
                 continue
-            d_start = self.c.data.d_start
+            d_start = int(getattr(self.c.data, "train_d_start", self.c.data.d_start))
             try:
                 blk = np.array(vol[d_start:d_start + self.c.data.depth, y:y+sp, x:x+sp], dtype=np.float32)
             except Exception:
@@ -654,6 +752,117 @@ class Trainer:
                     t_p.data.mul_(alpha).add_(s_p.data, alpha=1.0 - alpha)
         except Exception as e:
             pass   # test-scroll consistency must never crash training
+    
+    def _apply_pseudo_label_same_scroll(self, epoch):
+        """apply pseudo-labeling on high-confidence teacher predictions from unlabeled
+        regions of training scrolls (same-scroll, not test scrolls). this avoids domain
+        shift that caused test-consistency to fail."""
+        if not self._pseudo_label_scrolls or self._teacher_model is None:
+            return
+        
+        pl_lam = float(getattr(self.c.tra, "mean_teacher_lambda", 0.1))
+        ramp = min(1.0, epoch / max(1, getattr(self.c.tra, "mean_teacher_ramp_epochs", 3)))
+        pl_lam = pl_lam * ramp
+        if pl_lam <= 0:
+            return
+        
+        confidence_threshold = float(getattr(self.c.tra, "pseudo_label_threshold", 0.95))
+        
+        # pick one training scroll at random
+        sid = random.choice(list(self._pseudo_label_scrolls.keys()))
+        ps = self._pseudo_label_scrolls[sid]
+        vol = ps['vol']
+        label_mask = ps['label_mask']
+        if label_mask is None:
+            return
+        
+        D, H, W = map(int, vol.shape)
+        T = self.c.data.tile_size
+        ctx = int(getattr(self.c.data, "context_size", 0) or 0)
+        sp = ctx if (ctx > T) else T
+        bs = self.c.dl.batch_size
+        
+        # sample from UNLABELED regions (label_mask == 0)
+        unlabeled_y, unlabeled_x = np.where(label_mask == 0)
+        if len(unlabeled_y) < 100:
+            return  # not enough unlabeled regions
+        
+        # sample random tiles from unlabeled regions
+        tiles = []
+        max_attempts = bs * 8
+        for _ in range(max_attempts):
+            idx = np.random.randint(0, len(unlabeled_y))
+            y_center, x_center = unlabeled_y[idx], unlabeled_x[idx]
+            y = max(0, min(H - sp, y_center - sp // 2))
+            x = max(0, min(W - sp, x_center - sp // 2))
+            
+            # check if entire tile is mostly unlabeled (>80% unlabeled)
+            tile_mask = label_mask[y:y+sp, x:x+sp]
+            if tile_mask.sum() > 0.2 * sp * sp:
+                continue  # too much labeled area, skip
+            
+            d_start = int(getattr(self.c.data, "train_d_start", self.c.data.d_start))
+            try:
+                blk = np.array(vol[d_start:d_start + self.c.data.depth, y:y+sp, x:x+sp], dtype=np.float32)
+            except Exception:
+                continue
+            if blk.shape == (self.c.data.depth, sp, sp):
+                tiles.append(blk)
+            if len(tiles) >= bs:
+                break
+        
+        if len(tiles) < 4:
+            return  # not enough valid tiles
+        
+        try:
+            # normalize and convert to tensor
+            tiles_arr = np.stack(tiles[:bs], axis=0)
+            mean_val = float(getattr(self.c.data, "normalize_mean", 32768.0))
+            std_val = float(getattr(self.c.data, "normalize_std", 8192.0))
+            tiles_norm = (tiles_arr - mean_val) / std_val
+            tiles_t = torch.from_numpy(tiles_norm).float().to(self.c.device).unsqueeze(1)
+            
+            # generate teacher predictions
+            self._teacher_model.eval()
+            with torch.no_grad():
+                teacher_out = self._teacher_model(tiles_t)
+                if teacher_out.dim() == 4:
+                    teacher_out = teacher_out.flatten(1).max(dim=1, keepdim=True).values
+                teacher_prob = torch.sigmoid(teacher_out).squeeze()
+            
+            # filter by confidence: only use high-confidence predictions
+            high_conf_pos = teacher_prob > confidence_threshold
+            high_conf_neg = teacher_prob < (1.0 - confidence_threshold)
+            high_conf = high_conf_pos | high_conf_neg
+            
+            if high_conf.sum() < 2:
+                return  # not enough confident predictions
+            
+            # use confident tiles for pseudo-labeling
+            confident_tiles = tiles_t[high_conf]
+            pseudo_labels = (teacher_prob[high_conf] > 0.5).float().unsqueeze(-1)
+            
+            # train student on pseudo-labels
+            self.optimizer.zero_grad()
+            with autocast(self.c.device):
+                student_out = self.model(confident_tiles)
+                if student_out.dim() == 4:
+                    student_out = student_out.flatten(1).max(dim=1, keepdim=True).values
+                pseudo_loss = F.binary_cross_entropy_with_logits(student_out, pseudo_labels)
+            
+            self.scaler.scale(pl_lam * pseudo_loss).backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            
+            # EMA teacher update
+            alpha = float(getattr(self.c.tra, "mean_teacher_alpha", 0.999))
+            with torch.no_grad():
+                for t_p, s_p in zip(self._teacher_model.parameters(), self.model.parameters()):
+                    t_p.data.mul_(alpha).add_(s_p.data, alpha=1.0 - alpha)
+                    
+        except Exception as e:
+            pass  # pseudo-labeling must never crash training
 
     def validate_epoch(self):
         """runs a single validation epoch"""

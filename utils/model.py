@@ -626,9 +626,9 @@ class GatedAttentionMIL(nn.Module):
         nn.init.zeros_(self.w.weight)
         self.last_attn_weights = None   # (B, N) saved for visualization
 
-    def forward(self, vmap: torch.Tensor) -> torch.Tensor:
+    def forward(self, vmap: torch.Tensor, entropy_weight: float = 0.0) -> tuple:
         """vmap: (B, 1, D, H, W) or (B, C, D, H, W) voxel feature map.
-        returns (B, 1) tile score."""
+        returns (score, entropy_loss) where entropy_loss is 0 if entropy_weight==0."""
         B = vmap.shape[0]
         h = vmap.flatten(2).permute(0, 2, 1)   # (B, N, C)
         gate = torch.tanh(self.V(h)) * torch.sigmoid(self.U(h))   # (B, N, att_dim)
@@ -636,7 +636,16 @@ class GatedAttentionMIL(nn.Module):
         a = torch.softmax(a, dim=-1)            # (B, N) attention weights
         self.last_attn_weights = a.detach()
         score = (a.unsqueeze(-1) * self.out(h)).sum(dim=1)  # (B, 1)
-        return score
+        
+        # entropy regularization: prevent attention collapse
+        entropy_loss = torch.tensor(0.0, device=vmap.device)
+        if entropy_weight > 0:
+            # entropy = -sum(p * log(p)), we want to maximize it (high entropy = spread out)
+            # so we minimize -entropy (equivalent to maximizing entropy)
+            entropy = -(a * torch.log(a + 1e-8)).sum(dim=-1).mean()
+            entropy_loss = -entropy_weight * entropy  # negative because we maximize entropy
+        
+        return score, entropy_loss
 
 
 class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
@@ -670,7 +679,9 @@ class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
         # SupCon projection head
         self._use_supcon = bool(getattr(config.tra, "supcon", False))
         if self._use_supcon:
-            self.supcon_head = SupConHead(self._emb_dim, proj_dim=128, hidden=256)
+            proj_dim = int(getattr(config.tra, "supcon_proj_dim", 128))
+            hidden_dim = int(getattr(config.tra, "supcon_hidden_dim", 256))
+            self.supcon_head = SupConHead(self._emb_dim, proj_dim=proj_dim, hidden=hidden_dim)
 
         # Attention-MIL (replaces LSE)
         self._use_attn_mil = bool(getattr(config.model, "attn_mil", False))
@@ -701,8 +712,13 @@ class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
 
         # tile score: attention-MIL or LSE
         if self._use_attn_mil:
-            tile_score = self.attn_mil(center)
+            # entropy_weight is passed from train.py if needed
+            attn_entropy_weight = float(getattr(self.config.model, "attn_entropy_weight", 0.0))
+            tile_score, attn_entropy_loss = self.attn_mil(center, entropy_weight=attn_entropy_weight)
+            # store for train.py to add to total loss
+            self.last_attn_entropy_loss = attn_entropy_loss
         else:
+            self.last_attn_entropy_loss = torch.tensor(0.0, device=center.device)
             r = self.lse_r2.clamp(min=0.5, max=10.0)
             flat = center.flatten(1)
             N = flat.shape[1]

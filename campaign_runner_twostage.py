@@ -93,10 +93,11 @@ def _base_config(exp_name: str) -> Config:
     c.data.ring_shell_r      = 2
     # load the 4 default test scrolls; test figures fire once at epoch 30 (test_int).
     # only the primary scroll-vis loads them (see Trainer), so RAM stays bounded.
-    c.tra.epoch_cooldown_secs   = 9
-    c.tra.val_cooldown_secs     = 12
-    c.tra.eval_cooldown_secs    = 60
-    c.tra.fig_chunk_cooldown_ms = 60
+    c.tra.epoch_cooldown_secs   = 0 if on_linux else 9
+    c.tra.val_cooldown_secs     = 0 if on_linux else 12
+    c.tra.eval_cooldown_secs    = 0 if on_linux else 60
+    c.tra.fig_chunk_cooldown_ms = 0 if on_linux else 60
+    c.data.eval_infer_bs = 256 if on_linux else 32
     # SEG46527 ISOLATION: drop PHerc0814 (20260226000000) so training matches the original
     # 14-scroll tsJd corpus. remove this line to restore the full 15-scroll set.
     c.data.scrolls = [s for s in c.data.scrolls if int(s.scroll_id) != 20260226000000]

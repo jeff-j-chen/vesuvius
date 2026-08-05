@@ -266,10 +266,9 @@ FRAGMENTS = [
     ("20260716083545", "auto_grown_20260716083545968", 
      f"{BUCKET}/PHerc0813/volumes/20250821151723-9.362um-1.2m-113keV-masked.zarr/0",
      "16993,7947,7947"),
-    ("20260717193517", "auto_grown_20260717193517520",
-     f"{BUCKET}/PHerc0211/volumes/20250821151803-9.362um-1.2m-113keV-masked.zarr/0",
-     "19416,7948,7948"),
-    ("20260719202304", "auto_grown_20260719202304218",
+    # PHerc0211 large merged segment (replaces 20260717193517520 and 20260719202304218)
+    # combines 5 patches into a significantly larger rectangular area
+    ("20260717193517", "auto_grown_20260717193517520_0_1_2_3_4_merged",
      f"{BUCKET}/PHerc0211/volumes/20250821151803-9.362um-1.2m-113keV-masked.zarr/0",
      "19416,7948,7948"),
     ("20260720090842", "auto_grown_20260720090842117",

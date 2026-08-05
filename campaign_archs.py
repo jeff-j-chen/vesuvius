@@ -45,6 +45,7 @@ def _base_config(exp_name: str) -> Config:
     """fresh config for the architecture sweep — same data/aug stack as campaign_ts_ctx
     ctx48/ds2 baseline, but logging to ./runs_archs and using arch=v16_arch_ctx."""
     c = Config()
+    on_linux = (os.name == "posix")
     c.exp_name = exp_name
     c.model.arch = "v16_arch_ctx"     # InkDetectorArch: ctx48/ds2 + optional DANN/SupCon/AttnMIL
     c.data.tile_size     = 16
@@ -65,7 +66,8 @@ def _base_config(exp_name: str) -> Config:
     c.tra.save_int     = 2
     c.tra.log_dir      = LOG_DIR
     c.tra.deterministic = False  # disabled to reduce memory overhead (TPM errors)
-    c.data.eval_infer_bs = 32  # reduced to 32 for mean-teacher stability
+    c.tra.lr = 1.5e-4 if on_linux else 1.0e-4
+    c.data.eval_infer_bs = 256 if on_linux else 32  # increased for faster eval on linux
 
     # ---- SENTINEL VALUES: MUST be replaced with winners before running ----
     # set weight_decay to the best-performing value from the wd sweep.
@@ -80,8 +82,8 @@ def _base_config(exp_name: str) -> Config:
     # ---- END SENTINELS ----
 
     c.tra.l1_lambda    = 0.0           # proven inert in Adam -- keep off
-    c.dl.batch_size    = 32            # restored to 32 (skipping mean-teacher tests)
-    c.dl.num_workers   = 0             # disabled on Windows to prevent process spawn overhead
+    c.dl.batch_size    = 96 if on_linux else 32
+    c.dl.num_workers   = 12 if on_linux else 0
     c.dl.data_aug      = True          # set by build_config below based on aug probs
     c.data.mask_memmap       = True
     c.data.mask_bitpack      = True    # bit-packing: 1 bit/pixel (8x smaller, saves 6GB)
@@ -100,10 +102,10 @@ def _base_config(exp_name: str) -> Config:
     c.dl.cutout_max_frac     = 0.2
     c.dl.cutout_n_patches    = 2
     c.dl.depth_mask_prob     = 0.0
-    c.tra.epoch_cooldown_secs   = 9 * 2
-    c.tra.val_cooldown_secs     = 12 * 2
-    c.tra.eval_cooldown_secs    = 60 * 2
-    c.tra.fig_chunk_cooldown_ms = 60 * 2
+    c.tra.epoch_cooldown_secs   = 0 if on_linux else 9 * 2
+    c.tra.val_cooldown_secs     = 0 if on_linux else 12 * 2
+    c.tra.eval_cooldown_secs    = 0 if on_linux else 60 * 2
+    c.tra.fig_chunk_cooldown_ms = 0 if on_linux else 60 * 2
     # DANN: 15 scrolls in the training set
     c.tra.dann_n_domains = 15
     # seg46527 (20260226000000) intentionally kept in for this whole campaign

@@ -450,14 +450,11 @@ class TensorboardVisualizer:
             "Training_Overview": {
                 "loss": [
                     "Multiline", [
-                        "G_M/Loss/Train", 
-                        # "G_M/Loss/Train_Raw", 
                         "G_M/Loss/Valid"
                     ]
                 ],
                 "accuracy": [
                     "Multiline", [
-                        "G_M/Acc/Train",
                         "G_M/Acc/Valid"
                     ]
                 ],
@@ -477,13 +474,13 @@ class TensorboardVisualizer:
                 # ],
                 "F1": [
                     "Multiline", [
-                        "P_M/F1_Score/Train", "P_M/F1_Score/Valid"
+                        "P_M/F1_Score/Valid"
                     ]
                 ],
             },
             "AUC_Metrics": {
-                "roc_auc": ["Multiline", ["AUC/ROC_AUC/Train", "AUC/ROC_AUC/Valid"]],
-                "pr_auc": ["Multiline", ["AUC/PR_AUC/Train", "AUC/PR_AUC/Valid"]],
+                "roc_auc": ["Multiline", ["AUC/ROC_AUC/Valid"]],
+                "pr_auc": ["Multiline", ["AUC/PR_AUC/Valid"]],
             },
             "Readability": {
                 # "contrast_ranking": [

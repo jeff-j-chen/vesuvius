@@ -75,7 +75,7 @@ Ink labels (1.129 µm source, 59 keV) live in `inklabels/` (continuous 0–255 i
 ## Test segments
 
 
-Five VC3D-grown patches are configured as default test targets (`test_scroll_ids` in `utils/config.py`): PHerc0813 ×1, PHerc0211 ×2, PHerc1203 ×1, PHerc1447 ×1. Test figures are generated when `test_int` fires (currently set to 9999 — disabled until a sufficiently good model is found). The visualizer loads each segment sequentially with CUDA cache cleared between renders to keep VRAM bounded for the larger segments.
+Four VC3D-grown patches are configured as default test targets (`test_scroll_ids` in `utils/config.py`): PHerc0813 ×1, PHerc0211 ×1, PHerc1203 ×1, PHerc1447 ×1. Test figures are generated when `test_int` fires (currently set to 9999 — disabled until a sufficiently good model is found). The visualizer loads each segment sequentially with CUDA cache cleared between renders to keep VRAM bounded for the larger segments.
 
 ### Segment 1 — original reference patch
 
@@ -95,39 +95,16 @@ Five VC3D-grown patches are configured as default test targets (`test_scroll_ids
 | tifxyz location | `~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260716083545968/` |
 | Notes | First segment I unrolled; results are shoddy | 
 
-### Segment 2 — large elongated strip (2026-07-17)
+### Segment 2 — PHerc0211 large merged patch (2026-08-05)
 
 | | |
 |---|---|
-| Segment name | `auto_grown_20260717193517520` |
-| Scroll Source | Pherc0211 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151803`)
+| Segment name | `auto_grown_20260717193517520_0_1_2_3_4_merged` |
+| Scroll Source | PHerc0211 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151803`)
 | Zarr ID | `20260717193517` |
-| Zarr shape | (28, 10821, 10821) |
-| BBox | (7147×1837) | 
-| Area | **11.49 cm²** |
-| max_gen | 740 (VC3D growth iterations) |
-| Mask valid frac | 0.055 (re-rendered from updated .VC3D mesh; mesh coverage unchanged) |
-| tifxyz grid | 542 × 542 vertices |
-| tifxyz location | `~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260717193517520/` |
-| Notes | Stretches the entire length of the scroll, page is connected to segment xx218)
+| Notes | **Replaces** previous segments `auto_grown_20260717193517520` and `auto_grown_20260719202304218`. Combines 5 patches (0,1,2,3,4) into a significantly larger rectangular area. Exact metrics TBD after assembly. |
 
-### Segment 3 — wide patch (2026-07-19)
-
-| | |
-|---|---|
-| Segment name | `auto_grown_20260719202304218` |
-| Scroll Source | Pherc0211 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151803`)
-| Zarr ID | `20260719202304` |
-| Zarr shape | (28, 6741, 6741) |
-| BBox | (5265×1556) |
-| Area | **10.74 cm²** |
-| max_gen | 392 (VC3D growth iterations) |
-| Mask valid frac | 0.120 (re-rendered from updated .VC3D mesh; mesh coverage unchanged) |
-| tifxyz grid | 338 × 338 vertices |
-| tifxyz location | `~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260719202304218/` |
-| Notes | Stretches the majority of the scroll (too much artifacting at top and bottom) | 
-
-### Segment 4 — PHerc1203 patch (2026-07-20)
+### Segment 3 — PHerc1203 patch (2026-07-20)
 
 | | |
 |---|---|
@@ -143,7 +120,7 @@ Five VC3D-grown patches are configured as default test targets (`test_scroll_ids
 | tifxyz location | `~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260720090842117/` |
 | Notes | First PHerc1203 segment; different scroll entirely from training data |
 
-### Segment 5 — PHerc1447 large patch (2026-07-22)
+### Segment 4 — PHerc1447 large patch (2026-07-22)
 
 | | |
 |---|---|
@@ -160,7 +137,7 @@ Five VC3D-grown patches are configured as default test targets (`test_scroll_ids
 | tifxyz location | `~/.VC3D/remote_cache/open_data/segments/PHerc1447/20250521151220_editable/20250703034159/` |
 | Notes | Large strip, first PHerc1447 segment. Source scan is a coarser 8.64 µm volume, hence the upsample. |
 
-All five are rendered from their VC3D tifxyz mesh against their respective raw CT volume. The tifxyz format stores a 2D grid of 3D raw-volume voxel coordinates — the actual CT intensities are fetched at render time via `old/render_9um_surface.py`. See `assemble_test_zarr.sh` for the reproduction command for segment 1.
+All four are rendered from their VC3D tifxyz mesh against their respective raw CT volume. The tifxyz format stores a 2D grid of 3D raw-volume voxel coordinates — the actual CT intensities are fetched at render time via `old/render_9um_surface.py`. See `assemble_test_zarr.sh` for the reproduction command for segment 1.
 
 ---
 
