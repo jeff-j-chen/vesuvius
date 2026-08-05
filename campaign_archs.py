@@ -81,9 +81,9 @@ def _base_config(exp_name: str) -> Config:
 
     c.tra.l1_lambda    = 0.0           # proven inert in Adam -- keep off
     c.dl.batch_size    = 32            # restored to 32 (skipping mean-teacher tests)
-    c.dl.num_workers   = 4             # disabled on Windows to prevent process spawn overhead
+    c.dl.num_workers   = 0             # disabled on Windows to prevent process spawn overhead
     c.dl.data_aug      = True          # set by build_config below based on aug probs
-    c.data.mask_memmap       = False   # disabled: memmap + BitLocker causes system lockup
+    c.data.mask_memmap       = True
     c.data.mask_bitpack      = True    # bit-packing: 1 bit/pixel (8x smaller, saves 6GB)
     c.data.ring_negatives    = True
     c.data.ring_close_r      = 3
