@@ -37,12 +37,8 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 from utils.config import Config
 
-INTER_RUN_COOLDOWN_SECS = 60
 MAE_CKPT = "models/mae_twostage.pth"
 LOG_DIR = "./runs_archs2"
-N_EP = 20
-EVAL_INT = 20
-PROBE_INT = 5
 
 
 def _base_config(exp_name: str) -> Config:
@@ -62,10 +58,10 @@ def _base_config(exp_name: str) -> Config:
     c.model.conv1_drop = 0.15
     c.model.conv2_drop = 0.15
     c.model.head_drop  = 0.4
-    c.tra.n_epochs     = N_EP
-    c.tra.eval_int     = EVAL_INT
+    c.tra.n_epochs     = 15
+    c.tra.eval_int     = 999
     c.tra.test_int     = 999
-    c.tra.probe_int    = PROBE_INT
+    c.tra.probe_int    = 15
     c.tra.save_int     = 5
     c.tra.log_dir      = LOG_DIR
     c.tra.deterministic = False
@@ -111,9 +107,18 @@ def _base_config(exp_name: str) -> Config:
 
 _BASE = dict(
     init_weights=MAE_CKPT,
-    n_epochs=20,
-    eval_int=20,
     dann=False, supcon=False, attn_mil=False,
+    mean_teacher=False, test_consistency=False,
+)
+
+# base for all tests from attn13 onward: sc15 curriculum SupCon + basic attention-MIL
+# DANN is dropped (ds13-ds15 debunked it). entropy_weight not yet proven (attn10-12 pending).
+_BASE2 = dict(
+    init_weights=MAE_CKPT,
+    dann=False,
+    supcon=True, supcon_temp=0.07,
+    supcon_curriculum=True, supcon_lambda_start=0.05, supcon_lambda_end=0.5, supcon_curriculum_epochs=10,
+    attn_mil=True, attn_entropy_weight=0.03,
     mean_teacher=False, test_consistency=False,
 )
 
@@ -123,17 +128,19 @@ def _mk(tid, tag, **overrides):
     return d
 
 
+def _mk2(tid, tag, **overrides):
+    """like _mk but with sc15 curriculum SupCon + attn_mil as assumed base."""
+    d = dict(_BASE2); d.update(overrides); d["tid"] = tid; d["tag"] = tag
+    return d
+
+
 TESTS = [
     # ==============================================================================
     # SUPCON OPTIMIZATION (Priority 1)
     # ==============================================================================
     # sc10-12: Lambda interpolation around the winner (0.3 was best, test 0.25, 0.35, 0.4)
     _mk("sc10", "supcon_t007_lam025", supcon=True, supcon_temp=0.07, supcon_lambda=0.25),
-    _mk("sc11", "supcon_t007_lam035", supcon=True, supcon_temp=0.07, supcon_lambda=0.35),
     _mk("sc12", "supcon_t007_lam040", supcon=True, supcon_temp=0.07, supcon_lambda=0.40),
-    
-    # sc13: Best from round 1 (λ=0.3) but run for 20 epochs to see if it keeps improving
-    _mk("sc13", "supcon_t007_lam03_e20", supcon=True, supcon_temp=0.07, supcon_lambda=0.3),
     
     # sc14-15: Lambda curriculum (progressive transfer learning)
     # Start low (focus on ink detection), gradually increase (focus on cross-scroll transfer)
@@ -147,18 +154,6 @@ TESTS = [
     # ==============================================================================
     # DANN+SUPCON COMBOS (Top scorer from round 1, optimize it)
     # ==============================================================================
-    # ds10: Original winner (DANN λ=0.3, SupCon λ=0.1) run for 20 epochs
-    _mk("ds10", "dann03_sc_t007_lam01_e20",
-        dann=True, dann_lambda=0.3, dann_ramp_epochs=8,
-        supcon=True, supcon_temp=0.07, supcon_lambda=0.1),
-    
-    # ds11-12: Vary DANN lambda (0.25, 0.35) while keeping SupCon fixed
-    _mk("ds11", "dann025_sc_t007_lam01",
-        dann=True, dann_lambda=0.25, dann_ramp_epochs=8,
-        supcon=True, supcon_temp=0.07, supcon_lambda=0.1),
-    _mk("ds12", "dann035_sc_t007_lam01",
-        dann=True, dann_lambda=0.35, dann_ramp_epochs=10,
-        supcon=True, supcon_temp=0.07, supcon_lambda=0.1),
     
     # ds13-14: Vary SupCon lambda (0.2, 0.3) while keeping DANN fixed at sweet spot
     _mk("ds13", "dann03_sc_t007_lam02",
@@ -181,112 +176,101 @@ TESTS = [
     
     # attn11-12: Attention + entropy regularizer (force coverage spread)
     # NOTE: These require model.py changes to add entropy_weight parameter
-    _mk("attn11", "attn_entropy01", attn_mil=True, attn_entropy_weight=0.01),
-    _mk("attn12", "attn_entropy005", attn_mil=True, attn_entropy_weight=0.005),
-    
-    # attn13: Attention + SupCon (coverage from cross-scroll alignment)
-    _mk("attn13", "attn_sc_t007_lam02_e20",
-        attn_mil=True, supcon=True, supcon_temp=0.07, supcon_lambda=0.2),
-    
-    # attn14: Attention + SupCon + higher SupCon lambda (force more alignment)
-    _mk("attn14", "attn_sc_t007_lam035",
-        attn_mil=True, supcon=True, supcon_temp=0.07, supcon_lambda=0.35),
+    _mk("attn12", "attn_entropy03", attn_mil=True, attn_entropy_weight=0.03),
     
     # ==============================================================================
-    # MEANTEACHER ON SAME-SCROLL UNLABELED (Fix the failed test-consistency)
+    # FROM HERE: all tests use _mk2 base = sc15 curriculum SupCon + attn_mil_e20
+    # DANN is gone (debunked). entropy_weight stays off until attn11-12 results confirm it.
+    # Each test varies EXACTLY ONE additional feature on top of the validated base.
     # ==============================================================================
-    # The DIFFERENCE from round 1: Round 1's test_consistency used teacher predictions
-    # on TEST SCROLLS (different physical scrolls: PHerc0813, 0211, 1203 vs training 
-    # PHerc0139, 0814). This introduced DOMAIN SHIFT → pseudo-labels were systematically 
-    # wrong → PR_AUC collapsed to 0.4185.
-    #
-    # Round 2 fixes: Use teacher predictions on SAME-SCROLL validation regions (unlabeled
-    # tiles from the 20-25% validation split of training scrolls). Same domain → cleaner
-    # pseudo-labels. Also test original MeanTeacher (consistency on labeled tiles under
-    # different augmentations, not pseudo-labeling).
-    
-    # mt10-mt12: Verified-neg with varying lambdas (baseline from round 1)
-    _mk("mt10", "mt_vn_lam015",
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.15,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.25, test_consistency=False),
-    _mk("mt11", "mt_vn_lam02_e20",
+
+    # attn13: the baseline with new base (sc15 supcon curriculum + attn_mil)
+    # question: is the combination better than sc15 alone or attn10 alone?
+    # attn14: test if attention entropy helps now that supcon curriculum is the baseline
+    # (attn11/12 tested entropy without supcon; this tests it WITH the full base)
+
+    # ==============================================================================
+    # PHYSICS STEM: DoG ring detection + gradient magnitude sharpness
+    # All use sc15 supcon curriculum + attn_mil base.
+    # ==============================================================================
+    # phy01: per-slice DoG (ring detector: bright annulus at ink-papyrus boundary)
+    # vs attn13: does physics ring channel improve over the validated base?
+    _mk2("phy01", "physics_dog", physics_stem=True),
+
+    # phy02: depth-max DoG (wavy-papyrus fix: max ring response over 8-slice window)
+    # vs phy01: does broadcasting the peak ring response help?
+    _mk2("phy02", "physics_dmax", physics_stem_depthmax=True),
+
+    # ==============================================================================
+    # SURFACE DETECTION: per-(y,x) depth alignment for wavy papyrus
+    # surface_dist: signed distance to papyrus surface in [-1,+1]
+    # surface_attn: softmax(|dI/dz|) peaked at the papyrus-air boundary
+    # ==============================================================================
+    # surf01: surface channels only (5-ch stem)
+    # vs attn13: does knowing 'where is the surface in this tile?' help?
+    _mk2("surf01", "surface_dist", surface_stem=True),
+
+    # surf02: surface + DoG ring detection (6-ch stem: all fixed physics)
+    # vs phy01 and surf01: do ring + surface signals complement each other?
+    _mk2("surf02", "surface_dog", surface_stem_withdog=True),
+
+    # ==============================================================================
+    # LEARNED SURFACE ATTENTION: tiny 1D-depth conv (~320 params) that learns
+    # which depth slices are surface-proximal from the training signal itself.
+    # advantage over fixed physics: can learn which SIDE has ink, handle flaking.
+    # ==============================================================================
+    # learn01: learned surface attention, standard 3-ch stem
+    # vs surf01: can the model LEARN a better surface detector than the fixed |dz| peak?
+    _mk2("learn01", "learned_surf", learned_surface=True),
+
+    # learn02: learned surface attention + physics DoG channels (best of learned + fixed)
+    # vs learn01 and phy01: do physics channels help the learned surface finder?
+    _mk2("learn02", "learned_surf_dog", learned_surface=True, physics_stem=True),
+
+    # ==============================================================================
+    # MEANTEACHER: with sc15 supcon curriculum + attn_mil as base
+    # mt01-03 are the best representatives from the mt10-mt20 design,
+    # now with a stronger base. each tests ONE additional signal type.
+    # ==============================================================================
+    # mt01: verified-neg (2.4um hard negatives reinforce papyrus boundary)
+    # best single MeanTeacher signal from round 1 (mt_vn1 was 4th place overall)
+    _mk2("mt01", "mt_vneg",
         mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3, test_consistency=False),
-    _mk("mt12", "mt_vn_lam025",
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.25,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.35, test_consistency=False),
-    
-    # mt13-mt14: Vary verified_neg_lambda (how much weight on 2.4um hard negatives)
-    _mk("mt13", "mt_vn_vnlam02",
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.2, test_consistency=False),
-    _mk("mt14", "mt_vn_vnlam04",
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.4, test_consistency=False),
-    
-    # mt15: Faster EMA (teacher updates faster, less stable but more adaptive)
-    _mk("mt15", "mt_vn_alpha99",
-        mean_teacher=True, mean_teacher_alpha=0.99, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3, test_consistency=False),
-    
-    # mt16: Slower ramp (give model time to stabilize before MT kicks in)
-    _mk("mt16", "mt_vn_ramp5",
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=5, verified_neg_lambda=0.3, test_consistency=False),
-    
-    # mt17: Pseudo-label on SAME-SCROLL validation regions (not test scrolls)
-    _mk("mt17", "mt_samescroll_pseudo",
+        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3),
+
+    # mt02: same-scroll pseudo-labeling (high-confidence teacher on validation split)
+    # the domain-shift fix: avoids cross-scroll pseudo-labels that caused collapse
+    _mk2("mt02", "mt_pseudo",
         mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
         mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3,
         pseudo_label_same_scroll=True, pseudo_label_threshold=0.95),
-    
-    # mt18: Lower confidence threshold for pseudo-labels (more coverage, less precision)
-    _mk("mt18", "mt_samescroll_thr90",
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3,
-        pseudo_label_same_scroll=True, pseudo_label_threshold=0.90),
-    
-    # mt19: Consistency regularization on labeled tiles (original MeanTeacher formulation)
-    _mk("mt19", "mt_consistency_labeled",
+
+    # mt03: consistency on labeled tiles (original MeanTeacher, Tarvainen 2017)
+    # student/teacher see different augmentations of the same tile: rotation-invariance
+    _mk2("mt03", "mt_consistency",
         mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.3,
         mean_teacher_ramp_epochs=3, consistency_on_labeled=True),
-    
-    # mt20: Consistency + verified-neg (both signals)
-    _mk("mt20", "mt_consistency_vneg",
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3,
-        consistency_on_labeled=True),
-    
-    # ==============================================================================
-    # GRAND COMBOS (Best of everything)
-    # ==============================================================================
-    # combo1: DANN + SupCon + Attention (top features from round 1)
-    _mk("combo1", "dann03_sc02_attn_e20",
-        dann=True, dann_lambda=0.3, dann_ramp_epochs=8,
-        supcon=True, supcon_temp=0.07, supcon_lambda=0.2,
-        attn_mil=True),
-    
-    # combo2: SupCon + Attention + MeanTeacher verified-neg
-    _mk("combo2", "sc03_attn_mt_e20",
-        supcon=True, supcon_temp=0.07, supcon_lambda=0.3,
-        attn_mil=True,
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3, test_consistency=False),
-    
-    # combo3: Kitchen sink (DANN + SupCon + Attention + MT)
-    _mk("combo3", "grand_all_e20",
-        dann=True, dann_lambda=0.3, dann_ramp_epochs=8,
-        supcon=True, supcon_temp=0.07, supcon_lambda=0.2,
-        attn_mil=True,
-        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
-        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3, test_consistency=False),
-]
 
+    # ==============================================================================
+    # GRAND COMBO: the richest configuration of all validated components
+    # ==============================================================================
+    # grand1: sc15 supcon curriculum + attn_mil + learned surface + physics DoG + verified-neg MT
+    # if this works: we have a strong multi-signal model for the final campaign
+    _mk2("grand1", "grand_surf_dog_mt",
+        physics_stem=True, learned_surface=True,
+        mean_teacher=True, mean_teacher_alpha=0.999, mean_teacher_lambda=0.2,
+        mean_teacher_ramp_epochs=3, verified_neg_lambda=0.3),
+]
 # dict-key -> (config-section, attribute)
 _OVERRIDES = {
     "arch":                ("model", "arch"),
     "attn_mil":            ("model", "attn_mil"),
     "attn_entropy_weight": ("model", "attn_entropy_weight"),
+    "physics_stem":        ("model", "physics_stem"),
+    "physics_stem_depthmax": ("model", "physics_stem_depthmax"),
+    "surface_stem":          ("model", "surface_stem"),
+    "surface_stem_withdog":  ("model", "surface_stem_withdog"),
+    "learned_surface":       ("model", "learned_surface"),
     "n_epochs":            ("tra", "n_epochs"),
     "eval_int":            ("tra", "eval_int"),
     "probe_int":           ("tra", "probe_int"),
@@ -369,6 +353,7 @@ def run_test(c: Config, dry_run: bool) -> bool:
     print(f"  dann={c.tra.dann} lam={c.tra.dann_lambda}"
           f"  supcon={c.tra.supcon} lam={c.tra.supcon_lambda} T={c.tra.supcon_temp}")
     print(f"  mt={c.tra.mean_teacher} lam={c.tra.mean_teacher_lambda} alpha={c.tra.mean_teacher_alpha}")
+    print(f"  physics_stem={c.model.physics_stem}  physics_stem_depthmax={c.model.physics_stem_depthmax}")
     print(f"  scrolls={len(c.data.scrolls)}  eval_int_scrolls={c.tra.eval_int_scrolls}")
     if dry_run:
         print("  [DRY RUN] skipping")
@@ -422,8 +407,6 @@ def main():
             del c; gc.collect()
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
-        if i < len(selected) - 1 and not args.dry_run:
-            cooldown(INTER_RUN_COOLDOWN_SECS, f"after {tid}")
 
     print(f"\n{'='*70}\n[archs2] SUMMARY\n{'='*70}")
     for tid, status in results.items():

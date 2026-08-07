@@ -36,21 +36,16 @@ Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 11
 | `20260115000001` | **w056** | (28, 7161, 9721) | 0.866 | horizontal (top 50% train) |
 | `20260206000001` | **w047** | (28, 5821, 8421) | 0.402 (1.1 µm overlap band) | vertical (left 75% train) |
 | `20260115000000` | **w044** | (28, 6021, 8141) | 0.882 | horizontal (top 80.55% train) |
-
-**New 10 (2026-07-21)** — all vertical split (left 75% train / right 25% valid), full 9.4 µm masks (see caveat below):
-
-| ID | Fragment | Zarr shape (D,H,W) | Mask valid frac | Ink footprint |
-|---|---|---|---|---|
-| `20260210000000` | **w058** | (28, 7500, 9880) | 0.841 | 0.305 |
-| `20260227000000` | **w052** | (28, 7700, 9760) | 0.880 | 0.315 |
-| `20260318000000` | **w049** | (28, 5660, 9400) | 0.879 | 0.420 |
-| `20260325000000` | **w046** | (28, 5980, 8260) | 0.872 | 0.395 |
-| `20260108000000` | **w041** | (28, 6200, 8020) | 0.863 | 0.379 |
-| `20250831000000` | **w040** | (28, 6400, 7980) | 0.851 | 0.365 |
-| `20260302000000` | **w039** | (28, 8560, 7720) | 0.622 | 0.271 |
-| `20260306000000` | **w038** | (28, 6200, 7440) | 0.844 | 0.374 |
-| `20260310000000` | **w037** | (28, 6140, 7200) | 0.838 | 0.376 |
-| `20260303000000` | **w034** | (28, 7040, 7720) | 0.85 | 0.37 |
+| `20260210000000` | **w058** | (28, 7500, 9880) | 0.841 | (left 75% train / right 25% valid) |
+| `20260227000000` | **w052** | (28, 7700, 9760) | 0.880 | (left 75% train / right 25% valid) |
+| `20260318000000` | **w049** | (28, 5660, 9400) | 0.879 | (left 75% train / right 25% valid) |
+| `20260325000000` | **w046** | (28, 5980, 8260) | 0.872 | (left 75% train / right 25% valid) |
+| `20260108000000` | **w041** | (28, 6200, 8020) | 0.863 | (left 75% train / right 25% valid) |
+| `20250831000000` | **w040** | (28, 6400, 7980) | 0.851 | (left 75% train / right 25% valid) |
+| `20260302000000` | **w039** | (28, 8560, 7720) | 0.622 | (left 75% train / right 25% valid) |
+| `20260306000000` | **w038** | (28, 6200, 7440) | 0.844 | (left 75% train / right 25% valid) |
+| `20260310000000` | **w037** | (28, 6140, 7200) | 0.838 | (left 75% train / right 25% valid) |
+| `20260303000000` | **w034** | (28, 7040, 7720) | 0.85 | (left 75% train / right 25% valid) |
 
 **PHerc0814 (2026-07-22)** — different scroll, horizontal split (top 75% train / bottom 25% valid):
 
@@ -58,7 +53,15 @@ Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 11
 |---|---|---|---|---|
 | `20260226000000` | **seg46527** (PHerc0814) | (28, 2180, 3560) | 0.565 (content bbox 2110×3480) | 0.032 (in-mask) |
 
-All 15 are wired into `DEFAULT_SCROLLS` in `utils/config.py`. Ink footprint = fraction of the frame with ink label > 0 (the 1.129 µm ink detection resized to the 9.4 µm frame; ink-in-mask coverage ≈ 0.99 for all new fragments, confirming alignment — see `fragment_qa.ipynb`).
+**PHerc0500P2 (2026-08-07)** — different scroll, same 9.362 µm / 113 keV / 1.2 m scan parameters as PHerc0139. Vertical split (left 75% train / right 25% valid):
+
+| ID | Fragment | Zarr shape (D,H,W) | Mask valid frac | Eroded ink frac |
+|---|---|---|---|---|
+| `20250628074500` | **500P2_front** (PHerc0500P2) | (28, 6280, 3580) | 0.559 | 0.014 (in-mask) |
+
+The PHerc0500P2 fragment is notable for its **crystal-clear inklabels** derived from a high-resolution 2.215 µm / 111 keV scan. The 2.215 µm ink detection TIF (shape 26440 × 15060) was resized to the 9.362 µm zarr frame at a 4.21× scale ratio, thresholded at 0.55 (140/255), and eroded with a 3×3 kernel (12 iterations) to produce the training labels. Edit `inklabels/20250628074500.png` then regenerate the eroded version with `python download_p500p2_labels.py --erode-only`. Assemble via `python assemble_training_segments.py --only 500P2_front`.
+
+All **16** are wired into `DEFAULT_SCROLLS` in `utils/config.py`. Ink footprint = fraction of the frame with ink label > 0.
 
 The masks for **w059** and **w047** are intersected with the 1.1 µm ink-detection footprint (ROI2). The **new 10 use the full 9.4 µm papyrus footprint** (not intersected), so ring negatives near the labeled band could in principle fall on un-scanned surface; in practice the ring hugs the ink so this is minor. The full-surface footprint is recoverable directly from the zarr (`z[mid] > 0`); no separate `_full9um.png` is stored.
 

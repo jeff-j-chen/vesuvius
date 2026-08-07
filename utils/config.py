@@ -127,6 +127,9 @@ DEFAULT_SCROLLS: List[ScrollConfig] = [
     ScrollConfig(20260303000000, split_axis="x", train_split_frac=0.75),    # w034
     # PHerc0814 segment 46527 (2026-07-22) — different scroll; horizontal split (top 75% train)
     ScrollConfig(20260226000000, split_axis="y", train_split_frac=0.75),    # seg46527 P0814
+    # PHerc0500P2 front segment (2026-08-07) — different scroll, same 9.362µm/113keV/1.2m scan.
+    # crystal-clear 2.215µm inklabels (eroded fraction ~1.4% in-mask); vertical split.
+    ScrollConfig(20250628074500, split_axis="x", train_split_frac=0.75),    # 500P2_front P0500P2
 ]
 
 
@@ -313,6 +316,19 @@ class TrainingConfig:
     # enforce student-teacher consistency on labeled tiles under different augmentations.
     consistency_on_labeled: bool = False
 
+    # SPATIAL COHERENCE: total variation regularizer on the per-voxel logit map.
+    # penalizes high-frequency spatial variation in voxel logits within the context window,
+    # encouraging spatially smooth (coherent) ink predictions -> better letter shape readability.
+    # cheap: computed on the existing voxel map, no extra forward pass.
+    tv_lambda: float = 0.0   # 0 = off; try 0.1-0.5
+
+    # DEPTH PROFILE SUPCON: contrastive learning on raw mean depth profiles.
+    # separates depth-profile learning (raw CT intensity vs depth) from spatial feature learning.
+    # motivated by: ds=2 == ds=1, surface_dist is best learner -> signal is in depth dimension.
+    # uses a tiny DepthProfileHead (2-layer MLP, proj_dim=32) independent of the backbone.
+    depth_supcon: bool = False
+    depth_supcon_lambda: float = 0.1  # weight of the depth profile contrastive loss
+
 
 @dataclass
 class ModelConfig:
@@ -324,6 +340,27 @@ class ModelConfig:
     # attention entropy regularization: penalize low-entropy attention distributions to force
     # coverage across voxels (prevents attention from collapsing to a single peak)
     attn_entropy_weight: float = 0.0  # weight for entropy regularization term (0 = off)
+    # physics-informed input channels (ring detector + sharpness):
+    # when True, stage1 stem receives [raw, lcn, dz, DoG, grad_mag] instead of [raw, lcn, dz].
+    # DoG fires on the bright-ring ink signature; grad_mag captures the fuzz/clarity contrast.
+    physics_stem: bool = False
+    # depth-max variant: DoG is max-pooled over the 8-slice depth window before the stem.
+    # addresses the wavy-papyrus problem: ink at only 1-2 slices gives near-zero per-slice DoG
+    # for the other 6. depth-max broadcasts the peak ring response to all depth positions.
+    physics_stem_depthmax: bool = False
+    # surface-aware stems: detect papyrus surface per (y,x) using |dI/dz| soft-argmax.
+    # surface_stem: [raw, lcn, dz, surface_dist, surface_attn] = 5 channels
+    # surface_stem_withdog: [raw, lcn, dz, dog, surface_dist, surface_attn] = 6 channels
+    # surface_dist: signed distance to surface in [-1,+1] (ink always appears near 0)
+    # surface_attn: softmax(|dz|*temp) peaked at the papyrus-air boundary
+    surface_stem: bool = False
+    surface_stem_withdog: bool = False
+    # learned surface finder: adds DepthSurfaceAttn (tiny 1D-depth conv, ~320 params)
+    # that learns which depth slices are surface-proximal from the training signal.
+    # applied as residual amplification to per-slice features after the stem.
+    # advantage over fixed physics: can learn which SIDE of the surface has ink,
+    # and can handle multi-sheet papyrus with two surfaces.
+    learned_surface: bool = False
 
 
 @dataclass

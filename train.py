@@ -470,6 +470,16 @@ class Trainer:
                 if attn_entropy_loss.item() != 0.0:
                     loss = loss + attn_entropy_loss
 
+            # TV (total variation) regularizer on voxel logit map: smooths spatial predictions
+            # -> directly encourages letter-shape coherence (adjacent voxels predict similarly).
+            # applied to the current voxel map BEFORE MIL aggregation, computed in forward_with_extras.
+            tv_lam = float(getattr(self.c.tra, "tv_lambda", 0.0))
+            if tv_lam > 0 and hasattr(self.model, 'last_voxel_map') and self.model.last_voxel_map is not None:
+                vmap = self.model.last_voxel_map.detach()  # (B,1,D,H,W)
+                tv_x = (vmap[:, :, :, :, 1:] - vmap[:, :, :, :, :-1]).abs().mean()
+                tv_y = (vmap[:, :, :, 1:, :] - vmap[:, :, :, :-1, :]).abs().mean()
+                loss = loss + tv_lam * (tv_x + tv_y)
+
             # SupCon: supervised contrastive loss on the projected tile embeddings
             if getattr(self.c.tra, "supcon", False) and emb is not None:
                 # curriculum: progressive lambda scheduling
@@ -487,17 +497,41 @@ class Trainer:
                 sc_loss = supcon_loss(z, b_labels.view(-1).long(), temp=supcon_temp)
                 loss = loss + supcon_lam * sc_loss
 
+            # depth profile SupCon: contrastive on raw mean depth profiles.
+            # unlike spatial SupCon (which uses backbone embeddings after many conv layers),
+            # this operates on the raw CT depth signature -- a different, complementary signal.
+            # motivated by: ds=2==ds=1 and surface_dist being the best learner (depth >> spatial).
+            if getattr(self.c.tra, "depth_supcon", False) and hasattr(self.model, 'depth_profile_head'):
+                depth_profile = getattr(self.model, 'last_depth_profile', None)
+                if depth_profile is not None:
+                    dp_lam = float(getattr(self.c.tra, "depth_supcon_lambda", 0.1))
+                    dp_temp = float(getattr(self.c.tra, "supcon_temp", 0.07))
+                    dz = self.model.depth_profile_head(depth_profile)
+                    dp_loss = supcon_loss(dz, b_labels.view(-1).long(), temp=dp_temp)
+                    loss = loss + dp_lam * dp_loss
+
             # mean-teacher consistency on labeled tiles (train with verified-neg upweighting)
             if getattr(self.c.tra, "mean_teacher", False) and self._teacher_model is not None:
                 mt_lam = float(getattr(self.c.tra, "mean_teacher_lambda", 0.1))
                 ramp = min(1.0, epoch / max(1, getattr(self.c.tra, "mean_teacher_ramp_epochs", 3)))
                 mt_lam = mt_lam * ramp
                 if mt_lam > 0:
-                    # consistency on labeled tiles: apply different augmentations
+                    # consistency on labeled tiles: apply different augmentations to student and teacher
                     if getattr(self.c.tra, "consistency_on_labeled", False):
-                        # student already has augmented input, teacher uses same input
+                        # apply a different augmentation to teacher (student already has dataloader augmentation)
+                        # use simple geometric augmentations: flips and 90-degree rotations
+                        aug_ops = (
+                            lambda t: t,  # identity
+                            lambda t: torch.flip(t, dims=[-1]),  # horizontal flip
+                            lambda t: torch.flip(t, dims=[-2]),  # vertical flip
+                            lambda t: torch.flip(t, dims=[-1, -2]),  # both flips
+                            lambda t: torch.rot90(t, 1, dims=[-2, -1]),  # rotate 90
+                            lambda t: torch.rot90(t, -1, dims=[-2, -1]),  # rotate -90
+                        )
+                        teacher_view = aug_ops[int(torch.randint(0, len(aug_ops), (1,)).item())](b_imgs)
+                        
                         with torch.no_grad():
-                            t_out = self._teacher_model(b_imgs)
+                            t_out = self._teacher_model(teacher_view.contiguous())
                             if t_out.dim() == 4:
                                 t_out = t_out.flatten(1).max(dim=1, keepdim=True).values
                             t_prob = torch.sigmoid(t_out)
@@ -828,7 +862,7 @@ class Trainer:
                 teacher_out = self._teacher_model(tiles_t)
                 if teacher_out.dim() == 4:
                     teacher_out = teacher_out.flatten(1).max(dim=1, keepdim=True).values
-                teacher_prob = torch.sigmoid(teacher_out).squeeze()
+                teacher_prob = torch.sigmoid(teacher_out).view(-1)  # safer than squeeze()
             
             # filter by confidence: only use high-confidence predictions
             high_conf_pos = teacher_prob > confidence_threshold
@@ -840,7 +874,7 @@ class Trainer:
             
             # use confident tiles for pseudo-labeling
             confident_tiles = tiles_t[high_conf]
-            pseudo_labels = (teacher_prob[high_conf] > 0.5).float().unsqueeze(-1)
+            pseudo_labels = (teacher_prob[high_conf] > 0.5).float().view(-1, 1)  # explicit reshape
             
             # train student on pseudo-labels
             self.optimizer.zero_grad()

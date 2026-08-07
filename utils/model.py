@@ -67,7 +67,111 @@ def _lcn2d(x5, k=5):
     return ((xf - mu) / torch.sqrt(var.clamp(min=1e-4))).reshape(B, C, D, H, W)
 
 
+def _gauss1d(sigma: float, device=None) -> torch.Tensor:
+    """1D Gaussian kernel for separable per-slice 2D Gaussian filtering."""
+    k = int(2 * math.ceil(3.0 * sigma) + 1) | 1  # ensure odd
+    x = torch.arange(k, dtype=torch.float32, device=device) - k // 2
+    g = torch.exp(-x**2 / (2.0 * sigma**2))
+    return g / g.sum()
+
+
+def _gauss2d_blur(xf: torch.Tensor, sigma: float) -> torch.Tensor:
+    """separable 2D Gaussian blur on (N, C, H, W). operates per-channel."""
+    g = _gauss1d(sigma, xf.device)
+    k = g.shape[0]
+    pad = k // 2
+    C = xf.shape[1]
+    kh = g.view(1, 1, 1, k).expand(C, 1, 1, k)   # (C, 1, 1, k)
+    kv = g.view(1, 1, k, 1).expand(C, 1, k, 1)   # (C, 1, k, 1)
+    xf = F.conv2d(xf, kh, padding=(0, pad), groups=C)
+    xf = F.conv2d(xf, kv, padding=(pad, 0), groups=C)
+    return xf
+
+
+def _dog2d(x5, sigma1: float = 1.0, sigma2: float = 2.5) -> torch.Tensor:
+    """per-slice Difference of Gaussians: (B,C,D,H,W) -> (B,C,D,H,W).
+    fires positive on bright rings with radius ~(sigma2+sigma1)/2 px.
+    physics: the ink-papyrus boundary creates a bright annular region at the
+    paper surface that contracts/expands through depth layers as the X-ray
+    beam crosses the ink deposit at different oblique angles."""
+    B, C, D, H, W = x5.shape
+    xf = x5.reshape(B * D, C, H, W)
+    return (_gauss2d_blur(xf, sigma1) - _gauss2d_blur(xf, sigma2)).reshape(B, C, D, H, W)
+
+
+# fixed Sobel kernels registered once (avoids re-allocation every forward pass)
+_SOBEL_X = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]], dtype=torch.float32).view(1, 1, 3, 3) / 8.0
+_SOBEL_Y = torch.tensor([[-1., -2., -1.], [0., 0., 0.], [1., 2., 1.]], dtype=torch.float32).view(1, 1, 3, 3) / 8.0
+
+
+def _grad_mag2d(x5) -> torch.Tensor:
+    """per-slice spatial gradient magnitude: (B,C,D,H,W) -> (B,C,D,H,W)."""
+    B, C, D, H, W = x5.shape
+    xf = x5.reshape(B * D, C, H, W)
+    sx = _SOBEL_X.to(xf.device).expand(C, 1, 3, 3)
+    sy = _SOBEL_Y.to(xf.device).expand(C, 1, 3, 3)
+    gx = F.conv2d(xf, sx, padding=1, groups=C)
+    gy = F.conv2d(xf, sy, padding=1, groups=C)
+    return torch.sqrt(gx**2 + gy**2 + 1e-8).reshape(B, C, D, H, W)
+
+
+def _surface_attn(x5, temp: float = 8.0) -> torch.Tensor:
+    """soft depth attention peaked at the papyrus surface: (B,C,D,H,W) -> (B,C,D,H,W).
+    surface = per-(y,x) depth where |dI/dz| is largest (papyrus-air intensity boundary).
+    output is softmax(|dz|*temp) over depth, summing to 1 across D at each (y,x).
+
+    physics: ink sits at the papyrus surface. this channel tells the stem 'how close is
+    this voxel to the surface?' for each spatial position independently, compensating for
+    papyrus undulation that shifts the surface depth across the tile."""
+    dz = torch.zeros_like(x5)
+    dz[:, :, 1:] = x5[:, :, 1:] - x5[:, :, :-1]
+    return torch.softmax(dz.abs() * temp, dim=2)
+
+
+def _surface_dist(x5, temp: float = 8.0) -> torch.Tensor:
+    """signed normalized distance from the detected papyrus surface: (B,C,D,H,W).
+    surface detected as soft-argmax of |dI/dz| over depth per (y,x) position.
+
+    returns (z - z_surface(y,x)) / (D/2) in range [-1, +1].
+    voxels above the surface (air side): negative. below (papyrus interior): positive.
+    voxels at the surface: ~0.
+
+    with this channel the stem's depth coordinate becomes RELATIVE to the surface rather
+    than absolute, making ink features appear at depth_relative ~= 0 regardless of which
+    absolute depth slice the wavy papyrus surface happens to be at for this tile."""
+    B, C, D, H, W = x5.shape
+    dz = torch.zeros_like(x5)
+    dz[:, :, 1:] = x5[:, :, 1:] - x5[:, :, :-1]
+    # soft-argmax: differentiable surface localization
+    attn = torch.softmax(dz.abs() * temp, dim=2)   # (B, C, D, H, W)
+    depth_idx = torch.arange(D, dtype=x5.dtype, device=x5.device).view(1, 1, D, 1, 1)
+    surf_z = (attn * depth_idx).sum(dim=2, keepdim=True)  # (B, C, 1, H, W)
+    return (depth_idx - surf_z) / max(D / 2.0, 1.0)  # (B, C, D, H, W)
+
+
 def _depth_mix(drop1=0.0, drop2=0.05):
+    """shared depth-aware mixing stage: (B,64,D,H,W) -> (B,256,D,H/2,W/2)."""
+    return nn.Sequential(
+        nn.Conv3d(64, 128, kernel_size=3, padding=1, bias=False),
+        nn.BatchNorm3d(128).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        CBAM3D(128), nn.MaxPool3d(kernel_size=(1, 2, 2)), nn.Dropout3d(drop1),
+        nn.Conv3d(128, 256, kernel_size=3, padding=1, bias=False),
+        nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        CBAM3D(256), nn.Dropout3d(drop2),
+    )
+
+
+def _dog_depth_max(x5, sigma1: float = 1.0, sigma2: float = 2.5) -> torch.Tensor:
+    """depth-max of DoG: (B,C,D,H,W) -> (B,C,D,H,W) with same value broadcast.
+    computes per-slice DoG then takes the max across ALL depth slices in the window
+    and broadcasts it back. this tells the stem: 'at this spatial position, was there
+    EVER a strong ring response in any depth of this 8-slice window?'
+    addresses the wavy-papyrus problem: ink may only appear in 1-2 of the 8 slices,
+    so per-slice DoG produces mostly zeros; the depth-max collapses this to a reliable
+    presence map that doesn't depend on knowing which depth the ring is at."""
+    dog = _dog2d(x5, sigma1, sigma2)              # (B, C, D, H, W)
+    dmax = dog.max(dim=2, keepdim=True).values     # (B, C, 1, H, W) - peak ring response
+    return dmax.expand_as(dog)                     # broadcast back to (B, C, D, H, W)
     """shared depth-aware mixing stage: (B,64,D,H,W) -> (B,256,D,H/2,W/2)."""
     return nn.Sequential(
         nn.Conv3d(64, 128, kernel_size=3, padding=1, bias=False),
@@ -353,6 +457,243 @@ class InkDetectorMILDeepLCNZGrad(InkDetectorMILDeepLCN):
         return _mil_lse(vmap, self.lse_r, x.device)
 
 
+class InkDetectorMILDeepPhysics(InkDetectorMILDeepLCNZGrad):
+    """v14d_physics: extends zgrad+lcn stem with ring-detector and sharpness channels.
+
+    stem sees [raw, lcn, dz, dog, grad_mag] -> 5 channels.
+
+    physics motivation (from direct scroll inspection):
+    - dog (Difference of Gaussians): detects the bright RING pattern at the
+      ink-papyrus boundary. Scrubbing through depth layers reveals an annular
+      brightness that contracts/expands: cross-sections of the 3D ink deposit.
+      DoG fires positive on bright rings at the scale set by (sigma1, sigma2).
+    - grad_mag (|grad I_spatial|): captures the fuzz/clarity contrast. Ink regions
+      are locally SHARPER than surrounding papyrus (hypothetically: carbonization
+      compresses fibers). High |grad I| = sharp = ink; low = fuzzy = surrounding.
+
+    both channels are fixed (not learned) operations on the raw CT input, so they
+    cannot overfit -- they either expose more signal or they're ignored.
+    """
+    def __init__(self, config: Config):
+        super().__init__(config)
+        # 5-channel stem: raw, lcn, dz, dog, grad_mag
+        d1 = float(getattr(config.model, "conv1_drop", 0.0))
+        d2 = float(getattr(config.model, "conv2_drop", 0.05))
+        self.per_slice = nn.Sequential(
+            nn.Conv3d(5, 32, kernel_size=(1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.Conv3d(32, 64, kernel_size=(1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(64).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        dh = float(getattr(config.model, "head_drop", 0.0))
+        self.head_drop = nn.Dropout3d(dh) if dh > 0 else nn.Identity()
+
+    def _stem_in(self, x):
+        """5-channel input: [raw, lcn, dz, dog(ring-boundary scale), grad_mag(fiber scale)].
+        dog sigma=(8,20): rings span ~100px, tile is 48px, so the tile sees only a
+        ~10-20px wide ring-edge transition. DoG(8,20) fires on ~14px features = ring edge.
+        sigma=(1,2.5) was wrong -- that detects papyrus fiber texture, not ring edges.
+        grad_mag 3px Sobel is kept for fuzz/clarity (fiber-level contrast, correct scale)."""
+        lcn = _lcn2d(x, 5)
+        dz = torch.zeros_like(x)
+        dz[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
+        dog = _dog2d(x, sigma1=8.0, sigma2=20.0)
+        grad = _grad_mag2d(x)
+        return torch.cat([x, lcn, dz, dog, grad], dim=1)
+
+
+class InkDetectorMILDeepPhysicsDepthMax(InkDetectorMILDeepPhysics):
+    """physics stem variant: replaces per-slice DoG with depth-max DoG.
+
+    the standard physics stem computes DoG independently per depth slice, so if ink
+    only appears in 2 of the 8 window slices the other 6 get near-zero DoG responses
+    (noise). this variant takes the MAX of DoG across all 8 slices and broadcasts it
+    back -- making the 'was there a ring at this (y,x) position?' answer available at
+    EVERY depth slice, regardless of which specific slice the ink is in.
+
+    this directly addresses the wavy-papyrus problem: the papyrus surface undulates,
+    so ink appears at different absolute depths across the tile. the depth-max DoG
+    collapses that uncertainty into a single presence map per spatial position.
+
+    stem sees [raw, lcn, dz, dog_depthmax, grad_mag] (5 channels, same structure).
+    the dog channel is semantically different: not 'ring strength here at this depth'
+    but 'ring strength here anywhere in this 8-slice window'.
+    """
+
+    def _stem_in(self, x):
+        """5-channel input with depth-max DoG at ring-boundary scale."""
+        lcn = _lcn2d(x, 5)
+        dz = torch.zeros_like(x)
+        dz[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
+        dog_dmax = _dog_depth_max(x, sigma1=8.0, sigma2=20.0)
+        grad = _grad_mag2d(x)
+        return torch.cat([x, lcn, dz, dog_dmax, grad], dim=1)
+
+
+class InkDetectorMILDeepSurface(InkDetectorMILDeepLCNZGrad):
+    """surface-aware physics stem: [raw, lcn, dz, surface_dist, surface_attn] = 5 channels.
+
+    surface_dist: per-(y,x) signed distance from the detected papyrus surface.
+      makes the stem's depth coordinate RELATIVE to the surface, not absolute.
+      voxels on the air side: negative. papyrus interior: positive. at surface: ~0.
+      with this channel, ink features always appear near surface_dist=0 regardless
+      of where in the 8-slice window the wavy papyrus surface actually is.
+
+    surface_attn: softmax(|dI/dz| * temp) over depth, peaked at the surface.
+      equivalent to 'surface proximity probability' per voxel -- high where the
+      depth profile transitions (the surface boundary), low deep inside papyrus or air.
+
+    both are differentiable (use soft-argmax, not hard argmax) so gradients flow
+    through them if needed. currently used as fixed preprocessing.
+    """
+    def __init__(self, config: Config):
+        super().__init__(config)
+        d1 = float(getattr(config.model, "conv1_drop", 0.0))
+        d2 = float(getattr(config.model, "conv2_drop", 0.05))
+        self.per_slice = nn.Sequential(
+            nn.Conv3d(5, 32, kernel_size=(1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.Conv3d(32, 64, kernel_size=(1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(64).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        dh = float(getattr(config.model, "head_drop", 0.0))
+        self.head_drop = nn.Dropout3d(dh) if dh > 0 else nn.Identity()
+
+    def _stem_in(self, x):
+        """[raw, lcn, dz, surface_dist, surface_attn]."""
+        lcn = _lcn2d(x, 5)
+        dz = torch.zeros_like(x)
+        dz[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
+        sd = _surface_dist(x)
+        sa = _surface_attn(x)
+        return torch.cat([x, lcn, dz, sd, sa], dim=1)
+
+
+class InkDetectorMILDeepSurfaceDog(InkDetectorMILDeepLCNZGrad):
+    """combined physics stem: surface alignment + ring detection = 6 channels.
+    stem sees [raw, lcn, dz, dog, surface_dist, surface_attn].
+
+    this is the 'everything known' fixed-physics variant:
+    - dog: spatial ring detector (bright annulus at ink-papyrus boundary)
+    - surface_dist/surface_attn: depth alignment (compensates for wavy papyrus)
+    together they encode both WHERE in-plane the ink ring is and WHERE in depth
+    the papyrus surface is for each (y,x) position independently.
+    """
+    def __init__(self, config: Config):
+        super().__init__(config)
+        d1 = float(getattr(config.model, "conv1_drop", 0.0))
+        d2 = float(getattr(config.model, "conv2_drop", 0.05))
+        self.per_slice = nn.Sequential(
+            nn.Conv3d(6, 32, kernel_size=(1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(32).to(dtype=torch.float32), nn.ReLU(inplace=True),
+            nn.Conv3d(32, 64, kernel_size=(1, 3, 3), padding=(0, 1, 1), bias=False),
+            nn.BatchNorm3d(64).to(dtype=torch.float32), nn.ReLU(inplace=True),
+        )
+        dh = float(getattr(config.model, "head_drop", 0.0))
+        self.head_drop = nn.Dropout3d(dh) if dh > 0 else nn.Identity()
+
+    def _stem_in(self, x):
+        """[raw, lcn, dz, dog, surface_dist, surface_attn]."""
+        lcn = _lcn2d(x, 5)
+        dz = torch.zeros_like(x)
+        dz[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
+        dog = _dog2d(x, sigma1=8.0, sigma2=20.0)  # ring-boundary scale
+        sd = _surface_dist(x)
+        sa = _surface_attn(x)
+        return torch.cat([x, lcn, dz, dog, sd, sa], dim=1)
+
+
+class DepthSurfaceAttn(nn.Module):
+    """lightweight 1D-depth conv that learns which depth slices are surface-proximal.
+
+    processes only the depth axis (kernel=(k,1,1)), so each (y,x) position in the tile
+    is analyzed independently. learns a 'surface score' per depth slice that is used as
+    a residual multiplicative amplifier on the per-slice backbone features:
+        features *= (1 + sigmoid(depth_surface_attn(raw)))
+    so surface-proximal slices can get up to 2x amplification; other slices unchanged.
+
+    key capabilities (all learned, not hardcoded):
+    - find the papyrus-air boundary (sharp |dz| transition)
+    - distinguish which SIDE the ink is on (above vs below surface)
+    - handle flaked/delaminated papyrus (two surfaces: two peaks in |dz|)
+    - zero-suppress slices that are entirely in air or deep papyrus
+
+    ~320 parameters total. initialized to near-zero output (no initial amplification).
+    """
+    def __init__(self, hidden: int = 8):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv3d(1, hidden, kernel_size=(3, 1, 1), padding=(1, 0, 0), bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(hidden, hidden, kernel_size=(3, 1, 1), padding=(1, 0, 0), bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(hidden, 1, kernel_size=(1, 1, 1), bias=True),
+        )
+        # start near-zero (sigmoid(-2) ≈ 0.12): gentle initial amplification
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.constant_(self.net[-1].bias, -2.0)
+
+    def forward(self, x):
+        """x: (B, 1, D, H, W). returns (B, 1, D, H, W) in (0,1) via sigmoid."""
+        return torch.sigmoid(self.net(x))
+
+
+class InkDetectorMILDeepLearnedSurface(InkDetectorMILDeepLCNZGrad):
+    """learned surface-aware backbone: adds a DepthSurfaceAttn module that learns
+    which depth slices are surface-proximal.
+
+    architecture change: after the per-slice stem extracts features (B, 64, D, H, W),
+    a learned residual amplification is applied:
+        f = f * (1.0 + depth_surface_attn(raw))
+    where depth_surface_attn has only ~320 parameters (3 small 1D conv layers).
+
+    vs the fixed physics alternatives (InkDetectorMILDeepSurface):
+    - FIXED: surface_dist uses the |dz| peak directly. correct for clean papyrus.
+      wrong if the surface boundary is not the sharpest transition in the window
+      (e.g., if a fiber bundle creates a larger |dz| than the actual surface).
+    - LEARNED: DepthSurfaceAttn learns what 'surface' means from the training signal.
+      can adapt to multi-sheet papyrus, different surface sharpness across scrolls,
+      and which SIDE of the surface has ink (not knowable from geometry alone).
+
+    the depth PE (absolute position) and the surface attention (relative/learned)
+    are complementary -- the model has both signals available simultaneously.
+    """
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.depth_surface_attn = DepthSurfaceAttn(hidden=8)
+
+    def get_voxel_logits(self, x, depth_offset=0):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(self._stem_in(x))
+        D = f.shape[2]
+        f = f + self.depth_pe[:, :, depth_offset:depth_offset + D]
+        # learned surface attention: amplify surface-proximal slices by up to 2x
+        attn = self.depth_surface_attn(x)   # (B, 1, D, H, W)
+        f = f * (1.0 + attn)
+        f = self.depth_mix(f)
+        return self.voxel_head(self.head_drop(f))
+
+    def encode(self, x, depth_offset=0):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(self._stem_in(x))
+        D = f.shape[2]
+        f = f + self.depth_pe[:, :, depth_offset:depth_offset + D]
+        attn = self.depth_surface_attn(x)
+        f = f * (1.0 + attn)
+        return self.depth_mix(f)
+
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        f = self.per_slice(self._stem_in(x))
+        f = f + self.depth_pe[:, :, :f.shape[2]]
+        attn = self.depth_surface_attn(x)
+        f = f * (1.0 + attn)
+        f = self.depth_mix(f)
+        vmap = self.voxel_head(self.head_drop(f))
+        self.last_voxel_map = vmap.detach()
+        return _mil_lse(vmap, self.lse_r, x.device)
+
+
 class InkDetectorTwoStageZGrad(InkDetectorTwoStageLCN):
     """v15_twostage_zgrad: v15 whose shared backbone also ingests dI/dz ([raw, lcn, dz])."""
     def __init__(self, config: Config):
@@ -601,6 +942,34 @@ def supcon_loss(z: torch.Tensor, labels: torch.Tensor, temp: float = 0.07) -> to
     return loss_per_anchor.mean()
 
 
+class DepthProfileHead(nn.Module):
+    """projects the mean tile depth profile to a normalized embedding for contrastive learning.
+
+    the spatial SupCon head learns a contrastive embedding from the spatial backbone features
+    (after all convolutions). this head operates on the RAW mean depth profile at the center
+    tile before any spatial processing -- a completely separate signal.
+
+    motivation: ds=2 == ds=1 in performance, and surface_dist was the strongest learner.
+    this confirms the ink signal is primarily in the DEPTH profile (how CT intensity varies
+    with depth), not in the spatial texture within a slice. contrastive learning on depth
+    profiles directly pulls ink depth signatures together across scrolls.
+
+    input: (B, D_total) mean depth profile (averaged over tile center spatial positions).
+    D_total = 24 = 3 windows x 8 slices, the full scan depth used for training.
+    output: (B, proj_dim) L2-normalized embedding.
+    """
+    def __init__(self, n_depth: int = 24, proj_dim: int = 32, hidden: int = 64):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_depth, hidden), nn.ReLU(inplace=True),
+            nn.Linear(hidden, proj_dim),
+        )
+
+    def forward(self, depth_profile):
+        """depth_profile: (B, D). returns (B, proj_dim) L2-normalized."""
+        return F.normalize(self.net(depth_profile), dim=-1)
+
+
 class GatedAttentionMIL(nn.Module):
     """gated attention-MIL aggregation (Ilse, Tomczak & Welling 2018).
 
@@ -670,6 +1039,19 @@ class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
         _ctr = max(1, _tile // (2 * _ds))
         self._emb_dim = 8 * _ctr * _ctr   # always 8 depth slices per window (after depth_mix)
 
+        # physics stem: swap stage1 backbone for the appropriate variant
+        # priority order: depthmax > physics > surfacedog > surface > learned
+        if bool(getattr(config.model, "physics_stem_depthmax", False)):
+            self.stage1 = InkDetectorMILDeepPhysicsDepthMax(config)
+        elif bool(getattr(config.model, "physics_stem", False)):
+            self.stage1 = InkDetectorMILDeepPhysics(config)
+        elif bool(getattr(config.model, "surface_stem_withdog", False)):
+            self.stage1 = InkDetectorMILDeepSurfaceDog(config)
+        elif bool(getattr(config.model, "surface_stem", False)):
+            self.stage1 = InkDetectorMILDeepSurface(config)
+        elif bool(getattr(config.model, "learned_surface", False)):
+            self.stage1 = InkDetectorMILDeepLearnedSurface(config)
+
         # DANN domain head
         self._use_dann = bool(getattr(config.tra, "dann", False))
         if self._use_dann:
@@ -685,8 +1067,15 @@ class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
 
         # Attention-MIL (replaces LSE)
         self._use_attn_mil = bool(getattr(config.model, "attn_mil", False))
+        self._attn_entropy_weight = float(getattr(config.model, "attn_entropy_weight", 0.0))
         if self._use_attn_mil:
             self.attn_mil = GatedAttentionMIL(feat_dim=1, att_dim=32)
+
+        # depth profile SupCon head: contrastive on raw depth profiles (independent of spatial)
+        self._use_depth_supcon = bool(getattr(config.tra, "depth_supcon", False))
+        if self._use_depth_supcon:
+            # n_depth=24 = 3 windows x 8 slices; proj_dim small (depth profiles are 1D, low info)
+            self.depth_profile_head = DepthProfileHead(n_depth=24, proj_dim=32, hidden=64)
 
     def forward_with_extras(self, x):
         """like forward() but also returns (embedding, domain_logits, supcon_proj).
@@ -710,11 +1099,25 @@ class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
         # embedding: flatten center features for DANN / SupCon
         emb = center.flatten(1)   # (B, emb_dim)
 
+        # depth profile at center tile: mean over spatial dims across all 24 depth slices.
+        # captured BEFORE spatial convolutions -- this is the raw CT depth signature.
+        # used by DepthProfileHead for depth-profile contrastive learning.
+        if self._use_depth_supcon:
+            # x is (B, 1, 24, H_eff, W_eff) after ds downsampling
+            # extract center spatial region and average over it
+            H_eff, W_eff = x.shape[-2], x.shape[-1]
+            csize = min(self._center * 2, H_eff)   # center in effective (pre-pool) space
+            oy_c = (H_eff - csize) // 2
+            ox_c = (W_eff - csize) // 2
+            depth_profile = x[:, 0, :, oy_c:oy_c+csize, ox_c:ox_c+csize].mean(dim=[-2, -1])  # (B, 24)
+        else:
+            depth_profile = None
+        self.last_depth_profile = depth_profile
+
         # tile score: attention-MIL or LSE
         if self._use_attn_mil:
-            # entropy_weight is passed from train.py if needed
-            attn_entropy_weight = float(getattr(self.config.model, "attn_entropy_weight", 0.0))
-            tile_score, attn_entropy_loss = self.attn_mil(center, entropy_weight=attn_entropy_weight)
+            # use stored entropy_weight from initialization
+            tile_score, attn_entropy_loss = self.attn_mil(center, entropy_weight=self._attn_entropy_weight)
             # store for train.py to add to total loss
             self.last_attn_entropy_loss = attn_entropy_loss
         else:

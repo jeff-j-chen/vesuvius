@@ -67,6 +67,10 @@ SEGMENTS = [
     # (raw vol 20250804134230, see FRAG_OPTS['vol9_name']). only mask + eroded label exist
     # (no non-eroded 1um ink), so skip_labels keeps those and just fetches the zarr + norm.
     ("seg46527", "PHerc0814/segments/20260226000000-46527_2um_try2", "20260226000000"),
+    # PHerc0500P2 front segment (2026-08-07). DIFFERENT scroll, same resolution/energy as
+    # PHerc0139 (9.362um/113keV/1.2m). crystal-clear 2.215um inklabels available, making
+    # this a high-quality training fragment from a new scroll domain.
+    ("500P2_front", "PHerc0500P2/segments/20250628074500-500P2_front", "20250628074500"),
 ]
 
 # per-fragment behaviour overrides. skip_labels=True skips the eroded label check
@@ -81,6 +85,10 @@ FRAG_OPTS = {
     # and its labels are already final (eroded only), so keep them and only fetch the zarr.
     "seg46527": {"skip_labels": True,
                  "vol9_name": "9.362um-1.2m-113keV-volume-20250804134230.zarr"},
+    # PHerc0500P2: different raw volume name from PHerc0139 constant.
+    # inklabels will be generated separately (download_p500p2_labels.py) from the
+    # 2.215um ink detection TIF and saved to inklabels/ and eroded_inklabels/.
+    "500P2_front": {"vol9_name": "9.362um-1.2m-113keV-volume-20250820143440.zarr"},
 }
 
 CHUNK_XY = 128     # S3 surface volume source chunks are 128x128
