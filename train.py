@@ -379,7 +379,17 @@ class Trainer:
             # mislabeled tiles -- a mild, targeted counter to memorizing label noise.
             target = b_labels.float()
             ls = float(getattr(self.c.tra, "label_smooth", 0.0))
-            if ls > 0:
+            ls_pos = float(getattr(self.c.tra, "label_smooth_pos", 0.0))
+            ls_neg = float(getattr(self.c.tra, "label_smooth_neg", 0.0))
+            if ls_pos > 0 or ls_neg > 0:
+                # asymmetric: different smoothing for ink (pos) vs papyrus (neg) labels.
+                # ink labels are noisier (1.1um->9.4um projection ambiguity); papyrus labels
+                # are cleaner (ring negatives are well-defined).
+                pos_mask = (b_labels > 0.5)
+                target = torch.where(pos_mask,
+                                     torch.full_like(target, 1.0 - ls_pos),
+                                     torch.full_like(target, ls_neg))
+            elif ls > 0:
                 target = target * (1.0 - 2.0 * ls) + ls
             raw_loss = self.criterion(outputs, target)
             

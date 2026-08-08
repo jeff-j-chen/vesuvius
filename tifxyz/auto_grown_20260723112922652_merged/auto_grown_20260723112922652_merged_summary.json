@@ -1,0 +1,224 @@
+{
+  "edges": [
+    {
+      "a": "auto_grown_20260723112922652",
+      "anchor_bin_size": 1,
+      "anchor_count": 3123,
+      "anchor_seed_side": "A",
+      "b": "auto_grown_20260723112922652_copy",
+      "best_score": 0.8147737189885911,
+      "best_threshold": 7.0,
+      "pair_scale": 1.0001194976540628,
+      "per_threshold": [
+        {
+          "A": {
+            "distance_mean": 1.1910606196405873,
+            "distance_median": 0.8773756623268127,
+            "match_cells": 3285,
+            "normal_agree_mean": 0.9912876283626104,
+            "real_overlap_cells": 2633,
+            "real_overlap_components": 2,
+            "valid_cells": 25038
+          },
+          "B": {
+            "distance_mean": 1.1935314498375416,
+            "distance_median": 0.8916264176368713,
+            "match_cells": 3307,
+            "normal_agree_mean": 0.990426348595621,
+            "real_overlap_cells": 2642,
+            "real_overlap_components": 2,
+            "valid_cells": 36017
+          },
+          "purity_A": 0.8015220700152207,
+          "purity_B": 0.7989114000604778,
+          "score": 0.8002156703884474,
+          "threshold": 4.0,
+          "valid": true
+        },
+        {
+          "A": {
+            "distance_mean": 1.420455745794878,
+            "distance_median": 1.0471264123916626,
+            "match_cells": 3531,
+            "normal_agree_mean": 0.9902246860251394,
+            "real_overlap_cells": 2849,
+            "real_overlap_components": 2,
+            "valid_cells": 25038
+          },
+          "B": {
+            "distance_mean": 1.4140400252633458,
+            "distance_median": 1.061793565750122,
+            "match_cells": 3547,
+            "normal_agree_mean": 0.9898357143939275,
+            "real_overlap_cells": 2854,
+            "real_overlap_components": 2,
+            "valid_cells": 36017
+          },
+          "purity_A": 0.8068535825545171,
+          "purity_B": 0.8046236255990978,
+          "score": 0.8057378326246302,
+          "threshold": 5.0,
+          "valid": true
+        },
+        {
+          "A": {
+            "distance_mean": 1.617475260636497,
+            "distance_median": 1.161672592163086,
+            "match_cells": 3712,
+            "normal_agree_mean": 0.9893612684025586,
+            "real_overlap_cells": 3010,
+            "real_overlap_components": 2,
+            "valid_cells": 25038
+          },
+          "B": {
+            "distance_mean": 1.6290718421714026,
+            "distance_median": 1.170420527458191,
+            "match_cells": 3745,
+            "normal_agree_mean": 0.9884354878399374,
+            "real_overlap_cells": 3029,
+            "real_overlap_components": 2,
+            "valid_cells": 36017
+          },
+          "purity_A": 0.8108836206896551,
+          "purity_B": 0.8088117489986649,
+          "score": 0.8098470222729537,
+          "threshold": 6.0,
+          "valid": true
+        },
+        {
+          "A": {
+            "distance_mean": 1.7680300004079157,
+            "distance_median": 1.2363314628601074,
+            "match_cells": 3831,
+            "normal_agree_mean": 0.9884566147678028,
+            "real_overlap_cells": 3123,
+            "real_overlap_components": 2,
+            "valid_cells": 25038
+          },
+          "B": {
+            "distance_mean": 1.7885577349912265,
+            "distance_median": 1.2522817850112915,
+            "match_cells": 3873,
+            "normal_agree_mean": 0.987359982931679,
+            "real_overlap_cells": 3154,
+            "real_overlap_components": 2,
+            "valid_cells": 36017
+          },
+          "purity_A": 0.8151918559122945,
+          "purity_B": 0.8143557965401498,
+          "score": 0.8147737189885911,
+          "threshold": 7.0,
+          "valid": true
+        }
+      ],
+      "ransac_inliers": 3123,
+      "ransac_sigma_in": 0.12329701363122784,
+      "ransac_thresh": 5.0,
+      "ransac_total": 3123,
+      "real_overlap_A": 3123,
+      "real_overlap_B": 3154
+    }
+  ],
+  "joint_affine": [
+    {
+      "M": [
+        [
+          1.0001529384651544,
+          6.045179496271953e-05,
+          39.96155712052626
+        ],
+        [
+          -0.00022520008153761382,
+          1.0001694532809975,
+          40.00488166242003
+        ]
+      ],
+      "aniso": 1.000016488766898,
+      "surface": "auto_grown_20260723112922652",
+      "sx": 1.000152963818815,
+      "sy": 1.0001694551078977,
+      "t": [
+        39.96155712052626,
+        40.00488166242003
+      ]
+    },
+    {
+      "M": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ]
+      ],
+      "aniso": 1.0,
+      "surface": "auto_grown_20260723112922652_copy",
+      "sx": 1.0,
+      "sy": 1.0,
+      "t": [
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "merge_json": "/home/jeff/.VC3D/remote_cache/open_data/segments/PHerc0211/auto_grown_20260717193517520_merged.merge.json",
+  "obj_out": "/home/jeff/.VC3D/remote_cache/open_data/segments/PHerc0826/patches/auto_grown_20260723112922652_merged/auto_grown_20260723112922652_merged.obj",
+  "output": "/home/jeff/.VC3D/remote_cache/open_data/segments/PHerc0826/patches/auto_grown_20260723112922652_merged",
+  "params": {
+    "anchor_bin_size": 1,
+    "anchor_cap": 0,
+    "consensus_c": 6.0,
+    "consensus_min_active": 3,
+    "idw_k": 4,
+    "ransac_autogate": true,
+    "ransac_autogate_scale_k": 1.8,
+    "ransac_autogate_shift_frac": 0.35,
+    "ransac_iters": 3000,
+    "ransac_mad_k": 3.0,
+    "ransac_max_thresh": 10.0,
+    "ransac_min_shift": 0.0,
+    "ransac_min_thresh": 5.0,
+    "ransac_scale_max": 0.0,
+    "ransac_scale_min": 0.0,
+    "ransac_seed": 0,
+    "ridge_lambda": 100.0,
+    "step_size": 20
+  },
+  "ref_surface": "auto_grown_20260723112922652_copy",
+  "strip_cols": 0,
+  "strip_count": 1,
+  "surface_rbf": [
+    {
+      "n_anchors": 3123,
+      "resid_max": 0.6763015701196647,
+      "resid_rms": 0.06163659650920223,
+      "surface": "auto_grown_20260723112922652"
+    },
+    {
+      "n_anchors": 3123,
+      "resid_max": 0.6763015701196929,
+      "resid_rms": 0.06163659650920275,
+      "surface": "auto_grown_20260723112922652_copy"
+    }
+  ],
+  "surfaces": [
+    {
+      "H": 431,
+      "W": 431,
+      "name": "auto_grown_20260723112922652",
+      "path": "/home/jeff/.VC3D/remote_cache/open_data/segments/PHerc0826/patches/auto_grown_20260723112922652",
+      "valid": 25038
+    },
+    {
+      "H": 511,
+      "W": 511,
+      "name": "auto_grown_20260723112922652_copy",
+      "path": "/home/jeff/.VC3D/remote_cache/open_data/segments/PHerc0826/patches/auto_grown_20260723112922652_copy",
+      "valid": 36017
+    }
+  ]
+}

@@ -1071,6 +1071,34 @@ class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
         if self._use_attn_mil:
             self.attn_mil = GatedAttentionMIL(feat_dim=1, att_dim=32)
 
+        # 5-window depth coverage: adds overlapping windows at the seams between the 3
+        # standard windows. the ink surface can fall exactly at seam depths 12 or 20
+        # (absolute), where a 3-window model sees it at the very edge of two windows.
+        # with 5 windows the seam depths are always in the middle of at least one window.
+        # windows: [0-8, 4-12, 8-16, 12-20, 16-24] in downsampled-input slice coords,
+        # pe_offsets: [4, 8, 12, 16, 20] (correct absolute depth for positional encoding).
+        # stage1 weights are TIED across all 5 windows (same params as 3-window model).
+        # stage2 input grows from 3 -> 5 channels (very small param increase ~1.5k params).
+        _n_win = int(getattr(config.model, "n_depth_windows", 3))
+        if _n_win == 5:
+            self.WINDOWS = [
+                (0,  8,  4),   # abs 4-12  (same as window 0)
+                (4,  12, 8),   # abs 8-16  NEW -- covers seam at depth 12
+                (8,  16, 12),  # abs 12-20 (same as window 1)
+                (12, 20, 16),  # abs 16-24 NEW -- covers seam at depth 20
+                (16, 24, 20),  # abs 20-28 (same as window 2)
+            ]
+            # rebuild stage2 for 5-channel input (parent built it for 3)
+            self.stage2 = nn.Sequential(
+                nn.Conv3d(5, 32, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm3d(32), nn.ReLU(inplace=True),
+                nn.Conv3d(32, 32, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm3d(32), nn.ReLU(inplace=True),
+                nn.Conv3d(32, 16, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm3d(16), nn.ReLU(inplace=True),
+                nn.Conv3d(16, 1, kernel_size=1, bias=True),
+            )
+
         # depth profile SupCon head: contrastive on raw depth profiles (independent of spatial)
         self._use_depth_supcon = bool(getattr(config.tra, "depth_supcon", False))
         if self._use_depth_supcon:

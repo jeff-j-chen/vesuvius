@@ -105,7 +105,10 @@ Four VC3D-grown patches are configured as default test targets (`test_scroll_ids
 | Segment name | `auto_grown_20260717193517520_0_1_2_3_4_merged` |
 | Scroll Source | PHerc0211 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151803`)
 | Zarr ID | `20260717193517` |
-| Notes | **Replaces** previous segments `auto_grown_20260717193517520` and `auto_grown_20260719202304218`. Combines 5 patches (0,1,2,3,4) into a significantly larger rectangular area. Exact metrics TBD after assembly. |
+| Zarr shape | (28, 7181, 6501) |
+| tifxyz grid | 360 × 326 vertices |
+| Mask valid frac | ~0.72 |
+| Notes | **Replaces** previous segments `auto_grown_20260717193517520` and `auto_grown_20260719202304218`. Combines 5 patches (0,1,2,3,4) into a single large surface. Re-rendered 2026-08-08 from updated merged tifxyz. |
 
 ### Segment 3 — PHerc1203 patch (2026-07-20)
 
@@ -140,7 +143,18 @@ Four VC3D-grown patches are configured as default test targets (`test_scroll_ids
 | tifxyz location | `~/.VC3D/remote_cache/open_data/segments/PHerc1447/20250521151220_editable/20250703034159/` |
 | Notes | Large strip, first PHerc1447 segment. Source scan is a coarser 8.64 µm volume, hence the upsample. |
 
-All four are rendered from their VC3D tifxyz mesh against their respective raw CT volume. The tifxyz format stores a 2D grid of 3D raw-volume voxel coordinates — the actual CT intensities are fetched at render time via `old/render_9um_surface.py`. See `assemble_test_zarr.sh` for the reproduction command for segment 1.
+### Segment 5 — PHerc0826 merged patch (2026-08-08)
+
+| | |
+|---|---|
+| Segment name | `auto_grown_20260723112922652_merged` |
+| Scroll Source | PHerc0826 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151701`, shape 16920×8169×8169) |
+| Zarr ID | `20260723112922` |
+| Zarr shape | (28, 9481, 4521) |
+| tifxyz grid | 475 × 227 vertices (valid fraction 0.546) |
+| Notes | New scroll entirely. Same scan parameters as PHerc0139 (9.362 µm, 113 keV). Assemble via `python assemble_test_segments.py`. |
+
+All five are rendered from their VC3D tifxyz mesh against their respective raw CT volume. The tifxyz format stores a 2D grid of 3D raw-volume voxel coordinates — the actual CT intensities are fetched at render time via `assemble_test_segments.py`.
 
 ---
 

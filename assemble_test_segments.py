@@ -277,6 +277,10 @@ FRAGMENTS = [
     ("20250703034159", "20250703034159",
      f"{BUCKET}/PHerc1447/volumes/20250521151220-8.640um-1.2m-116keV-masked.zarr/0",
      "24297,8343,8343"),
+    # PHerc0826 merged patch (2026-08-08)
+    ("20260723112922", "auto_grown_20260723112922652_merged",
+     f"{BUCKET}/PHerc0826/volumes/20250821151701-9.362um-1.2m-113keV-masked.zarr/0",
+     "16920,8169,8169"),
 ]
 
 

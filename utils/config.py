@@ -143,12 +143,13 @@ class DataConfig:
     scrolls: List[ScrollConfig] = field(default_factory=lambda: list(DEFAULT_SCROLLS))
 
     # test/inference scrolls (all rendered when test_int fires).
-    # default = VC3D segments grown so far (PHerc0813 x1, PHerc0211 x1, PHerc1203 x1, PHerc1447 x1).
+    # default = VC3D segments grown so far (5 test segments across 5 different scrolls).
     test_scroll_ids: List[int] = field(default_factory=lambda: [
         20260716083545,   # auto_grown_20260716083545968  2.98cm²  max_gen=175  PHerc0813
-        20260717193517,   # auto_grown_20260717193517520_0_1_2_3_4_merged  (5-patch merge)  PHerc0211
+        20260717193517,   # auto_grown_20260717193517520_0_1_2_3_4_merged (7181×6501) PHerc0211
         20260720090842,   # auto_grown_20260720090842117  7.90cm²  max_gen=345  PHerc1203
         20250703034159,   # auto_grown_20250703034159599  51.27cm² max_gen=638  PHerc1447 (8.64µm src)
+        20260723112922,   # auto_grown_20260723112922652_merged  (9481×4521)   PHerc0826
     ])
 
     # holdout scroll(s): rendered as full-size test figures alongside test_scroll_ids but
@@ -253,6 +254,12 @@ class TrainingConfig:
     ranking_lambda: float = 0.0      # weight on pairwise ranking (AUC surrogate) added to BCE; 0 = off
     ranking_neg_frac: float = 1.0    # 1.0 = full-AUC ranking; <1.0 = partial-AUC (hardest negatives only)
     ranking_margin: float = 0.3      # margin for the ranking hinge
+    # asymmetric label smoothing: different uncertainty for positive vs negative labels.
+    # ink labels at 9.4um are inherently noisy (partial-volume from 1.1um projection),
+    # so positive labels deserve more smoothing than negative ones.
+    # if both are 0, falls back to the symmetric label_smooth value above.
+    label_smooth_pos: float = 0.0    # smoothing for ink tiles (1 -> 1-label_smooth_pos)
+    label_smooth_neg: float = 0.0    # smoothing for papyrus tiles (0 -> label_smooth_neg)
     # TTA-consistency regularizer: each step forward an EXTRA flipped view and penalize the two
     # tile predictions' disagreement (invariance regularizer -> fewer holdout hallucinations than
     # augmentation alone, which never forces two views to AGREE). ~2x forward cost when on.
@@ -340,6 +347,10 @@ class ModelConfig:
     # attention entropy regularization: penalize low-entropy attention distributions to force
     # coverage across voxels (prevents attention from collapsing to a single peak)
     attn_entropy_weight: float = 0.0  # weight for entropy regularization term (0 = off)
+    # depth window count: 3 = standard non-overlapping (seams at abs depths 12 and 20),
+    # 5 = adds intermediate windows at seam depths so ink at any depth is always covered
+    # by a window that sees it near the CENTER, not the edge.
+    n_depth_windows: int = 3  # 3 or 5
     # physics-informed input channels (ring detector + sharpness):
     # when True, stage1 stem receives [raw, lcn, dz, DoG, grad_mag] instead of [raw, lcn, dz].
     # DoG fires on the bright-ring ink signature; grad_mag captures the fuzz/clarity contrast.
