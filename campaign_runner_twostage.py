@@ -48,6 +48,7 @@ os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 from utils.config import Config
+from utils.platform import get_zarr_dir, get_default_batch_size, get_default_eval_bs, get_default_workers, get_default_lr
 
 INTER_RUN_COOLDOWN_SECS = 120
 
@@ -61,6 +62,9 @@ def _base_config(exp_name: str) -> Config:
     c = Config()
     c.exp_name = exp_name
     c.model.arch = "v15_twostage_lcn"
+    
+    # Set platform-aware zarr path
+    c.data.zarr_path = get_zarr_dir()
     # depth=24 covers all 3 windows (4-12, 12-20, 20-28)
     c.data.tile_size     = 16
     c.data.depth         = 24
@@ -82,8 +86,8 @@ def _base_config(exp_name: str) -> Config:
     c.tra.deterministic = False   # exact reproducibility for seeded runs
     c.tra.l1_lambda    = 0.0
     c.tra.weight_decay = 0.0
-    c.dl.batch_size    = 96
-    c.dl.num_workers   = 4
+    c.dl.batch_size    = get_default_batch_size()
+    c.dl.num_workers   = get_default_workers()
     c.dl.data_aug      = False
     c.data.mask_memmap       = True
     c.data.ring_negatives    = True
@@ -97,7 +101,7 @@ def _base_config(exp_name: str) -> Config:
     c.tra.val_cooldown_secs     = 0 if on_linux else 12
     c.tra.eval_cooldown_secs    = 0 if on_linux else 60
     c.tra.fig_chunk_cooldown_ms = 0 if on_linux else 60
-    c.data.eval_infer_bs = 256 if on_linux else 32
+    c.data.eval_infer_bs = get_default_eval_bs()
     # SEG46527 ISOLATION: drop PHerc0814 (20260226000000) so training matches the original
     # 14-scroll tsJd corpus. remove this line to restore the full 15-scroll set.
     c.data.scrolls = [s for s in c.data.scrolls if int(s.scroll_id) != 20260226000000]

@@ -1015,16 +1015,21 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
     # with num_workers=0 the seeding is unused and the main-process set_seed already covers it.
     _base_seed = int(getattr(config.tra, "seed", 41))
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=config.dl.batch_size,
-        num_workers=config.dl.num_workers,
-        pin_memory=True,
-        persistent_workers=False,  # disabled on Windows - spawn deadlocks with persistent workers
-        prefetch_factor=3 if config.dl.num_workers > 0 else None,
-        worker_init_fn=partial(_worker_init, base_seed=_base_seed) if config.dl.num_workers > 0 else None,
-        drop_last=True,   # prevents trailing batch of 1 from crashing BatchNorm
-    )
+    # build dataloader kwargs conditionally to avoid ValueError when num_workers=0
+    train_loader_kwargs = {
+        "batch_size": config.dl.batch_size,
+        "num_workers": config.dl.num_workers,
+        "pin_memory": True,
+        "persistent_workers": False,  # disabled on Windows - spawn deadlocks with persistent workers
+        "drop_last": True,   # prevents trailing batch of 1 from crashing BatchNorm
+    }
+    
+    # only add these params when using multiprocessing (num_workers > 0)
+    if config.dl.num_workers > 0:
+        train_loader_kwargs["prefetch_factor"] = 3
+        train_loader_kwargs["worker_init_fn"] = partial(_worker_init, base_seed=_base_seed)
+    
+    train_loader = DataLoader(train_dataset, **train_loader_kwargs)
 
     # validation always uses 0 workers (main thread only) — on Windows, spawned
     # worker subprocesses receive CTRL_CLOSE_EVENT from the OS console job object

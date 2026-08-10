@@ -33,6 +33,7 @@ os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 from utils.config import Config, DEFAULT_SCROLLS, ScrollConfig
+from utils.platform import get_zarr_dir, get_default_batch_size, get_default_eval_bs, get_default_workers
 
 INTER_RUN_COOLDOWN_SECS = 120
 
@@ -60,6 +61,10 @@ def _base_config(exp_name: str) -> Config:
     """tsI (medium-reg) two-stage config, with the isolation-campaign exceptions applied."""
     c = Config()
     c.exp_name = exp_name
+    
+    # Set platform-aware zarr path
+    c.data.zarr_path = get_zarr_dir()
+    
     # --- architecture (tsI) ---
     c.model.arch         = "v15_twostage_wide_zgrad"
     c.data.tile_size     = 16
@@ -86,8 +91,8 @@ def _base_config(exp_name: str) -> Config:
     c.tra.ranking_lambda = 0.5
     c.tra.ranking_neg_frac = 1.0
     # --- dataloader + augmentation (tsI medreg) ---
-    c.dl.batch_size      = 96
-    c.dl.num_workers     = 4
+    c.dl.batch_size      = get_default_batch_size()
+    c.dl.num_workers     = get_default_workers()
     c.dl.data_aug        = True
     c.dl.channel_mixing_prob = 0.0
     c.dl.flip_prob       = 0.4
@@ -111,7 +116,7 @@ def _base_config(exp_name: str) -> Config:
     c.tra.val_cooldown_secs     = 0 if on_linux else 12
     c.tra.eval_cooldown_secs    = 0 if on_linux else 60
     c.tra.fig_chunk_cooldown_ms = 0 if on_linux else 60
-    c.data.eval_infer_bs = 256 if on_linux else 32
+    c.data.eval_infer_bs = get_default_eval_bs()
     return c
 
 

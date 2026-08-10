@@ -17,6 +17,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .config import Config
 
+# Import radical architectures for campaign_archs_6
+try:
+    from .radical_archs import ViT3D, Swin3D, ConvNeXt3D, XCiT3D, nnUNet3D, SlotAttention3D
+    _RADICAL_ARCHS_AVAILABLE = True
+except ImportError:
+    _RADICAL_ARCHS_AVAILABLE = False
+
 
 class CBAM3D(nn.Module):
     """channel + spatial attention block used inside the depth-mix stage."""
@@ -1169,6 +1176,15 @@ class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
 
 # register v16_arch_ctx AFTER the class is defined
 _ARCH_MAP["v16_arch_ctx"] = InkDetectorArch
+
+# Register radical architectures for campaign_archs_6 (if available)
+if _RADICAL_ARCHS_AVAILABLE:
+    _ARCH_MAP["vit3d"] = ViT3D
+    _ARCH_MAP["swin3d"] = Swin3D
+    _ARCH_MAP["convnext3d"] = ConvNeXt3D
+    _ARCH_MAP["xcit3d"] = XCiT3D
+    _ARCH_MAP["nnunet3d"] = nnUNet3D
+    _ARCH_MAP["slot3d"] = SlotAttention3D
 
 
 def create_model(config: Config):

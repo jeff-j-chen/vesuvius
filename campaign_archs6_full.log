@@ -1,0 +1,94 @@
+nohup: ignoring input
+/home/jeff/.local/lib/python3.10/site-packages/torch/cuda/__init__.py:184: UserWarning: CUDA initialization: The NVIDIA driver on your system is too old (found version 11040). Please update your GPU driver by downloading and installing a new version from the URL: http://www.nvidia.com/Download/index.aspx Alternatively, go to: https://pytorch.org to install a PyTorch version that has been compiled with your version of the CUDA driver. (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:119.)
+  return torch._C._cuda_getDeviceCount() > 0
+/media/jeff/Seagate/vesuvius/train.py:127: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = GradScaler()
+/home/jeff/.local/lib/python3.10/site-packages/torch/cuda/amp/grad_scaler.py:31: UserWarning: torch.cuda.amp.GradScaler is enabled, but CUDA is not available.  Disabling.
+  super().__init__(
+
+================================================================================
+[campaign_archs_6] 6 test(s), 15 epochs each
+================================================================================
+
+================================================================================
+=== 1/6: vit3d (vision_transformer_3d) ===
+================================================================================
+--- Configuration ---
+data: DataConfig(zarr_path='/media/jeff/Seagate/ves_zarrs2', scroll1_id=20260115000000, scroll2_id=20250223000000, scroll4_id=20260206000001, test_on_scroll4=False, tile_size=16, depth=24, d_start=4, d_end=28, train_d_start=4, train_d_end=28)
+dl: DataloaderConfig(batch_size=96, num_workers=12, data_aug=True, channel_mixing_prob=0.0, rotation_prob=0.6, flip_prob=0.6, noise_prob=0.3, brightness_prob=0.6, contrast_prob=0.6)
+tra: TrainingConfig(n_epochs=15, lr=0.00015, weight_decay=0.3, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=5, log_dir='./runs_archs6', eval_int=999, test_int=999, probe_int=15, eval_aggregate=True)
+model: ModelConfig(conv1_drop=0.15, conv2_drop=0.15, fc1_drop=0.2, fc2_drop=0.1, pooling='avg', gem_p=3.0, conv3_dilation=1, arch='vit3d')
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(enabled=True, hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1, dir='./hard_negs')
+device: cpu
+model_dir: models
+exp_name: c6_vit3d
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20260115000000
+sampling datasets to calculate average class weights
+label distribution (from 7500 samples): Counter({0: 7336, 1: 164})
+using average pos_weight: 44.73
+saved pos_weight cache for scroll 20260115000000 to ./norm_cache.json
+Data setup done in 133.10s
+Creating model and loss... l1 lambda 7e-06... Model parameters (vit3d): 4,812,289
+ done in 1.19s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20260115000000
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.8997
+[SCROLL4 DEBUG] Scroll4 mask / range basic checks passed.
+TensorBoard logs will be saved to: ./runs_archs6/c6_vit3d_08_23-36-24
+To view, run: tensorboard --logdir=./runs_archs6
+
+--- Epoch 1/15 ---
+Training:   0%|          | 0/1369 [00:00<?, ?it/s]/home/jeff/.local/lib/python3.10/site-packages/torch/utils/data/dataloader.py:1118: UserWarning: 'pin_memory' argument is set as true but no accelerator is found, then device pinned memory won't be used.
+  super().__init__(loader)
+Training:   0%|          | 0/1369 [00:55<?, ?it/s]
+Traceback (most recent call last):
+  File "/media/jeff/Seagate/vesuvius/campaign_archs_6.py", line 287, in run_campaign
+    trainer.run()
+  File "/media/jeff/Seagate/vesuvius/train.py", line 378, in run
+    train_metrics = self.train_epoch(hard_injector)
+  File "/media/jeff/Seagate/vesuvius/train.py", line 254, in train_epoch
+    b_scores, b_labels, b_loss, b_raw_loss = self._train_batch(b_imgs, b_labels, mask)
+  File "/media/jeff/Seagate/vesuvius/train.py", line 182, in _train_batch
+    outputs = self.model(b_imgs)
+  File "/home/jeff/.local/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/jeff/.local/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/media/jeff/Seagate/vesuvius/utils/radical_archs.py", line 179, in forward
+    x = x + self.pos_embed
+RuntimeError: The size of tensor a (97) must match the size of tensor b (217) at non-singleton dimension 1
+
+[vit3d] FAILED: The size of tensor a (97) must match the size of tensor b (217) at non-singleton dimension 1
+
+================================================================================
+=== 2/6: swin3d (swin_transformer_3d) ===
+================================================================================
+--- Configuration ---
+data: DataConfig(zarr_path='/media/jeff/Seagate/ves_zarrs2', scroll1_id=20260115000000, scroll2_id=20250223000000, scroll4_id=20260206000001, test_on_scroll4=False, tile_size=16, depth=24, d_start=4, d_end=28, train_d_start=4, train_d_end=28)
+dl: DataloaderConfig(batch_size=96, num_workers=12, data_aug=True, channel_mixing_prob=0.0, rotation_prob=0.6, flip_prob=0.6, noise_prob=0.3, brightness_prob=0.6, contrast_prob=0.6)
+tra: TrainingConfig(n_epochs=15, lr=0.00015, weight_decay=0.3, l1_lambda=7e-06, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=5, log_dir='./runs_archs6', eval_int=999, test_int=999, probe_int=15, eval_aggregate=True)
+model: ModelConfig(conv1_drop=0.15, conv2_drop=0.15, fc1_drop=0.2, fc2_drop=0.1, pooling='avg', gem_p=3.0, conv3_dilation=1, arch='swin3d')
+finetune: FinetuneConfig(learning_rate=1e-05, num_epochs=25)
+hm: HardMining(enabled=True, hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1, dir='./hard_negs')
+device: cpu
+model_dir: models
+exp_name: c6_swin3d
+---------------------
+Creating datasets...
+[info] using cached normalization for segment 20260115000000
+using cached pos_weight for scroll 20260115000000: 44.73
+Data setup done in 2.79s
+Creating model and loss... l1 lambda 7e-06... Model parameters (swin3d): 25,939,297
+ done in 0.29s
+Initializing Tensorboard...
+[info] using cached normalization for segment 20260115000000
+[SCROLL4 DEBUG] Region mask non-zero fraction: 0.8997
+[SCROLL4 DEBUG] Scroll4 mask / range basic checks passed.
+TensorBoard logs will be saved to: ./runs_archs6/c6_swin3d_08_23-37-32
+To view, run: tensorboard --logdir=./runs_archs6
+
+--- Epoch 1/15 ---
+Training:   0%|          | 0/1369 [00:00<?, ?it/s]

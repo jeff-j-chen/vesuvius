@@ -36,6 +36,7 @@ os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 from utils.config import Config
+from utils.platform import get_zarr_dir
 
 MAE_CKPT = "models/mae_twostage.pth"
 LOG_DIR = "./runs_archs2"
@@ -47,6 +48,9 @@ def _base_config(exp_name: str) -> Config:
     on_linux = (os.name == "posix")
     c.exp_name = exp_name
     c.model.arch = "v16_arch_ctx"
+    
+    # Set platform-aware zarr path
+    c.data.zarr_path = get_zarr_dir()
     c.data.tile_size     = 16
     c.data.depth         = 24
     c.data.train_d_start = 4
@@ -65,8 +69,8 @@ def _base_config(exp_name: str) -> Config:
     c.tra.save_int     = 5
     c.tra.log_dir      = LOG_DIR
     c.tra.deterministic = False
-    c.tra.lr = 1.5e-4 if on_linux else 1.0e-4
-    c.data.eval_infer_bs = 256 if on_linux else 32
+    c.tra.lr = get_default_lr()
+    c.data.eval_infer_bs = get_default_eval_bs()
     
     # OPTIMIZATION: only render 1 scroll during eval (much faster)
     c.tra.eval_int_scrolls = 1
@@ -77,8 +81,8 @@ def _base_config(exp_name: str) -> Config:
     c.tra.tta_consistency = False
     
     c.tra.l1_lambda    = 0.0
-    c.dl.batch_size    = 96 if on_linux else 32
-    c.dl.num_workers   = 12 if on_linux else 0
+    c.dl.batch_size    = get_default_batch_size()
+    c.dl.num_workers   = get_default_workers()
     c.dl.data_aug      = True
     c.data.mask_memmap       = True
     c.data.mask_bitpack      = True
