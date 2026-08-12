@@ -134,9 +134,9 @@ TESTS = [
     # if this works: label diversity is less important than label quality at small scale.
     _mk5("w044_soft", "w044_softaug",
          scrolls=[ScrollConfig(20260115000000, split_axis="y", train_split_frac=0.8055)],
-         flip_prob=0.2, rotation_prob=0.2, noise_prob=0.1,
-         brightness_prob=0.1, contrast_prob=0.1,
-         cutout_prob=0.0),
+         flip_prob=0.25, rotation_prob=0.25, noise_prob=0.15,
+         brightness_prob=0.15, contrast_prob=0.15,
+         cutout_prob=0.1, cutout_max_frac=0.1, cutout_n_patches=1),
 
     # ==============================================================================
     # 2. TWO CLEAN-LABEL SCROLLS

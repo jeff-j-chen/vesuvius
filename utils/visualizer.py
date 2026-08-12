@@ -1874,6 +1874,18 @@ class TensorboardVisualizer:
         else:
             tr_y, tr_x = self.shared_range, self.train_range
             full_y = self.shared_range; full_x = (self.train_range[0], self.valid_range[1])
+        
+        # fast_eval_figure: only render left 40% of valid region (for single-scroll campaigns)
+        if getattr(self.c.tra, "fast_eval_figure", False):
+            valid_width = self.valid_range[1] - self.valid_range[0]
+            if getattr(self, "split_axis", "x") == "y":
+                # y-split: restrict y range to first 40% of valid region
+                fast_valid_end = self.valid_range[0] + int(valid_width * 0.4)
+                full_y = (self.train_range[0], fast_valid_end)
+            else:
+                # x-split: restrict x range to first 40% of valid region
+                fast_valid_end = self.valid_range[0] + int(valid_width * 0.4)
+                full_x = (self.train_range[0], fast_valid_end)
 
         hm_dir = self._hard_mining_dir()
         hm_enabled = getattr(self.c.hm, "enabled", True)

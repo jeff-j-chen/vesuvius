@@ -129,7 +129,7 @@ DEFAULT_SCROLLS: List[ScrollConfig] = [
     ScrollConfig(20260226000000, split_axis="y", train_split_frac=0.75),    # seg46527 P0814
     # PHerc0500P2 front segment (2026-08-07) — different scroll, same 9.362µm/113keV/1.2m scan.
     # crystal-clear 2.215µm inklabels (eroded fraction ~1.4% in-mask); vertical split.
-    ScrollConfig(20250628074500, split_axis="x", train_split_frac=0.75),    # 500P2_front P0500P2
+    ScrollConfig(20250628074500, split_axis="y", train_split_frac=0.75),    # 500P2_front P0500P2 (vertical: top 75% train, bottom 25% valid)
 ]
 
 
@@ -200,6 +200,8 @@ class DataConfig:
     dense_labels: bool = False        # dense per-pixel BCE (model emits (B,1,T,T) map, not a tile scalar)
     dense_soft_labels: bool = False   # use soft_inklabels probability map as the dense target
     preload_to_ram: bool = False  # load full zarr into RAM; only useful if disk I/O is the bottleneck (it's not — chunks are uncompressed, OS caches them)
+    # normalization mode: "zscore" = global mean/std (default), "robust_mad" = per-patch median/MAD (villa)
+    normalization_mode: str = "zscore"
     # per-scroll probe ROIs: {scroll_id: [ProbeROI, ...]}
     probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_default_probe_rois)
 
@@ -277,6 +279,8 @@ class TrainingConfig:
     # save the full-size eval figures (one per training scroll) to
     # ./output/visualizations/<exp_name>/ at eval_int. off by default (TensorBoard only).
     save_vis: bool = False
+    # fast eval figure: only render left 40% of valid region (for large scrolls)
+    fast_eval_figure: bool = False
     # render the test/holdout figure ONCE on the final epoch even when test_int never fires
     # (e.g. test_int=9999). used by leave-one-out campaigns to infer the held-out fragment.
     test_on_final: bool = False
@@ -372,6 +376,15 @@ class ModelConfig:
     # advantage over fixed physics: can learn which SIDE of the surface has ink,
     # and can handle multi-sheet papyrus with two surfaces.
     learned_surface: bool = False
+    # villa-inspired improvements (campaign_archs_7):
+    # depth_attention_mode: how to apply depth attention (villa's key innovation)
+    # "none" = disabled, "hybrid_per_window" = attention+max per 8-slice window (NOT global collapse)
+    depth_attention_mode: str = "none"
+    # normalization_layer: which norm to use in 3D convs
+    # "batch" = BatchNorm3d (default), "group" = GroupNorm (stable), "instance" = InstanceNorm3d (villa's choice)
+    normalization_layer: str = "batch"
+    # activation: "relu" (default) or "leaky" (LeakyReLU with slope=0.01, villa's choice)
+    activation: str = "relu"
 
 
 @dataclass
