@@ -1,0 +1,119 @@
+baseline: w044_noaug -> cmp_archs7_w044_noaug_w044_no_augs_11_21-34-49
+
+duplicate dual_gated:
+  cmp_archs7_dual_gated_dual_stream_gated_fusion_12_10-45-44  step=11 comp=72 train_pr=0.97894 valid_pr=0.42408 train_f1=0.95648 valid_f1=0.46898
+  cmp_archs7_dual_gated_dual_stream_gated_fusion_12_10-42-58  step=1 comp=12 train_pr=0.60100 valid_pr=0.49640 train_f1=0.68029 valid_f1=0.62274
+
+duplicate dual_late:
+  cmp_archs7_dual_late_dual_stream_late_fusion_12_10-25-18  step=11 comp=72 train_pr=0.99036 valid_pr=0.44123 train_f1=0.95499 valid_f1=0.47681
+  cmp_archs7_dual_late_dual_stream_late_fusion_12_08-59-34  step=11 comp=72 train_pr=0.99469 valid_pr=0.46810 train_f1=0.96331 valid_f1=0.33849
+
+duplicate hybrid_global:
+  cmp_archs7_hybrid_global_hybrid_attn_global_12_11-38-06  step=11 comp=72 train_pr=0.93699 valid_pr=0.51147 train_f1=0.85903 valid_f1=0.33425
+  cmp_archs7_hybrid_global_hybrid_attn_global_12_11-31-27  step=4 comp=30 train_pr=0.63014 valid_pr=0.54485 train_f1=0.66951 valid_f1=0.55443
+
+top 10 by train_pr_auc:
+   1. nnunet3d             last=0.99905 best=0.99905 best_step=11 delta_last3=0.00036
+   2. ghost                last=0.99895 best=0.99895 best_step=11 delta_last3=0.02551
+   3. dual_early           last=0.99569 best=0.99659 best_step=9 delta_last3=-0.00089
+   4. nnunet3d_ds2         last=0.99201 best=0.99201 best_step=11 delta_last3=0.00504
+   5. dual_late            last=0.99036 best=0.99071 best_step=10 delta_last3=0.00488
+   6. progressive          last=0.98519 best=0.98519 best_step=11 delta_last3=0.05927
+   7. dual_gated           last=0.97894 best=0.98202 best_step=10 delta_last3=-0.00177
+   8. nnunet3d_softaug     last=0.96555 best=0.96555 best_step=11 delta_last3=0.01703
+   9. fpn                  last=0.96532 best=0.96532 best_step=11 delta_last3=0.03900
+  10. nonlocal             last=0.96081 best=0.96081 best_step=11 delta_last3=0.08834
+
+top 10 by train_f1:
+   1. nnunet3d             last=0.99662 best=0.99740 best_step=9 delta_last3=-0.00077
+   2. nnunet3d_ds2         last=0.98760 best=0.98760 best_step=11 delta_last3=0.01318
+   3. ghost                last=0.98634 best=0.98634 best_step=11 delta_last3=0.06996
+   4. dual_early           last=0.97488 best=0.97488 best_step=11 delta_last3=0.00402
+   5. dual_gated           last=0.95648 best=0.96673 best_step=10 delta_last3=0.00393
+   6. dual_late            last=0.95499 best=0.95499 best_step=11 delta_last3=0.01396
+   7. progressive          last=0.94237 best=0.94237 best_step=11 delta_last3=0.08027
+   8. nnunet3d_softaug     last=0.91896 best=0.92622 best_step=10 delta_last3=0.02014
+   9. nonlocal             last=0.90827 best=0.90827 best_step=11 delta_last3=0.10025
+  10. fpn                  last=0.90560 best=0.90560 best_step=11 delta_last3=0.06179
+
+top 10 by train_loss:
+   1. nnunet3d             last=0.18081 best=0.18081 best_step=11 delta_last3=-0.03284
+   2. nnunet3d_ds2         last=0.21153 best=0.21153 best_step=11 delta_last3=-0.04025
+   3. convnext3d           last=0.28656 best=0.28370 best_step=8 delta_last3=-0.04869
+   4. nnunet3d_softaug     last=0.30904 best=0.30904 best_step=11 delta_last3=-0.03671
+   5. ctx64_fovea          last=0.37414 best=0.37414 best_step=11 delta_last3=-0.03341
+   6. swin3d               last=0.57805 best=0.57805 best_step=11 delta_last3=-0.03688
+   7. xcit3d               last=0.64608 best=0.64332 best_step=10 delta_last3=0.00165
+   8. slot3d               last=0.68520 best=0.68300 best_step=1 delta_last3=-0.00023
+   9. vit3d                last=0.68630 best=0.68577 best_step=1 delta_last3=0.00004
+  10. dual_early           last=2.42753 best=1.75265 best_step=0 delta_last3=0.09080
+
+top 10 by valid_pr_auc:
+   1. deform               last=0.60634 best=0.60634 best_step=11 delta_last3=0.02762
+   2. efficient            last=0.59222 best=0.59881 best_step=8 delta_last3=-0.00452
+   3. inverted             last=0.59222 best=0.59881 best_step=8 delta_last3=-0.00452
+   4. latecollapse32       last=0.58469 best=0.58469 best_step=11 delta_last3=0.01441
+   5. hybrid_triple        last=0.57842 best=0.59427 best_step=7 delta_last3=-0.00870
+   6. latecollapse64       last=0.57226 best=0.57226 best_step=11 delta_last3=0.03277
+   7. late_unet            last=0.56719 best=0.56719 best_step=11 delta_last3=0.00675
+   8. nonlocal             last=0.55325 best=0.57252 best_step=8 delta_last3=-0.01854
+   9. dual_asym            last=0.53939 best=0.53939 best_step=11 delta_last3=0.00793
+  10. swin3d               last=0.53924 best=0.54775 best_step=9 delta_last3=-0.00851
+
+top 10 by valid_f1:
+   1. late_unet            last=0.65042 best=0.65042 best_step=11 delta_last3=0.00704
+   2. latecollapse64       last=0.63961 best=0.63961 best_step=11 delta_last3=0.00106
+   3. ctx64_fovea          last=0.63684 best=0.64017 best_step=8 delta_last3=0.00225
+   4. villa_layernorm      last=0.63250 best=0.63250 best_step=0 delta_last3=0.00000
+   5. mixed_win            last=0.63186 best=0.63186 best_step=11 delta_last3=0.02985
+   6. latecollapse32       last=0.63038 best=0.63377 best_step=9 delta_last3=-0.00339
+   7. axial                last=0.62453 best=0.62832 best_step=10 delta_last3=0.08095
+   8. fpn                  last=0.62370 best=0.62370 best_step=11 delta_last3=0.00411
+   9. progressive          last=0.61967 best=0.62976 best_step=6 delta_last3=-0.00924
+  10. gce_noise            last=0.61846 best=0.63788 best_step=10 delta_last3=-0.01886
+
+top 10 by valid_loss:
+   1. efficient            last=0.50290 best=0.50290 best_step=11 delta_last3=-0.00237
+   2. inverted             last=0.50290 best=0.50290 best_step=11 delta_last3=-0.00237
+   3. gce_noise            last=0.50719 best=0.48849 best_step=6 delta_last3=-0.00460
+   4. deform               last=0.51337 best=0.51337 best_step=11 delta_last3=-0.04280
+   5. swin3d               last=0.52464 best=0.50753 best_step=9 delta_last3=0.01711
+   6. hybrid_triple        last=0.52988 best=0.52988 best_step=11 delta_last3=-0.01451
+   7. nnunet3d             last=0.53095 best=0.52984 best_step=7 delta_last3=-0.00319
+   8. xcit3d               last=0.53379 best=0.53318 best_step=9 delta_last3=0.00061
+   9. dual_asym            last=0.53645 best=0.53330 best_step=10 delta_last3=0.00085
+  10. villa_instancenorm   last=0.53684 best=0.53684 best_step=11 delta_last3=-0.01137
+
+top 15 composite:
+   1. nnunet3d             score=0.87021 train_pr=0.99905 train_f1=0.99662 train_loss=0.18081 valid_pr=0.53349 valid_f1=0.26076 valid_loss=0.53095
+   2. ghost                score=0.79574 train_pr=0.99895 train_f1=0.98634 train_loss=2.49927 valid_pr=0.46117 valid_f1=0.57107 valid_loss=0.58196
+   3. nonlocal             score=0.78723 train_pr=0.96081 train_f1=0.90827 train_loss=2.73045 valid_pr=0.55325 valid_f1=0.61288 valid_loss=0.55315
+   4. progressive          score=0.75426 train_pr=0.98519 train_f1=0.94237 train_loss=2.60612 valid_pr=0.48686 valid_f1=0.61967 valid_loss=0.65307
+   5. dual_early           score=0.75213 train_pr=0.99569 train_f1=0.97488 train_loss=2.42753 valid_pr=0.44786 valid_f1=0.54230 valid_loss=0.64698
+   6. nnunet3d_ds2         score=0.75000 train_pr=0.99201 train_f1=0.98760 train_loss=0.21153 valid_pr=0.45580 valid_f1=0.41456 valid_loss=0.59586
+   7. fpn                  score=0.73723 train_pr=0.96532 train_f1=0.90560 train_loss=2.78295 valid_pr=0.50491 valid_f1=0.62370 valid_loss=0.59113
+   8. dual_late            score=0.69574 train_pr=0.99036 train_f1=0.95499 train_loss=2.56788 valid_pr=0.44123 valid_f1=0.47681 valid_loss=0.61599
+   9. coord_attn           score=0.68936 train_pr=0.94124 train_f1=0.87177 train_loss=2.80622 valid_pr=0.51371 valid_f1=0.60313 valid_loss=0.56299
+  10. dual_gated           score=0.67979 train_pr=0.97894 train_f1=0.95648 train_loss=2.52631 valid_pr=0.42408 valid_f1=0.46898 valid_loss=0.71335
+  11. nnunet3d_softaug     score=0.67340 train_pr=0.96555 train_f1=0.91896 train_loss=0.30904 valid_pr=0.44603 valid_f1=0.43078 valid_loss=0.60603
+  12. bifpn                score=0.66596 train_pr=0.94444 train_f1=0.87800 train_loss=2.82242 valid_pr=0.49109 valid_f1=0.60349 valid_loss=0.58628
+  13. multiscale           score=0.66277 train_pr=0.95161 train_f1=0.88878 train_loss=2.72813 valid_pr=0.49007 valid_f1=0.52128 valid_loss=0.57956
+  14. latecollapse32       score=0.65319 train_pr=0.91306 train_f1=0.83944 train_loss=2.85392 valid_pr=0.58469 valid_f1=0.63038 valid_loss=0.57365
+  15. depth_se             score=0.64362 train_pr=0.93415 train_f1=0.86476 train_loss=2.82869 valid_pr=0.50200 valid_f1=0.61434 valid_loss=0.60076
+
+baseline deltas for top 15 composite:
+  nnunet3d             d_train_pr=0.09708 d_train_f1=0.18109 d_valid_pr=0.03441 d_valid_f1=-0.21798 d_train_loss=-2.55146 d_valid_loss=-0.02346
+  ghost                d_train_pr=0.09698 d_train_f1=0.17081 d_valid_pr=-0.03792 d_valid_f1=0.09232 d_train_loss=-0.23300 d_valid_loss=0.02755
+  nonlocal             d_train_pr=0.05884 d_train_f1=0.09274 d_valid_pr=0.05417 d_valid_f1=0.13414 d_train_loss=-0.00182 d_valid_loss=-0.00126
+  progressive          d_train_pr=0.08322 d_train_f1=0.12684 d_valid_pr=-0.01222 d_valid_f1=0.14092 d_train_loss=-0.12615 d_valid_loss=0.09866
+  dual_early           d_train_pr=0.09372 d_train_f1=0.15935 d_valid_pr=-0.05122 d_valid_f1=0.06356 d_train_loss=-0.30474 d_valid_loss=0.09258
+  nnunet3d_ds2         d_train_pr=0.09004 d_train_f1=0.17207 d_valid_pr=-0.04328 d_valid_f1=-0.06418 d_train_loss=-2.52074 d_valid_loss=0.04146
+  fpn                  d_train_pr=0.06334 d_train_f1=0.09008 d_valid_pr=0.00583 d_valid_f1=0.14496 d_train_loss=0.05068 d_valid_loss=0.03673
+  dual_late            d_train_pr=0.08839 d_train_f1=0.13946 d_valid_pr=-0.05785 d_valid_f1=-0.00193 d_train_loss=-0.16439 d_valid_loss=0.06159
+  coord_attn           d_train_pr=0.03927 d_train_f1=0.05624 d_valid_pr=0.01463 d_valid_f1=0.12439 d_train_loss=0.07395 d_valid_loss=0.00858
+  dual_gated           d_train_pr=0.07697 d_train_f1=0.14095 d_valid_pr=-0.07500 d_valid_f1=-0.00977 d_train_loss=-0.20596 d_valid_loss=0.15895
+  nnunet3d_softaug     d_train_pr=0.06357 d_train_f1=0.10343 d_valid_pr=-0.05305 d_valid_f1=-0.04796 d_train_loss=-2.42323 d_valid_loss=0.05162
+  bifpn                d_train_pr=0.04246 d_train_f1=0.06247 d_valid_pr=-0.00799 d_valid_f1=0.12475 d_train_loss=0.09014 d_valid_loss=0.03187
+  multiscale           d_train_pr=0.04964 d_train_f1=0.07325 d_valid_pr=-0.00901 d_valid_f1=0.04254 d_train_loss=-0.00414 d_valid_loss=0.02515
+  latecollapse32       d_train_pr=0.01109 d_train_f1=0.02391 d_valid_pr=0.08561 d_valid_f1=0.15164 d_train_loss=0.12165 d_valid_loss=0.01924
+  depth_se             d_train_pr=0.03218 d_train_f1=0.04923 d_valid_pr=0.00292 d_valid_f1=0.13560 d_train_loss=0.09642 d_valid_loss=0.04635

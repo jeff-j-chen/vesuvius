@@ -26,7 +26,7 @@ python precompute_norm.py --scroll-id 20260206000001
 
 ## Training data
 
-Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113 keV, 1.2 m detector distance, raw volume ID `20250728140407`). The training set is **15 fragments**: the original 4, plus 10 added 2026-07-21, plus 1 PHerc0814 segment added 2026-07-22.
+Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113 keV, 1.2 m detector distance, raw volume ID `20250728140407`). The training set is **17 fragments**: the original 4, plus 11 PHerc0139 fragments, plus 1 PHerc0814 segment (seg46527), plus 1 PHerc0500P2 segment (500P2_front).
 
 **Original 4:**
 
@@ -46,6 +46,7 @@ Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 11
 | `20260306000000` | **w038** | (28, 6200, 7440) | 0.844 | (left 75% train / right 25% valid) |
 | `20260310000000` | **w037** | (28, 6140, 7200) | 0.838 | (left 75% train / right 25% valid) |
 | `20260303000000` | **w034** | (28, 7040, 7720) | 0.85 | (left 75% train / right 25% valid) |
+| `20260317000000` | **w035** (2026-08-12) | (28, 5820, 5240) | TBD | (left 75% train / right 25% valid) |
 
 **PHerc0814 (2026-07-22)** — different scroll, horizontal split (top 75% train / bottom 25% valid):
 
@@ -59,9 +60,11 @@ Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 11
 |---|---|---|---|---|
 | `20250628074500` | **500P2_front** (PHerc0500P2) | (28, 6280, 3580) | 0.559 | 0.014 (in-mask) |
 
+**w035** labels are downloaded separately: `python download_w035_labels.py` (1.129 µm / 59 keV source, same as all other PHerc0139 fragments). Assemble zarr via `python assemble_training_segments.py --only w035` (mask generation requires the zarr; re-run label script afterwards to apply it). Edit `inklabels/20260317000000.png` and regenerate eroded labels with `python download_w035_labels.py --erode-only`.
+
 The PHerc0500P2 fragment is notable for its **crystal-clear inklabels** derived from a high-resolution 2.215 µm / 111 keV scan. The 2.215 µm ink detection TIF (shape 26440 × 15060) was resized to the 9.362 µm zarr frame at a 4.21× scale ratio, thresholded at 0.55 (140/255), and eroded with a 3×3 kernel (12 iterations) to produce the training labels. Split changed from horizontal to vertical (2026-08-11) for campaign_archs_7 single-scroll isolation testing. Edit `inklabels/20250628074500.png` then regenerate the eroded version with `python download_p500p2_labels.py --erode-only`. Assemble via `python assemble_training_segments.py --only 500P2_front`.
 
-All **16** are wired into `DEFAULT_SCROLLS` in `utils/config.py`. Ink footprint = fraction of the frame with ink label > 0.
+All **17** are wired into `DEFAULT_SCROLLS` in `utils/config.py`. Ink footprint = fraction of the frame with ink label > 0.
 
 The masks for **w059** and **w047** are intersected with the 1.1 µm ink-detection footprint (ROI2). The **new 10 use the full 9.4 µm papyrus footprint** (not intersected), so ring negatives near the labeled band could in principle fall on un-scanned surface; in practice the ring hugs the ink so this is minor. The full-surface footprint is recoverable directly from the zarr (`z[mid] > 0`); no separate `_full9um.png` is stored.
 

@@ -9,14 +9,17 @@ SCROLL CONFIGURATION:
   each entry carries its zarr id, split axis/fraction, and any fragment-specific
   overrides.
 
-CURRENT TRAINING SCROLLS (14 PHerc0139 9.362um / 113keV fragments):
-  original 4:
+CURRENT TRAINING SCROLLS (17 total: 15 PHerc0139 + 1 PHerc0814 + 1 PHerc0500P2):
+  original 4 PHerc0139 fragments:
     20260115000000  w044  split y 0.8055
     20250223000000  w059  split x 0.75
     20260206000001  w047  split x 0.75
     20260115000001  w056  split y 0.50
-  new 10 (2026-07-21, all split x 0.75):
+  new 10 PHerc0139 (2026-07-21, all split x 0.75):
     w058 w052 w049 w046 w041 w040 w039 w038 w037 w034
+  w035 (2026-08-12, split y 0.75 -- horizontal: top 75% train)
+  seg46527 PHerc0814 (2026-07-22, split y 0.75)
+  500P2_front PHerc0500P2 (2026-08-07, split y 0.75)
 
 CURRENT MODEL: v14_mil_deep (MIL with per-voxel logits + LSE aggregation).
   physics variants: v14b_mil_zgrad (depth-gradient channel), v14c_mil_lcn (local contrast norm + depth PE).
@@ -124,7 +127,8 @@ DEFAULT_SCROLLS: List[ScrollConfig] = [
     ScrollConfig(20260302000000, split_axis="x", train_split_frac=0.75),    # w039
     ScrollConfig(20260306000000, split_axis="x", train_split_frac=0.75),    # w038
     ScrollConfig(20260310000000, split_axis="x", train_split_frac=0.75),    # w037
-    ScrollConfig(20260303000000, split_axis="x", train_split_frac=0.75),    # w034
+    ScrollConfig(20260303000000, split_axis="y", train_split_frac=0.500),    # w034
+    ScrollConfig(20260317000000, split_axis="y", train_split_frac=0.75),    # w035 (2026-08-12, horizontal: top 75% train)
     # PHerc0814 segment 46527 (2026-07-22) — different scroll; horizontal split (top 75% train)
     ScrollConfig(20260226000000, split_axis="y", train_split_frac=0.75),    # seg46527 P0814
     # PHerc0500P2 front segment (2026-08-07) — different scroll, same 9.362µm/113keV/1.2m scan.

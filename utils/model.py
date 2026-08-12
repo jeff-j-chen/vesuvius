@@ -1460,6 +1460,23 @@ class InkDetectorArch_Fovea(InkDetectorTwoStageWideZGradFovea):
         return score
 
 
+class InkDetectorArchRelaxedCrop(InkDetectorArch):
+    """v16_arch_ctx_relaxedcrop: baseline bagging over a larger pooled center region."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        relaxed_center = max(self._center, int(config.data.tile_size) // max(1, self._ds))
+        if relaxed_center != self._center:
+            self._center = relaxed_center
+            self._emb_dim = 8 * self._center * self._center
+            if self._use_dann:
+                n_dom = int(getattr(config.tra, "dann_n_domains", 15))
+                self.domain_head = DomainHead(self._emb_dim, n_dom, hidden=64)
+            if self._use_supcon:
+                proj_dim = int(getattr(config.tra, "supcon_proj_dim", 128))
+                hidden_dim = int(getattr(config.tra, "supcon_hidden_dim", 256))
+                self.supcon_head = SupConHead(self._emb_dim, proj_dim=proj_dim, hidden=hidden_dim)
+
+
 # Dual-stream architectures (tests 7-10)
 class InkDetectorDualStreamEarly(InkDetectorArch):
     """v16_dual_stream_early: fuse full-depth and squashed streams before stage-2."""
@@ -1993,6 +2010,124 @@ class InkDetectorLateUNet(InkDetectorArch):
         return self._finalize_forward(self.stage2(torch.cat(feats, dim=1)), x)
 
 
+class InkDetectorLateCollapse32NonLocal(InkDetectorLateCollapse32):
+    """v16_latecollapse32_nonlocal: late rich features with non-local refinement before collapse."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        proj_ch = 32
+        self.feature_nonlocal = NonLocalVoxelBlock(len(self.WINDOWS) * proj_ch)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        feats = [self.feature_proj(fm) for fm in self._window_feature_maps(x)]
+        fused = self.feature_nonlocal(torch.cat(feats, dim=1))
+        return self._finalize_forward(self.stage2(fused), x)
+
+
+class InkDetectorLateCollapse32CoordAttention(InkDetectorLateCollapse32):
+    """v16_latecollapse32_coord: late rich features with coordinate attention before collapse."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        proj_ch = 32
+        self.feature_coord_attn = CoordAttention3dLite(len(self.WINDOWS) * proj_ch)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        feats = [self.feature_proj(fm) for fm in self._window_feature_maps(x)]
+        fused = self.feature_coord_attn(torch.cat(feats, dim=1))
+        return self._finalize_forward(self.stage2(fused), x)
+
+
+class InkDetectorLateCollapse32DepthSE(InkDetectorLateCollapse32):
+    """v16_latecollapse32_depthse: late rich features with depth squeeze-excitation before collapse."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        proj_ch = 32
+        self.feature_depth_se = DepthSEGate(len(self.WINDOWS) * proj_ch)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        feats = [self.feature_proj(fm) for fm in self._window_feature_maps(x)]
+        fused = self.feature_depth_se(torch.cat(feats, dim=1))
+        return self._finalize_forward(self.stage2(fused), x)
+
+
+class InkDetectorLateCollapse32FPN(InkDetectorLateCollapse32):
+    """v16_latecollapse32_fpn: late rich features with top-down cross-window refinement."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        proj_ch = 32
+        self.lateral = nn.ModuleList([
+            nn.Conv3d(proj_ch, proj_ch, kernel_size=1, bias=False) for _ in self.WINDOWS
+        ])
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        feats = [self.feature_proj(fm) for fm in self._window_feature_maps(x)]
+        for idx in range(len(feats) - 1, 0, -1):
+            feats[idx - 1] = feats[idx - 1] + self.lateral[idx](feats[idx])
+        return self._finalize_forward(self.stage2(torch.cat(feats, dim=1)), x)
+
+
+class InkDetectorLateUNetNonLocal(InkDetectorLateUNet):
+    """v16_late_unet_nonlocal: shallow feature u-net with non-local refinement on projected windows."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        proj_ch = 32
+        self.feature_nonlocal = NonLocalVoxelBlock(len(self.WINDOWS) * proj_ch)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        feats = [self.feature_proj(fm) for fm in self._window_feature_maps(x)]
+        fused = self.feature_nonlocal(torch.cat(feats, dim=1))
+        return self._finalize_forward(self.stage2(fused), x)
+
+
+class InkDetectorLateUNetCoordAttention(InkDetectorLateUNet):
+    """v16_late_unet_coord: shallow feature u-net with coordinate attention on projected windows."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        proj_ch = 32
+        self.feature_coord_attn = CoordAttention3dLite(len(self.WINDOWS) * proj_ch)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        feats = [self.feature_proj(fm) for fm in self._window_feature_maps(x)]
+        fused = self.feature_coord_attn(torch.cat(feats, dim=1))
+        return self._finalize_forward(self.stage2(fused), x)
+
+
+class InkDetectorLateUNetDepthSE(InkDetectorLateUNet):
+    """v16_late_unet_depthse: shallow feature u-net with depth squeeze-excitation on projected windows."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        proj_ch = 32
+        self.feature_depth_se = DepthSEGate(len(self.WINDOWS) * proj_ch)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        feats = [self.feature_proj(fm) for fm in self._window_feature_maps(x)]
+        fused = self.feature_depth_se(torch.cat(feats, dim=1))
+        return self._finalize_forward(self.stage2(fused), x)
+
+
+class InkDetectorLateUNetFPN(InkDetectorLateUNet):
+    """v16_late_unet_fpn: shallow feature u-net with top-down cross-window refinement."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        proj_ch = 32
+        self.lateral = nn.ModuleList([
+            nn.Conv3d(proj_ch, proj_ch, kernel_size=1, bias=False) for _ in self.WINDOWS
+        ])
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        feats = [self.feature_proj(fm) for fm in self._window_feature_maps(x)]
+        for idx in range(len(feats) - 1, 0, -1):
+            feats[idx - 1] = feats[idx - 1] + self.lateral[idx](feats[idx])
+        return self._finalize_forward(self.stage2(torch.cat(feats, dim=1)), x)
+
+
 # ===================================================================
 # RADICAL ARCHITECTURES (tests 39-44)
 # ===================================================================
@@ -2218,6 +2353,13 @@ class nnUNet3D(nn.Module):
     """
     def __init__(self, config: Config):
         super().__init__()
+        self._ds = max(1, int(getattr(config.data, "context_downsample", 1)))
+        self._use_attn_mil = bool(getattr(config.model, "attn_mil", False))
+        self._attn_entropy_weight = float(getattr(config.model, "attn_entropy_weight", 0.0))
+        self.last_voxel_map = None
+        self.last_attn_entropy_loss = None
+        if self._use_attn_mil:
+            self.attn_mil = GatedAttentionMIL(feat_dim=1, att_dim=32)
         
         # Encoder
         self.enc1 = self._conv_block(1, 32)
@@ -2253,9 +2395,34 @@ class nnUNet3D(nn.Module):
             nn.InstanceNorm3d(out_ch),
             nn.LeakyReLU(0.01, inplace=True)
         )
+
+    def _prepare_input(self, x):
+        if x.dim() == 4:
+            x = x.unsqueeze(1)
+        if self._ds > 1:
+            x = F.avg_pool3d(x, kernel_size=(1, self._ds, self._ds), stride=(1, self._ds, self._ds))
+        return x
+
+    def _stem_in(self, x):
+        return x
+
+    def _bag_score(self, out):
+        if self._use_attn_mil:
+            tile_score, attn_entropy_loss = self.attn_mil(out, entropy_weight=self._attn_entropy_weight)
+            self.last_attn_entropy_loss = attn_entropy_loss
+            return tile_score
+        self.last_attn_entropy_loss = torch.tensor(0.0, device=out.device)
+        out_flat = out.flatten(1)
+        r = 2.0
+        N = out_flat.shape[1]
+        return (1.0 / r) * (
+            torch.logsumexp(r * out_flat, dim=1, keepdim=True)
+            - torch.log(torch.tensor(float(N), device=out.device))
+        )
     
     def forward(self, x):
-        if x.dim() == 4: x = x.unsqueeze(1)
+        x = self._prepare_input(x)
+        x = self._stem_in(x)
         
         # Encoder
         e1 = self.enc1(x)
@@ -2272,27 +2439,25 @@ class nnUNet3D(nn.Module):
         
         # Deep supervision (use final output for tile score)
         out = self.out1(d1)
-        
-        # MIL-LSE aggregation over voxels
-        out_flat = out.flatten(1)
-        r = 2.0
-        N = out_flat.shape[1]
-        return (1.0 / r) * (torch.logsumexp(r * out_flat, dim=1, keepdim=True) - 
-                           torch.log(torch.tensor(float(N), device=out.device)))
+        self.last_voxel_map = out.detach()
+        return self._bag_score(out)
+
+
+class nnUNet3DLCNZGrad(nnUNet3D):
+    """nnU-Net 3D with the baseline-style raw+lcn+dz stem inputs."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.enc1 = self._conv_block(3, 32)
+
+    def _stem_in(self, x):
+        dz = torch.zeros_like(x)
+        dz[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
+        return torch.cat([x, _lcn2d(x, 5), dz], dim=1)
 
 
 class nnUNet3DDS(nnUNet3D):
-    """nnU-Net with optional input downsampling so campaign ds2 becomes a real ablation."""
-    def __init__(self, config: Config):
-        super().__init__(config)
-        self._ds = max(1, int(getattr(config.data, "context_downsample", 1)))
-
-    def forward(self, x):
-        if x.dim() == 4:
-            x = x.unsqueeze(1)
-        if self._ds > 1:
-            x = F.avg_pool3d(x, kernel_size=(1, self._ds, self._ds), stride=(1, self._ds, self._ds))
-        return super().forward(x)
+    """compat alias now that nnUNet3D honors context_downsample directly."""
+    pass
 
 
 class SlotAttention3D(nn.Module):
@@ -2383,6 +2548,7 @@ class SlotAttention3D(nn.Module):
 
 # register v16_arch_ctx AFTER the class is defined
 _ARCH_MAP["v16_arch_ctx"] = InkDetectorArch
+_ARCH_MAP["v16_arch_ctx_relaxedcrop"] = InkDetectorArchRelaxedCrop
 
 # Register Campaign Archs 7 architectures
 _ARCH_MAP["v16_arch_ctx_fovea"] = InkDetectorArch_Fovea
@@ -2415,6 +2581,14 @@ _ARCH_MAP["v16_depth_shift"] = InkDetectorDepthShift
 _ARCH_MAP["v16_latecollapse32"] = InkDetectorLateCollapse32
 _ARCH_MAP["v16_latecollapse64"] = InkDetectorLateCollapse64
 _ARCH_MAP["v16_late_unet"] = InkDetectorLateUNet
+_ARCH_MAP["v16_latecollapse32_nonlocal"] = InkDetectorLateCollapse32NonLocal
+_ARCH_MAP["v16_latecollapse32_coord"] = InkDetectorLateCollapse32CoordAttention
+_ARCH_MAP["v16_latecollapse32_depthse"] = InkDetectorLateCollapse32DepthSE
+_ARCH_MAP["v16_latecollapse32_fpn"] = InkDetectorLateCollapse32FPN
+_ARCH_MAP["v16_late_unet_nonlocal"] = InkDetectorLateUNetNonLocal
+_ARCH_MAP["v16_late_unet_coord"] = InkDetectorLateUNetCoordAttention
+_ARCH_MAP["v16_late_unet_depthse"] = InkDetectorLateUNetDepthSE
+_ARCH_MAP["v16_late_unet_fpn"] = InkDetectorLateUNetFPN
 
 # Register radical architectures (tests 39-44) - fully implemented!
 _ARCH_MAP["vit3d"] = ViT3D
@@ -2422,6 +2596,7 @@ _ARCH_MAP["swin3d"] = Swin3D
 _ARCH_MAP["convnext3d"] = ConvNeXt3D
 _ARCH_MAP["xcit3d"] = XCiT3D
 _ARCH_MAP["nnunet3d"] = nnUNet3D
+_ARCH_MAP["nnunet3d_lcndz"] = nnUNet3DLCNZGrad
 _ARCH_MAP["nnunet3d_ds"] = nnUNet3DDS
 _ARCH_MAP["slot3d"] = SlotAttention3D
 

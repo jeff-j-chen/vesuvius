@@ -1,0 +1,33 @@
+baseline:
+  w044_noaug       run=cmp_archs7_w044_noaug_w044_no_augs_11_21-34-49 train_pr=0.90197 train_f1=0.81553 train_loss=2.73227 valid_pr=0.49908 valid_f1=0.47874 valid_loss=0.55441 trend=still climbing
+
+selected candidates:
+  nnunet3d         train_pr=0.99905 train_f1=0.99662 train_loss=0.18081 valid_pr=0.53349 valid_f1=0.26076 valid_loss=0.53095 d_train_pr=0.09708 d_train_f1=0.18109 d_valid_pr=0.03441 d_valid_f1=-0.21798 trend=plateaued/mixed
+  ghost            train_pr=0.99895 train_f1=0.98634 train_loss=2.49927 valid_pr=0.46117 valid_f1=0.57107 valid_loss=0.58196 d_train_pr=0.09698 d_train_f1=0.17081 d_valid_pr=-0.03792 d_valid_f1=0.09232 trend=still climbing
+  nonlocal         train_pr=0.96081 train_f1=0.90827 train_loss=2.73045 valid_pr=0.55325 valid_f1=0.61288 valid_loss=0.55315 d_train_pr=0.05884 d_train_f1=0.09274 d_valid_pr=0.05417 d_valid_f1=0.13414 trend=still climbing
+  progressive      train_pr=0.98519 train_f1=0.94237 train_loss=2.60612 valid_pr=0.48686 valid_f1=0.61967 valid_loss=0.65307 d_train_pr=0.08322 d_train_f1=0.12684 d_valid_pr=-0.01222 d_valid_f1=0.14092 trend=still climbing
+  dual_early       train_pr=0.99569 train_f1=0.97488 train_loss=2.42753 valid_pr=0.44786 valid_f1=0.54230 valid_loss=0.64698 d_train_pr=0.09372 d_train_f1=0.15935 d_valid_pr=-0.05122 d_valid_f1=0.06356 trend=mild upward
+  nnunet3d_ds2     train_pr=0.99201 train_f1=0.98760 train_loss=0.21153 valid_pr=0.45580 valid_f1=0.41456 valid_loss=0.59586 d_train_pr=0.09004 d_train_f1=0.17207 d_valid_pr=-0.04328 d_valid_f1=-0.06418 trend=still climbing
+  late_unet        train_pr=0.90560 train_f1=0.83926 train_loss=2.84726 valid_pr=0.56719 valid_f1=0.65042 valid_loss=0.57549 d_train_pr=0.00363 d_train_f1=0.02374 d_valid_pr=0.06811 d_valid_f1=0.17168 trend=still climbing
+  latecollapse64   train_pr=0.85391 train_f1=0.78154 train_loss=2.98074 valid_pr=0.57226 valid_f1=0.63961 valid_loss=0.56795 d_train_pr=-0.04806 d_train_f1=-0.03399 d_valid_pr=0.07318 d_valid_f1=0.16086 trend=still climbing
+  latecollapse32   train_pr=0.91306 train_f1=0.83944 train_loss=2.85392 valid_pr=0.58469 valid_f1=0.63038 valid_loss=0.57365 d_train_pr=0.01109 d_train_f1=0.02391 d_valid_pr=0.08561 d_valid_f1=0.15164 trend=still climbing
+  deform           train_pr=0.84572 train_f1=0.77069 train_loss=3.01337 valid_pr=0.60634 valid_f1=0.60826 valid_loss=0.51337 d_train_pr=-0.05625 d_train_f1=-0.04484 d_valid_pr=0.10726 d_valid_f1=0.12952 trend=plateaued/mixed
+  efficient        train_pr=0.87823 train_f1=0.79909 train_loss=2.99916 valid_pr=0.59222 valid_f1=0.48923 valid_loss=0.50290 d_train_pr=-0.02374 d_train_f1=-0.01643 d_valid_pr=0.09314 d_valid_f1=0.01049 trend=still climbing
+  ctx64_fovea      train_pr=0.86870 train_f1=0.83847 train_loss=0.37414 valid_pr=0.51822 valid_f1=0.63684 valid_loss=0.55266 d_train_pr=-0.03327 d_train_f1=0.02294 d_valid_pr=0.01914 d_valid_f1=0.15810 trend=still climbing
+  coord_attn       train_pr=0.94124 train_f1=0.87177 train_loss=2.80622 valid_pr=0.51371 valid_f1=0.60313 valid_loss=0.56299 d_train_pr=0.03927 d_train_f1=0.05624 d_valid_pr=0.01463 d_valid_f1=0.12439 trend=still climbing
+  fpn              train_pr=0.96532 train_f1=0.90560 train_loss=2.78295 valid_pr=0.50491 valid_f1=0.62370 valid_loss=0.59113 d_train_pr=0.06334 d_train_f1=0.09008 d_valid_pr=0.00583 d_valid_f1=0.14496 trend=still climbing
+  nnunet3d_softaug train_pr=0.96555 train_f1=0.91896 train_loss=0.30904 valid_pr=0.44603 valid_f1=0.43078 valid_loss=0.60603 d_train_pr=0.06357 d_train_f1=0.10343 d_valid_pr=-0.05305 d_valid_f1=-0.04796 trend=mild upward
+  dual_asym        train_pr=0.86201 train_f1=0.79456 train_loss=2.95678 valid_pr=0.53939 valid_f1=0.55736 valid_loss=0.53645 d_train_pr=-0.03997 d_train_f1=-0.02097 d_valid_pr=0.04031 d_valid_f1=0.07862 trend=still climbing
+
+family summary: avg deltas vs baseline and best member by train_pr / valid_pr / valid_f1
+  sanity                avg_d_train_pr=-0.09241 avg_d_train_f1=-0.09270 avg_d_valid_pr=+0.00427 avg_d_valid_f1=+0.03026 best_train_pr=w044_noaug(0.90197) best_valid_pr=w044_sanity(0.50763) best_valid_f1=w044_sanity(0.53927)
+  context               avg_d_train_pr=-0.01712 avg_d_train_f1=+0.01195 avg_d_valid_pr=+0.02010 avg_d_valid_f1=+0.14020 best_train_pr=ctx96_ds2(0.90156) best_valid_pr=ctx64_ds2(0.52229) best_valid_f1=ctx64_fovea(0.63684)
+  dual_stream           avg_d_train_pr=+0.05478 avg_d_train_f1=+0.10470 avg_d_valid_pr=-0.03594 avg_d_valid_f1=+0.03262 best_train_pr=dual_early(0.99569) best_valid_pr=dual_asym(0.53939) best_valid_f1=dual_asym(0.55736)
+  hybrid_depth          avg_d_train_pr=-0.00690 avg_d_train_f1=+0.00720 avg_d_valid_pr=+0.01536 avg_d_valid_f1=-0.06514 best_train_pr=hybrid_global(0.93699) best_valid_pr=hybrid_triple(0.57842) best_valid_f1=hybrid_triple(0.45566)
+  multiscale_efficient  avg_d_train_pr=-0.01108 avg_d_train_f1=+0.00544 avg_d_valid_pr=+0.02829 avg_d_valid_f1=+0.06542 best_train_pr=multiscale(0.95161) best_valid_pr=efficient(0.59222) best_valid_f1=mixed_win(0.63186)
+  attention             avg_d_train_pr=+0.02090 avg_d_train_f1=+0.04421 avg_d_valid_pr=+0.02791 avg_d_valid_f1=+0.13269 best_train_pr=progressive(0.98519) best_valid_pr=deform(0.60634) best_valid_f1=axial(0.62453)
+  fusion                avg_d_train_pr=+0.00087 avg_d_train_f1=+0.03385 avg_d_valid_pr=+0.00593 avg_d_valid_f1=+0.08712 best_train_pr=ghost(0.99895) best_valid_pr=inverted(0.59222) best_valid_f1=fpn(0.62370)
+  archs5_carryover      avg_d_train_pr=-0.01709 avg_d_train_f1=-0.00609 avg_d_valid_pr=+0.01244 avg_d_valid_f1=+0.11990 best_train_pr=gce_noise(0.88542) best_valid_pr=gce_noise(0.53302) best_valid_f1=gce_noise(0.61846)
+  villa_norm            avg_d_train_pr=-0.16118 avg_d_train_f1=-0.10043 avg_d_valid_pr=-0.00594 avg_d_valid_f1=+0.07929 best_train_pr=villa_instancenorm(0.86643) best_valid_pr=villa_instancenorm(0.53891) best_valid_f1=villa_layernorm(0.63250)
+  radical               avg_d_train_pr=-0.18342 avg_d_train_f1=-0.18529 avg_d_valid_pr=-0.00309 avg_d_valid_f1=-0.16314 best_train_pr=nnunet3d(0.99905) best_valid_pr=swin3d(0.53924) best_valid_f1=swin3d(0.55178)
+  nnunet_lifts          avg_d_train_pr=+0.01418 avg_d_train_f1=+0.04643 avg_d_valid_pr=+0.04590 avg_d_valid_f1=+0.10500 best_train_pr=nnunet3d_ds2(0.99201) best_valid_pr=latecollapse32(0.58469) best_valid_f1=late_unet(0.65042)
