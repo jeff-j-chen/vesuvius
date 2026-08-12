@@ -279,7 +279,7 @@ class TrainingConfig:
     # save the full-size eval figures (one per training scroll) to
     # ./output/visualizations/<exp_name>/ at eval_int. off by default (TensorBoard only).
     save_vis: bool = False
-    # fast eval figure: only render left 40% of valid region (for large scrolls)
+    # fast eval figure: only render left 40% x-dim AND bottom 40% y-dim (16% area, much faster)
     fast_eval_figure: bool = False
     # render the test/holdout figure ONCE on the final epoch even when test_int never fires
     # (e.g. test_int=9999). used by leave-one-out campaigns to infer the held-out fragment.

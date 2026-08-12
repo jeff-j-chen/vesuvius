@@ -363,23 +363,106 @@ class FixedScrollPriorSampler:
 
 ---
 
-## WHAT WE CANNOT ADOPT (Requires Dense Labels)
+## LABEL SUPERVISION: SINGLE-SLICE DENSE vs TILE-LEVEL SPARSE
 
-### ❌ **1. Dense Pixel Supervision**
-Villa trains on **per-pixel labels** (B, H, W) with BCE+Dice loss.  
-We use **tile-scalar labels** (B, 1) with MIL aggregation.  
+**Critical Discovery from HuggingFace README**:
 
-**Why we can't adopt**: Our labels are binary per-tile, not dense pixel masks. Converting would require:
-- Re-annotating all training data at pixel level (months of work)
-- Dense labels at 9µm resolution may not exist for our scrolls
+### VILLA Labels (Single-Slice Dense)
+```
+labels/aligned-scrollprizeorg-21slices/<segment>/<segment>_inklabels.zarr
+Shape: (21, H, W)  — but only Z=10 is annotated, other slices are zeros
+```
+
+**What this means**:
+- Labels are **2D pixel masks** at a single depth plane (Z=10 for aligned, Z=14 for native)
+- Model predicts **128×128 pixel segmentation** at that depth
+- Loss is **per-pixel BCE + Dice** over the annotated slice
+- Other 20 depth slices are IGNORED during training (supervision_mask filters them out)
+
+**Why this works for Villa**:
+- **Dense spatial supervision**: 128×128 = 16,384 pixels per patch vs our 1 scalar per tile
+- **2D U-Net matches label structure**: outputs (B, 1, H, W) prediction map at the annotated slice
+- **Depth fusion happens in stem**: 3D stem collapses 17 slices → single 2D representation
+- **Single-slice annotation is practical**: humans annotate 2D slices, not full 3D volumes
+
+### OUR Labels (Tile-Level Sparse)
+```
+eroded_inklabels/<scroll_id>.png  (2D binary map, 1 value per tile_size×tile_size region)
+Shape: (H/tile_size, W/tile_size)  — typically (H/16, W/16)
+```
+
+**What this means**:
+- Labels are **tile-level binary scalars** (16×16 tile → 1 or 0)
+- Model predicts **1 scalar** per tile via MIL aggregation over 24×16×16 voxels
+- Loss is **scalar BCE** per tile (256× fewer supervised signals than Villa)
+- **NO depth annotation**: tile label = 1 if ANY depth slice in that tile has ink
+
+**Why this is fundamentally different**:
+- **Cannot use U-Net decoder**: no dense pixel targets to supervise (H, W) output
+- **Must use MIL aggregation**: reduce 24×16×16 voxels → 1 scalar somehow
+- **Depth ambiguity**: tile label=1 doesn't tell us WHICH of 24 slices has ink
+- **Coarser spatial resolution**: 16×16 tiles vs 128×128 dense pixels (64× fewer labels)
+
+### Architectural Implications
+
+✅ **CAN ADOPT from Villa**:
+- LocalDepthFusionStem (3D stem with attention+max branches)
+- Robust-MAD normalization (per-patch, depth-independent)
+- InstanceNorm3d + LeakyReLU (architecture details)
+- Depth jitter augmentation (prevents depth overfitting)
+- Fixed scroll sampling (training stability)
+
+❌ **CANNOT ADOPT from Villa**:
+- 2D U-Net decoder (requires dense pixel labels at fixed depth)
+- Dice loss (requires spatial overlap between prediction and ground truth maps)
+- 128×128 dense pixel predictions (we have only tile-level scalars)
+
+🔄 **HYBRID APPROACH (What We Should Do)**:
+Villa's stem architecture is COMPATIBLE with our MIL head:
+```
+[Input: 24×48×48] 
+  → LocalDepthFusionStem (Villa's 3D stem)
+  → [Output: 32×48×48 2D features]
+  → Spatial downsampling + depth re-expansion (NEW adapter layer)
+  → [Output: D'×H'×W' voxel features]
+  → MIL-LSE aggregation (our existing head)
+  → [Output: 1 scalar tile logit]
+```
+
+This gives us Villa's depth fusion benefits while preserving tile-level supervision compatibility.
 
 ---
 
-### ❌ **2. 2D U-Net Decoder**
-Villa's 2D U-Net produces spatial segmentation maps (B, 1, H, W).  
-We use MIL-LSE to aggregate voxel logits → scalar.
+## WHAT WE CANNOT ADOPT (Requires Dense Labels)
 
-**Why we can't adopt**: U-Net decoder expects dense targets. Our MIL framework is fundamentally different.
+## WHAT WE CANNOT ADOPT (Incompatible with Tile-Scalar Labels)
+
+### ❌ **1. 2D U-Net Decoder**
+Villa's decoder produces dense segmentation maps (B, 1, H, W) for single-slice supervision.  
+We have tile-scalar labels (B,) requiring MIL aggregation.
+
+**Why incompatible**: U-Net decoder expects per-pixel targets. Our eroded inklabels are binary per-tile, not dense masks.
+
+---
+
+### ❌ **2. Dice Loss**
+Dice = `2×(pred∩target) / (pred+target)` requires spatial overlap computation.  
+We have scalar predictions (1 value per tile), not segmentation maps.
+
+**Why incompatible**: Dice operates on 2D masks. Our BCE loss is already optimal for binary scalars.
+
+---
+
+### ❌ **3. 128×128 Patch Size at 9µm** (Storage/Memory Constraint)
+Villa uses 128×128×17 patches (278k voxels) with stride 32 (75% overlap).  
+Our 48×48×24 context (55k voxels) already pushes memory limits on 24GB VRAM.
+
+**Why risky to adopt**:
+- 5× more voxels per sample → 5× GPU memory (would need batch_size=1 or smaller tiles)
+- Dense 32px stride sampling → 16× more training samples per epoch (4× longer training)
+- Tile-level labels don't benefit from dense spatial sampling (no sub-tile detail to learn)
+
+**Verdict**: Keep context=48, ds=2 (effective 96×96 voxel grid at 2× coarser resolution).
 
 ---
 

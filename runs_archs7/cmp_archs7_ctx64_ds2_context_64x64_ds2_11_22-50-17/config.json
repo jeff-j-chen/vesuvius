@@ -1,0 +1,380 @@
+{
+  "data": {
+    "composite_d0": 10,
+    "composite_d1": 18,
+    "composite_display": "raw",
+    "composite_method": "maxproj",
+    "context_downsample": 2,
+    "context_size": 64,
+    "d_end": 28,
+    "d_start": 4,
+    "dense_labels": false,
+    "dense_soft_labels": false,
+    "depth": 24,
+    "eval_cmap_norm": "raw",
+    "eval_infer_bs": 64,
+    "holdout_scroll_ids": [
+      20251226000000
+    ],
+    "mask_memmap": true,
+    "normalization_mode": "zscore",
+    "preload_to_ram": false,
+    "probe_rois": {
+      "20250223000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 4320,
+          "y": 3456
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 8352,
+          "y": 2496
+        }
+      ],
+      "20250831000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 2784,
+          "y": 1632
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 6144,
+          "y": 2016
+        }
+      ],
+      "20260108000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 576,
+          "y": 1824
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5664,
+          "y": 3072
+        }
+      ],
+      "20260115000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 4224,
+          "y": 3744
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5856,
+          "y": 4800
+        }
+      ],
+      "20260115000001": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 6816,
+          "y": 1056
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 7008,
+          "y": 5376
+        }
+      ],
+      "20260206000001": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 672,
+          "y": 960
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 6336,
+          "y": 2304
+        }
+      ],
+      "20260210000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 4128,
+          "y": 2592
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 4032,
+          "y": 3168
+        }
+      ],
+      "20260226000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 480,
+          "y": 960
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 480,
+          "y": 1536
+        }
+      ],
+      "20260227000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 4512,
+          "y": 4224
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 7296,
+          "y": 3456
+        }
+      ],
+      "20260302000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 3936,
+          "y": 3744
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5856,
+          "y": 4224
+        }
+      ],
+      "20260303000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 5088,
+          "y": 2784
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5760,
+          "y": 3744
+        }
+      ],
+      "20260306000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 3744,
+          "y": 2016
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5664,
+          "y": 2976
+        }
+      ],
+      "20260310000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 192,
+          "y": 864
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5856,
+          "y": 1824
+        }
+      ],
+      "20260318000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 4128,
+          "y": 960
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 7680,
+          "y": 864
+        }
+      ],
+      "20260325000000": [
+        {
+          "label": "easy",
+          "size": 576,
+          "x": 3168,
+          "y": 2112
+        },
+        {
+          "label": "hard",
+          "size": 576,
+          "x": 5376,
+          "y": 2976
+        }
+      ]
+    },
+    "ring_close_r": 3,
+    "ring_gap_r": 3,
+    "ring_label_source": "closed",
+    "ring_negatives": true,
+    "ring_shell_r": 2,
+    "scrolls": [
+      {
+        "crop_x_frac": [
+          0.0,
+          1.0
+        ],
+        "crop_y_frac": [
+          0.0,
+          1.0
+        ],
+        "scroll_id": 20260115000000,
+        "split_axis": "y",
+        "train_split_frac": 0.8055
+      }
+    ],
+    "test_scroll_ids": [
+      20260716083545,
+      20260717193517,
+      20260720090842,
+      20250703034159,
+      20260723112922
+    ],
+    "tile_size": 16,
+    "train_d_end": 28,
+    "train_d_start": 4,
+    "tta_mode": "flips",
+    "voxel_um": 9.362,
+    "zarr_path": "C:\\Users\\ChenJeff\\Documents\\ves_zarrs2"
+  },
+  "device": "cuda",
+  "dl": {
+    "batch_size": 32,
+    "brightness_delta": 0.15,
+    "brightness_prob": 0,
+    "channel_mixing_prob": 0.0,
+    "contrast_delta": 0.15,
+    "contrast_prob": 0,
+    "cutout_max_frac": 0,
+    "cutout_n_patches": 0,
+    "cutout_prob": 0,
+    "data_aug": false,
+    "depth_mask_prob": 0.0,
+    "flip_prob": 0,
+    "noise_prob": 0,
+    "noise_std_max": 0.005,
+    "noise_std_min": 0.001,
+    "num_workers": 4,
+    "rotation_prob": 0
+  },
+  "exp_name": "cmp_archs7_ctx64_ds2_context_64x64_ds2",
+  "hm": {
+    "dir": "./hard_negs",
+    "enabled": false,
+    "hm_frac": 0.1,
+    "hn_cutoff": 0.8,
+    "hp_cutoff": 0.45
+  },
+  "init_weights": "models/mae_twostage.pth",
+  "model": {
+    "activation": "relu",
+    "arch": "v16_arch_ctx",
+    "attn_entropy_weight": 0.03,
+    "attn_mil": true,
+    "conv1_drop": 0.15,
+    "conv2_drop": 0.15,
+    "depth_attention_mode": "none",
+    "head_drop": 0.4,
+    "learned_surface": false,
+    "n_depth_windows": 3,
+    "normalization_layer": "batch",
+    "physics_stem": false,
+    "physics_stem_depthmax": false,
+    "surface_stem": false,
+    "surface_stem_withdog": false
+  },
+  "model_dir": "models",
+  "tra": {
+    "consistency_on_labeled": false,
+    "dann": false,
+    "dann_lambda": 0.1,
+    "dann_n_domains": 1,
+    "dann_ramp_epochs": 5,
+    "depth_supcon": true,
+    "depth_supcon_lambda": 0.3,
+    "deterministic": false,
+    "epoch_cooldown_secs": 0,
+    "eval_cooldown_secs": 0,
+    "eval_int": 12,
+    "eval_int_scrolls": 1,
+    "fast_eval_figure": true,
+    "fig_chunk_cooldown_ms": 0,
+    "focal_gamma": 0.0,
+    "gce_q": 0.7,
+    "grad_norm": 0.5,
+    "l1_lambda": 0.0,
+    "label_smooth": 0.1,
+    "label_smooth_neg": 0.0,
+    "label_smooth_pos": 0.0,
+    "log_dir": "./runs_archs7",
+    "loss_type": "gce",
+    "lr": 0.0001,
+    "lr_decay": 0.5,
+    "mean_teacher": false,
+    "mean_teacher_alpha": 0.999,
+    "mean_teacher_lambda": 0.1,
+    "mean_teacher_ramp_epochs": 3,
+    "n_epochs": 12,
+    "patience": 5,
+    "pos_weight_enabled": false,
+    "probe_int": 999,
+    "probe_rois_enabled": true,
+    "pseudo_label_same_scroll": false,
+    "pseudo_label_threshold": 0.95,
+    "ranking_lambda": 0.5,
+    "ranking_margin": 0.3,
+    "ranking_neg_frac": 1.0,
+    "save_int": 5,
+    "save_vis": false,
+    "seed": 41,
+    "supcon": true,
+    "supcon_curriculum": true,
+    "supcon_curriculum_epochs": 10,
+    "supcon_hidden_dim": 256,
+    "supcon_lambda": 0.1,
+    "supcon_lambda_end": 0.5,
+    "supcon_lambda_start": 0.05,
+    "supcon_proj_dim": 128,
+    "supcon_temp": 0.07,
+    "test_consistency": false,
+    "test_consistency_lambda": 0.1,
+    "test_int": 999,
+    "test_on_final": false,
+    "tta_consistency": false,
+    "tta_consistency_lambda": 0.5,
+    "tta_consistency_mode": "flips",
+    "tv_lambda": 0.0,
+    "val_cooldown_secs": 0,
+    "verified_neg_lambda": 0.2,
+    "verified_neg_threshold": 31,
+    "weight_decay": 0.3
+  }
+}

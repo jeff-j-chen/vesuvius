@@ -441,6 +441,19 @@ class InkVolumeDataset(IterableDataset):
 
     def _normalize_block(self, block):
         """normalizes a block using pre computed global stats"""
+        mode = str(getattr(self.c.data, "normalization_mode", "zscore") or "zscore").lower()
+        if mode == "robust_mad":
+            block = block.astype(np.float32, copy=False)
+            lo = float(np.percentile(block, 1.0))
+            hi = float(np.percentile(block, 99.0))
+            clipped = np.clip(block, lo, hi)
+            median = float(np.median(clipped))
+            mad = float(np.median(np.abs(clipped - median)))
+            scale = max(mad * 1.4826, 1e-6)
+            norm_block = np.clip((block - median) / scale, -3.0, 3.0)
+            norm_block = (norm_block + 3.0) / 6.0
+            return np.ascontiguousarray(norm_block.astype(np.float32, copy=False))
+
         mean, std, g_min, g_max = self.norm_stats
         if std == 0:
             return block.astype(np.float32, copy=False)

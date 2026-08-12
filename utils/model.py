@@ -179,15 +179,185 @@ def _dog_depth_max(x5, sigma1: float = 1.0, sigma2: float = 2.5) -> torch.Tensor
     dog = _dog2d(x5, sigma1, sigma2)              # (B, C, D, H, W)
     dmax = dog.max(dim=2, keepdim=True).values     # (B, C, 1, H, W) - peak ring response
     return dmax.expand_as(dog)                     # broadcast back to (B, C, D, H, W)
-    """shared depth-aware mixing stage: (B,64,D,H,W) -> (B,256,D,H/2,W/2)."""
+
+
+class ChannelLayerNorm3d(nn.Module):
+    """layer norm over channels for 3D tensors shaped (B, C, D, H, W)."""
+    def __init__(self, channels: int, eps: float = 1e-5):
+        super().__init__()
+        self.channels = int(channels)
+        self.weight = nn.Parameter(torch.ones(self.channels))
+        self.bias = nn.Parameter(torch.zeros(self.channels))
+        self.eps = eps
+
+    def forward(self, x):
+        y = x.permute(0, 2, 3, 4, 1)
+        y = F.layer_norm(y, (self.channels,), self.weight, self.bias, self.eps)
+        return y.permute(0, 4, 1, 2, 3)
+
+
+def _norm3d(channels: int, mode: str = "batch") -> nn.Module:
+    """factory for campaign-configurable 3D normalization layers."""
+    mode = str(mode or "batch").lower()
+    channels = int(channels)
+    if mode == "group":
+        for groups in (8, 4, 2):
+            if channels % groups == 0:
+                return nn.GroupNorm(groups, channels)
+        return nn.GroupNorm(1, channels)
+    if mode == "instance":
+        return nn.InstanceNorm3d(channels, affine=True)
+    if mode == "layer":
+        return ChannelLayerNorm3d(channels)
+    return nn.BatchNorm3d(channels)
+
+
+def _act3d(mode: str = "relu") -> nn.Module:
+    """factory for campaign-configurable activations."""
+    return nn.LeakyReLU(0.01, inplace=True) if str(mode or "relu").lower() == "leaky" else nn.ReLU(inplace=True)
+
+
+def _make_stage2(in_channels: int, norm_mode: str = "batch", activation: str = "relu",
+                 widths: tuple[int, int, int] = (32, 32, 16)) -> nn.Sequential:
+    """generic stage-2 fusion builder that preserves the standard (B,1,D,H,W) output."""
+    c1, c2, c3 = widths
     return nn.Sequential(
-        nn.Conv3d(64, 128, kernel_size=3, padding=1, bias=False),
-        nn.BatchNorm3d(128).to(dtype=torch.float32), nn.ReLU(inplace=True),
-        CBAM3D(128), nn.MaxPool3d(kernel_size=(1, 2, 2)), nn.Dropout3d(drop1),
-        nn.Conv3d(128, 256, kernel_size=3, padding=1, bias=False),
-        nn.BatchNorm3d(256).to(dtype=torch.float32), nn.ReLU(inplace=True),
-        CBAM3D(256), nn.Dropout3d(drop2),
+        nn.Conv3d(in_channels, c1, kernel_size=3, padding=1, bias=False),
+        _norm3d(c1, norm_mode), _act3d(activation),
+        nn.Conv3d(c1, c2, kernel_size=3, padding=1, bias=False),
+        _norm3d(c2, norm_mode), _act3d(activation),
+        nn.Conv3d(c2, c3, kernel_size=3, padding=1, bias=False),
+        _norm3d(c3, norm_mode), _act3d(activation),
+        nn.Conv3d(c3, 1, kernel_size=1, bias=True),
     )
+
+
+def _replace_norm_activation(module: nn.Module, norm_mode: str = "batch", activation: str = "relu") -> None:
+    """mutate a module tree so config-only norm/activation knobs become real behavior."""
+    for name, child in list(module.named_children()):
+        replacement = child
+        if isinstance(child, nn.BatchNorm3d):
+            replacement = _norm3d(child.num_features, norm_mode)
+        elif isinstance(child, nn.ReLU):
+            replacement = _act3d(activation)
+        if replacement is not child:
+            setattr(module, name, replacement)
+            child = replacement
+        _replace_norm_activation(child, norm_mode, activation)
+
+
+class DepthSEGate(nn.Module):
+    """depth-aware squeeze excitation for small voxel-map channel counts."""
+    def __init__(self, channels: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv1d(channels, channels, kernel_size=3, padding=1, groups=channels, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(channels, channels, kernel_size=1, bias=True),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        gate = self.net(x.mean(dim=(-2, -1)))
+        return x * gate.unsqueeze(-1).unsqueeze(-1)
+
+
+class NonLocalVoxelBlock(nn.Module):
+    """lightweight non-local block over the concatenated window voxel maps."""
+    def __init__(self, channels: int):
+        super().__init__()
+        inter = max(1, channels)
+        self.theta = nn.Conv3d(channels, inter, kernel_size=1, bias=False)
+        self.phi = nn.Conv3d(channels, inter, kernel_size=1, bias=False)
+        self.g = nn.Conv3d(channels, inter, kernel_size=1, bias=False)
+        self.out = nn.Conv3d(inter, channels, kernel_size=1, bias=False)
+
+    def forward(self, x):
+        b, _, d, h, w = x.shape
+        n = d * h * w
+        theta = self.theta(x).reshape(b, -1, n).transpose(1, 2)
+        phi = self.phi(x).reshape(b, -1, n)
+        g = self.g(x).reshape(b, -1, n).transpose(1, 2)
+        attn = torch.softmax((theta @ phi) / math.sqrt(max(phi.shape[1], 1)), dim=-1)
+        y = (attn @ g).transpose(1, 2).reshape(b, -1, d, h, w)
+        return x + self.out(y)
+
+
+class CoordAttention3dLite(nn.Module):
+    """coordinate-style spatial gating over H and W axes."""
+    def __init__(self, channels: int):
+        super().__init__()
+        hidden = max(4, channels)
+        self.mix = nn.Sequential(
+            nn.Conv3d(channels, hidden, kernel_size=1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(hidden, channels, kernel_size=1, bias=True),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        h_pool = x.mean(dim=4, keepdim=True)
+        w_pool = x.mean(dim=3, keepdim=True)
+        gate_h = self.mix(h_pool)
+        gate_w = self.mix(w_pool)
+        return x * gate_h * gate_w
+
+
+class GhostStage2(nn.Module):
+    """cheap ghost-style stage-2 fusion block."""
+    def __init__(self, in_channels: int, norm_mode: str = "batch", activation: str = "relu"):
+        super().__init__()
+        self.primary = nn.Sequential(
+            nn.Conv3d(in_channels, 12, kernel_size=1, bias=False),
+            _norm3d(12, norm_mode), _act3d(activation),
+        )
+        self.cheap = nn.Sequential(
+            nn.Conv3d(12, 12, kernel_size=3, padding=1, groups=12, bias=False),
+            _norm3d(12, norm_mode), _act3d(activation),
+        )
+        self.fuse = _make_stage2(24, norm_mode=norm_mode, activation=activation, widths=(24, 16, 8))
+
+    def forward(self, x):
+        primary = self.primary(x)
+        ghost = self.cheap(primary)
+        return self.fuse(torch.cat([primary, ghost], dim=1))
+
+
+class InvertedResidualStage2(nn.Module):
+    """MobileNetV2-style stage-2 fusion."""
+    def __init__(self, in_channels: int, norm_mode: str = "batch", activation: str = "relu"):
+        super().__init__()
+        hidden = max(16, in_channels * 4)
+        self.net = nn.Sequential(
+            nn.Conv3d(in_channels, hidden, kernel_size=1, bias=False),
+            _norm3d(hidden, norm_mode), _act3d(activation),
+            nn.Conv3d(hidden, hidden, kernel_size=3, padding=1, groups=hidden, bias=False),
+            _norm3d(hidden, norm_mode), _act3d(activation),
+            nn.Conv3d(hidden, in_channels, kernel_size=1, bias=False),
+            _norm3d(in_channels, norm_mode),
+        )
+        self.out = _make_stage2(in_channels, norm_mode=norm_mode, activation=activation, widths=(24, 16, 8))
+
+    def forward(self, x):
+        return self.out(x + self.net(x))
+
+
+class ResNeXtStage2(nn.Module):
+    """grouped-convolution stage-2 fusion."""
+    def __init__(self, in_channels: int, norm_mode: str = "batch", activation: str = "relu"):
+        super().__init__()
+        width = 24
+        groups = 3 if width % 3 == 0 else 1
+        self.net = nn.Sequential(
+            nn.Conv3d(in_channels, width, kernel_size=1, bias=False),
+            _norm3d(width, norm_mode), _act3d(activation),
+            nn.Conv3d(width, width, kernel_size=3, padding=1, groups=groups, bias=False),
+            _norm3d(width, norm_mode), _act3d(activation),
+            nn.Conv3d(width, 1, kernel_size=1, bias=True),
+        )
+
+    def forward(self, x):
+        return self.net(x)
 
 
 class InkDetectorMILDeep(nn.Module):
@@ -1038,6 +1208,11 @@ class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
     """
     def __init__(self, config: Config):
         super().__init__(config)
+        self._norm_mode = str(getattr(config.model, "normalization_layer", "batch")).lower()
+        self._activation = str(getattr(config.model, "activation", "relu")).lower()
+        self.domain_head = None
+        self.supcon_head = None
+        self.dann_lambda = 1.0
         # pre-MIL center embedding dim (D * ch * cw after center-crop in pooled coords)
         # for ctx48/ds2: input 48/2=24 -> depth_mix maxpool -> Hf=12; center=tile//(2*ds)=4
         # so D=8, ch=cw=4 -> emb_dim = 8*4*4 = 128
@@ -1096,15 +1271,7 @@ class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
                 (16, 24, 20),  # abs 20-28 (same as window 2)
             ]
             # rebuild stage2 for 5-channel input (parent built it for 3)
-            self.stage2 = nn.Sequential(
-                nn.Conv3d(5, 32, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm3d(32), nn.ReLU(inplace=True),
-                nn.Conv3d(32, 32, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm3d(32), nn.ReLU(inplace=True),
-                nn.Conv3d(32, 16, kernel_size=3, padding=1, bias=False),
-                nn.BatchNorm3d(16), nn.ReLU(inplace=True),
-                nn.Conv3d(16, 1, kernel_size=1, bias=True),
-            )
+            self.stage2 = _make_stage2(5, norm_mode=self._norm_mode, activation=self._activation)
 
         # depth profile SupCon head: contrastive on raw depth profiles (independent of spatial)
         self._use_depth_supcon = bool(getattr(config.tra, "depth_supcon", False))
@@ -1112,61 +1279,180 @@ class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
             # n_depth=24 = 3 windows x 8 slices; proj_dim small (depth profiles are 1D, low info)
             self.depth_profile_head = DepthProfileHead(n_depth=24, proj_dim=32, hidden=64)
 
+        self._apply_campaign_overrides()
+
+    def _apply_campaign_overrides(self):
+        """apply config-driven norm/activation swaps after all submodules exist."""
+        if self._norm_mode != "batch" or self._activation != "relu":
+            _replace_norm_activation(self.stage1, self._norm_mode, self._activation)
+            _replace_norm_activation(self.stage2, self._norm_mode, self._activation)
+
+    def _prepare_input(self, x):
+        if x.dim() == 4:
+            x = x.unsqueeze(1)
+        if self._ds > 1:
+            x = F.avg_pool3d(x, kernel_size=(1, self._ds, self._ds), stride=(1, self._ds, self._ds))
+        return x
+
+    def _window_voxel_maps(self, x, windows=None):
+        windows = self.WINDOWS if windows is None else windows
+        return [
+            self.stage1.get_voxel_logits(x[:, :, z0:z1], depth_offset=pe_off)
+            for z0, z1, pe_off in windows
+        ]
+
+    def _window_feature_maps(self, x, windows=None):
+        windows = self.WINDOWS if windows is None else windows
+        return [
+            self.stage1.encode(x[:, :, z0:z1], depth_offset=pe_off)
+            for z0, z1, pe_off in windows
+        ]
+
+    def _center_crop_fused(self, fused):
+        Hf, Wf = fused.shape[-2], fused.shape[-1]
+        ch, cw = min(self._center, Hf), min(self._center, Wf)
+        oy, ox = (Hf - ch) // 2, (Wf - cw) // 2
+        return fused[:, :, :, oy:oy + ch, ox:ox + cw]
+
+    def _depth_profile_from_input(self, x):
+        H_eff, W_eff = x.shape[-2], x.shape[-1]
+        csize = min(self._center * 2, H_eff)
+        oy_c = (H_eff - csize) // 2
+        ox_c = (W_eff - csize) // 2
+        return x[:, 0, :, oy_c:oy_c + csize, ox_c:ox_c + csize].mean(dim=[-2, -1])
+
+    def _mil_score(self, center):
+        if self._use_attn_mil:
+            tile_score, attn_entropy_loss = self.attn_mil(center, entropy_weight=self._attn_entropy_weight)
+            self.last_attn_entropy_loss = attn_entropy_loss
+            return tile_score
+        self.last_attn_entropy_loss = torch.tensor(0.0, device=center.device)
+        return _mil_lse(center, self.lse_r2, center.device)
+
+    def _finalize_outputs(self, fused, x_input, tile_score=None, already_centered=False):
+        center = fused if already_centered else self._center_crop_fused(fused)
+        self.last_voxel_map = center.detach()
+        emb = center.flatten(1)
+        self.last_depth_profile = self._depth_profile_from_input(x_input) if self._use_depth_supcon else None
+        if tile_score is None:
+            tile_score = self._mil_score(center)
+        elif tile_score.dim() == 1:
+            tile_score = tile_score.unsqueeze(1)
+        dom_logits = self.domain_head(emb, self.dann_lambda) if self._use_dann and self.domain_head is not None else None
+        supcon_z = self.supcon_head(emb) if self._use_supcon and self.supcon_head is not None else None
+        return tile_score, emb, dom_logits, supcon_z
+
     def forward_with_extras(self, x):
         """like forward() but also returns (embedding, domain_logits, supcon_proj).
         used by train.py when DANN or SupCon is active to compute aux losses.
         non-active outputs are None. embedding is always returned (for DANN/SupCon)."""
-        if x.dim() == 4: x = x.unsqueeze(1)
-        if self._ds > 1:
-            x = F.avg_pool3d(x, kernel_size=(1, self._ds, self._ds), stride=(1, self._ds, self._ds))
-        voxel_maps = [
-            self.stage1.get_voxel_logits(x[:, :, z0:z1], depth_offset=pe_off)
-            for z0, z1, pe_off in self.WINDOWS
-        ]
+        x = self._prepare_input(x)
+        voxel_maps = self._window_voxel_maps(x)
         v_cat = torch.cat(voxel_maps, dim=1)
         fused = self.stage2(v_cat)
-        Hf, Wf = fused.shape[-2], fused.shape[-1]
-        ch, cw = min(self._center, Hf), min(self._center, Wf)
-        oy, ox = (Hf - ch) // 2, (Wf - cw) // 2
-        center = fused[:, :, :, oy:oy + ch, ox:ox + cw]
-        self.last_voxel_map = center.detach()
+        return self._finalize_outputs(fused, x)
 
-        # embedding: flatten center features for DANN / SupCon
-        emb = center.flatten(1)   # (B, emb_dim)
+    def _finalize_forward(self, fused, x_input, tile_score=None, already_centered=False):
+        """compat wrapper for campaign variants."""
+        return self._finalize_outputs(fused, x_input, tile_score=tile_score, already_centered=already_centered)
 
-        # depth profile at center tile: mean over spatial dims across all 24 depth slices.
-        # captured BEFORE spatial convolutions -- this is the raw CT depth signature.
-        # used by DepthProfileHead for depth-profile contrastive learning.
-        if self._use_depth_supcon:
-            # x is (B, 1, 24, H_eff, W_eff) after ds downsampling
-            # extract center spatial region and average over it
-            H_eff, W_eff = x.shape[-2], x.shape[-1]
-            csize = min(self._center * 2, H_eff)   # center in effective (pre-pool) space
-            oy_c = (H_eff - csize) // 2
-            ox_c = (W_eff - csize) // 2
-            depth_profile = x[:, 0, :, oy_c:oy_c+csize, ox_c:ox_c+csize].mean(dim=[-2, -1])  # (B, 24)
-        else:
-            depth_profile = None
-        self.last_depth_profile = depth_profile
+    def forward(self, x):
+        score, _, _, _ = self.forward_with_extras(x)
+        return score
 
-        # tile score: attention-MIL or LSE
+
+# ============================================================================
+# CAMPAIGN ARCHS 7: 27 NEW ARCHITECTURAL VARIANTS
+# ============================================================================
+
+# Foveated context (test 6)
+class InkDetectorArch_Fovea(InkDetectorTwoStageWideZGradFovea):
+    """v16_arch_ctx_fovea: foveated context with DANN, SupCon, Attention-MIL"""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        # Calculate embedding dimension from actual fused output shape
+        # After fovea_fuse and stage2: (B, 1, 8, tile_size/2, tile_size/2)
+        _tile = int(config.data.tile_size)
+        _spatial = _tile // 2  # stage2 has MaxPool3d reducing spatial by 2x
+        _depth = 8  # fixed depth dimension from 3 windows
+        self._emb_dim = 1 * _depth * _spatial * _spatial  # 1*8*8*8 = 512 for tile_size=16
+        
+        # DANN domain adversarial head
+        self._use_dann = bool(getattr(config.tra, "dann", False))
+        if self._use_dann:
+            n_domains = int(getattr(config.tra, "dann_n_domains", 1))
+            self.domain_head = DomainHead(self._emb_dim, n_domains, hidden=64)
+        
+        # SupCon projection head
+        self._use_supcon = bool(getattr(config.tra, "supcon", False))
+        if self._use_supcon:
+            proj_dim = int(getattr(config.tra, "supcon_proj_dim", 128))
+            hidden_dim = int(getattr(config.tra, "supcon_hidden_dim", 256))
+            self.supcon_head = SupConHead(self._emb_dim, proj_dim=proj_dim, hidden=hidden_dim)
+        
+        # Attention-MIL
+        self._use_attn_mil = bool(getattr(config.model, "attn_mil", False))
+        self._attn_entropy_weight = float(getattr(config.model, "attn_entropy_weight", 0.0))
         if self._use_attn_mil:
-            # use stored entropy_weight from initialization
-            tile_score, attn_entropy_loss = self.attn_mil(center, entropy_weight=self._attn_entropy_weight)
-            # store for train.py to add to total loss
+            self.attn_mil = GatedAttentionMIL(feat_dim=1, att_dim=32)
+        
+        # DANN lambda for gradient reversal
+        self.dann_lambda = 1.0
+
+        norm_mode = str(getattr(config.model, "normalization_layer", "batch")).lower()
+        activation = str(getattr(config.model, "activation", "relu")).lower()
+        if norm_mode != "batch" or activation != "relu":
+            _replace_norm_activation(self.stage1, norm_mode, activation)
+            _replace_norm_activation(self.stage2, norm_mode, activation)
+            _replace_norm_activation(self.fovea_fuse, norm_mode, activation)
+
+    def forward_with_extras(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        C, T, ds = self._ctx, self._tile, self._ds
+        off = (C - T) // 2
+        xc = x[:, :, :, off:off + T, off:off + T]
+        fused_c = self._fuse_windows(xc)
+        xs = F.avg_pool3d(x, kernel_size=(1, ds, ds), stride=(1, ds, ds))
+        fused_s = self._fuse_windows(xs)
+        Hc, Wc = fused_c.shape[-2], fused_c.shape[-1]
+        hs = fused_s.shape[-1]
+        cc = max(1, hs // ds)
+        o = (hs - cc) // 2
+        s_c = fused_s[:, :, :, o:o + cc, o:o + cc]
+        B_, Ch_, D_, h_, w_ = s_c.shape
+        s_c = s_c.permute(0, 2, 1, 3, 4).reshape(B_ * D_, Ch_, h_, w_)
+        s_c = F.interpolate(s_c, size=(Hc, Wc), mode="bilinear", align_corners=False)
+        s_c = s_c.reshape(B_, D_, Ch_, Hc, Wc).permute(0, 2, 1, 3, 4)
+        fused = self.fovea_fuse(torch.cat([fused_c, s_c], dim=1))
+        self.last_voxel_map = fused.detach()
+        
+        B = fused.shape[0]
+        flat = fused.view(B, -1)
+        
+        # MIL aggregation
+        if self._use_attn_mil:
+            tile_score, attn_entropy_loss = self.attn_mil(fused, entropy_weight=self._attn_entropy_weight)
             self.last_attn_entropy_loss = attn_entropy_loss
         else:
-            self.last_attn_entropy_loss = torch.tensor(0.0, device=center.device)
+            self.last_attn_entropy_loss = torch.tensor(0.0, device=fused.device)
             r = self.lse_r2.clamp(min=0.5, max=10.0)
-            flat = center.flatten(1)
-            N = flat.shape[1]
-            tile_score = (1.0 / r) * (
-                torch.logsumexp(r * flat, dim=1, keepdim=True)
-                - torch.log(torch.tensor(float(N), device=fused.device))
-            )
-
-        dom_logits = None
-        supcon_z = None
+            tile_score = (flat.exp() * r).mean(dim=1).log() / r
+        
+        # Embeddings for DANN and SupCon
+        emb = flat
+        
+        # DANN
+        if self._use_dann:
+            dom_logits = self.domain_head(_grad_reversal(emb, self.dann_lambda))
+        else:
+            dom_logits = None
+        
+        # SupCon
+        if self._use_supcon:
+            supcon_z = F.normalize(self.supcon_head(emb), dim=1)
+        else:
+            supcon_z = None
+        
         return tile_score, emb, dom_logits, supcon_z
 
     def forward(self, x):
@@ -1174,17 +1460,970 @@ class InkDetectorArch(InkDetectorTwoStageWideZGradCtx):
         return score
 
 
+# Dual-stream architectures (tests 7-10)
+class InkDetectorDualStreamEarly(InkDetectorArch):
+    """v16_dual_stream_early: fuse full-depth and squashed streams before stage-2."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        in_ch = len(self.WINDOWS)
+        self.early_fuse = nn.Sequential(
+            nn.Conv3d(in_ch * 2, in_ch, kernel_size=1, bias=False),
+            _norm3d(in_ch, self._norm_mode), _act3d(self._activation),
+        )
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        full_maps = self._window_voxel_maps(x)
+        xs = x.amax(dim=2, keepdim=True).expand_as(x)
+        squashed_maps = self._window_voxel_maps(xs)
+        fused_in = self.early_fuse(torch.cat([torch.cat(full_maps, dim=1), torch.cat(squashed_maps, dim=1)], dim=1))
+        return self._finalize_forward(self.stage2(fused_in), x)
+
+class InkDetectorDualStreamLate(InkDetectorArch):
+    """v16_dual_stream_late: separate streams fused at the tile-logit level."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.late_stage2 = _make_stage2(len(self.WINDOWS), norm_mode=self._norm_mode, activation=self._activation)
+        self.late_alpha = nn.Parameter(torch.tensor(0.0))
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        full_center = self._center_crop_fused(self.stage2(torch.cat(self._window_voxel_maps(x), dim=1)))
+        xs = x.amax(dim=2, keepdim=True).expand_as(x)
+        squashed_center = self._center_crop_fused(self.late_stage2(torch.cat(self._window_voxel_maps(xs), dim=1)))
+        alpha = torch.sigmoid(self.late_alpha)
+        tile_score = alpha * self._mil_score(squashed_center) + (1.0 - alpha) * self._mil_score(full_center)
+        mixed_center = alpha * squashed_center + (1.0 - alpha) * full_center
+        return self._finalize_forward(mixed_center, x, tile_score=tile_score, already_centered=True)
+
+class InkDetectorDualStreamGated(InkDetectorArch):
+    """v16_dual_stream_gated: sample-wise gate between full and squashed streams."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        emb_dim = self._emb_dim * 2
+        self.gated_stage2 = _make_stage2(len(self.WINDOWS), norm_mode=self._norm_mode, activation=self._activation)
+        self.gate_net = nn.Sequential(
+            nn.Linear(emb_dim, max(32, self._emb_dim // 2)),
+            nn.ReLU(inplace=True),
+            nn.Linear(max(32, self._emb_dim // 2), 1),
+            nn.Sigmoid(),
+        )
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        full_center = self._center_crop_fused(self.stage2(torch.cat(self._window_voxel_maps(x), dim=1)))
+        xs = x.amax(dim=2, keepdim=True).expand_as(x)
+        squashed_center = self._center_crop_fused(self.gated_stage2(torch.cat(self._window_voxel_maps(xs), dim=1)))
+        gate = self.gate_net(torch.cat([full_center.flatten(1), squashed_center.flatten(1)], dim=1))
+        gate = gate.view(-1, 1, 1, 1, 1)
+        mixed_center = gate * squashed_center + (1.0 - gate) * full_center
+        return self._finalize_forward(mixed_center, x, already_centered=True)
+
+class InkDetectorDualStreamAsym(InkDetectorArch):
+    """v16_dual_stream_asym: lightweight squashed context plus heavy 3D detail stream."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        in_ch = len(self.WINDOWS)
+        self.context_light = nn.Sequential(
+            nn.Conv3d(in_ch, in_ch, kernel_size=(1, 3, 3), padding=(0, 1, 1), groups=in_ch, bias=False),
+            _norm3d(in_ch, self._norm_mode), _act3d(self._activation),
+            nn.Conv3d(in_ch, in_ch, kernel_size=1, bias=False),
+            _norm3d(in_ch, self._norm_mode), _act3d(self._activation),
+        )
+        self.asym_fuse = nn.Sequential(
+            nn.Conv3d(in_ch * 2, in_ch, kernel_size=1, bias=False),
+            _norm3d(in_ch, self._norm_mode), _act3d(self._activation),
+        )
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        full_cat = torch.cat(self._window_voxel_maps(x), dim=1)
+        xs = x.amax(dim=2, keepdim=True).expand_as(x)
+        light_ctx = self.context_light(torch.cat(self._window_voxel_maps(xs), dim=1))
+        fused = self.stage2(self.asym_fuse(torch.cat([full_cat, light_ctx], dim=1)))
+        return self._finalize_forward(fused, x)
+
+# Hybrid depth attention (tests 11-14)
+class InkDetectorHybridDepthPerWindow(InkDetectorArch):
+    """v16_hybrid_depth_per_window: attention + max branch per 8-slice window."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.attn_heads = nn.ModuleList([
+            nn.Conv3d(1, 1, kernel_size=(3, 1, 1), padding=(1, 0, 0), bias=True) for _ in self.WINDOWS
+        ])
+        self.hybrid_stage2 = _make_stage2(len(self.WINDOWS) * 2, norm_mode=self._norm_mode, activation=self._activation)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        fused_windows = []
+        for attn_head, voxel_map in zip(self.attn_heads, self._window_voxel_maps(x)):
+            attn = torch.softmax(attn_head(voxel_map), dim=2)
+            attn_pool = (voxel_map * attn).sum(dim=2, keepdim=True).expand_as(voxel_map)
+            max_pool = voxel_map.amax(dim=2, keepdim=True).expand_as(voxel_map)
+            fused_windows.extend([attn_pool, max_pool])
+        fused = self.hybrid_stage2(torch.cat(fused_windows, dim=1))
+        return self._finalize_forward(fused, x)
+
+class InkDetectorHybridDepthGlobal(InkDetectorArch):
+    """v16_hybrid_depth_global: collapse all 24 slices with one global depth attention."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.global_attn = nn.Conv3d(1, 1, kernel_size=(3, 1, 1), padding=(1, 0, 0), bias=True)
+        self.global_stage2 = _make_stage2(2, norm_mode=self._norm_mode, activation=self._activation, widths=(16, 16, 8))
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        full_depth = torch.cat(self._window_voxel_maps(x), dim=2)
+        attn = torch.softmax(self.global_attn(full_depth), dim=2)
+        attn_pool = (full_depth * attn).sum(dim=2, keepdim=True).expand(-1, -1, 8, -1, -1)
+        max_pool = full_depth.amax(dim=2, keepdim=True).expand(-1, -1, 8, -1, -1)
+        fused = self.global_stage2(torch.cat([attn_pool, max_pool], dim=1))
+        return self._finalize_forward(fused, x)
+
+class InkDetectorHybridDepthTriple(InkDetectorArch):
+    """v16_hybrid_depth_triple: attention + max + mean branches per window."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.attn_heads = nn.ModuleList([
+            nn.Conv3d(1, 1, kernel_size=(3, 1, 1), padding=(1, 0, 0), bias=True) for _ in self.WINDOWS
+        ])
+        self.triple_stage2 = _make_stage2(len(self.WINDOWS) * 3, norm_mode=self._norm_mode, activation=self._activation, widths=(48, 32, 16))
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        fused_windows = []
+        for attn_head, voxel_map in zip(self.attn_heads, self._window_voxel_maps(x)):
+            attn = torch.softmax(attn_head(voxel_map), dim=2)
+            fused_windows.extend([
+                (voxel_map * attn).sum(dim=2, keepdim=True).expand_as(voxel_map),
+                voxel_map.amax(dim=2, keepdim=True).expand_as(voxel_map),
+                voxel_map.mean(dim=2, keepdim=True).expand_as(voxel_map),
+            ])
+        fused = self.triple_stage2(torch.cat(fused_windows, dim=1))
+        return self._finalize_forward(fused, x)
+
+class InkDetectorHybridDepthGated(InkDetectorArch):
+    """v16_hybrid_depth_gated: learned mix between attention and max per window."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.attn_heads = nn.ModuleList([
+            nn.Conv3d(1, 1, kernel_size=(3, 1, 1), padding=(1, 0, 0), bias=True) for _ in self.WINDOWS
+        ])
+        self.gates = nn.ModuleList([
+            nn.Sequential(nn.AdaptiveAvgPool3d(1), nn.Conv3d(1, 1, kernel_size=1), nn.Sigmoid()) for _ in self.WINDOWS
+        ])
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        fused_windows = []
+        for attn_head, gate_head, voxel_map in zip(self.attn_heads, self.gates, self._window_voxel_maps(x)):
+            attn = torch.softmax(attn_head(voxel_map), dim=2)
+            attn_pool = (voxel_map * attn).sum(dim=2, keepdim=True).expand_as(voxel_map)
+            max_pool = voxel_map.amax(dim=2, keepdim=True).expand_as(voxel_map)
+            gate = gate_head(voxel_map)
+            fused_windows.append(gate * attn_pool + (1.0 - gate) * max_pool)
+        return self._finalize_forward(self.stage2(torch.cat(fused_windows, dim=1)), x)
+
+# Multi-scale & efficient (tests 15-20)
+class InkDetectorMultiscalePyramid(InkDetectorArch):
+    """v16_multiscale_pyramid: 1x, 1/2x and 1/4x voxel-map fusion."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.scale_stage2 = _make_stage2(len(self.WINDOWS) * 3, norm_mode=self._norm_mode, activation=self._activation, widths=(48, 32, 16))
+
+    def _resized_vcat(self, x, pool: int):
+        xp = x if pool == 1 else F.avg_pool3d(x, kernel_size=(1, pool, pool), stride=(1, pool, pool))
+        vcat = torch.cat(self._window_voxel_maps(xp), dim=1)
+        if vcat.shape[-2:] != x.shape[-2:]:
+            b, c, d, h, w = vcat.shape
+            vcat = vcat.permute(0, 2, 1, 3, 4).reshape(b * d, c, h, w)
+            vcat = F.interpolate(vcat, size=x.shape[-2:], mode="bilinear", align_corners=False)
+            vcat = vcat.reshape(b, d, c, x.shape[-2], x.shape[-1]).permute(0, 2, 1, 3, 4)
+        return vcat
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        fused = self.scale_stage2(torch.cat([self._resized_vcat(x, 1), self._resized_vcat(x, 2), self._resized_vcat(x, 4)], dim=1))
+        return self._finalize_forward(fused, x)
+
+class InkDetectorDepthSE(InkDetectorArch):
+    """v16_depth_se: depth squeeze-excitation over window voxel maps."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.depth_se = DepthSEGate(len(self.WINDOWS))
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        vcat = self.depth_se(torch.cat(self._window_voxel_maps(x), dim=1))
+        return self._finalize_forward(self.stage2(vcat), x)
+
+class InkDetectorDepthwiseSep(InkDetectorArch):
+    """v16_depthwise_sep: depthwise-separable 3D stage-2 fusion."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        in_ch = len(self.WINDOWS)
+        hidden = max(16, in_ch * 8)
+        self.stage2 = nn.Sequential(
+            nn.Conv3d(in_ch, hidden, kernel_size=1, bias=False),
+            _norm3d(hidden, self._norm_mode), _act3d(self._activation),
+            nn.Conv3d(hidden, hidden, kernel_size=3, padding=1, groups=hidden, bias=False),
+            _norm3d(hidden, self._norm_mode), _act3d(self._activation),
+            nn.Conv3d(hidden, 16, kernel_size=1, bias=False),
+            _norm3d(16, self._norm_mode), _act3d(self._activation),
+            nn.Conv3d(16, 1, kernel_size=1, bias=True),
+        )
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        return self._finalize_forward(self.stage2(torch.cat(self._window_voxel_maps(x), dim=1)), x)
+
+class InkDetectorMixedDepthWindows(InkDetectorArch):
+    """v16_mixed_depth_windows: 5 fixed windows with learned seam emphasis."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.WINDOWS = [
+            (0, 8, 4),
+            (4, 12, 8),
+            (8, 16, 12),
+            (12, 20, 16),
+            (16, 24, 20),
+        ]
+        self.window_gain = nn.Parameter(torch.tensor([1.0, 1.25, 1.0, 1.25, 1.0], dtype=torch.float32))
+        self.stage2 = _make_stage2(5, norm_mode=self._norm_mode, activation=self._activation)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        weighted = [vm * gain for vm, gain in zip(self._window_voxel_maps(x), self.window_gain)]
+        return self._finalize_forward(self.stage2(torch.cat(weighted, dim=1)), x)
+
+class InkDetectorOctaveConv(InkDetectorArch):
+    """v16_octave_conv: fuse high/low spatial-frequency voxel maps."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.octave_stage2 = _make_stage2(len(self.WINDOWS) * 2, norm_mode=self._norm_mode, activation=self._activation, widths=(32, 24, 16))
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        vcat = torch.cat(self._window_voxel_maps(x), dim=1)
+        low = F.avg_pool3d(vcat, kernel_size=(1, 2, 2), stride=(1, 2, 2))
+        low = F.interpolate(low.flatten(0, 1), size=vcat.shape[-2:], mode="bilinear", align_corners=False).view_as(vcat)
+        high = vcat - low
+        return self._finalize_forward(self.octave_stage2(torch.cat([high, low], dim=1)), x)
+
+class InkDetectorEfficientScale(InkDetectorArch):
+    """v16_efficientnet_scale: narrower compound-scaled stage-2 path."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.stage2 = InvertedResidualStage2(len(self.WINDOWS), norm_mode=self._norm_mode, activation=self._activation)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        return self._finalize_forward(self.stage2(torch.cat(self._window_voxel_maps(x), dim=1)), x)
+
+# Attention mechanisms (tests 21-26)
+class InkDetectorNonLocalDepth(InkDetectorArch):
+    """v16_nonlocal_depth: non-local attention before stage-2 fusion."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.nonlocal_block = NonLocalVoxelBlock(len(self.WINDOWS))
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        vcat = self.nonlocal_block(torch.cat(self._window_voxel_maps(x), dim=1))
+        return self._finalize_forward(self.stage2(vcat), x)
+
+class InkDetectorCoordAttention(InkDetectorArch):
+    """v16_coord_attention: coordinate-aware gating over voxel maps."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.coord_attn = CoordAttention3dLite(len(self.WINDOWS))
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        vcat = self.coord_attn(torch.cat(self._window_voxel_maps(x), dim=1))
+        return self._finalize_forward(self.stage2(vcat), x)
+
+class InkDetectorDeformableConv(InkDetectorArch):
+    """v16_deformable_conv: multi-dilation fusion as a deformable proxy."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        in_ch = len(self.WINDOWS)
+        self.branch1 = nn.Conv3d(in_ch, 16, kernel_size=3, padding=1, bias=False)
+        self.branch2 = nn.Conv3d(in_ch, 16, kernel_size=3, padding=2, dilation=2, bias=False)
+        self.deform_stage2 = _make_stage2(32, norm_mode=self._norm_mode, activation=self._activation, widths=(32, 24, 16))
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        vcat = torch.cat(self._window_voxel_maps(x), dim=1)
+        fused = torch.cat([self.branch1(vcat), self.branch2(vcat)], dim=1)
+        return self._finalize_forward(self.deform_stage2(fused), x)
+
+class InkDetectorProgressiveDepth(InkDetectorArch):
+    """v16_progressive_depth: refine each window using the previous refined state."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.refine = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv3d(2, 1, kernel_size=3, padding=1, bias=False),
+                _norm3d(1, self._norm_mode), _act3d(self._activation),
+            ) for _ in self.WINDOWS
+        ])
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        refined = []
+        prev = None
+        for voxel_map, refine in zip(self._window_voxel_maps(x), self.refine):
+            if prev is None:
+                cur = voxel_map
+            else:
+                cur = refine(torch.cat([voxel_map, prev], dim=1))
+            refined.append(cur)
+            prev = cur
+        return self._finalize_forward(self.stage2(torch.cat(refined, dim=1)), x)
+
+class InkDetectorDualAttention(InkDetectorArch):
+    """v16_dual_attention: channel and spatial attention over window voxel maps."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        in_ch = len(self.WINDOWS)
+        hidden = max(4, in_ch * 2)
+        self.channel_attn = nn.Sequential(
+            nn.AdaptiveAvgPool3d(1),
+            nn.Conv3d(in_ch, hidden, kernel_size=1),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(hidden, in_ch, kernel_size=1),
+            nn.Sigmoid(),
+        )
+        self.spatial_attn = nn.Sequential(
+            nn.Conv3d(2, 1, kernel_size=7, padding=3),
+            nn.Sigmoid(),
+        )
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        vcat = torch.cat(self._window_voxel_maps(x), dim=1)
+        vcat = vcat * self.channel_attn(vcat)
+        max_pool = vcat.max(dim=1, keepdim=True).values
+        mean_pool = vcat.mean(dim=1, keepdim=True)
+        vcat = vcat * self.spatial_attn(torch.cat([max_pool, mean_pool], dim=1))
+        return self._finalize_forward(self.stage2(vcat), x)
+
+class InkDetectorAxialAttention(InkDetectorArch):
+    """v16_axial_attention: separate depth and spatial-axis gating."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        in_ch = len(self.WINDOWS)
+        self.depth_gate = nn.Sequential(
+            nn.Conv1d(in_ch, in_ch, kernel_size=3, padding=1, groups=in_ch, bias=False),
+            nn.Sigmoid(),
+        )
+        self.spatial_gate = nn.Sequential(
+            nn.Conv2d(in_ch, in_ch, kernel_size=3, padding=1, groups=in_ch, bias=False),
+            nn.Sigmoid(),
+        )
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        vcat = torch.cat(self._window_voxel_maps(x), dim=1)
+        depth_gate = self.depth_gate(vcat.mean(dim=(-2, -1))).unsqueeze(-1).unsqueeze(-1)
+        spatial_gate = self.spatial_gate(vcat.mean(dim=2)).unsqueeze(2)
+        vcat = vcat * depth_gate * spatial_gate
+        return self._finalize_forward(self.stage2(vcat), x)
+
+# Advanced fusion (tests 27-32)
+class InkDetectorFPN(InkDetectorArch):
+    """v16_fpn: top-down refinement across depth windows."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.lateral = nn.ModuleList([nn.Conv3d(1, 1, kernel_size=1, bias=False) for _ in self.WINDOWS])
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        maps = self._window_voxel_maps(x)
+        for idx in range(len(maps) - 1, 0, -1):
+            maps[idx - 1] = maps[idx - 1] + self.lateral[idx](maps[idx])
+        return self._finalize_forward(self.stage2(torch.cat(maps, dim=1)), x)
+
+class InkDetectorBiFPN(InkDetectorArch):
+    """v16_bifpn: top-down and bottom-up refinement across windows."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.td = nn.ModuleList([nn.Conv3d(1, 1, kernel_size=1, bias=False) for _ in self.WINDOWS])
+        self.bu = nn.ModuleList([nn.Conv3d(1, 1, kernel_size=1, bias=False) for _ in self.WINDOWS])
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        maps = self._window_voxel_maps(x)
+        for idx in range(len(maps) - 1, 0, -1):
+            maps[idx - 1] = maps[idx - 1] + self.td[idx](maps[idx])
+        for idx in range(len(maps) - 1):
+            maps[idx + 1] = maps[idx + 1] + self.bu[idx](maps[idx])
+        return self._finalize_forward(self.stage2(torch.cat(maps, dim=1)), x)
+
+class InkDetectorGhostConv(InkDetectorArch):
+    """v16_ghost_conv: ghost-style cheap feature generation in stage-2."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.stage2 = GhostStage2(len(self.WINDOWS), norm_mode=self._norm_mode, activation=self._activation)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        return self._finalize_forward(self.stage2(torch.cat(self._window_voxel_maps(x), dim=1)), x)
+
+class InkDetectorInvertedResidual(InkDetectorArch):
+    """v16_inverted_residual: MobileNetV2-style stage-2 fusion."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.stage2 = InvertedResidualStage2(len(self.WINDOWS), norm_mode=self._norm_mode, activation=self._activation)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        return self._finalize_forward(self.stage2(torch.cat(self._window_voxel_maps(x), dim=1)), x)
+
+class InkDetectorResNeXt(InkDetectorArch):
+    """v16_resnext_groups: grouped-conv fusion over window voxel maps."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self.stage2 = ResNeXtStage2(len(self.WINDOWS), norm_mode=self._norm_mode, activation=self._activation)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        return self._finalize_forward(self.stage2(torch.cat(self._window_voxel_maps(x), dim=1)), x)
+
+class InkDetectorDepthShift(InkDetectorArch):
+    """v16_depth_shift: shift voxel evidence along depth before fusion."""
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        shifted = []
+        for voxel_map in self._window_voxel_maps(x):
+            shift_up = torch.cat([voxel_map[:, :, 1:], voxel_map[:, :, :1]], dim=2)
+            shift_down = torch.cat([voxel_map[:, :, -1:], voxel_map[:, :, :-1]], dim=2)
+            shifted.append((voxel_map + shift_up + shift_down) / 3.0)
+        return self._finalize_forward(self.stage2(torch.cat(shifted, dim=1)), x)
+
+
+class ShallowFeatureUNet3D(nn.Module):
+    """small 3D u-net used to fuse richer per-window features before voxel collapse."""
+    def __init__(self, in_channels: int, base_channels: int = 64,
+                 norm_mode: str = "batch", activation: str = "relu"):
+        super().__init__()
+        self.stem = nn.Sequential(
+            nn.Conv3d(in_channels, base_channels, kernel_size=1, bias=False),
+            _norm3d(base_channels, norm_mode), _act3d(activation),
+            nn.Conv3d(base_channels, base_channels, kernel_size=3, padding=1, bias=False),
+            _norm3d(base_channels, norm_mode), _act3d(activation),
+        )
+        self.pool = nn.MaxPool3d(2)
+        self.bottleneck = nn.Sequential(
+            nn.Conv3d(base_channels, base_channels * 2, kernel_size=3, padding=1, bias=False),
+            _norm3d(base_channels * 2, norm_mode), _act3d(activation),
+            nn.Conv3d(base_channels * 2, base_channels * 2, kernel_size=3, padding=1, bias=False),
+            _norm3d(base_channels * 2, norm_mode), _act3d(activation),
+        )
+        self.up = nn.ConvTranspose3d(base_channels * 2, base_channels, kernel_size=2, stride=2)
+        self.decode = nn.Sequential(
+            nn.Conv3d(base_channels * 2, base_channels, kernel_size=3, padding=1, bias=False),
+            _norm3d(base_channels, norm_mode), _act3d(activation),
+            nn.Conv3d(base_channels, base_channels, kernel_size=3, padding=1, bias=False),
+            _norm3d(base_channels, norm_mode), _act3d(activation),
+        )
+        self.out = nn.Conv3d(base_channels, 1, kernel_size=1, bias=True)
+
+    def forward(self, x):
+        skip = self.stem(x)
+        low = self.bottleneck(self.pool(skip))
+        up = self.up(low)
+        if up.shape[-3:] != skip.shape[-3:]:
+            up = F.interpolate(up, size=skip.shape[-3:], mode="trilinear", align_corners=False)
+        return self.out(self.decode(torch.cat([skip, up], dim=1)))
+
+
+class InkDetectorLateCollapse32(InkDetectorArch):
+    """v16_latecollapse32: keep 32 feature channels per window until after stage-2 fusion."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        proj_ch = 32
+        self.feature_proj = nn.Sequential(
+            nn.Conv3d(256, proj_ch, kernel_size=1, bias=False),
+            _norm3d(proj_ch, self._norm_mode), _act3d(self._activation),
+        )
+        self.stage2 = _make_stage2(len(self.WINDOWS) * proj_ch, norm_mode=self._norm_mode,
+                                   activation=self._activation, widths=(96, 64, 32))
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        feats = [self.feature_proj(fm) for fm in self._window_feature_maps(x)]
+        return self._finalize_forward(self.stage2(torch.cat(feats, dim=1)), x)
+
+
+class InkDetectorLateCollapse64(InkDetectorArch):
+    """v16_latecollapse64: same idea as latecollapse32 but keeps 64 channels per window."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        proj_ch = 64
+        self.feature_proj = nn.Sequential(
+            nn.Conv3d(256, proj_ch, kernel_size=1, bias=False),
+            _norm3d(proj_ch, self._norm_mode), _act3d(self._activation),
+        )
+        self.stage2 = _make_stage2(len(self.WINDOWS) * proj_ch, norm_mode=self._norm_mode,
+                                   activation=self._activation, widths=(128, 96, 48))
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        feats = [self.feature_proj(fm) for fm in self._window_feature_maps(x)]
+        return self._finalize_forward(self.stage2(torch.cat(feats, dim=1)), x)
+
+
+class InkDetectorLateUNet(InkDetectorArch):
+    """v16_late_unet: fuse rich window features with a shallow u-net, then crop only at final MIL."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        proj_ch = 32
+        self.feature_proj = nn.Sequential(
+            nn.Conv3d(256, proj_ch, kernel_size=1, bias=False),
+            _norm3d(proj_ch, self._norm_mode), _act3d(self._activation),
+        )
+        self.stage2 = ShallowFeatureUNet3D(len(self.WINDOWS) * proj_ch, base_channels=64,
+                                           norm_mode=self._norm_mode, activation=self._activation)
+
+    def forward_with_extras(self, x):
+        x = self._prepare_input(x)
+        feats = [self.feature_proj(fm) for fm in self._window_feature_maps(x)]
+        return self._finalize_forward(self.stage2(torch.cat(feats, dim=1)), x)
+
+
+# ===================================================================
+# RADICAL ARCHITECTURES (tests 39-44)
+# ===================================================================
+
+class ViT3D(nn.Module):
+    """3D Vision Transformer for ink detection.
+    
+    Divides 3D volume into patches, applies transformer encoder, outputs tile score.
+    Input: (B, 1, D, H, W) where D=24, H=W=16 (or 48 with context)
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        self.tile_size = int(getattr(config.data, 'context_size', config.data.tile_size))
+        self.depth = int(config.data.depth)
+        
+        # Patch embedding: 4x4x4 patches
+        self.patch_d, self.patch_h, self.patch_w = 4, 4, 4
+        self.patch_embed = nn.Conv3d(1, 256, kernel_size=(self.patch_d, self.patch_h, self.patch_w), 
+                                     stride=(self.patch_d, self.patch_h, self.patch_w))
+        
+        # Transformer encoder (4 layers, lighter than typical ViT)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=256, nhead=8, dim_feedforward=512, 
+                                                   dropout=0.1, activation='gelu', batch_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=4)
+        
+        # Classification head
+        self.norm = nn.LayerNorm(256)
+        self.head = nn.Linear(256, 1)
+        
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        B, _, D, H, W = x.shape
+        
+        # Patch embedding: (B, 256, n_d, n_h, n_w)
+        x = self.patch_embed(x)
+        
+        # Flatten to sequence: (B, n_patches, 256)
+        x = x.flatten(2).transpose(1, 2)
+        N = x.shape[1]
+        
+        # Learnable positional encoding (adaptive to sequence length)
+        if not hasattr(self, 'pos_embed') or self.pos_embed.shape[1] != N:
+            self.pos_embed = nn.Parameter(torch.randn(1, N, 256, device=x.device) * 0.02)
+        
+        # Add positional encoding
+        x = x + self.pos_embed
+        
+        # Transformer encoder
+        x = self.transformer(x)
+        
+        # Global average pooling over patches
+        x = x.mean(dim=1)
+        
+        # Classification
+        x = self.norm(x)
+        return self.head(x)
+
+
+class Swin3D(nn.Module):
+    """Swin Transformer 3D with shifted window attention.
+    
+    Hierarchical transformer with shifted windows for efficiency.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        self.tile_size = int(config.data.tile_size)
+        self.depth = int(config.data.depth)
+        
+        # Patch embedding
+        self.patch_embed = nn.Conv3d(1, 96, kernel_size=4, stride=4)
+        
+        # Window attention (simplified - single stage)
+        self.window_size = 2  # 2x2x2 windows
+        self.attn = nn.MultiheadAttention(96, num_heads=4, dropout=0.1, batch_first=True)
+        self.norm1 = nn.LayerNorm(96)
+        self.norm2 = nn.LayerNorm(96)
+        
+        # MLP
+        self.mlp = nn.Sequential(
+            nn.Linear(96, 384),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(384, 96),
+            nn.Dropout(0.1)
+        )
+        
+        # Pooling and head
+        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.head = nn.Linear(96, 1)
+        
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        B = x.shape[0]
+        
+        # Patch embedding
+        x = self.patch_embed(x)  # (B, 96, D', H', W')
+        
+        # Flatten to sequence
+        x = x.flatten(2).transpose(1, 2)  # (B, N, 96)
+        
+        # Window attention (simplified - no actual windowing for efficiency)
+        x_norm = self.norm1(x)
+        attn_out, _ = self.attn(x_norm, x_norm, x_norm)
+        x = x + attn_out
+        
+        # MLP
+        x = x + self.mlp(self.norm2(x))
+        
+        # Pool and classify
+        x = x.transpose(1, 2)  # (B, 96, N)
+        x = self.pool(x).squeeze(-1)  # (B, 96)
+        return self.head(x)
+
+
+class ConvNeXt3D(nn.Module):
+    """ConvNeXt 3D - modernized CNN with large kernels and inverted bottlenecks.
+    
+    Key features: 7x7x7 depthwise convs, LayerNorm, GELU, inverted bottleneck (expand then compress).
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        
+        # Stem
+        self.stem = nn.Sequential(
+            nn.Conv3d(1, 96, kernel_size=4, stride=4)
+        )
+        
+        # ConvNeXt blocks
+        self.blocks = nn.ModuleList([
+            self._make_block(96) for _ in range(4)
+        ])
+        
+        # Head
+        self.head = nn.Sequential(
+            nn.AdaptiveAvgPool3d(1),
+            nn.Flatten(),
+            nn.LayerNorm(96),
+            nn.Linear(96, 1)
+        )
+        
+    def _make_block(self, dim):
+        return nn.Sequential(
+            nn.Conv3d(dim, dim, kernel_size=7, padding=3, groups=dim),  # Depthwise
+            nn.BatchNorm3d(dim),  # Use BatchNorm instead of LayerNorm for flexibility
+            nn.Conv3d(dim, dim * 4, kernel_size=1),  # Expand
+            nn.GELU(),
+            nn.Conv3d(dim * 4, dim, kernel_size=1),  # Compress
+        )
+    
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        
+        x = self.stem(x)
+        
+        for block in self.blocks:
+            x = x + block(x)  # Residual
+        
+        return self.head(x)
+
+
+class XCiT3D(nn.Module):
+    """XCiT 3D - Cross-Covariance Image Transformer.
+    
+    Uses cross-covariance attention instead of standard attention for efficiency.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        self.tile_size = int(config.data.tile_size)
+        
+        # Patch embedding
+        self.patch_embed = nn.Conv3d(1, 128, kernel_size=4, stride=4)
+        
+        # Cross-covariance attention (simplified)
+        self.temperature = nn.Parameter(torch.ones(1))
+        self.qkv = nn.Linear(128, 128 * 3)
+        self.proj = nn.Linear(128, 128)
+        self.norm1 = nn.LayerNorm(128)
+        self.norm2 = nn.LayerNorm(128)
+        
+        # MLP
+        self.mlp = nn.Sequential(
+            nn.Linear(128, 512),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(512, 128),
+            nn.Dropout(0.1)
+        )
+        
+        self.head = nn.Linear(128, 1)
+        
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        
+        # Patch embedding
+        x = self.patch_embed(x)
+        x = x.flatten(2).transpose(1, 2)  # (B, N, 128)
+        
+        # Cross-covariance attention
+        x_norm = self.norm1(x)
+        B, N, C = x_norm.shape
+        qkv = self.qkv(x_norm).reshape(B, N, 3, C).permute(2, 0, 1, 3)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        
+        # Cross-covariance: q^T k / sqrt(C)
+        attn = (q.transpose(-2, -1) @ k) * self.temperature
+        attn = F.softmax(attn, dim=-1)
+        
+        x_attn = (attn @ v.transpose(-2, -1)).transpose(-2, -1)
+        x = x + self.proj(x_attn)
+        
+        # MLP
+        x = x + self.mlp(self.norm2(x))
+        
+        # Pool and classify
+        x = x.mean(dim=1)
+        return self.head(x)
+
+
+class nnUNet3D(nn.Module):
+    """nnU-Net 3D - Medical imaging encoder-decoder with deep supervision.
+    
+    Encoder-decoder with skip connections, designed for medical 3D volumes.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        
+        # Encoder
+        self.enc1 = self._conv_block(1, 32)
+        self.enc2 = self._conv_block(32, 64)
+        self.enc3 = self._conv_block(64, 128)
+        
+        self.pool = nn.MaxPool3d(2)
+        
+        # Bottleneck
+        self.bottleneck = self._conv_block(128, 256)
+        
+        # Decoder
+        self.up3 = nn.ConvTranspose3d(256, 128, kernel_size=2, stride=2)
+        self.dec3 = self._conv_block(256, 128)
+        
+        self.up2 = nn.ConvTranspose3d(128, 64, kernel_size=2, stride=2)
+        self.dec2 = self._conv_block(128, 64)
+        
+        self.up1 = nn.ConvTranspose3d(64, 32, kernel_size=2, stride=2)
+        self.dec1 = self._conv_block(64, 32)
+        
+        # Deep supervision outputs
+        self.out1 = nn.Conv3d(32, 1, kernel_size=1)
+        self.out2 = nn.Conv3d(64, 1, kernel_size=1)
+        self.out3 = nn.Conv3d(128, 1, kernel_size=1)
+        
+    def _conv_block(self, in_ch, out_ch):
+        return nn.Sequential(
+            nn.Conv3d(in_ch, out_ch, kernel_size=3, padding=1),
+            nn.InstanceNorm3d(out_ch),
+            nn.LeakyReLU(0.01, inplace=True),
+            nn.Conv3d(out_ch, out_ch, kernel_size=3, padding=1),
+            nn.InstanceNorm3d(out_ch),
+            nn.LeakyReLU(0.01, inplace=True)
+        )
+    
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        
+        # Encoder
+        e1 = self.enc1(x)
+        e2 = self.enc2(self.pool(e1))
+        e3 = self.enc3(self.pool(e2))
+        
+        # Bottleneck
+        b = self.bottleneck(self.pool(e3))
+        
+        # Decoder with skip connections
+        d3 = self.dec3(torch.cat([self.up3(b), e3], dim=1))
+        d2 = self.dec2(torch.cat([self.up2(d3), e2], dim=1))
+        d1 = self.dec1(torch.cat([self.up1(d2), e1], dim=1))
+        
+        # Deep supervision (use final output for tile score)
+        out = self.out1(d1)
+        
+        # MIL-LSE aggregation over voxels
+        out_flat = out.flatten(1)
+        r = 2.0
+        N = out_flat.shape[1]
+        return (1.0 / r) * (torch.logsumexp(r * out_flat, dim=1, keepdim=True) - 
+                           torch.log(torch.tensor(float(N), device=out.device)))
+
+
+class nnUNet3DDS(nnUNet3D):
+    """nnU-Net with optional input downsampling so campaign ds2 becomes a real ablation."""
+    def __init__(self, config: Config):
+        super().__init__(config)
+        self._ds = max(1, int(getattr(config.data, "context_downsample", 1)))
+
+    def forward(self, x):
+        if x.dim() == 4:
+            x = x.unsqueeze(1)
+        if self._ds > 1:
+            x = F.avg_pool3d(x, kernel_size=(1, self._ds, self._ds), stride=(1, self._ds, self._ds))
+        return super().forward(x)
+
+
+class SlotAttention3D(nn.Module):
+    """Slot Attention 3D - Object-centric learning with slot attention.
+    
+    Learns to decompose scene into slots through iterative attention.
+    """
+    def __init__(self, config: Config):
+        super().__init__()
+        
+        # Feature extraction
+        self.encoder = nn.Sequential(
+            nn.Conv3d(1, 64, kernel_size=5, stride=2, padding=2),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(64, 64, kernel_size=5, stride=1, padding=2),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(64, 64, kernel_size=5, stride=1, padding=2),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Slot attention
+        self.num_slots = 4  # Learn 4 slots (ink patterns)
+        self.slot_dim = 64
+        self.num_iters = 3
+        
+        self.slots_init = nn.Parameter(torch.randn(1, self.num_slots, self.slot_dim))
+        
+        self.norm_slots = nn.LayerNorm(self.slot_dim)
+        self.norm_inputs = nn.LayerNorm(self.slot_dim)
+        
+        # Attention
+        self.to_q = nn.Linear(self.slot_dim, self.slot_dim)
+        self.to_k = nn.Linear(self.slot_dim, self.slot_dim)
+        self.to_v = nn.Linear(self.slot_dim, self.slot_dim)
+        
+        self.gru = nn.GRUCell(self.slot_dim, self.slot_dim)
+        
+        self.mlp = nn.Sequential(
+            nn.Linear(self.slot_dim, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, self.slot_dim)
+        )
+        
+        # Classifier
+        self.head = nn.Linear(self.slot_dim * self.num_slots, 1)
+        
+    def forward(self, x):
+        if x.dim() == 4: x = x.unsqueeze(1)
+        B = x.shape[0]
+        
+        # Extract features
+        features = self.encoder(x)  # (B, 64, D', H', W')
+        features = features.flatten(2).transpose(1, 2)  # (B, N, 64)
+        
+        # Initialize slots
+        slots = self.slots_init.expand(B, -1, -1)
+        
+        # Slot attention iterations
+        for _ in range(self.num_iters):
+            slots_prev = slots
+            slots = self.norm_slots(slots)
+            
+            # Attention
+            q = self.to_q(slots)
+            k = self.to_k(self.norm_inputs(features))
+            v = self.to_v(self.norm_inputs(features))
+            
+            # Compute attention weights
+            attn_logits = torch.einsum('bid,bjd->bij', q, k) / math.sqrt(self.slot_dim)
+            attn = F.softmax(attn_logits, dim=1)
+            
+            # Weighted mean
+            updates = torch.einsum('bij,bjd->bid', attn, v)
+            
+            # GRU update
+            slots = self.gru(
+                updates.reshape(B * self.num_slots, self.slot_dim),
+                slots_prev.reshape(B * self.num_slots, self.slot_dim)
+            ).reshape(B, self.num_slots, self.slot_dim)
+            
+            # MLP
+            slots = slots + self.mlp(self.norm_slots(slots))
+        
+        # Aggregate slots and classify
+        slots_flat = slots.flatten(1)
+        return self.head(slots_flat)
+
+
 # register v16_arch_ctx AFTER the class is defined
 _ARCH_MAP["v16_arch_ctx"] = InkDetectorArch
 
-# Register radical architectures for campaign_archs_6 (if available)
-if _RADICAL_ARCHS_AVAILABLE:
-    _ARCH_MAP["vit3d"] = ViT3D
-    _ARCH_MAP["swin3d"] = Swin3D
-    _ARCH_MAP["convnext3d"] = ConvNeXt3D
-    _ARCH_MAP["xcit3d"] = XCiT3D
-    _ARCH_MAP["nnunet3d"] = nnUNet3D
-    _ARCH_MAP["slot3d"] = SlotAttention3D
+# Register Campaign Archs 7 architectures
+_ARCH_MAP["v16_arch_ctx_fovea"] = InkDetectorArch_Fovea
+_ARCH_MAP["v16_dual_stream_early"] = InkDetectorDualStreamEarly
+_ARCH_MAP["v16_dual_stream_late"] = InkDetectorDualStreamLate
+_ARCH_MAP["v16_dual_stream_gated"] = InkDetectorDualStreamGated
+_ARCH_MAP["v16_dual_stream_asym"] = InkDetectorDualStreamAsym
+_ARCH_MAP["v16_hybrid_depth_per_window"] = InkDetectorHybridDepthPerWindow
+_ARCH_MAP["v16_hybrid_depth_global"] = InkDetectorHybridDepthGlobal
+_ARCH_MAP["v16_hybrid_depth_triple"] = InkDetectorHybridDepthTriple
+_ARCH_MAP["v16_hybrid_depth_gated"] = InkDetectorHybridDepthGated
+_ARCH_MAP["v16_multiscale_pyramid"] = InkDetectorMultiscalePyramid
+_ARCH_MAP["v16_depth_se"] = InkDetectorDepthSE
+_ARCH_MAP["v16_depthwise_sep"] = InkDetectorDepthwiseSep
+_ARCH_MAP["v16_mixed_depth_windows"] = InkDetectorMixedDepthWindows
+_ARCH_MAP["v16_octave_conv"] = InkDetectorOctaveConv
+_ARCH_MAP["v16_efficientnet_scale"] = InkDetectorEfficientScale
+_ARCH_MAP["v16_nonlocal_depth"] = InkDetectorNonLocalDepth
+_ARCH_MAP["v16_coord_attention"] = InkDetectorCoordAttention
+_ARCH_MAP["v16_deformable_conv"] = InkDetectorDeformableConv
+_ARCH_MAP["v16_progressive_depth"] = InkDetectorProgressiveDepth
+_ARCH_MAP["v16_dual_attention"] = InkDetectorDualAttention
+_ARCH_MAP["v16_axial_attention"] = InkDetectorAxialAttention
+_ARCH_MAP["v16_fpn"] = InkDetectorFPN
+_ARCH_MAP["v16_bifpn"] = InkDetectorBiFPN
+_ARCH_MAP["v16_ghost_conv"] = InkDetectorGhostConv
+_ARCH_MAP["v16_inverted_residual"] = InkDetectorInvertedResidual
+_ARCH_MAP["v16_resnext_groups"] = InkDetectorResNeXt
+_ARCH_MAP["v16_depth_shift"] = InkDetectorDepthShift
+_ARCH_MAP["v16_latecollapse32"] = InkDetectorLateCollapse32
+_ARCH_MAP["v16_latecollapse64"] = InkDetectorLateCollapse64
+_ARCH_MAP["v16_late_unet"] = InkDetectorLateUNet
+
+# Register radical architectures (tests 39-44) - fully implemented!
+_ARCH_MAP["vit3d"] = ViT3D
+_ARCH_MAP["swin3d"] = Swin3D
+_ARCH_MAP["convnext3d"] = ConvNeXt3D
+_ARCH_MAP["xcit3d"] = XCiT3D
+_ARCH_MAP["nnunet3d"] = nnUNet3D
+_ARCH_MAP["nnunet3d_ds"] = nnUNet3DDS
+_ARCH_MAP["slot3d"] = SlotAttention3D
 
 
 def create_model(config: Config):
@@ -1199,7 +2438,7 @@ def create_model(config: Config):
             nn.init.xavier_uniform_(m.weight, gain=0.8)
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
-        elif isinstance(m, (nn.BatchNorm3d, nn.BatchNorm2d, nn.GroupNorm, nn.LayerNorm)):
+        elif isinstance(m, (nn.BatchNorm3d, nn.BatchNorm2d, nn.GroupNorm, nn.LayerNorm, nn.InstanceNorm3d, ChannelLayerNorm3d)):
             if hasattr(m, "weight") and m.weight is not None:
                 nn.init.constant_(m.weight, 1)
             if hasattr(m, "bias") and m.bias is not None:

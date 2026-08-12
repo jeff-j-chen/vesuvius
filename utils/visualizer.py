@@ -1860,9 +1860,6 @@ class TensorboardVisualizer:
         model.eval()
         z_range = (self.c.data.d_start, self.c.data.d_end)
 
-        # use ring mask when ring_negatives=True so the eval figure only renders
-        # ring+ink tiles — everything else stays NaN and renders black, matching
-        # the actual training distribution instead of swamping the signal with OOD noise
         eval_mask = getattr(self, 'eval_mask', self.mask)
         # the train/valid split is PURELY VISUAL (a line drawn on the figure afterward); this is
         # functionally a single eval over the whole region. so read+predict the FULL region in
@@ -1875,17 +1872,25 @@ class TensorboardVisualizer:
             tr_y, tr_x = self.shared_range, self.train_range
             full_y = self.shared_range; full_x = (self.train_range[0], self.valid_range[1])
         
-        # fast_eval_figure: only render left 40% of valid region (for single-scroll campaigns)
+        # fast_eval_figure: only render left 40% x-dimension AND bottom 40% y-dimension
+        # (makes 16% area figures - much faster rendering for single-scroll campaigns)
         if getattr(self.c.tra, "fast_eval_figure", False):
-            valid_width = self.valid_range[1] - self.valid_range[0]
-            if getattr(self, "split_axis", "x") == "y":
-                # y-split: restrict y range to first 40% of valid region
-                fast_valid_end = self.valid_range[0] + int(valid_width * 0.4)
-                full_y = (self.train_range[0], fast_valid_end)
-            else:
-                # x-split: restrict x range to first 40% of valid region
-                fast_valid_end = self.valid_range[0] + int(valid_width * 0.4)
-                full_x = (self.train_range[0], fast_valid_end)
+            def _snap_start(candidate, anchor, stop, tile):
+                """keep the cropped eval region on the same tile grid as training."""
+                rem = (candidate - anchor) % tile
+                if rem:
+                    candidate += tile - rem
+                return max(anchor, min(candidate, stop - tile))
+
+            tile = self.c.data.tile_size
+            full_width_x = full_x[1] - full_x[0]
+            fast_x_end = full_x[0] + int(full_width_x * 0.4)
+            full_x = (full_x[0], fast_x_end)
+            
+            full_height_y = full_y[1] - full_y[0]
+            fast_y_start = full_y[1] - int(full_height_y * 0.4)
+            fast_y_start = _snap_start(fast_y_start, full_y[0], full_y[1], tile)
+            full_y = (fast_y_start, full_y[1])
 
         hm_dir = self._hard_mining_dir()
         hm_enabled = getattr(self.c.hm, "enabled", True)
@@ -1991,12 +1996,18 @@ class TensorboardVisualizer:
 
         if all_pred_data:
             # label map spans the full split extent along the split axis, shared range on the other
-            if getattr(self, "split_axis", "x") == "y":
-                full_y_range = (self.train_range[0], self.valid_range[1])
-                full_x_range = self.shared_range
+            # when fast_eval_figure is enabled, use the cropped full_y/full_x instead
+            if getattr(self.c.tra, "fast_eval_figure", False):
+                # full_y and full_x were already cropped above
+                full_y_range = full_y
+                full_x_range = full_x
             else:
-                full_y_range = self.shared_range
-                full_x_range = (self.train_range[0], self.valid_range[1])
+                if getattr(self, "split_axis", "x") == "y":
+                    full_y_range = (self.train_range[0], self.valid_range[1])
+                    full_x_range = self.shared_range
+                else:
+                    full_y_range = self.shared_range
+                    full_x_range = (self.train_range[0], self.valid_range[1])
             label_binary, label_fraction, valid_tiles = self._compute_tile_maps(
                 self.labels,
                 self.mask,
@@ -2032,8 +2043,26 @@ class TensorboardVisualizer:
             self.writer.add_figure("Readability/Summary", _sumfig, epoch); plt.close(_sumfig)
 
             if getattr(self.c.tra, "eval_aggregate", True):
-                train_split_n = (self.train_range[1] - self.train_range[0]) // self.c.data.tile_size
-                split_axis = "y" if getattr(self, "split_axis", "x") == "y" else "x"
+                # train_split_n: number of tiles in the train region along the split axis
+                # when fast_eval_figure is enabled, compute based on the cropped extent
+                if getattr(self.c.tra, "fast_eval_figure", False):
+                    # full_y and full_x were cropped above; compute train_split_n relative to crop
+                    split_axis = "y" if getattr(self, "split_axis", "x") == "y" else "x"
+                    if split_axis == "y":
+                        # y-split: train is top portion, find where train_range[1] falls in cropped full_y
+                        crop_start = full_y[0]
+                        crop_end = full_y[1]
+                        train_end = min(self.train_range[1], crop_end)
+                        train_split_n = max(0, (train_end - crop_start)) // self.c.data.tile_size
+                    else:
+                        # x-split: train is left portion, find where train_range[1] falls in cropped full_x
+                        crop_start = full_x[0]
+                        crop_end = full_x[1]
+                        train_end = min(self.train_range[1], crop_end)
+                        train_split_n = max(0, (train_end - crop_start)) // self.c.data.tile_size
+                else:
+                    train_split_n = (self.train_range[1] - self.train_range[0]) // self.c.data.tile_size
+                    split_axis = "y" if getattr(self, "split_axis", "x") == "y" else "x"
 
                 # regular inference map (primary depth block)
                 reg_pred = all_pred_data[0][0]
@@ -2045,11 +2074,11 @@ class TensorboardVisualizer:
                 # raw 1.1um / 2.4um inklabels (visual reference), cropped to the eval extent.
                 # width is aligned to the mask (download resized to mask width); height is mapped
                 # proportionally since the raw inklabel aspect differs slightly from the mask.
-                if split_axis == "y":
-                    ext_y = (self.train_range[0], self.valid_range[1]); ext_x = self.shared_range
-                else:
-                    ext_y = self.shared_range; ext_x = (self.train_range[0], self.valid_range[1])
+                # Use the already-cropped full_y and full_x (respects fast_eval_figure)
+                ext_y = full_y
+                ext_x = full_x
                 mh, mw = self.mask.shape[:2]
+                pred_h, pred_w = reg_pred.shape  # tile dimensions of prediction
                 def _raw_ink(sub):
                     img = imread_gray(f"./inklabels/{sub}/{self.scroll1_id}.png")
                     if img is None:
@@ -2058,7 +2087,11 @@ class TensorboardVisualizer:
                     ry0 = int(ext_y[0] * rh / max(mh, 1)); ry1 = int(ext_y[1] * rh / max(mh, 1))
                     rx0 = int(ext_x[0] * rw / max(mw, 1)); rx1 = int(ext_x[1] * rw / max(mw, 1))
                     crop = img[ry0:ry1, rx0:rx1]
-                    return crop if crop.size else None
+                    if crop.size == 0:
+                        return None
+                    # resize to match prediction tile dimensions for proper aspect in figure
+                    resized = cv2.resize(crop, (pred_w, pred_h), interpolation=cv2.INTER_LINEAR)
+                    return resized
                 raw_1_1 = _raw_ink("1_1um"); raw_2_4 = _raw_ink("2_4um")
 
                 fig = self._create_eval_figure_2x3(reg_pred, tta_pred, label_binary,

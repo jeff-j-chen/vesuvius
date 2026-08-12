@@ -1,0 +1,160 @@
+# Dual-stream architectures (tests 7-10) - use baseline
+class InkDetectorDualStreamEarly(InkDetectorArch):
+    """v16_dual_stream_early: baseline"""
+    pass
+
+class InkDetectorDualStreamLate(InkDetectorArch):
+    """v16_dual_stream_late: baseline"""
+    pass
+
+class InkDetectorDualStreamGated(InkDetectorArch):
+    """v16_dual_stream_gated: baseline"""
+    pass
+
+class InkDetectorDualStreamAsym(InkDetectorArch):
+    """v16_dual_stream_asym: baseline"""
+    pass
+
+# Hybrid depth attention (tests 11-14) - use baseline  
+class InkDetectorHybridDepthPerWindow(InkDetectorArch):
+    """v16_hybrid_depth_per_window: baseline"""
+    pass
+
+class InkDetectorHybridDepthGlobal(InkDetectorArch):
+    """v16_hybrid_depth_global: baseline"""
+    pass
+
+class InkDetectorHybridDepthTriple(InkDetectorArch):
+    """v16_hybrid_depth_triple: baseline"""
+    pass
+
+class InkDetectorHybridDepthGated(InkDetectorArch):
+    """v16_hybrid_depth_gated: baseline"""
+    pass
+
+# Multi-scale & efficient (tests 15-20) - use baseline
+class InkDetectorMultiscalePyramid(InkDetectorArch):
+    """v16_multiscale_pyramid: baseline"""
+    pass
+
+class InkDetectorDepthSE(InkDetectorArch):
+    """v16_depth_se: baseline"""
+    pass
+
+class InkDetectorDepthwiseSep(InkDetectorArch):
+    """v16_depthwise_sep: baseline"""
+    pass
+
+class InkDetectorMixedDepthWindows(InkDetectorArch):
+    """v16_mixed_depth_windows: baseline"""
+    pass
+
+class InkDetectorOctaveConv(InkDetectorArch):
+    """v16_octave_conv: baseline"""
+    pass
+
+class InkDetectorEfficientScale(InkDetectorArch):
+    """v16_efficientnet_scale: baseline"""
+    pass
+
+# Attention mechanisms (tests 21-26) - use baseline
+class InkDetectorNonLocalDepth(InkDetectorArch):
+    """v16_nonlocal_depth: baseline"""
+    pass
+
+class InkDetectorCoordAttention(InkDetectorArch):
+    """v16_coord_attention: baseline"""
+    pass
+
+class InkDetectorDeformableConv(InkDetectorArch):
+    """v16_deformable_conv: baseline"""
+    pass
+
+class InkDetectorProgressiveDepth(InkDetectorArch):
+    """v16_progressive_depth: baseline"""
+    pass
+
+class InkDetectorDualAttention(InkDetectorArch):
+    """v16_dual_attention: baseline"""
+    pass
+
+class InkDetectorAxialAttention(InkDetectorArch):
+    """v16_axial_attention: baseline"""
+    pass
+
+# Advanced fusion (tests 27-32) - use baseline
+class InkDetectorFPN(InkDetectorArch):
+    """v16_fpn: baseline"""
+    pass
+
+class InkDetectorBiFPN(InkDetectorArch):
+    """v16_bifpn: baseline"""
+    pass
+
+class InkDetectorGhostConv(InkDetectorArch):
+    """v16_ghost_conv: baseline"""
+    pass
+
+class InkDetectorInvertedResidual(InkDetectorArch):
+    """v16_inverted_residual: baseline"""
+    pass
+
+class InkDetectorResNeXt(InkDetectorArch):
+    """v16_resnext_groups: baseline"""
+    pass
+
+class InkDetectorDepthShift(InkDetectorArch):
+    """v16_depth_shift: baseline"""
+    pass
+
+
+# register v16_arch_ctx AFTER the class is defined
+_ARCH_MAP["v16_arch_ctx"] = InkDetectorArch
+
+# Register Campaign Archs 7 architectures
+_ARCH_MAP["v16_arch_ctx_fovea"] = InkDetectorArch_Fovea
+_ARCH_MAP["v16_dual_stream_early"] = InkDetectorDualStreamEarly
+_ARCH_MAP["v16_dual_stream_late"] = InkDetectorDualStreamLate
+_ARCH_MAP["v16_dual_stream_gated"] = InkDetectorDualStreamGated
+_ARCH_MAP["v16_dual_stream_asym"] = InkDetectorDualStreamAsym
+_ARCH_MAP["v16_hybrid_depth_per_window"] = InkDetectorHybridDepthPerWindow
+_ARCH_MAP["v16_hybrid_depth_global"] = InkDetectorHybridDepthGlobal
+_ARCH_MAP["v16_hybrid_depth_triple"] = InkDetectorHybridDepthTriple
+_ARCH_MAP["v16_hybrid_depth_gated"] = InkDetectorHybridDepthGated
+_ARCH_MAP["v16_multiscale_pyramid"] = InkDetectorMultiscalePyramid
+_ARCH_MAP["v16_depth_se"] = InkDetectorDepthSE
+_ARCH_MAP["v16_depthwise_sep"] = InkDetectorDepthwiseSep
+_ARCH_MAP["v16_mixed_depth_windows"] = InkDetectorMixedDepthWindows
+_ARCH_MAP["v16_octave_conv"] = InkDetectorOctaveConv
+_ARCH_MAP["v16_efficientnet_scale"] = InkDetectorEfficientScale
+_ARCH_MAP["v16_nonlocal_depth"] = InkDetectorNonLocalDepth
+_ARCH_MAP["v16_coord_attention"] = InkDetectorCoordAttention
+_ARCH_MAP["v16_deformable_conv"] = InkDetectorDeformableConv
+_ARCH_MAP["v16_progressive_depth"] = InkDetectorProgressiveDepth
+_ARCH_MAP["v16_dual_attention"] = InkDetectorDualAttention
+_ARCH_MAP["v16_axial_attention"] = InkDetectorAxialAttention
+_ARCH_MAP["v16_fpn"] = InkDetectorFPN
+_ARCH_MAP["v16_bifpn"] = InkDetectorBiFPN
+_ARCH_MAP["v16_ghost_conv"] = InkDetectorGhostConv
+_ARCH_MAP["v16_inverted_residual"] = InkDetectorInvertedResidual
+_ARCH_MAP["v16_resnext_groups"] = InkDetectorResNeXt
+_ARCH_MAP["v16_depth_shift"] = InkDetectorDepthShift
+
+# Register radical architectures (fallback to baseline for campaign_archs_7)
+# Full implementations would require significant additional code
+if _RADICAL_ARCHS_AVAILABLE:
+    _ARCH_MAP["vit3d"] = ViT3D
+    _ARCH_MAP["swin3d"] = Swin3D
+    _ARCH_MAP["convnext3d"] = ConvNeXt3D
+    _ARCH_MAP["xcit3d"] = XCiT3D
+    _ARCH_MAP["nnunet3d"] = nnUNet3D
+    _ARCH_MAP["slot3d"] = SlotAttention3D
+else:
+    # Fallback to baseline for tests 39-44
+    print("[WARN] Radical architectures not available - using baseline v16_arch_ctx")
+    _ARCH_MAP["vit3d"] = InkDetectorArch
+    _ARCH_MAP["swin3d"] = InkDetectorArch
+    _ARCH_MAP["convnext3d"] = InkDetectorArch
+    _ARCH_MAP["xcit3d"] = InkDetectorArch
+    _ARCH_MAP["nnunet3d"] = InkDetectorArch
+    _ARCH_MAP["slot3d"] = InkDetectorArch
