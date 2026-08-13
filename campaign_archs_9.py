@@ -186,14 +186,14 @@ _MAE_CTX96 = "models/mae_nnunet_96.pth"
 
 TESTS = [
     # ctx=48 baseline family (MAE warm-start)
-    _mk9(
-        "lcndz_softaug_tta_attn_mae",
-        "nnunet3d_ds2_lcndz_softaug_tta_attn_mae",
-        arch="nnunet3d_lcndz",
-        init_weights=_MAE_CTX48,
-        **SOFT_AUGS,
-        **TTA_FLIPS,
-    ),
+    # _mk9(
+    #     "lcndz_softaug_tta_attn_mae",
+    #     "nnunet3d_ds2_lcndz_softaug_tta_attn_mae",
+    #     arch="nnunet3d_lcndz",
+    #     init_weights=_MAE_CTX48,
+    #     **SOFT_AUGS,
+    #     **TTA_FLIPS,
+    # ),
     _mk9(
         "lcndz_softaug_tta_attn_gceasym_mae",
         "nnunet3d_ds2_lcndz_softaug_tta_attn_gceasym_mae",

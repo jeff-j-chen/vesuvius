@@ -1324,6 +1324,232 @@ class TensorboardVisualizer:
         ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.0))
         ax.grid(True)
 
+    def add_evaluation_figures(self, epoch, model):
+        """run eval on train and valid splits produce mining and figures"""
+        print("Starting evaluation figure generation...")
+        model.eval()
+        z_range = (self.c.data.d_start, self.c.data.d_end)
+
+        eval_mask = getattr(self, 'eval_mask', self.mask)
+        # the train/valid split is PURELY VISUAL (a line drawn on the figure afterward); this is
+        # functionally a single eval over the whole region. so read+predict the FULL region in
+        # ONE pass instead of two (train then valid) -- half the per-call overhead, and for an
+        # x-split one wide strip read per row instead of two.
+        if getattr(self, "split_axis", "x") == "y":
+            tr_y, tr_x = self.train_range, self.shared_range
+            full_y = (self.train_range[0], self.valid_range[1]); full_x = self.shared_range
+        else:
+            tr_y, tr_x = self.shared_range, self.train_range
+            full_y = self.shared_range; full_x = (self.train_range[0], self.valid_range[1])
+        
+        # fast_eval_figure: only render left 40% x-dimension AND bottom 40% y-dimension
+        # (makes 16% area figures - much faster rendering for single-scroll campaigns)
+        if getattr(self.c.tra, "fast_eval_figure", False):
+            def _snap_start(candidate, anchor, stop, tile):
+                """keep the cropped eval region on the same tile grid as training."""
+                rem = (candidate - anchor) % tile
+                if rem:
+                    candidate += tile - rem
+                return max(anchor, min(candidate, stop - tile))
+
+            tile = self.c.data.tile_size
+            full_width_x = full_x[1] - full_x[0]
+            fast_x_end = full_x[0] + int(full_width_x * 0.4)
+            full_x = (full_x[0], fast_x_end)
+            
+            full_height_y = full_y[1] - full_y[0]
+            fast_y_start = full_y[1] - int(full_height_y * 0.4)
+            fast_y_start = _snap_start(fast_y_start, full_y[0], full_y[1], tile)
+            full_y = (fast_y_start, full_y[1])
+
+        hm_dir = self._hard_mining_dir()
+        hm_enabled = getattr(self.c.hm, "enabled", True)
+
+        full_coords = self._gen_tile_coords(z_range, full_y, full_x, eval_mask, z_step=self.c.data.depth)
+        full_grouped = group_by_depth(full_coords)
+        # train-region coords (coord-only, no read) -- only needed to route hard-negative mining
+        # to the training portion; the full-region origin == train origin so indices line up.
+        train_grouped = group_by_depth(
+            self._gen_tile_coords(z_range, tr_y, tr_x, eval_mask, z_step=self.c.data.depth)
+        ) if hm_enabled else {}
+        depth_offsets = sorted(full_grouped.keys())
+        all_pred_data = []
+        all_tta_data = []
+
+        if hm_enabled:
+            os.makedirs(hm_dir, exist_ok=True)
+            mining_path = os.path.join(hm_dir, f"hard_mining_epoch_{epoch}.jsonl")
+            mining_f = open(mining_path, "w")
+            print(f"[HARD][Eval] Writing mining file to: {mining_path}")
+        else:
+            mining_path = None
+            mining_f = None
+
+        hn_cut = self.c.hm.hn_cutoff
+        hp_cut = self.c.hm.hp_cutoff
+        hn_cnt = 0
+        hp_cnt = 0
+
+        # load a set of existing mined keys across all previous files to prevent duplicates
+        existing_keys = self._load_existing_mined_keys() if hm_enabled else set()
+        # also track keys added in this epoch to avoid intra epoch duplicates
+        new_keys = set()
+
+        for d_off in depth_offsets:
+            depth_start = d_off + self.c.data.d_start
+            depth_end = depth_start + self.c.data.depth
+
+            t_coords = train_grouped.get(d_off, [])
+
+            # ONE read+predict pass over the full train+valid region (also_tta -> raw + TTA maps)
+            full_pred, full_tta = predict_tiles(
+                self.c, model, self.volume, eval_mask, full_grouped.get(d_off, []), full_y, full_x,
+                depth_start, "eval", self.global_mean, self.global_std, self.global_min, self.global_max,
+                also_tta=True
+            )
+
+            tile = self.c.data.tile_size
+
+            # hard-negative mining from the TRAIN portion only (full origin == train origin, so
+            # the train-tile indices line up directly with the full prediction map)
+            for (_, y_off, x_off) in t_coords:
+                yi = y_off // tile
+                xi = x_off // tile
+                if yi < 0 or yi >= full_pred.shape[0] or xi < 0 or xi >= full_pred.shape[1]:
+                    continue
+
+                score = float(full_pred[yi, xi])
+
+                z_global = depth_start
+                y_global = full_y[0] + y_off
+                x_global = full_x[0] + x_off
+
+                l_tile = self.labels[y_global:y_global + tile, x_global:x_global + tile]
+                has_ink = int(np.any(l_tile > 0.5))
+
+                # dedup key includes z y x and label
+                key = (int(z_global), int(y_global), int(x_global), int(has_ink))
+
+                # scroll_id makes each record self-describing so the injector can
+                # route it back to the correct volume in multi-scroll training
+                sid_rec = int(getattr(self, "scroll1_id", 0) or 0)
+                if has_ink == 0 and score >= hn_cut:
+                    if key not in existing_keys and key not in new_keys:
+                        if mining_f is not None:
+                            mining_f.write(json.dumps({"scroll_id": sid_rec, "z": z_global, "y": y_global, "x": x_global, "score": score, "label": 0}) + "\n")
+                        new_keys.add(key)
+                        hn_cnt += 1
+                elif has_ink == 1 and score <= hp_cut:
+                    if key not in existing_keys and key not in new_keys:
+                        if mining_f is not None:
+                            mining_f.write(json.dumps({"scroll_id": sid_rec, "z": z_global, "y": y_global, "x": x_global, "score": score, "label": 1}) + "\n")
+                        new_keys.add(key)
+                        hp_cnt += 1
+
+            all_pred_data.append((full_pred, None, depth_start, depth_end))
+            all_tta_data.append(full_tta)
+
+        if mining_f is not None:
+            mining_f.write(json.dumps({"_type": "meta", "hard_negatives": hn_cnt, "hard_positives": hp_cnt}) + "\n")
+            mining_f.close()
+            print(f"[HARD][Eval] Finished mining epoch {epoch}: neg={hn_cnt} pos={hp_cnt}")
+        # no print when disabled — the user already knows
+
+        if hm_enabled:
+            self.writer.add_scalar("HardMining/HardNegatives", hn_cnt, epoch)
+            self.writer.add_scalar("HardMining/HardPositives", hp_cnt, epoch)
+
+        fig = self._create_hard_examples_overlay(mining_path) if mining_path else None
+        if fig is not None:
+            self.writer.add_figure(f"HardMined/Overlay", fig, epoch)
+            plt.close(fig)
+
+        if all_pred_data:
+            # label map spans the full split extent along the split axis, shared range on the other
+            # when fast_eval_figure is enabled, use the cropped full_y/full_x instead
+            if getattr(self.c.tra, "fast_eval_figure", False):
+                # full_y and full_x were already cropped above
+                full_y_range = full_y
+                full_x_range = full_x
+            else:
+                if getattr(self, "split_axis", "x") == "y":
+                    full_y_range = (self.train_range[0], self.valid_range[1])
+                    full_x_range = self.shared_range
+                else:
+                    full_y_range = self.shared_range
+                    full_x_range = (self.train_range[0], self.valid_range[1])
+            label_binary, label_fraction, valid_tiles = self._compute_tile_maps(
+                self.labels,
+                self.mask,
+                full_y_range,
+                full_x_range,
+            )
+            # split the tile-grid maps into train/valid along the split axis so readability is
+            # reported PER SPLIT (the combined region was ~75% train, masking the valid signal).
+            # each depth's TTA map (all_tta_data, from the same read) yields the *_tta groups.
+            n_split = (self.train_range[1] - self.train_range[0]) // self.c.data.tile_size
+            _ax = "y" if getattr(self, "split_axis", "x") == "y" else "x"
+            def _sp(m):
+                return (m[:n_split], m[n_split:]) if _ax == "y" else (m[:, :n_split], m[:, n_split:])
+            lb_t, lb_v = _sp(label_binary); lf_t, lf_v = _sp(label_fraction); vt_t, vt_v = _sp(valid_tiles)
+
+            depth_labels = [f"{pd[2]}-{pd[3]}" for pd in all_pred_data]
+            groups = {"Train": [], "Valid": [], "Train_tta": [], "Valid_tta": []}
+            for i, pd in enumerate(all_pred_data):
+                rp = pd[0]
+                tp = all_tta_data[i] if (i < len(all_tta_data) and all_tta_data[i] is not None) else rp
+                rp_t, rp_v = _sp(rp); tp_t, tp_v = _sp(tp)
+                groups["Train"].append(self._compute_readability_metrics(rp_t, lb_t, lf_t, vt_t))
+                groups["Valid"].append(self._compute_readability_metrics(rp_v, lb_v, lf_v, vt_v))
+                groups["Train_tta"].append(self._compute_readability_metrics(tp_t, lb_t, lf_t, vt_t))
+                groups["Valid_tta"].append(self._compute_readability_metrics(tp_v, lb_v, lf_v, vt_v))
+            group_aggr = {k: self._aggregate_metric_dicts(v) for k, v in groups.items()}
+
+            for gname, aggr in group_aggr.items():
+                self._log_readability_scalars(epoch, aggr, gname)
+            self._log_readability_compass(epoch, group_aggr)
+            # per-depth summary heatmap for the train split (representative)
+            _sumfig = self._create_readability_summary_figure(group_aggr["Train"], groups["Train"], depth_labels)
+            self.writer.add_figure("Readability/Summary", _sumfig, epoch); plt.close(_sumfig)
+
+            if getattr(self.c.tra, "eval_aggregate", True):
+                # train_split_n: number of tiles in the train region along the split axis
+                # when fast_eval_figure is enabled, compute based on the cropped extent
+                if getattr(self.c.tra, "fast_eval_figure", False):
+                    # full_y and full_x were cropped above; compute train_split_n relative to crop
+                    split_axis = "y" if getattr(self, "split_axis", "x") == "y" else "x"
+                    if split_axis == "y":
+                        # y-split: train is top portion, find where train_range[1] falls in cropped full_y
+                        crop_start = full_y[0]
+                        crop_end = full_y[1]
+                        train_end = min(self.train_range[1], crop_end)
+                        train_split_n = max(0, (train_end - crop_start)) // self.c.data.tile_size
+                    else:
+                        # x-split: train is left portion, find where train_range[1] falls in cropped full_x
+                        crop_start = full_x[0]
+                        crop_end = full_x[1]
+                        train_end = min(self.train_range[1], crop_end)
+                        train_split_n = max(0, (train_end - crop_start)) // self.c.data.tile_size
+                else:
+                    train_split_n = (self.train_range[1] - self.train_range[0]) // self.c.data.tile_size
+                    split_axis = "y" if getattr(self, "split_axis", "x") == "y" else "x"
+
+                # regular inference map (primary depth block)
+                reg_pred = all_pred_data[0][0]
+
+                # TTA map: computed in the SAME read pass as reg_pred (also_tta=True above),
+                # so we do NOT re-read the zarr -- TTA just re-augments the already-loaded tiles.
+                tta_pred = all_tta_data[0] if all_tta_data else None
+
+                # raw 1.1um / 2.4um inklabels (visual reference), cropped to the eval extent.
+                # width is aligned to the mask (download resized to mask width); height is mapped
+                # proportionally since the raw inklabel aspect differs slightly from the mask.
+                # Use the already-cropped full_y and full_x (respects fast_eval_figure)
+                ext_y = full_y
+                ext_x = full_x
+                mh, mw = self.mask.shape[:2]
+                pred_h, pred_w = reg_pred.shape  # tile dimensions of prediction
+
     def _hard_mining_dir(self):
         """return hard-mining directory for the current experiment (per scroll fragment)"""
         base = getattr(self.c.hm, "dir", "./hard_negs")
@@ -2233,7 +2459,7 @@ class TensorboardVisualizer:
                                  gridspec_kw={"hspace": 0.28, "wspace": 0.03})
         axes = np.array(axes).reshape(n_rows, n_cols)
         cmap = plt.get_cmap(SCROLL_CMAP)
-        alpha = 0.45   # inklabel overlay strength
+        alpha = 0.2  # inklabel overlay strength
         import warnings
 
         def _maxpred(pd, key):
@@ -2469,7 +2695,8 @@ class TensorboardVisualizer:
         self.writer.add_scalar("Hyperparameters/LR Scheduler Factor", self.c.tra.lr_decay)
         self.writer.add_scalar("Hyperparameters/Probe Interval", self.c.tra.probe_int)
         self.writer.add_scalar("Hyperparameters/Model Complexity", params)
-        self.writer.add_scalar("Hyperparameters/Pos Weight", pos_weight)
+        if pos_weight is not None:
+            self.writer.add_scalar("Hyperparameters/Pos Weight", float(pos_weight) if not hasattr(pos_weight, 'item') else pos_weight.item())
         self.writer.add_scalar("Hyperparameters/HN Cutoff", self.c.hm.hn_cutoff)
         self.writer.add_scalar("Hyperparameters/HP Cutoff", self.c.hm.hp_cutoff)
 
