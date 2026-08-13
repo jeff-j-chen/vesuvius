@@ -4,13 +4,21 @@ GOAL: keep the current 3-test sparse-label baseline set intact and add only furt
 integration tests for the remaining baseline-family ideas the current nnUNet path can
 now consume directly: spatial SupCon and learned surface attention.
 
-ORGANIZATION (6 TESTS):
-1:     nnunet3d_ds2_lcndz_softaug_tta_attn_sparse baseline
+ALL TESTS USE MAE WARM-START via models/mae_nnunet_ctx48.pth (ctx=48 tests) and
+models/mae_nnunet_ctx96.pth (ctx=96 tests). Run before campaign:
+    python mae_pretrain_nnunet.py --steps 6000 --ctx 48 --ds 2 -n mae_nnunet_ctx48
+    python mae_pretrain_nnunet.py --steps 6000 --ctx 96 --ds 2 -n mae_nnunet_ctx96
+
+ORGANIZATION (9 TESTS):
+1:     nnunet3d_ds2_lcndz_softaug_tta_attn_mae baseline (ctx=48)
 2:     baseline + GCE q=0.9 + asymmetric label smoothing
-3:     baseline + 96x96 ds2 context + GCE q=0.9 + asymmetric labels
-4:     test 3 + spatial SupCon
-5:     test 3 + learned surface
-6:     test 3 + spatial SupCon + learned surface
+3:     baseline + spatial SupCon
+4:     baseline + GCE/asym + spatial SupCon
+5:     ctx=96 + GCE/asym + MAE
+6:     ctx=96 + GCE/asym + learned surface + MAE
+7:     ctx=96 + GCE/asym + spatial SupCon + MAE
+8:     ctx=96 + GCE/asym + spatial SupCon + learned surface + MAE
+9:     ctx=96 + GCE/asym + spatial SupCon + learned surface + MAE (same as 8, duplicate run)
 
 BASELINE FOR COMPARISON:
 - cmp_archs8_w044_nnunet3d_lcndz_w044_nnunet3d_ds2_lcndz_12_17-14-53 from archs8
@@ -23,13 +31,8 @@ CONFIGURATION:
 - trains on all 17 scrolls from utils.config DEFAULT_SCROLLS
 - attn entropy weight stays at 0.03 for all attn-MIL runs
 
-NEW INTEGRATION TESTS:
-- spatial SupCon uses the archs5-style curriculum schedule
-- learned surface uses DepthSurfaceAttn on the current nnUNet encoder path
-- depth SupCon remains off in this sweep
-
     python campaign_archs_9.py --dry-run
-    python campaign_archs_9.py --only softaug_tta_attn,lcndz_ctx96_softaug_tta_attn_gceasym
+    python campaign_archs_9.py --only lcndz_softaug_tta_attn_mae
     python campaign_archs_9.py
 """
 from __future__ import annotations
@@ -101,7 +104,7 @@ GCE_ASYM = dict(
 def _base_config(exp_name: str) -> Config:
     c = Config()
     c.exp_name = exp_name
-    c.model.arch = "v16_arch_ctx"
+    c.model.arch = "nnunet3d_lcndz"
 
     c.data.zarr_path = get_zarr_dir()
 
@@ -139,8 +142,6 @@ def _base_config(exp_name: str) -> Config:
     c.data.ring_close_r = 3
     c.data.ring_gap_r = 3
     c.data.ring_shell_r = 2
-    c.tra.ranking_lambda = 0.5
-    c.tra.ranking_neg_frac = 1.0
     c.tra.fast_eval_figure = False
     c.dl.flip_prob = 0.0
     c.dl.rotation_prob = 0.0
@@ -155,15 +156,12 @@ def _base_config(exp_name: str) -> Config:
     c.tra.val_cooldown_secs = 0
     c.tra.eval_cooldown_secs = 0
     c.tra.fig_chunk_cooldown_ms = 0
-    c.tra.dann_n_domains = len(c.data.scrolls)
     return c
 
 
 _BASE9 = dict(
-    arch="nnunet3d",
+    arch="nnunet3d_lcndz",
     init_weights=None,
-    dann=False,
-    # keep aux losses that are no-op on the current nnUNet path disabled here
     supcon=False,
     supcon_temp=0.07,
     supcon_curriculum=False,
@@ -172,10 +170,6 @@ _BASE9 = dict(
     supcon_curriculum_epochs=10,
     attn_mil=True,
     attn_entropy_weight=0.03,
-    depth_supcon=False,
-    depth_supcon_lambda=0.3,
-    mean_teacher=False,
-    test_consistency=False,
 )
 
 
@@ -187,81 +181,91 @@ def _mk9(tid: str, tag: str, **overrides: object) -> dict:
     return d
 
 
+_MAE_CTX48 = "models/mae_nnunet_48.pth"
+_MAE_CTX96 = "models/mae_nnunet_96.pth"
+
 TESTS = [
-    # BASELINE TO COMPARE SPARSE LABELS
+    # ctx=48 baseline family (MAE warm-start)
     _mk9(
-        "lcndz_softaug_tta_attn_sparse",
-        "nnunet3d_ds2_lcndz_softaug_tta_attn_sparse",
+        "lcndz_softaug_tta_attn_mae",
+        "nnunet3d_ds2_lcndz_softaug_tta_attn_mae",
         arch="nnunet3d_lcndz",
+        init_weights=_MAE_CTX48,
         **SOFT_AUGS,
         **TTA_FLIPS,
     ),
-    # with gceasym
     _mk9(
-        "lcndz_softaug_tta_attn_gceasym_sparse",
-        "nnunet3d_ds2_lcndz_softaug_tta_attn_gceasym_sparse",
+        "lcndz_softaug_tta_attn_gceasym_mae",
+        "nnunet3d_ds2_lcndz_softaug_tta_attn_gceasym_mae",
         arch="nnunet3d_lcndz",
+        init_weights=_MAE_CTX48,
         **SOFT_AUGS,
         **TTA_FLIPS,
         **GCE_ASYM,
     ),
-    # with spatial supcon
     _mk9(
-        "lcndz_softaug_tta_attn_spatial_supcon_sparse",
-        "nnunet3d_ds2_lcndz_softaug_tta_attn_spatial_supcon_sparse",
+        "lcndz_softaug_tta_attn_supcon_mae",
+        "nnunet3d_ds2_lcndz_softaug_tta_attn_supcon_mae",
         arch="nnunet3d_lcndz",
+        init_weights=_MAE_CTX48,
         **SOFT_AUGS,
         **TTA_FLIPS,
         **SPATIAL_SUPCON,
     ),
-    # both
     _mk9(
-        "lcndz_softaug_tta_attn_gceasym_spatial_supcon_sparse",
-        "nnunet3d_ds2_lcndz_softaug_tta_attn_gceasym_spatial_supcon_sparse",
+        "lcndz_softaug_tta_attn_gceasym_supcon_mae",
+        "nnunet3d_ds2_lcndz_softaug_tta_attn_gceasym_supcon_mae",
         arch="nnunet3d_lcndz",
+        init_weights=_MAE_CTX48,
         **SOFT_AUGS,
         **TTA_FLIPS,
         **GCE_ASYM,
         **SPATIAL_SUPCON,
     ),
-    # high context size 96
+    # ctx=96 family (MAE warm-start)
     _mk9(
-        "lcndz_ctx96_softaug_tta_attn_gceasym_sparse",
-        "nnunet3d_ds2_lcndz_ctx96_attn_mil_softaug_tta_gceasym_sparse",
+        "lcndz_ctx96_softaug_tta_attn_gceasym_mae",
+        "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_gceasym_mae",
         arch="nnunet3d_lcndz",
         context_size=96,
         context_downsample=2,
+        init_weights=_MAE_CTX96,
         **SOFT_AUGS,
         **TTA_FLIPS,
+        **GCE_ASYM,
     ),
     _mk9(
-        "lcndz_ctx96_softaug_tta_attn_gceasym_learnsurf_sparse",
-        "nnunet3d_ds2_lcndz_ctx96_attn_mil_softaug_tta_gceasym_learnsurf_sparse",
+        "lcndz_ctx96_softaug_tta_attn_gceasym_learnsurf_mae",
+        "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_gceasym_learnsurf_mae",
         arch="nnunet3d_lcndz",
         context_size=96,
         context_downsample=2,
         learned_surface=True,
+        init_weights=_MAE_CTX96,
         **SOFT_AUGS,
         **TTA_FLIPS,
         **GCE_ASYM,
     ),
     _mk9(
-        "lcndz_ctx96_softaug_tta_attn_gceasym_supcon_sparse",
-        "nnunet3d_ds2_lcndz_ctx96_attn_mil_softaug_tta_gceasym_supcon_sparse",
+        "lcndz_ctx96_softaug_tta_attn_gceasym_supcon_mae",
+        "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_gceasym_supcon_mae",
         arch="nnunet3d_lcndz",
         context_size=96,
         context_downsample=2,
+        init_weights=_MAE_CTX96,
         **SOFT_AUGS,
         **TTA_FLIPS,
+        **GCE_ASYM,
         **SPATIAL_SUPCON,
     ),
     _mk9(
-        "lcndz_ctx96_softaug_tta_attn_gceasym_supcon_learnsurf_sparse",
-        "nnunet3d_ds2_lcndz_ctx96_attn_mil_softaug_tta_gceasym_supcon_learnsurf_sparse",
+        "lcndz_ctx96_softaug_tta_attn_gceasym_supcon_learnsurf_mae",
+        "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_gceasym_supcon_learnsurf_mae",
         arch="nnunet3d_lcndz",
         context_size=96,
         context_downsample=2,
         learned_surface=True,
+        init_weights=_MAE_CTX96,
         **SOFT_AUGS,
         **TTA_FLIPS,
         **GCE_ASYM,
@@ -274,15 +278,7 @@ _OVERRIDES = {
     "arch": ("model", "arch"),
     "attn_mil": ("model", "attn_mil"),
     "attn_entropy_weight": ("model", "attn_entropy_weight"),
-    "physics_stem": ("model", "physics_stem"),
-    "physics_stem_depthmax": ("model", "physics_stem_depthmax"),
-    "surface_stem": ("model", "surface_stem"),
-    "surface_stem_withdog": ("model", "surface_stem_withdog"),
     "learned_surface": ("model", "learned_surface"),
-    "n_depth_windows": ("model", "n_depth_windows"),
-    "depth_attention_mode": ("model", "depth_attention_mode"),
-    "normalization_layer": ("model", "normalization_layer"),
-    "activation": ("model", "activation"),
     "conv1_drop": ("model", "conv1_drop"),
     "conv2_drop": ("model", "conv2_drop"),
     "head_drop": ("model", "head_drop"),
@@ -291,19 +287,13 @@ _OVERRIDES = {
     "probe_int": ("tra", "probe_int"),
     "l1": ("tra", "l1_lambda"),
     "weight_decay": ("tra", "weight_decay"),
-    "ranking_lambda": ("tra", "ranking_lambda"),
-    "tv_lambda": ("tra", "tv_lambda"),
-    "depth_supcon": ("tra", "depth_supcon"),
-    "depth_supcon_lambda": ("tra", "depth_supcon_lambda"),
     "tta_consistency": ("tra", "tta_consistency"),
     "tta_consistency_lambda": ("tra", "tta_consistency_lambda"),
     "tta_consistency_mode": ("tra", "tta_consistency_mode"),
     "gce_q": ("tra", "gce_q"),
     "loss_type": ("tra", "loss_type"),
-    "focal_gamma": ("tra", "focal_gamma"),
     "label_smooth_pos": ("tra", "label_smooth_pos"),
     "label_smooth_neg": ("tra", "label_smooth_neg"),
-    "normalization_mode": ("data", "normalization_mode"),
     "context_size": ("data", "context_size"),
     "context_downsample": ("data", "context_downsample"),
     "ring_label_source": ("data", "ring_label_source"),
@@ -351,8 +341,6 @@ def build_config(t: dict) -> Config:
         c.dl.cutout_prob,
         c.dl.depth_mask_prob,
     ])
-    c.dl.channel_mixing_prob = 0.0
-    c.tra.dann_n_domains = len(c.data.scrolls)
     os.makedirs("models/archs9", exist_ok=True)
     setattr(c, "save_final", f"models/archs9/{tid}_{tag}_final.pth")
     return c
@@ -375,7 +363,6 @@ def run_test(c: Config, dry_run: bool) -> bool:
         f"  fast_eval_figure={c.tra.fast_eval_figure}  eval_int_scrolls={c.tra.eval_int_scrolls}"
         f"  eval_bs={c.data.eval_infer_bs}"
     )
-    print(f"  depth_supcon={c.tra.depth_supcon}  depth_supcon_lam={c.tra.depth_supcon_lambda}")
     print(
         f"  loss={c.tra.loss_type}  gce_q={c.tra.gce_q}"
         f"  ls_pos={c.tra.label_smooth_pos}  ls_neg={c.tra.label_smooth_neg}"
@@ -429,11 +416,8 @@ def main() -> None:
 
     print(f"[archs9] {len(selected)} test(s) queued  (log -> {LOG_DIR})")
     print("[archs9] Multi-scroll run: all 17 training scrolls from utils.config DEFAULT_SCROLLS")
-    print("[archs9] Existing 3-test sparse baseline set stays unchanged")
-    print("[archs9] New tests add spatial SupCon and learned surface on the strongest ctx96 + GCE/asym variant")
-    print("[archs9] Attn entropy remains on at weight 0.03 for every run in this sweep")
-    print("[archs9] Spatial SupCon is now wired into nnUNet embeddings; depth SupCon remains off")
-    print("[archs9] Config: 15ep, probe every 5ep, no test figs mid-run, full eval figure")
+    print("[archs9] All tests use MAE warm-start (ctx48 or ctx96 backbone)")
+    print("[archs9] Attn entropy weight=0.03, probe every 5ep, no test figs mid-run")
 
     results = {}
     for t in selected:

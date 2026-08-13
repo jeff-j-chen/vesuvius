@@ -1,45 +1,33 @@
 import os
-
-# keep tensorboard/tensorflow startup noise low and deterministic across windows workers
-os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
-
-from utils.config import Config
-from utils.visualizer import TensorboardVisualizer
-from utils.hard_mining import HardMiningManager, HardMiningInjector
-from utils.dataloader import DataManager, get_dataloaders, calc_class_wgts, calc_dense_pos_weight, MultiScrollIterableDataset
-from utils.model import create_model, supcon_loss, InkDetectorArch
-from utils.training_utils import (
-    create_optimizer_and_scheduler, 
-    create_loss_function,
-    calculate_metrics,
-    save_model,
-    pairwise_ranking_loss,
-)
+import random
+import sys
+import time
 
 import numpy as np
 import torch
 from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
-
 from tqdm import tqdm
-import sys
-import time
-import random
+
+from utils.config import Config
+from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders
+from utils.hard_mining import HardMiningInjector, HardMiningManager
+from utils.model import create_model, supcon_loss
+from utils.training_utils import (
+    calculate_metrics,
+    create_loss_function,
+    create_optimizer_and_scheduler,
+    save_model,
+)
+from utils.visualizer import TensorboardVisualizer
 
 
-def set_seed(seed=42, deterministic=False):
-    """sets the seed for reproducibility across all relevant libraries.
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
-    deterministic=False (default, FAST): cuDNN profiles+caches the fastest conv algo
-      (benchmark=True). conv/pool backward use non-deterministic GPU atomics, so two
-      runs with the SAME seed differ very slightly (fp noise that compounds over epochs).
-      this is the speed/memory path.
-    deterministic=True (EXACT): forces deterministic cuDNN algos, disables benchmark, and
-      requires CUBLAS_WORKSPACE_CONFIG for deterministic cuBLAS matmuls. two runs with the
-      same seed are then bit-for-bit identical, at ~10-20% speed cost. warn_only=True so an
-      op without a deterministic kernel warns instead of hard-crashing mid-run.
-    """
+
+def set_seed(seed: int = 42, deterministic: bool = False) -> None:
+    """set the global RNG state for reproducible training."""
     torch.cuda.manual_seed_all(seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -50,1227 +38,521 @@ def set_seed(seed=42, deterministic=False):
         torch.backends.cudnn.deterministic = True
         try:
             torch.use_deterministic_algorithms(True, warn_only=True)
-        except Exception as e:
-            print(f"[seed] use_deterministic_algorithms unavailable: {e}")
+        except Exception as exc:
+            print(f"[seed] use_deterministic_algorithms unavailable: {exc}")
         print(f"[seed] DETERMINISTIC mode (seed={seed}) — exact reproducibility, slower")
     else:
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
         print(f"[seed] fast mode (seed={seed}) — cudnn benchmark on, tiny run-to-run fp noise")
 
+
 class Trainer:
-    """manages the model training and validation process"""
-    def __init__(self, config):
-        """initializes the trainer, setting up data, model, and logging"""
+    """manage the current training and validation loop."""
+
+    def __init__(self, config: Config):
         self.c = config
-        set_seed(int(getattr(config.tra, "seed", 41)),
-                 deterministic=bool(getattr(config.tra, "deterministic", False)))
+        set_seed(
+            int(getattr(config.tra, "seed", 41)),
+            deterministic=bool(getattr(config.tra, "deterministic", False)),
+        )
         self._print_config()
-        
-        # initialize data, model, and optimizer
-        self.train_dataset, \
-        self.train_loader, \
-        self.valid_loader, \
-        self.pos_weight = self._setup_data()
-        
-        self.model, \
-        self.params, \
-        self.optimizer, \
-        self.scheduler, \
-        self.criterion = self._setup_model_optim()
-        
-        # setup logging and visualization
+
+        self.train_dataset, self.train_loader, self.valid_loader = self._setup_data()
+        self.model, self.params, self.optimizer, self.scheduler, self.criterion = self._setup_model_optim()
+
         print("Initializing Tensorboard...")
+        self._init_visualizers()
+        self._dump_run_config()
+
+        self.scaler = GradScaler(enabled=self.c.device == "cuda")
+        self.hard_manager = HardMiningManager(self.c.hm.dir)
+        self.hard_samples: list[dict] = []
+        self.best_val_loss = float("inf")
+        self.best_val_f1 = 0.0
+
+    def _print_config(self) -> None:
+        print("--- Configuration ---")
+        for field in self.c.__dataclass_fields__:
+            print(f"{field}: {getattr(self.c, field)}")
+        print("---------------------")
+
+    def _setup_data(self):
+        print("Creating datasets...")
+        start_time = time.time()
+
+        scroll_ids = [int(scroll.scroll_id) for scroll in self.c.data.scrolls]
+        self._scroll_ids = scroll_ids
+        self._scroll_train_sets = None
+
+        if len(scroll_ids) > 1:
+            train_sets = []
+            valid_sets = []
+            self._scroll_dms = {}
+            self._scroll_train_sets = {}
+            for scroll_id in scroll_ids:
+                data_manager = DataManager(self.c, scroll_id=scroll_id)
+                train_set, valid_set = data_manager.get_datasets()
+                train_sets.append(train_set)
+                valid_sets.append(valid_set)
+                self._scroll_dms[scroll_id] = data_manager
+                self._scroll_train_sets[scroll_id] = train_set
+                print(
+                    f"[multi-scroll] scroll {scroll_id}: "
+                    f"train_tiles={len(train_set)} valid_tiles={len(valid_set)}"
+                )
+
+            merged_train = MultiScrollIterableDataset(train_sets)
+            merged_valid = MultiScrollIterableDataset(valid_sets)
+            train_loader, valid_loader = get_dataloaders(merged_train, merged_valid, self.c)
+            print(
+                f"[multi-scroll] merged train_tiles={len(merged_train)} "
+                f"valid_tiles={len(merged_valid)}"
+            )
+            print(f"Data setup done in {time.time() - start_time:.2f}s")
+            return merged_train, train_loader, valid_loader
+
+        data_manager = DataManager(self.c, scroll_id=scroll_ids[0])
+        train_set, valid_set = data_manager.get_datasets()
+        train_loader, valid_loader = get_dataloaders(train_set, valid_set, self.c)
+        self._scroll_dms = {scroll_ids[0]: data_manager}
+        print(f"Data setup done in {time.time() - start_time:.2f}s")
+        return train_set, train_loader, valid_loader
+
+    def _setup_model_optim(self):
+        print(f"Creating model and loss... l1 lambda {self.c.tra.l1_lambda}... ", end="")
+        start_time = time.time()
+
+        model, params = create_model(self.c)
+        init_path = getattr(self.c, "init_weights", None)
+        if init_path:
+            state_dict = torch.load(init_path, map_location=self.c.device)
+            model_state = model.state_dict()
+            compatible = {
+                key: value
+                for key, value in state_dict.items()
+                if key in model_state and value.shape == model_state[key].shape
+            }
+            skipped = len(state_dict) - len(compatible)
+            missing, unexpected = model.load_state_dict(compatible, strict=False)
+            print(
+                f"[init-weights] loaded {len(compatible)}/{len(state_dict)} tensors from {init_path} "
+                f"(shape-skipped={skipped} missing={len(missing)} unexpected={len(unexpected)})"
+            )
+
+        optimizer, scheduler = create_optimizer_and_scheduler(model, self.c)
+        criterion = create_loss_function(None, self.c)
+        print(f" done in {time.time() - start_time:.2f}s")
+        return model, params, optimizer, scheduler, criterion
+
+    def _init_visualizers(self) -> None:
         scroll_ids = self._scroll_ids
-        # will a test/holdout figure ever fire? periodic tests need test_int <= n_epochs;
-        # the one-shot final render needs test_on_final. campaigns set test_int > n_epochs
-        # (e.g. 9999) and no final, so skip opening every test/holdout zarr for nothing.
         tra = self.c.tra
         will_test = (tra.test_int <= tra.n_epochs) or bool(getattr(tra, "test_on_final", False))
         if not will_test:
-            print(f"[test] test_int={tra.test_int} > n_epochs={tra.n_epochs} and "
-                  f"test_on_final={getattr(tra, 'test_on_final', False)} -> skipping test-frag load")
+            print(
+                f"[test] test_int={tra.test_int} > n_epochs={tra.n_epochs} and "
+                f"test_on_final={getattr(tra, 'test_on_final', False)} -> skipping test-frag load"
+            )
+
         if len(scroll_ids) > 1:
-            # merged training stream: the main visualizer owns the single tensorboard
-            # run folder and logs scalar metrics; one figure-visualizer per scroll
-            # renders its own eval/test figures into that SAME folder, namespacing its
-            # tags with s<sid>/. this keeps the run list at one folder regardless of
-            # scroll count (tag '/' is UI grouping only, not a folder on disk). probe
-            # ROIs stay global (rendered once, unprefixed).
-            self.vis = TensorboardVisualizer(self.c, mode='metrics')
+            self.vis = TensorboardVisualizer(self.c, mode="metrics")
             self.scroll_vis = {}
-            for i, sid in enumerate(scroll_ids):
-                self.scroll_vis[sid] = TensorboardVisualizer(
-                    self.c, mode='train', scroll_id=sid,
-                    shared_writer=self.vis.writer, tag_prefix=f"s{sid}/",
-                    # only primary loads the large test-frag assets, and only if a test can fire
-                    load_test_frags=(i == 0 and will_test),
+            for index, scroll_id in enumerate(scroll_ids):
+                self.scroll_vis[scroll_id] = TensorboardVisualizer(
+                    self.c,
+                    mode="train",
+                    scroll_id=scroll_id,
+                    shared_writer=self.vis.writer,
+                    tag_prefix=f"s{scroll_id}/",
+                    load_test_frags=(index == 0 and will_test),
                 )
         else:
             self.vis = TensorboardVisualizer(self.c, load_test_frags=will_test)
             self.scroll_vis = None
 
-        # persist the EXACT resolved config into this run's tensorboard folder (config.json)
-        # + a TB "Text" tab, so every run is fully reproducible from its own dir.
-        self._dump_run_config()
+    def _dump_run_config(self) -> None:
+        import dataclasses
+        import json
 
-        # initialize training components
-        self.scaler = GradScaler()
-        self.hard_manager = HardMiningManager(self.c.hm.dir)
-        self.hard_samples = []
-        # initialize tracking variables for best model saving
-        self.best_val_loss = float('inf')
-        self.best_val_f1 = 0.0
-
-    def _print_config(self):
-        """prints the configuration parameters"""
-        print("--- Configuration ---")
-        for field in self.c.__dataclass_fields__:
-            value = getattr(self.c, field)
-            if isinstance(value, dict):
-                for subfield, subvalue in value.items():
-                    print(f"{field}.{subfield}: {subvalue}")
-            else:
-                print(f"{field}: {value}")
-        print("---------------------")
-
-    def _setup_data(self):
-        """loads and prepares the datasets and dataloaders"""
-        print("Creating datasets...")
-        start_time = time.time()
-
-        scroll_ids = [s.scroll_id for s in self.c.data.scrolls]
-        self._scroll_ids = scroll_ids
-        self._scroll_train_sets = None   # {scroll_id: train_set} in multiscroll, for HM routing
-        multi = len(scroll_ids) > 1
-
-        if multi:
-
-            ring_mode = getattr(self.c.data, 'ring_negatives', False)
-            train_sets, valid_sets = [], []
-            self._scroll_dms = {}
-            self._scroll_train_sets = {}
-            for sid in scroll_ids:
-                dm = DataManager(self.c, scroll_id=sid)
-                t_set, v_set = dm.get_datasets()
-                train_sets.append(t_set)
-                valid_sets.append(v_set)
-                self._scroll_dms[sid] = dm
-                self._scroll_train_sets[int(sid)] = t_set
-                print(f"[multi-scroll] scroll {sid}: train_tiles={len(t_set)} valid_tiles={len(v_set)}")
-
-            t_set_merged = MultiScrollIterableDataset(train_sets)
-            v_set_merged = MultiScrollIterableDataset(valid_sets)
-            t_loader, v_loader = get_dataloaders(t_set_merged, v_set_merged, self.c)
-            if getattr(self.c.data, "dense_labels", False):
-                pos_weight = calc_dense_pos_weight(t_set_merged)
-            else:
-                pos_weight = calc_class_wgts(t_set_merged, v_set_merged, scroll_id=None)
-            self._t_set_full = t_set_merged
-            self._t_set_ring = None
-            print(f"[multi-scroll] merged train_tiles={len(t_set_merged)} valid_tiles={len(v_set_merged)}")
-            print(f"Data setup done in {time.time() - start_time:.2f}s")
-            return t_set_merged, t_loader, v_loader, pos_weight
-
-        data_manager = DataManager(self.c, scroll_id=scroll_ids[0])
-        self._scroll_dms = {scroll_ids[0]: data_manager}
-
-        t_set_full, v_set = data_manager.get_datasets()
-        t_loader, v_loader = get_dataloaders(t_set_full, v_set, self.c)
-        if getattr(self.c.data, "dense_labels", False):
-            pos_weight = calc_dense_pos_weight(t_set_full)
-        else:
-            pos_weight = calc_class_wgts(t_set_full, v_set, scroll_id=None)
-        self._t_set_full = t_set_full
-        self._t_set_ring = None
-
-        print(f"Data setup done in {time.time() - start_time:.2f}s")
-        return t_set_full, t_loader, v_loader, pos_weight
-
-    def _setup_model_optim(self):
-        """creates the model, optimizer, scheduler, and loss function"""
-        print(f"Creating model and loss... l1 lambda {self.c.tra.l1_lambda}... ", end="")
-        start_time = time.time()
-        
-        model, params = create_model(self.c)
-        # optional warm-start: load MAE (or any) pretrained weights, ignoring
-        # non-matching keys (e.g. the MAE 'recon' head vs the ink 'head').
-        init_path = getattr(self.c, "init_weights", None)
-        if init_path:
-            sd = torch.load(init_path, map_location=self.c.device)
-            # keep only keys that exist in the model AND share the same shape.
-            # strict=False skips missing/unexpected keys but still errors on shape
-            # mismatch, so filter those out for partial cross-arch transfer (e.g.
-            # dense_unet MAE -> dense_unet_depth: per_slice matches, e1+ differ).
-            model_sd = model.state_dict()
-            compat = {k: v for k, v in sd.items()
-                      if k in model_sd and v.shape == model_sd[k].shape}
-            skipped = len(sd) - len(compat)
-            missing, unexpected = model.load_state_dict(compat, strict=False)
-            print(f"[init-weights] loaded {len(compat)}/{len(sd)} tensors from {init_path} "
-                  f"(shape-skipped={skipped} missing={len(missing)} unexpected={len(unexpected)})")
-        optimizer, scheduler = create_optimizer_and_scheduler(model, self.c)
-        # pos_weight (neg/pos) upweights positives -> biases outputs toward 1.0. optionally drop it.
-        pw = self.pos_weight if getattr(self.c.tra, "pos_weight_enabled", True) else None
-        if pw is None and self.pos_weight is not None:
-            print("[loss] pos_weight DISABLED (pos_weight_enabled=False) -- using unweighted loss")
-        criterion = create_loss_function(pw, self.c)
-
-        # mean teacher: EMA copy of the model (no gradients; updated in run() after each step)
-        self._teacher_model = None
-        if getattr(self.c.tra, "mean_teacher", False):
-            import copy
-            self._teacher_model = copy.deepcopy(model)
-            self._teacher_model.eval()
-            for p in self._teacher_model.parameters():
-                p.requires_grad_(False)
-            print("[mean-teacher] EMA teacher initialized")
-
-        # load verified-negative masks (2.4um inklabel < threshold = definite papyrus).
-        # resized to each scroll's zarr dims via cv2; stored as binary uint8 per scroll.
-        self._verified_neg_masks = {}
-        if getattr(self.c.tra, "mean_teacher", False) or getattr(self.c.tra, "verified_neg_lambda", 0.0) > 0:
-            self._load_verified_neg_masks()
-
-        # load test-scroll zarrs for teacher-student consistency (if enabled). these are NOT
-        # used for labels -- only unlabeled consistency forward passes.
-        self._test_vols = {}
-        if getattr(self.c.tra, "test_consistency", False):
-            self._load_test_consistency_vols()
-        
-        # for pseudo-label same-scroll: we'll sample from training scrolls' unlabeled regions
-        # (regions where mask == 0, outside inklabels). no separate loader needed - just use
-        # the existing scroll zarrs from the dataloader.
-        self._pseudo_label_scrolls = {}
-        if getattr(self.c.tra, "pseudo_label_same_scroll", False):
-            self._init_pseudo_label_scrolls()
-
-        print(f" done in {time.time() - start_time:.2f}s")
-        return model, params, optimizer, scheduler, criterion
-
-    def _load_verified_neg_masks(self):
-        """for each training scroll, load the 2.4µm inklabel, resize to zarr dims (W,H),
-        and binarize with threshold < verified_neg_threshold -> 1 (definite papyrus)."""
-        import cv2 as _cv2, zarr as _zarr
-        thr = int(getattr(self.c.tra, "verified_neg_threshold", 31))
-        zp = self.c.data.zarr_path
-        for sc in self.c.data.scrolls:
-            sid = int(sc.scroll_id)
-            lpath = f"./inklabels/2_4um/{sid}.png"
-            if not os.path.exists(lpath):
-                continue
-            lbl = _cv2.imread(lpath, _cv2.IMREAD_GRAYSCALE)
-            if lbl is None:
-                continue
-            # resize label to exact zarr spatial dims
-            zpath = os.path.join(zp, f"{sid}.zarr")
-            if not os.path.isdir(zpath):
-                continue
-            z = _zarr.open(zpath, mode='r'); _, zH, zW = map(int, z.shape)
-            lH, lW = lbl.shape[:2]
-            if (lH, lW) != (zH, zW):
-                lbl = _cv2.resize(lbl, (zW, zH), interpolation=_cv2.INTER_NEAREST)
-            vn = (lbl < thr).astype('uint8')
-            self._verified_neg_masks[sid] = vn
-        print(f"[verified-neg] loaded {len(self._verified_neg_masks)} masks (thr<{thr})")
-        if not self._verified_neg_masks:
-            print("[verified-neg] WARN no 2.4um masks loaded; verified-negative weighting will be inert")
-
-    def _load_test_consistency_vols(self):
-        """open zarrs for the test scrolls used in teacher-student consistency. masks loaded too."""
-        import zarr as _zarr, cv2 as _cv2
-        zp = self.c.data.zarr_path
-        for sid in getattr(self.c.data, 'test_scroll_ids', []):
-            sid = int(sid)
-            zpath = os.path.join(zp, f"{sid}.zarr")
-            mpath = f"./masks/{sid}.png"
-            if not os.path.isdir(zpath) or not os.path.exists(mpath):
-                continue
-            try:
-                vol = _zarr.open(zpath, mode='r')
-                mask_img = _cv2.imread(mpath, _cv2.IMREAD_GRAYSCALE)
-                mask_bin = (mask_img > 127).astype('uint8') if mask_img is not None else None
-                self._test_vols[sid] = {'vol': vol, 'mask': mask_bin}
-                D, H, W = map(int, vol.shape)
-                print(f"[test-consistency] loaded {sid} ({W}x{H})")
-            except Exception as e:
-                print(f"[test-consistency] skipping {sid}: {e}")
-        print(f"[test-consistency] {len(self._test_vols)} test vols loaded for EMA consistency")
-        if not self._test_vols:
-            print("[test-consistency] WARN no test vols loaded; EMA test consistency will be inert")
-    
-    def _init_pseudo_label_scrolls(self):
-        """initialize access to training scrolls for same-scroll pseudo-labeling.
-        we sample from unlabeled regions (mask==0) of training scrolls, not test scrolls."""
-        import zarr as _zarr, cv2 as _cv2
-        zp = self.c.data.zarr_path
-        for sc in self.c.data.scrolls:
-            sid = int(sc['scroll_id'])
-            zpath = os.path.join(zp, f"{sid}.zarr")
-            # use eroded or regular inklabel mask to identify LABELED regions
-            # (we want to sample from UNlabeled regions, i.e., where mask==0)
-            if self.c.data.ring_label_source == "eroded":
-                mpath = f"./eroded_inklabels/{sid}.png"
-            else:
-                mpath = f"./inklabels/{self.c.data.label_folder}/{sid}.png"
-            
-            if not os.path.isdir(zpath):
-                continue
-            try:
-                vol = _zarr.open(zpath, mode='r')
-                mask_img = _cv2.imread(mpath, _cv2.IMREAD_GRAYSCALE) if os.path.exists(mpath) else None
-                # binary mask: 1=labeled (ink or ring), 0=unlabeled
-                mask_bin = (mask_img > 0).astype('uint8') if mask_img is not None else None
-                self._pseudo_label_scrolls[sid] = {'vol': vol, 'label_mask': mask_bin}
-                D, H, W = map(int, vol.shape)
-                print(f"[pseudo-label] loaded {sid} ({W}x{H}) for same-scroll pseudo-labeling")
-            except Exception as e:
-                print(f"[pseudo-label] skipping {sid}: {e}")
-        if not self._pseudo_label_scrolls:
-            print("[pseudo-label] WARN no training scrolls loaded; pseudo-labeling will be inert")
-
-    def _dump_run_config(self):
-        """write the full resolved config as config.json into this run's tensorboard dir and add
-        it to the TB 'Text' tab, so every run is reproducible from its own folder. best-effort --
-        config logging must never break a training run."""
-        import json, dataclasses
         try:
             run_dir = getattr(self.vis, "log_path", None) or getattr(self.vis.writer, "log_dir", None)
             if not run_dir:
                 print("[config] no run dir resolved -- skipping config dump", flush=True)
                 return
-            cfg = dataclasses.asdict(self.c) if dataclasses.is_dataclass(self.c) else vars(self.c)
-            txt = json.dumps(cfg, indent=2, default=str, sort_keys=True)
+            config_data = dataclasses.asdict(self.c) if dataclasses.is_dataclass(self.c) else vars(self.c)
+            text = json.dumps(config_data, indent=2, default=str, sort_keys=True)
             os.makedirs(run_dir, exist_ok=True)
-            with open(os.path.join(run_dir, "config.json"), "w", encoding="utf-8") as f:
-                f.write(txt)
-            self.vis.writer.add_text("config", "```json\n" + txt + "\n```", 0)
+            with open(os.path.join(run_dir, "config.json"), "w", encoding="utf-8") as handle:
+                handle.write(text)
+            self.vis.writer.add_text("config", "```json\n" + text + "\n```", 0)
             print(f"[config] saved run config -> {os.path.join(run_dir, 'config.json')}", flush=True)
-        except Exception as e:
-            print(f"[config] WARN could not dump run config: {e}", flush=True)
+        except Exception as exc:
+            print(f"[config] WARN could not dump run config: {exc}", flush=True)
 
-    def _train_batch(self, b_imgs, b_labels, mask, scroll_ids_batch=None,
-                     sample_scroll_ids_batch=None, coords_batch=None, epoch=0):
-        """trains the model on a single batch of data"""
-        if getattr(self.c.data, "dense_labels", False):
-            return self._train_batch_dense(b_imgs, b_labels, mask)
-        b_imgs = b_imgs.to(self.c.device)
-        b_labels = b_labels.to(self.c.device).view(-1, 1)
-        # mask is (B, 32, 32) per-pixel; collapse to per-tile (B, 1): tile is valid if any pixel is valid
-        mask = (mask.to(self.c.device).view(b_imgs.size(0), -1).sum(dim=1) > 0).float().unsqueeze(1)
+    def _train_batch(self, images, labels, mask, epoch: int = 0):
+        images = images.to(self.c.device)
+        labels = labels.to(self.c.device).view(-1, 1)
+        mask = (mask.to(self.c.device).view(images.size(0), -1).sum(dim=1) > 0).float().unsqueeze(1)
 
         self.optimizer.zero_grad()
-
-        # forward pass with automatic mixed precision
-        with autocast(self.c.device):
-            # models that expose forward_with_extras can participate in DANN / SupCon.
-            # older architectures without that hook fall back to the plain forward path.
-            use_extras = hasattr(self.model, "forward_with_extras") and (
-                getattr(self.c.tra, "dann", False) or getattr(self.c.tra, "supcon", False))
-            if use_extras:
-                outputs, emb, _, _ = self.model.forward_with_extras(b_imgs)
+        with autocast(self.c.device, enabled=self.c.device == "cuda"):
+            if getattr(self.c.tra, "supcon", False) and hasattr(self.model, "forward_with_extras"):
+                outputs, _, _, supcon_z = self.model.forward_with_extras(images)
             else:
-                outputs = self.model(b_imgs)
-                emb = None
-            # per-voxel models return (B,1,H,W) heatmap; apply MIL max for tile-level BCE
+                outputs = self.model(images)
+                supcon_z = None
+
             if outputs.dim() == 4:
                 outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
-            # loss target: optional label smoothing (hard b_labels kept for metrics/ranking).
-            # softening 0/1 -> ls/(1-ls) stops the model driving logits to +/-inf on possibly
-            # mislabeled tiles -- a mild, targeted counter to memorizing label noise.
-            target = b_labels.float()
-            ls = float(getattr(self.c.tra, "label_smooth", 0.0))
-            ls_pos = float(getattr(self.c.tra, "label_smooth_pos", 0.0))
-            ls_neg = float(getattr(self.c.tra, "label_smooth_neg", 0.0))
-            if ls_pos > 0 or ls_neg > 0:
-                # asymmetric: different smoothing for ink (pos) vs papyrus (neg) labels.
-                # ink labels are noisier (1.1um->9.4um projection ambiguity); papyrus labels
-                # are cleaner (ring negatives are well-defined).
-                pos_mask = (b_labels > 0.5)
-                target = torch.where(pos_mask,
-                                     torch.full_like(target, 1.0 - ls_pos),
-                                     torch.full_like(target, ls_neg))
-            elif ls > 0:
-                target = target * (1.0 - 2.0 * ls) + ls
-            raw_loss = self.criterion(outputs, target)
-            
-            # apply mask to zero out loss in irrelevant regions
-            raw_loss = raw_loss * mask
-            if mask.sum() <= 0:
+
+            targets = labels.float()
+            pos_smooth = float(getattr(self.c.tra, "label_smooth_pos", 0.0))
+            neg_smooth = float(getattr(self.c.tra, "label_smooth_neg", 0.0))
+            if pos_smooth > 0 or neg_smooth > 0:
+                pos_mask = labels > 0.5
+                targets = torch.where(
+                    pos_mask,
+                    torch.full_like(targets, 1.0 - pos_smooth),
+                    torch.full_like(targets, neg_smooth),
+                )
+
+            raw_loss = self.criterion(outputs, targets) * mask
+            denom = mask.sum()
+            if denom <= 0:
                 print("[ERROR] Mask sum is zero, skipping loss calculation.")
                 return np.empty([]), np.empty([]), 0.0, 0.0
 
-            # verified negatives: extra supervised weight on tiles whose resized 2.4um
-            # label map is confidently papyrus across the whole center tile
-            vn_lam = float(getattr(self.c.tra, "verified_neg_lambda", 0.0))
-            if (vn_lam > 0 and coords_batch is not None and sample_scroll_ids_batch is not None
-                    and self._verified_neg_masks):
-                tile = int(self.c.data.tile_size)
-                coords_iter = coords_batch.cpu().numpy() if torch.is_tensor(coords_batch) else np.asarray(coords_batch)
-                vn_flags = []
-                for sid, (y0, x0) in zip(sample_scroll_ids_batch, coords_iter):
-                    vn = self._verified_neg_masks.get(int(sid))
-                    if vn is None:
-                        vn_flags.append(0.0)
-                        continue
-                    y0 = int(y0)
-                    x0 = int(x0)
-                    patch = vn[y0:y0 + tile, x0:x0 + tile]
-                    vn_flags.append(1.0 if patch.shape == (tile, tile) and patch.min() > 0 else 0.0)
-                if any(vn_flags):
-                    vn_mask = torch.tensor(vn_flags, device=self.c.device, dtype=raw_loss.dtype).unsqueeze(1)
-                    neg_mask = (b_labels <= 0.5).float()
-                    raw_loss = raw_loss * (1.0 + vn_lam * vn_mask * neg_mask)
-            
-            # normalize loss and add l1 regularization
-            raw_loss_val = (raw_loss.sum() / mask.sum()).item()
-            l1_loss = sum(p.abs().sum() for p in self.model.parameters())
-            loss = (raw_loss.sum() / mask.sum()) + self.c.tra.l1_lambda * l1_loss
+            raw_loss_value = (raw_loss.sum() / denom).item()
+            l1_loss = sum(param.abs().sum() for param in self.model.parameters())
+            loss = (raw_loss.sum() / denom) + self.c.tra.l1_lambda * l1_loss
 
-            # optional pairwise-ranking term (AUC / partial-AUC surrogate). added on top of
-            # BCE to directly optimize tile ordering -- the objective PR-AUC actually rewards.
-            # well-matched to balanced ring data (unlike focal, which targets imbalance).
-            ranking_lambda = float(getattr(self.c.tra, "ranking_lambda", 0.0))
-            if ranking_lambda > 0:
-                probs = torch.sigmoid(outputs).reshape(-1)
-                rloss = pairwise_ranking_loss(
-                    probs, b_labels.reshape(-1),
-                    margin=float(getattr(self.c.tra, "ranking_margin", 0.3)),
-                    neg_frac=float(getattr(self.c.tra, "ranking_neg_frac", 1.0)),
-                )
-                loss = loss + ranking_lambda * rloss
-
-            # optional TTA-consistency regularizer
-            tta_cons_lambda = float(getattr(self.c.tra, "tta_consistency_lambda", 0.0))
-            if getattr(self.c.tra, "tta_consistency", False) and tta_cons_lambda > 0:
-                cons_mode = str(getattr(self.c.tra, "tta_consistency_mode", "flips")).lower()
-                if cons_mode == "dihedral":
-                    _cops = (
-                        lambda t: torch.flip(t, dims=[-1]),
-                        lambda t: torch.flip(t, dims=[-2]),
-                        lambda t: torch.flip(t, dims=[-1, -2]),
-                        lambda t: torch.rot90(t, 1, dims=[-2, -1]),
-                        lambda t: torch.rot90(t, -1, dims=[-2, -1]),
+            tta_lambda = float(getattr(self.c.tra, "tta_consistency_lambda", 0.0))
+            if getattr(self.c.tra, "tta_consistency", False) and tta_lambda > 0:
+                mode = str(getattr(self.c.tra, "tta_consistency_mode", "flips")).lower()
+                if mode == "dihedral":
+                    transforms = (
+                        lambda tensor: torch.flip(tensor, dims=[-1]),
+                        lambda tensor: torch.flip(tensor, dims=[-2]),
+                        lambda tensor: torch.flip(tensor, dims=[-1, -2]),
+                        lambda tensor: torch.rot90(tensor, 1, dims=[-2, -1]),
+                        lambda tensor: torch.rot90(tensor, -1, dims=[-2, -1]),
                     )
-                    view = _cops[int(torch.randint(0, len(_cops), (1,)).item())](b_imgs)
+                    view = transforms[int(torch.randint(0, len(transforms), (1,)).item())](images)
                 else:
-                    fd = ([-1], [-2], [-1, -2])[int(torch.randint(0, 3, (1,)).item())]
-                    view = torch.flip(b_imgs, dims=fd)
-                out2 = self.model(view.contiguous())
-                if out2.dim() == 4:
-                    out2 = out2.flatten(1).max(dim=1, keepdim=True).values
+                    dims = ([-1], [-2], [-1, -2])[int(torch.randint(0, 3, (1,)).item())]
+                    view = torch.flip(images, dims=dims)
+                other = self.model(view.contiguous())
+                if other.dim() == 4:
+                    other = other.flatten(1).max(dim=1, keepdim=True).values
                 p1 = torch.sigmoid(outputs)
-                p2 = torch.sigmoid(out2)
-                cons = ((p2 - p1.detach()) ** 2) * mask
-                cons = cons.sum() / mask.sum().clamp(min=1)
-                loss = loss + tta_cons_lambda * cons
+                p2 = torch.sigmoid(other)
+                consistency = ((p2 - p1.detach()) ** 2) * mask
+                loss = loss + tta_lambda * (consistency.sum() / denom.clamp(min=1))
 
-            # DANN: domain-adversarial head. linearly ramp lambda from 0 -> dann_lambda
-            if (getattr(self.c.tra, "dann", False) and emb is not None and scroll_ids_batch is not None
-                    and hasattr(self.model, "domain_head") and self.model.domain_head is not None):
-                n_ep = max(1, self.c.tra.n_epochs)
-                ramp = min(1.0, epoch / max(1, getattr(self.c.tra, "dann_ramp_epochs", 5)))
-                dann_lam = float(getattr(self.c.tra, "dann_lambda", 0.1)) * ramp
-                dom_logits = self.model.domain_head(emb, dann_lam)
-                dom_labels = torch.tensor(scroll_ids_batch, device=self.c.device, dtype=torch.long)
-                dann_loss = torch.nn.functional.cross_entropy(dom_logits, dom_labels)
-                loss = loss + dann_lam * dann_loss
-            
-            # attention entropy regularization (if using attention-MIL)
-            if hasattr(self.model, 'last_attn_entropy_loss'):
-                attn_entropy_loss = self.model.last_attn_entropy_loss
-                if attn_entropy_loss.item() != 0.0:
-                    loss = loss + attn_entropy_loss
+            attn_entropy_loss = getattr(self.model, "last_attn_entropy_loss", None)
+            if attn_entropy_loss is not None and attn_entropy_loss.item() != 0.0:
+                loss = loss + attn_entropy_loss
 
-            # TV (total variation) regularizer on voxel logit map: smooths spatial predictions
-            # -> directly encourages letter-shape coherence (adjacent voxels predict similarly).
-            # applied to the current voxel map BEFORE MIL aggregation, computed in forward_with_extras.
-            tv_lam = float(getattr(self.c.tra, "tv_lambda", 0.0))
-            if tv_lam > 0 and hasattr(self.model, 'last_voxel_map') and self.model.last_voxel_map is not None:
-                vmap = self.model.last_voxel_map.detach()  # (B,1,D,H,W)
-                tv_x = (vmap[:, :, :, :, 1:] - vmap[:, :, :, :, :-1]).abs().mean()
-                tv_y = (vmap[:, :, :, 1:, :] - vmap[:, :, :, :-1, :]).abs().mean()
-                loss = loss + tv_lam * (tv_x + tv_y)
-
-            # SupCon: supervised contrastive loss on the projected tile embeddings
-            if getattr(self.c.tra, "supcon", False) and emb is not None:
-                # curriculum: progressive lambda scheduling
+            if getattr(self.c.tra, "supcon", False) and supcon_z is not None:
                 if getattr(self.c.tra, "supcon_curriculum", False):
                     curriculum_epochs = int(getattr(self.c.tra, "supcon_curriculum_epochs", 15))
                     lambda_start = float(getattr(self.c.tra, "supcon_lambda_start", 0.1))
                     lambda_end = float(getattr(self.c.tra, "supcon_lambda_end", 0.5))
                     progress = min(1.0, epoch / max(1, curriculum_epochs))
-                    supcon_lam = lambda_start + (lambda_end - lambda_start) * progress
+                    supcon_lambda = lambda_start + (lambda_end - lambda_start) * progress
                 else:
-                    supcon_lam = float(getattr(self.c.tra, "supcon_lambda", 0.1))
-                
+                    supcon_lambda = float(getattr(self.c.tra, "supcon_lambda", 0.1))
                 supcon_temp = float(getattr(self.c.tra, "supcon_temp", 0.07))
-                z = self.model.supcon_head(emb)
-                sc_loss = supcon_loss(z, b_labels.view(-1).long(), temp=supcon_temp)
-                loss = loss + supcon_lam * sc_loss
-
-            # depth profile SupCon: contrastive on raw mean depth profiles.
-            # unlike spatial SupCon (which uses backbone embeddings after many conv layers),
-            # this operates on the raw CT depth signature -- a different, complementary signal.
-            # motivated by: ds=2==ds=1 and surface_dist being the best learner (depth >> spatial).
-            if getattr(self.c.tra, "depth_supcon", False) and hasattr(self.model, 'depth_profile_head'):
-                depth_profile = getattr(self.model, 'last_depth_profile', None)
-                if depth_profile is not None:
-                    dp_lam = float(getattr(self.c.tra, "depth_supcon_lambda", 0.1))
-                    dp_temp = float(getattr(self.c.tra, "supcon_temp", 0.07))
-                    dz = self.model.depth_profile_head(depth_profile)
-                    dp_loss = supcon_loss(dz, b_labels.view(-1).long(), temp=dp_temp)
-                    loss = loss + dp_lam * dp_loss
-
-            # mean-teacher consistency on labeled tiles (train with verified-neg upweighting)
-            if getattr(self.c.tra, "mean_teacher", False) and self._teacher_model is not None:
-                mt_lam = float(getattr(self.c.tra, "mean_teacher_lambda", 0.1))
-                ramp = min(1.0, epoch / max(1, getattr(self.c.tra, "mean_teacher_ramp_epochs", 3)))
-                mt_lam = mt_lam * ramp
-                if mt_lam > 0:
-                    # consistency on labeled tiles: apply different augmentations to student and teacher
-                    if getattr(self.c.tra, "consistency_on_labeled", False):
-                        # apply a different augmentation to teacher (student already has dataloader augmentation)
-                        # use simple geometric augmentations: flips and 90-degree rotations
-                        aug_ops = (
-                            lambda t: t,  # identity
-                            lambda t: torch.flip(t, dims=[-1]),  # horizontal flip
-                            lambda t: torch.flip(t, dims=[-2]),  # vertical flip
-                            lambda t: torch.flip(t, dims=[-1, -2]),  # both flips
-                            lambda t: torch.rot90(t, 1, dims=[-2, -1]),  # rotate 90
-                            lambda t: torch.rot90(t, -1, dims=[-2, -1]),  # rotate -90
-                        )
-                        teacher_view = aug_ops[int(torch.randint(0, len(aug_ops), (1,)).item())](b_imgs)
-                        
-                        with torch.no_grad():
-                            t_out = self._teacher_model(teacher_view.contiguous())
-                            if t_out.dim() == 4:
-                                t_out = t_out.flatten(1).max(dim=1, keepdim=True).values
-                            t_prob = torch.sigmoid(t_out)
-                        s_prob = torch.sigmoid(outputs)
-                        # MSE consistency loss on labeled tiles only
-                        consistency_loss = ((s_prob - t_prob.detach()) ** 2) * mask
-                        loss = loss + mt_lam * consistency_loss.sum() / mask.sum().clamp(min=1)
-                    else:
-                        # original: unlabeled consistency (test scrolls or validation)
-                        with torch.no_grad():
-                            t_out = self._teacher_model(b_imgs)
-                            if t_out.dim() == 4:
-                                t_out = t_out.flatten(1).max(dim=1, keepdim=True).values
-                            t_prob = torch.sigmoid(t_out)
-                        s_prob = torch.sigmoid(outputs)
-                        mt_cons = ((s_prob - t_prob.detach()) ** 2) * mask
-                        loss = loss + mt_lam * mt_cons.sum() / mask.sum().clamp(min=1)
-
-        # backward pass and optimization step
-        self.scaler.scale(loss).backward()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-
-        # EMA teacher update after each step (alpha * teacher + (1-alpha) * student)
-        if getattr(self.c.tra, "mean_teacher", False) and self._teacher_model is not None:
-            alpha = float(getattr(self.c.tra, "mean_teacher_alpha", 0.999))
-            with torch.no_grad():
-                for t_p, s_p in zip(self._teacher_model.parameters(), self.model.parameters()):
-                    t_p.data.mul_(alpha).add_(s_p.data, alpha=1.0 - alpha)
-
-        # calculate scores and labels for metrics
-        scores = torch.sigmoid(outputs).cpu().detach().numpy().flatten()
-        labels = b_labels.cpu().detach().numpy().flatten().astype(int)
-        
-        return scores, labels, loss.item(), raw_loss_val
-
-    @staticmethod
-    def _dense_pixel_sample(scores_map, label_map, pmask, max_px=4096):
-        """flatten valid (mask>0) pixels and subsample for epoch-level metric accumulation.
-        keeps per-pixel metric memory bounded across an epoch (a full tile is ~16k px)."""
-        sel = pmask.reshape(-1) > 0
-        s = scores_map.reshape(-1)[sel]
-        l = (label_map.reshape(-1)[sel] > 0.5).astype(np.int64)
-        if s.shape[0] > max_px:
-            idx = np.random.default_rng(0).choice(s.shape[0], max_px, replace=False)
-            s, l = s[idx], l[idx]
-        return s, l
-
-    def _train_batch_dense(self, b_imgs, b_labels, mask):
-        """dense per-pixel training step: per-pixel masked BCE against the (B,1,T,T) label map.
-
-        this is the non-binary path — the model returns a (B,1,H,W) logit map and every
-        interior (mask>0) pixel contributes a BCE term. no MIL max-collapse, no tile scalar."""
-        device = self.c.device
-        b_imgs = b_imgs.to(device)
-        b_labels = b_labels.to(device).float()                    # (B,1,T,T)
-        pmask = (mask.to(device) > 0).float().unsqueeze(1)        # (B,1,T,T)
-
-        self.optimizer.zero_grad()
-        with autocast(device):
-            outputs = self.model(b_imgs)                          # (B,1,H,W)
-            raw = self.criterion(outputs, b_labels)              # per-pixel (reduction='none')
-            denom = pmask.sum()
-            if denom <= 0:
-                return np.empty([]), np.empty([]), 0.0, 0.0
-            raw_loss_val = ((raw * pmask).sum() / denom).item()
-            l1_loss = sum(p.abs().sum() for p in self.model.parameters())
-            loss = (raw * pmask).sum() / denom + self.c.tra.l1_lambda * l1_loss
+                loss = loss + supcon_lambda * supcon_loss(supcon_z, labels.view(-1).long(), temp=supcon_temp)
 
         self.scaler.scale(loss).backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
-        scores_map = torch.sigmoid(outputs).detach().float().cpu().numpy()
-        s, l = self._dense_pixel_sample(scores_map, b_labels.cpu().numpy(),
-                                        pmask.cpu().numpy())
-        return s, l, loss.item(), raw_loss_val
+        scores = torch.sigmoid(outputs).detach().cpu().numpy().flatten()
+        label_values = labels.detach().cpu().numpy().flatten().astype(int)
+        return scores, label_values, loss.item(), raw_loss_value
 
-    def _ins_hard_samples(self, b_imgs, b_labels, mask, hard_injector, rem_batches):
-        """injects hard-mined samples into the current batch"""
+    def _ins_hard_samples(self, images, labels, mask, hard_injector, remaining_batches: int) -> int:
         if not hard_injector or not hard_injector.has_next():
             return 0
 
-        # calculate how many samples to inject in this batch to distribute them evenly
-        if rem_batches <= 0:
+        if remaining_batches <= 0:
             inject_n = 0
         else:
-            inject_n = min(b_imgs.size(0), (hard_injector.remaining() + rem_batches - 1) // rem_batches)
+            inject_n = min(images.size(0), (hard_injector.remaining() + remaining_batches - 1) // remaining_batches)
 
-        injected_n = 0
+        injected = 0
         if inject_n > 0:
-            # randomly select indices in the batch to replace with hard samples
-            replace_indices = np.random.choice(b_imgs.size(0), inject_n, replace=False)
-            for ri in replace_indices:
+            replace_indices = np.random.choice(images.size(0), inject_n, replace=False)
+            for replace_index in replace_indices:
                 sample = None
                 while hard_injector.has_next() and sample is None:
                     sample = hard_injector.next_sample()
-                
                 if sample is None:
                     break
-                
-                # replace batch data with hard-mined sample data
-                hi_block, hi_label, hi_mask = sample
-                b_imgs[ri] = hi_block.to(self.c.device)
-                b_labels[ri] = hi_label.to(self.c.device)
-                mask[ri] = hi_mask.to(self.c.device)
-                injected_n += 1
-        
-        return injected_n
+                hard_block, hard_label, hard_mask = sample
+                images[replace_index] = hard_block.to(self.c.device)
+                labels[replace_index] = hard_label.to(self.c.device)
+                mask[replace_index] = hard_mask.to(self.c.device)
+                injected += 1
+        return injected
 
-    def train_epoch(self, hard_injector, epoch=0):
-        """runs a single training epoch"""
+    def train_epoch(self, hard_injector, epoch: int = 0):
         self.model.train()
-        loss, raw_loss = 0.0, 0.0
-        labels, preds, scores = [], [], []
-        total_inj = 0
+        loss_total = 0.0
+        raw_loss_total = 0.0
+        labels = []
+        preds = []
+        scores = []
+        total_injected = 0
 
-        # build scroll-id -> domain-index map once per epoch for DANN
-        _scroll_domain_map = {}
-        if getattr(self.c.tra, "dann", False):
-            for i, sc in enumerate(self.c.data.scrolls):
-                _scroll_domain_map[int(sc.scroll_id)] = i
-
-        for batch_idx, batch in enumerate(tqdm(self.train_loader, desc="Training", mininterval=5, miniters=1, file=sys.stderr)):
-            # unpack batch: 3-tuple (normal) or 4-tuple (dann=True, dataset appends scroll_id).
-            # when dann=True the dataset emits (block, label, mask, scroll_id_tensor) so every
-            # sample has its own ground-truth domain label for the adversarial head.
-            sid_batch = None
-            sample_sid_batch = None
-            # unpack batch: 3-tuple (basic), 4-tuple (dann), or 5-tuple (dann+verified_neg)
-            coords_batch = None
-            if len(batch) == 5:
-                b_imgs, b_labels, mask, b_sid_tensors, b_coords = batch
-                coords_batch = b_coords
-                sample_sid_batch = [int(s.item()) for s in b_sid_tensors]
-                if _scroll_domain_map:
-                    sid_batch = [_scroll_domain_map.get(int(s.item()), 0) for s in b_sid_tensors]
-            elif len(batch) == 4:
-                b_imgs, b_labels, mask, b_sid_tensors = batch
-                sample_sid_batch = [int(s.item()) for s in b_sid_tensors]
-                if _scroll_domain_map:
-                    sid_batch = [_scroll_domain_map.get(int(s.item()), 0) for s in b_sid_tensors]
-            else:
-                b_imgs, b_labels, mask = batch
-                # single-scroll fallback: assign all samples to the same domain index
-                if _scroll_domain_map and len(self._scroll_ids) == 1:
-                    dom = _scroll_domain_map.get(int(self._scroll_ids[0]), 0)
-                    sid_batch = [dom] * b_imgs.shape[0]
-
-            # inject hard-mined samples into the batch
-            total_inj += self._ins_hard_samples(
-                b_imgs, b_labels, mask, hard_injector, len(self.train_loader) - batch_idx
+        for batch_index, batch in enumerate(
+            tqdm(self.train_loader, desc="Training", mininterval=5, miniters=1, file=sys.stderr)
+        ):
+            images, batch_labels, mask = batch
+            total_injected += self._ins_hard_samples(
+                images,
+                batch_labels,
+                mask,
+                hard_injector,
+                len(self.train_loader) - batch_index,
             )
+            batch_scores, batch_labels_out, batch_loss, batch_raw_loss = self._train_batch(
+                images,
+                batch_labels,
+                mask,
+                epoch=epoch,
+            )
+            if batch_scores.size == 0:
+                continue
+            loss_total += batch_loss
+            raw_loss_total += batch_raw_loss
+            labels.extend(batch_labels_out)
+            preds.extend((batch_scores > 0.5).astype(int))
+            scores.extend(batch_scores)
 
-            # train on the (potentially modified) batch
-            b_scores, b_labels_out, b_loss, b_raw_loss = self._train_batch(
-                b_imgs, b_labels, mask,
-                scroll_ids_batch=sid_batch,
-                sample_scroll_ids_batch=sample_sid_batch,
-                coords_batch=coords_batch,
-                epoch=epoch)
-
-            # test-scroll consistency: sample a small batch from test vols, apply through
-            # student + teacher, penalize disagreement (no class assertion, unlabeled only)
-            if getattr(self.c.tra, "test_consistency", False) and self._test_vols and batch_idx % 4 == 0:
-                self._apply_test_consistency(epoch)
-
-            # accumulate results for epoch-level metrics
-            if b_scores.size > 0:
-                loss += b_loss
-                raw_loss += b_raw_loss
-                labels.extend(b_labels_out)
-                preds.extend((b_scores > 0.5).astype(int))
-                scores.extend(b_scores)
-
-        # calculate and return epoch metrics
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
-        metrics['loss'] = loss / len(self.train_loader)
-        metrics['raw_loss'] = raw_loss / len(self.train_loader)
-        metrics['scores'] = scores
-        metrics['hard_injected'] = total_inj
-        
+        metrics["loss"] = loss_total / len(self.train_loader)
+        metrics["raw_loss"] = raw_loss_total / len(self.train_loader)
+        metrics["scores"] = scores
+        metrics["hard_injected"] = total_injected
+
         if hard_injector:
-            st = hard_injector.stats()
-            print(f"[HARD][Epoch Summary] injected={total_inj} "
-                  f"injector_used={st['used']} injector_skipped={st['skipped']}")
+            stats = hard_injector.stats()
+            print(
+                f"[HARD][Epoch Summary] injected={total_injected} "
+                f"injector_used={stats['used']} injector_skipped={stats['skipped']}"
+            )
         return metrics
 
-    def _apply_test_consistency(self, epoch):
-        """apply teacher-student consistency loss on a small random batch from one test scroll.
-        no labels, no class assertion -- pure function-smoothness on the target domain."""
-        if not self._test_vols or self._teacher_model is None:
-            return
-        tc_lam = float(getattr(self.c.tra, "test_consistency_lambda", 0.1))
-        ramp = min(1.0, epoch / max(1, getattr(self.c.tra, "mean_teacher_ramp_epochs", 3)))
-        tc_lam = tc_lam * ramp
-        if tc_lam <= 0:
-            return
-        # pick one test scroll at random
-        sid = random.choice(list(self._test_vols.keys()))
-        tv = self._test_vols[sid]
-        vol = tv['vol']; mask_bin = tv['mask']
-        if mask_bin is None:
-            return
-        D, H, W = map(int, vol.shape)
-        T = self.c.data.tile_size
-        ctx = int(getattr(self.c.data, "context_size", 0) or 0)
-        sp = ctx if (ctx > T) else T
-        # sample up to batch_size random masked tiles
-        bs = self.c.dl.batch_size
-        ys = np.random.randint(0, max(1, H - sp), size=bs * 4)
-        xs = np.random.randint(0, max(1, W - sp), size=bs * 4)
-        tiles = []
-        for y, x in zip(ys, xs):
-            if mask_bin[y:y+sp, x:x+sp].sum() == 0:
-                continue
-            d_start = int(getattr(self.c.data, "train_d_start", self.c.data.d_start))
-            try:
-                blk = np.array(vol[d_start:d_start + self.c.data.depth, y:y+sp, x:x+sp], dtype=np.float32)
-            except Exception:
-                continue
-            if blk.shape == (self.c.data.depth, sp, sp):
-                tiles.append(blk)
-            if len(tiles) >= bs:
-                break
-        if not tiles:
-            return
-        bt = torch.from_numpy(np.stack(tiles)).float().unsqueeze(1).to(self.c.device)
-        try:
-            with torch.no_grad():
-                t_out = self._teacher_model(bt)
-                if t_out.dim() == 4:
-                    t_out = t_out.flatten(1).max(dim=1, keepdim=True).values
-                t_prob = torch.sigmoid(t_out)
-            self.optimizer.zero_grad()
-            with autocast(self.c.device):
-                s_out = self.model(bt)
-                if s_out.dim() == 4:
-                    s_out = s_out.flatten(1).max(dim=1, keepdim=True).values
-                s_prob = torch.sigmoid(s_out)
-                tc_loss = tc_lam * ((s_prob - t_prob.detach()) ** 2).mean()
-            self.scaler.scale(tc_loss).backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            # EMA teacher update
-            alpha = float(getattr(self.c.tra, "mean_teacher_alpha", 0.999))
-            with torch.no_grad():
-                for t_p, s_p in zip(self._teacher_model.parameters(), self.model.parameters()):
-                    t_p.data.mul_(alpha).add_(s_p.data, alpha=1.0 - alpha)
-        except Exception as e:
-            pass   # test-scroll consistency must never crash training
-    
-    def _apply_pseudo_label_same_scroll(self, epoch):
-        """apply pseudo-labeling on high-confidence teacher predictions from unlabeled
-        regions of training scrolls (same-scroll, not test scrolls). this avoids domain
-        shift that caused test-consistency to fail."""
-        if not self._pseudo_label_scrolls or self._teacher_model is None:
-            return
-        
-        pl_lam = float(getattr(self.c.tra, "mean_teacher_lambda", 0.1))
-        ramp = min(1.0, epoch / max(1, getattr(self.c.tra, "mean_teacher_ramp_epochs", 3)))
-        pl_lam = pl_lam * ramp
-        if pl_lam <= 0:
-            return
-        
-        confidence_threshold = float(getattr(self.c.tra, "pseudo_label_threshold", 0.95))
-        
-        # pick one training scroll at random
-        sid = random.choice(list(self._pseudo_label_scrolls.keys()))
-        ps = self._pseudo_label_scrolls[sid]
-        vol = ps['vol']
-        label_mask = ps['label_mask']
-        if label_mask is None:
-            return
-        
-        D, H, W = map(int, vol.shape)
-        T = self.c.data.tile_size
-        ctx = int(getattr(self.c.data, "context_size", 0) or 0)
-        sp = ctx if (ctx > T) else T
-        bs = self.c.dl.batch_size
-        
-        # sample from UNLABELED regions (label_mask == 0)
-        unlabeled_y, unlabeled_x = np.where(label_mask == 0)
-        if len(unlabeled_y) < 100:
-            return  # not enough unlabeled regions
-        
-        # sample random tiles from unlabeled regions
-        tiles = []
-        max_attempts = bs * 8
-        for _ in range(max_attempts):
-            idx = np.random.randint(0, len(unlabeled_y))
-            y_center, x_center = unlabeled_y[idx], unlabeled_x[idx]
-            y = max(0, min(H - sp, y_center - sp // 2))
-            x = max(0, min(W - sp, x_center - sp // 2))
-            
-            # check if entire tile is mostly unlabeled (>80% unlabeled)
-            tile_mask = label_mask[y:y+sp, x:x+sp]
-            if tile_mask.sum() > 0.2 * sp * sp:
-                continue  # too much labeled area, skip
-            
-            d_start = int(getattr(self.c.data, "train_d_start", self.c.data.d_start))
-            try:
-                blk = np.array(vol[d_start:d_start + self.c.data.depth, y:y+sp, x:x+sp], dtype=np.float32)
-            except Exception:
-                continue
-            if blk.shape == (self.c.data.depth, sp, sp):
-                tiles.append(blk)
-            if len(tiles) >= bs:
-                break
-        
-        if len(tiles) < 4:
-            return  # not enough valid tiles
-        
-        try:
-            # normalize and convert to tensor
-            tiles_arr = np.stack(tiles[:bs], axis=0)
-            mean_val = float(getattr(self.c.data, "normalize_mean", 32768.0))
-            std_val = float(getattr(self.c.data, "normalize_std", 8192.0))
-            tiles_norm = (tiles_arr - mean_val) / std_val
-            tiles_t = torch.from_numpy(tiles_norm).float().to(self.c.device).unsqueeze(1)
-            
-            # generate teacher predictions
-            self._teacher_model.eval()
-            with torch.no_grad():
-                teacher_out = self._teacher_model(tiles_t)
-                if teacher_out.dim() == 4:
-                    teacher_out = teacher_out.flatten(1).max(dim=1, keepdim=True).values
-                teacher_prob = torch.sigmoid(teacher_out).view(-1)  # safer than squeeze()
-            
-            # filter by confidence: only use high-confidence predictions
-            high_conf_pos = teacher_prob > confidence_threshold
-            high_conf_neg = teacher_prob < (1.0 - confidence_threshold)
-            high_conf = high_conf_pos | high_conf_neg
-            
-            if high_conf.sum() < 2:
-                return  # not enough confident predictions
-            
-            # use confident tiles for pseudo-labeling
-            confident_tiles = tiles_t[high_conf]
-            pseudo_labels = (teacher_prob[high_conf] > 0.5).float().view(-1, 1)  # explicit reshape
-            
-            # train student on pseudo-labels
-            self.optimizer.zero_grad()
-            with autocast(self.c.device):
-                student_out = self.model(confident_tiles)
-                if student_out.dim() == 4:
-                    student_out = student_out.flatten(1).max(dim=1, keepdim=True).values
-                pseudo_loss = F.binary_cross_entropy_with_logits(student_out, pseudo_labels)
-            
-            self.scaler.scale(pl_lam * pseudo_loss).backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            
-            # EMA teacher update
-            alpha = float(getattr(self.c.tra, "mean_teacher_alpha", 0.999))
-            with torch.no_grad():
-                for t_p, s_p in zip(self._teacher_model.parameters(), self.model.parameters()):
-                    t_p.data.mul_(alpha).add_(s_p.data, alpha=1.0 - alpha)
-                    
-        except Exception as e:
-            pass  # pseudo-labeling must never crash training
-
     def validate_epoch(self):
-        """runs a single validation epoch"""
         self.model.eval()
-        loss = 0.0
-        labels, preds, scores = [], [], []
+        loss_total = 0.0
+        labels = []
+        preds = []
+        scores = []
 
-        if getattr(self.c.data, "dense_labels", False):
-            return self._validate_epoch_dense()
-
-        with torch.no_grad(), autocast(self.c.device):
-            for batch in tqdm(self.valid_loader, desc="Validating", mininterval=5, miniters=1, file=sys.stderr):
-                # unpack: validation can return 3/4/5-tuple depending on config
-                if len(batch) == 5:
-                    b_imgs, b_labels, mask, _, _ = batch  # ignore scroll_id and coords in validation
-                elif len(batch) == 4:
-                    b_imgs, b_labels, mask, _ = batch  # ignore scroll_id
-                else:
-                    b_imgs, b_labels, mask = batch
-                    
+        with torch.no_grad(), autocast(self.c.device, enabled=self.c.device == "cuda"):
+            for images, batch_labels, mask in tqdm(
+                self.valid_loader,
+                desc="Validating",
+                mininterval=5,
+                miniters=1,
+                file=sys.stderr,
+            ):
                 if mask.view(mask.size(0), -1).sum() <= 0:
                     print("[ERROR] Encountered batch with mask sum == 0 in validation. This block should not be loaded!")
                     continue
 
-                b_imgs = b_imgs.to(self.c.device, non_blocking=True)
-                b_labels = b_labels.to(self.c.device, non_blocking=True).view(-1, 1)
-                # collapse per-pixel mask to per-tile (B, 1)
-                mask = (mask.to(self.c.device).view(b_imgs.size(0), -1).sum(dim=1) > 0).float().unsqueeze(1)
+                images = images.to(self.c.device, non_blocking=True)
+                batch_labels = batch_labels.to(self.c.device, non_blocking=True).view(-1, 1)
+                mask = (mask.to(self.c.device).view(images.size(0), -1).sum(dim=1) > 0).float().unsqueeze(1)
 
-                # forward pass
-                outputs = self.model(b_imgs)
+                outputs = self.model(images)
                 if outputs.dim() == 4:
                     outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
-                
-                # calculate loss
-                raw_loss = self.criterion(outputs, b_labels)
-                raw_loss = (raw_loss * mask).sum() / mask.sum()
-                loss += raw_loss.item()
 
-                # calculate scores and accumulate for metrics
-                b_scores = torch.sigmoid(outputs).cpu().numpy().flatten()
-                
-                labels.extend(b_labels.cpu().numpy().flatten().astype(int))
-                preds.extend((b_scores > 0.5).astype(int))
-                scores.extend(b_scores)
+                raw_loss = self.criterion(outputs, batch_labels)
+                loss_total += ((raw_loss * mask).sum() / mask.sum()).item()
 
-        # calculate and return epoch metrics
+                batch_scores = torch.sigmoid(outputs).cpu().numpy().flatten()
+                labels.extend(batch_labels.cpu().numpy().flatten().astype(int))
+                preds.extend((batch_scores > 0.5).astype(int))
+                scores.extend(batch_scores)
+
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
-        metrics['loss'] = loss / len(self.valid_loader)
-        metrics['scores'] = scores
+        metrics["loss"] = loss_total / len(self.valid_loader)
+        metrics["scores"] = scores
         return metrics
 
-    def _validate_epoch_dense(self):
-        """dense per-pixel validation: per-pixel masked BCE + subsampled per-pixel metrics."""
-        device = self.c.device
-        loss, nb = 0.0, 0
-        labels, preds, scores = [], [], []
-        with torch.no_grad(), autocast(device):
-            for b_imgs, b_labels, mask in tqdm(self.valid_loader, desc="Validating", mininterval=5, miniters=1, file=sys.stderr):
-                pmask = (mask.to(device) > 0).float().unsqueeze(1)     # (B,1,T,T)
-                if pmask.sum() <= 0:
-                    continue
-                b_imgs = b_imgs.to(device)
-                b_labels = b_labels.to(device).float()                # (B,1,T,T)
-                outputs = self.model(b_imgs)                          # (B,1,H,W)
-                raw = self.criterion(outputs, b_labels)
-                loss += ((raw * pmask).sum() / pmask.sum()).item(); nb += 1
-                s_map = torch.sigmoid(outputs).float().cpu().numpy()
-                s, l = self._dense_pixel_sample(s_map, b_labels.cpu().numpy(),
-                                                pmask.cpu().numpy())
-                labels.extend(l.tolist())
-                preds.extend((s > 0.5).astype(int).tolist())
-                scores.extend(s.tolist())
-        metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
-        metrics['loss'] = loss / max(nb, 1)
-        metrics['scores'] = scores
-        return metrics
-
-    def _periodic_model_save(self, epoch, val_metrics):
-        """saves the model periodically and based on performance"""
-        # save best model based on f1 score
-        if val_metrics['f1'] > self.best_val_f1:
-            self.best_val_f1 = val_metrics['f1']
-            save_model(self.model, f'{self.c.model_dir}/best_model_f1.pth')
+    def _periodic_model_save(self, epoch: int, val_metrics: dict) -> None:
+        if val_metrics["f1"] > self.best_val_f1:
+            self.best_val_f1 = val_metrics["f1"]
+            save_model(self.model, f"{self.c.model_dir}/best_model_f1.pth")
             print(f"New best F1 model saved! Val F1: {self.best_val_f1:.4f}")
-        
-        # save best model based on validation loss
-        if val_metrics['loss'] < self.best_val_loss:
-            self.best_val_loss = val_metrics['loss']
-            save_model(self.model, f'{self.c.model_dir}/best_model_loss.pth')
-            print(f"New best loss model saved! Val Loss: {self.best_val_loss:.4f}")
-        
-        # save periodic checkpoint
-        if (epoch + 1) % self.c.tra.save_int == 0:
-            save_model(self.model, f'{self.c.model_dir}/model_epoch_{epoch+1}.pth')
 
-    def _update_hard_mining_samples(self, epoch):
-        """checks for and loads new hard-mined samples at specified intervals"""
+        if val_metrics["loss"] < self.best_val_loss:
+            self.best_val_loss = val_metrics["loss"]
+            save_model(self.model, f"{self.c.model_dir}/best_model_loss.pth")
+            print(f"New best loss model saved! Val Loss: {self.best_val_loss:.4f}")
+
+        if (epoch + 1) % self.c.tra.save_int == 0:
+            save_model(self.model, f"{self.c.model_dir}/model_epoch_{epoch + 1}.pth")
+
+    def _update_hard_mining_samples(self, epoch: int) -> None:
         if not self.c.hm.enabled:
             return
-        # periodically check for new hard mining data
-        if epoch % self.c.tra.eval_int == 0 and epoch > 5:
-            target_hard = int(self.c.hm.hm_frac * len(self.train_dataset))
-            
-            # load new samples from the previous epoch's per-scroll mining files.
-            # works for one scroll (list len 1) or many; records are tagged with
-            # scroll_id so the injector routes each to the right volume.
-            new_samples = self.hard_manager.sample_for_epoch_scrolls(
-                epoch - 1, target_hard, self._scroll_ids
-            )
-            
-            if new_samples:
-                self.hard_samples.extend(new_samples)
-                print(f"[HARD][Epoch {epoch}] Added {len(new_samples)} new hard samples. Total is now {len(self.hard_samples)}.")
-                self.vis.writer.add_scalar("HardMining/TotalSamplesInPool", len(self.hard_samples), epoch)
-            else:
-                print(f"[HARD][Epoch {epoch}] Mining file processed but no new samples were added.")
-
-    def _log_epoch(self, epoch, train_metrics, val_metrics, time_elapsed):
-        """logs metrics for the completed epoch to tensorboard"""
-        current_lr = self.optimizer.param_groups[0]['lr']
-
-        # parseable one-liner for external monitors (campaign early-stop wrapper reads this)
-        print(f"[METRICS] epoch={epoch+1} train_loss={train_metrics['loss']:.4f} "
-              f"val_loss={val_metrics['loss']:.4f} train_f1={train_metrics['f1']:.4f}")
-
-        self.vis.log_epoch_metrics(epoch, self.model, train_metrics, val_metrics, current_lr, time_elapsed, self.params, self.pos_weight)
-        if self.c.hm.enabled:
-            self.vis.writer.add_scalar("HardMining/Injected", train_metrics.get('hard_injected', 0), epoch)
-
-        # multi-scroll: the main visualizer logs scalars only; drive per-scroll
-        # eval/test/probe figures here so each fragment gets its own visualizations
-        if getattr(self, 'scroll_vis', None):
-            eval_due  = (epoch + 1) % self.c.tra.eval_int  == 0
-            test_due  = (epoch + 1) % self.c.tra.test_int  == 0
-            probe_due = (epoch + 1) % self.c.tra.probe_int == 0
-            # leave-one-out campaigns disable periodic tests (test_int=9999) but still want
-            # the held-out fragment inferred once at the end -> force test on the final epoch.
-            if getattr(self.c.tra, "test_on_final", False) and (epoch + 1) == self.c.tra.n_epochs:
-                test_due = True
-            dense = getattr(self.c.data, 'dense_labels', False)
-            # eval figures are the slow part -> render only the first N scrolls (probes/test unaffected)
-            max_eval_scrolls = getattr(self.c.tra, "eval_int_scrolls", 2)
-            for idx, (sid, svis) in enumerate(self.scroll_vis.items()):
-                if eval_due and idx < max_eval_scrolls and getattr(svis, 'eval_enabled', True):
-                    try:
-                        # dense models produce per-pixel maps -> dense figure; else tile figure.
-                        # each per-scroll visualizer loaded its own volume/labels, so the two
-                        # scrolls render as two separate figures namespaced by s<sid>/.
-                        if dense:
-                            svis.add_dense_evaluation_figure(epoch, self.model)
-                        else:
-                            svis.add_evaluation_figures(epoch, self.model)
-                    except Exception as e:
-                        print(f"[ERROR] eval figures failed for scroll {sid}: {e}")
-                        import traceback; traceback.print_exc()
-                if test_due and idx == 0:
-                    try:
-                        svis.add_test_figures(epoch, self.model)
-                    except Exception as e:
-                        print(f"[ERROR] test figures failed for scroll {sid}: {e}")
-                # probe ROIs are fixed (scroll-independent); render once on the primary
-                if probe_due and idx == 0:
-                    try:
-                        svis.add_probe_region_figures(epoch, self.model)
-                    except Exception as e:
-                        print(f"[ERROR] probe figures failed for scroll {sid}: {e}")
-            for svis in self.scroll_vis.values():
-                svis.writer.flush()
-
-    def _pretrain_epoch(self):
-        """one epoch of band-identity pretraining (self-supervised, no ink labels needed).
-
-        the model learns to distinguish ink_band tiles (label=1) from flanking band tiles (label=0).
-        because ink is the primary feature distinguishing these bands in ink regions, the
-        backbone builds a representation that encodes differential absorption — useful for BCE fine-tuning.
-        """
-        import torch.nn.functional as F
-        self.model.train()
-        total_loss = 0.0
-        n_batches = 0
-        tile = self.c.data.tile_size
-        depth = self.c.data.depth
-        device = self.c.device
-        pre_z  = getattr(self.c.data, "pre_band_start", 20)
-        post_z = getattr(self.c.data, "post_band_start", 40)
-        ink_z  = getattr(self.c.data, "train_d_start", 32)
-        criterion = nn.BCEWithLogitsLoss()
-
-        for batch_idx, (b_imgs, b_labels, mask) in enumerate(tqdm(self.train_loader, desc="Pretrain", mininterval=5, miniters=1, file=sys.stderr)):
-            # b_imgs is the normal ink-band batch; we also sample flanking batches
-            # build: half ink-band (label=1), half flanking (label=0)
-            bs = b_imgs.size(0)
-            vol = self.train_dataset.vol
-            y_start = self.train_dataset.y_start
-            x_start = self.train_dataset.x_start
-
-            # collect flanking band blocks for the same (y,x) positions
-            flanking_blocks = []
-            for i in range(bs):
-                # pick pre or post band
-                fz = pre_z if (i % 2 == 0) else post_z
-                # recover approximate (y, x) from batch coords — just use random valid coords
-                idx = self.train_dataset.block_coords[
-                    np.random.randint(len(self.train_dataset.block_coords))
-                ]
-                _, y_off, x_off = idx
-                y = y_start + y_off
-                x = x_start + x_off
-                blk = np.array(vol[fz:fz+depth, y:y+tile, x:x+tile]).astype(np.float32)
-                norm = self.train_dataset._normalize_block(blk)
-                flanking_blocks.append(norm)
-
-            flanking = torch.from_numpy(np.stack(flanking_blocks)).float().unsqueeze(1).to(device)
-            ink_imgs = b_imgs.to(device)
-
-            combined = torch.cat([ink_imgs, flanking], dim=0)
-            band_labels = torch.cat([
-                torch.ones(bs, 1, device=device),
-                torch.zeros(bs, 1, device=device)
-            ], dim=0)
-
-            self.optimizer.zero_grad()
-            with autocast(device):
-                logits = self.model(combined)
-                loss = criterion(logits, band_labels)
-            self.scaler.scale(loss).backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            total_loss += loss.item()
-            n_batches += 1
-
-        return total_loss / max(n_batches, 1)
-
-    def _switch_to_epoch_dataset(self, epoch):
-        """for alternating_ring mode: swap the training loader between full and ring sets.
-        odd epochs use ring (closer to boundary, harder); even epochs use full set.
-        hard mining is only enabled on ring epochs."""
-        alternating = getattr(self.c.data, 'alternating_ring', False)
-        if not alternating or self._t_set_ring is None:
+        if epoch % self.c.tra.eval_int != 0 or epoch <= 5:
             return
-        use_ring = (epoch % 2 == 1)  # odd epochs → ring
-        t_set = self._t_set_ring if use_ring else self._t_set_full
-        self.train_dataset = t_set
-        self.train_loader, _ = get_dataloaders(t_set, t_set, self.c)  # v_set unused here
-        # suppress hard mining on full-set epochs to avoid off-boundary injections
-        self._hm_active_this_epoch = use_ring and self.c.hm.enabled
-        label = 'RING' if use_ring else 'FULL'
-        print(f"[alternating_ring] epoch {epoch+1}: {label} set ({len(t_set)} tiles)")
 
-    def run(self):
-        """executes the main training loop, with optional pretraining phase"""
-        pretrain_epochs = int(getattr(self.c.tra, "pretrain_epochs", 0))
-        if pretrain_epochs > 0:
-            print(f"\n=== PRETRAINING PHASE ({pretrain_epochs} epochs) ===")
-            for ep in range(pretrain_epochs):
-                pt_loss = self._pretrain_epoch()
-                print(f"  Pretrain epoch {ep+1}/{pretrain_epochs}  loss={pt_loss:.4f}")
-                self.vis.writer.add_scalar("Pretrain/Loss", pt_loss, ep)
-            print("=== PRETRAINING COMPLETE — switching to BCE fine-tuning ===\n")
-            # reset optimizer/scheduler for the fine-tuning phase
-            self.optimizer, self.scheduler = create_optimizer_and_scheduler(self.model, self.c)
-        self._hm_active_this_epoch = self.c.hm.enabled  # default; overridden by alternating
+        target_hard = int(self.c.hm.hm_frac * len(self.train_dataset))
+        new_samples = self.hard_manager.sample_for_epoch_scrolls(epoch - 1, target_hard, self._scroll_ids)
+        if new_samples:
+            self.hard_samples.extend(new_samples)
+            print(
+                f"[HARD][Epoch {epoch}] Added {len(new_samples)} new hard samples. "
+                f"Total is now {len(self.hard_samples)}."
+            )
+            self.vis.writer.add_scalar("HardMining/TotalSamplesInPool", len(self.hard_samples), epoch)
+        else:
+            print(f"[HARD][Epoch {epoch}] Mining file processed but no new samples were added.")
+
+    def _log_epoch(self, epoch: int, train_metrics: dict, val_metrics: dict, time_elapsed: float) -> None:
+        current_lr = self.optimizer.param_groups[0]["lr"]
+        print(
+            f"[METRICS] epoch={epoch + 1} train_loss={train_metrics['loss']:.4f} "
+            f"val_loss={val_metrics['loss']:.4f} train_f1={train_metrics['f1']:.4f}"
+        )
+
+        self.vis.log_epoch_metrics(
+            epoch,
+            self.model,
+            train_metrics,
+            val_metrics,
+            current_lr,
+            time_elapsed,
+            self.params,
+            None,
+        )
+        if self.c.hm.enabled:
+            self.vis.writer.add_scalar("HardMining/Injected", train_metrics.get("hard_injected", 0), epoch)
+
+        if not self.scroll_vis:
+            return
+
+        eval_due = (epoch + 1) % self.c.tra.eval_int == 0
+        test_due = (epoch + 1) % self.c.tra.test_int == 0
+        probe_due = (epoch + 1) % self.c.tra.probe_int == 0
+        if getattr(self.c.tra, "test_on_final", False) and (epoch + 1) == self.c.tra.n_epochs:
+            test_due = True
+
+        max_eval_scrolls = getattr(self.c.tra, "eval_int_scrolls", 2)
+        for index, (scroll_id, visualizer) in enumerate(self.scroll_vis.items()):
+            if eval_due and index < max_eval_scrolls and getattr(visualizer, "eval_enabled", True):
+                try:
+                    visualizer.add_evaluation_figures(epoch, self.model)
+                except Exception as exc:
+                    print(f"[ERROR] eval figures failed for scroll {scroll_id}: {exc}")
+                    import traceback
+
+                    traceback.print_exc()
+            if test_due and index == 0:
+                try:
+                    visualizer.add_test_figures(epoch, self.model)
+                except Exception as exc:
+                    print(f"[ERROR] test figures failed for scroll {scroll_id}: {exc}")
+            if probe_due and index == 0:
+                try:
+                    visualizer.add_probe_region_figures(epoch, self.model)
+                except Exception as exc:
+                    print(f"[ERROR] probe figures failed for scroll {scroll_id}: {exc}")
+        for visualizer in self.scroll_vis.values():
+            visualizer.writer.flush()
+
+    def run(self) -> None:
+        self._hm_active_this_epoch = self.c.hm.enabled
         for epoch in range(self.c.tra.n_epochs):
-            print(f"\n--- Epoch {epoch+1}/{self.c.tra.n_epochs} ---")
+            print(f"\n--- Epoch {epoch + 1}/{self.c.tra.n_epochs} ---")
             start_time = time.time()
 
-            # swap dataset for alternating-ring mode before anything else
-            self._switch_to_epoch_dataset(epoch)
-
-            # activate data augmentation after a few initial epochs
-            if epoch >= 5 and self.c.dl.data_aug:
-                self.train_dataset.apply_transforms = True
-            
-            # check for new hard-mined samples to add to the pool
+            self.train_dataset.apply_transforms = bool(epoch >= 5 and self.c.dl.data_aug)
             self._update_hard_mining_samples(epoch)
-            
-            # create a new injector for the epoch if hard samples are available
-            # in alternating-ring mode, only inject on ring epochs
+
             hard_injector = None
             if self.hard_samples and self._hm_active_this_epoch:
-                # multiscroll: route by scroll_id to per-scroll train sets; single
-                # scroll: wrap the current train dataset (handles alternating swap).
-                if getattr(self, '_scroll_train_sets', None):
-                    ds_arg = self._scroll_train_sets
+                if self._scroll_train_sets:
+                    dataset_map = self._scroll_train_sets
                 else:
-                    ds_arg = {int(self._scroll_ids[0]): self.train_dataset}
-                hard_injector = HardMiningInjector(self.hard_samples, ds_arg)
-                if (epoch % self.c.tra.eval_int) == 0:
+                    dataset_map = {int(self._scroll_ids[0]): self.train_dataset}
+                hard_injector = HardMiningInjector(self.hard_samples, dataset_map)
+                if epoch % self.c.tra.eval_int == 0:
                     self.vis.writer.add_scalar("HardMining/InjectedSamplesPlanned", len(self.hard_samples), epoch)
 
-            # run training and validation for the epoch
             train_metrics = self.train_epoch(hard_injector, epoch=epoch)
 
-            # brief thermal cooldown between train and validation every epoch
-            _val_cool = int(getattr(self.c.tra, 'val_cooldown_secs', 0))
-            if _val_cool > 0:
-                print(f"[COOLDOWN] train->val pause {_val_cool}s...")
-                time.sleep(_val_cool)
+            val_cooldown = int(getattr(self.c.tra, "val_cooldown_secs", 0))
+            if val_cooldown > 0:
+                print(f"[COOLDOWN] train->val pause {val_cooldown}s...")
+                time.sleep(val_cooldown)
 
             val_metrics = self.validate_epoch()
-            
-            # update learning rate scheduler and save models
-            self.scheduler.step(val_metrics['loss'])
+            self.scheduler.step(val_metrics["loss"])
             self._periodic_model_save(epoch, val_metrics)
-            
-            # log results
-            time_elapsed = time.time() - start_time
-            self._log_epoch(epoch, train_metrics, val_metrics, time_elapsed)
+            self._log_epoch(epoch, train_metrics, val_metrics, time.time() - start_time)
 
-            # cooldown after heavy inference epochs (probe / eval) to prevent overheating
-            cooldown = int(getattr(self.c.tra, 'eval_cooldown_secs', 0))
+            eval_cooldown = int(getattr(self.c.tra, "eval_cooldown_secs", 0))
             is_probe_epoch = (epoch + 1) % self.c.tra.probe_int == 0
-            is_eval_epoch  = (epoch + 1) % self.c.tra.eval_int  == 0
-            if cooldown > 0 and (is_probe_epoch or is_eval_epoch):
-                kind = 'eval+probe' if is_eval_epoch and is_probe_epoch else ('eval' if is_eval_epoch else 'probe')
-                print(f"[COOLDOWN] {kind} epoch — sleeping {cooldown}s for hardware to cool...")
-                time.sleep(cooldown)
+            is_eval_epoch = (epoch + 1) % self.c.tra.eval_int == 0
+            if eval_cooldown > 0 and (is_probe_epoch or is_eval_epoch):
+                kind = "eval+probe" if is_eval_epoch and is_probe_epoch else ("eval" if is_eval_epoch else "probe")
+                print(f"[COOLDOWN] {kind} epoch — sleeping {eval_cooldown}s for hardware to cool...")
+                time.sleep(eval_cooldown)
 
-            # unconditional per-epoch thermal cooldown (fires after EVERY epoch).
-            # avoid double-sleeping when the eval/probe cooldown above already ran.
-            _ep_cool = int(getattr(self.c.tra, 'epoch_cooldown_secs', 0))
-            if _ep_cool > 0 and not (cooldown > 0 and (is_probe_epoch or is_eval_epoch)):
-                print(f"[COOLDOWN] end-of-epoch pause {_ep_cool}s for hardware to cool...")
-                time.sleep(_ep_cool)
+            epoch_cooldown = int(getattr(self.c.tra, "epoch_cooldown_secs", 0))
+            if epoch_cooldown > 0 and not (eval_cooldown > 0 and (is_probe_epoch or is_eval_epoch)):
+                print(f"[COOLDOWN] end-of-epoch pause {epoch_cooldown}s for hardware to cool...")
+                time.sleep(epoch_cooldown)
 
-        # explicit final checkpoint save (deterministic path) for clean resume by the
-        # campaign wrapper; independent of save_int arithmetic.
-        _final = getattr(self.c, "save_final", None)
-        if _final:
-            os.makedirs(os.path.dirname(_final), exist_ok=True)
-            save_model(self.model, _final)
-            print(f"[save-final] wrote final model to {_final}")
+        final_path = getattr(self.c, "save_final", None)
+        if final_path:
+            os.makedirs(os.path.dirname(final_path), exist_ok=True)
+            save_model(self.model, final_path)
+            print(f"[save-final] wrote final model to {final_path}")
 
         self.vis.close()
-        if getattr(self, 'scroll_vis', None):
-            for svis in self.scroll_vis.values():
-                svis.close()
+        if self.scroll_vis:
+            for visualizer in self.scroll_vis.values():
+                visualizer.close()
         print("Training completed.")
 
 
-def main():
-    """train.py takes only -n for the experiment name; all other config comes from config.py.
-    campaign runners override config fields directly by instantiating Config() and mutating
-    fields before passing to Trainer. see campaign_runner_p0139_triple.py for examples."""
+def main() -> None:
     import argparse
+
     parser = argparse.ArgumentParser(description="Vesuvius ink-detection training")
-    parser.add_argument("-n", "--experiment_name", type=str, default="", help="experiment name (used for TensorBoard log dir and checkpoint naming)")
+    parser.add_argument(
+        "-n",
+        "--experiment_name",
+        type=str,
+        default="",
+        help="experiment name (used for TensorBoard log dir and checkpoint naming)",
+    )
     args = parser.parse_args()
 
-    c = Config()
+    config = Config()
     if args.experiment_name:
-        c.exp_name = args.experiment_name
+        config.exp_name = args.experiment_name
 
     repo_root = os.path.dirname(os.path.abspath(__file__))
-    if not os.path.isabs(c.tra.log_dir):
-        c.tra.log_dir = os.path.normpath(os.path.join(repo_root, c.tra.log_dir))
-    if not os.path.isabs(c.model_dir):
-        c.model_dir = os.path.normpath(os.path.join(repo_root, c.model_dir))
+    if not os.path.isabs(config.tra.log_dir):
+        config.tra.log_dir = os.path.normpath(os.path.join(repo_root, config.tra.log_dir))
+    if not os.path.isabs(config.model_dir):
+        config.model_dir = os.path.normpath(os.path.join(repo_root, config.model_dir))
 
-    trainer = Trainer(c)
+    trainer = Trainer(config)
     trainer.run()
 
 

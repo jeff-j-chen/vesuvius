@@ -1,169 +1,98 @@
-"""config.py -- single source of truth for all training configuration.
-
-train.py takes only `-n experiment_name`. everything else is set here by default
-or overridden per-test in campaign runners by constructing a Config() and mutating
-fields before passing to Trainer.
-
-SCROLL CONFIGURATION:
-  `scrolls` is a list of ScrollConfig objects (one per training fragment).
-  each entry carries its zarr id, split axis/fraction, and any fragment-specific
-  overrides.
-
-CURRENT TRAINING SCROLLS (17 total: 15 PHerc0139 + 1 PHerc0814 + 1 PHerc0500P2):
-  original 4 PHerc0139 fragments:
-    20260115000000  w044  split y 0.8055
-    20250223000000  w059  split x 0.75
-    20260206000001  w047  split x 0.75
-    20260115000001  w056  split y 0.50
-  new 10 PHerc0139 (2026-07-21, all split x 0.75):
-    w058 w052 w049 w046 w041 w040 w039 w038 w037 w034
-  w035 (2026-08-12, split y 0.75 -- horizontal: top 75% train)
-  seg46527 PHerc0814 (2026-07-22, split y 0.75)
-  500P2_front PHerc0500P2 (2026-08-07, split y 0.75)
-
-CURRENT MODEL: v14_mil_deep (MIL with per-voxel logits + LSE aggregation).
-  physics variants: v14b_mil_zgrad (depth-gradient channel), v14c_mil_lcn (local contrast norm + depth PE).
-"""
+"""config.py -- current training configuration for the nnunet3d_lcndz path."""
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Optional, List, Dict
+
+import json
 import os
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+
 import torch
 
 
 @dataclass
 class ScrollConfig:
     scroll_id: int
-    split_axis: str = "y"         # 'x' = vertical (left/right), 'y' = horizontal (top/bottom)
+    split_axis: str = "y"
     train_split_frac: float = 0.8055
-    crop_x_frac: tuple = (0.0, 1.0)
-    crop_y_frac: tuple = (0.0, 1.0)
+    crop_x_frac: tuple[float, float] = (0.0, 1.0)
+    crop_y_frac: tuple[float, float] = (0.0, 1.0)
 
 
 @dataclass
 class ProbeROI:
-    """a fixed readability probe: a square window whose TOP-LEFT corner is (x, y) in full-res
-    pixel coords. x/y are snapped to the model grid (max(tile_size, context_size)) at render
-    time so the window's tiles land exactly on the grid the model trains on."""
     x: int
     y: int
-    label: str = ""   # e.g. 'easy' or 'hard'; used as tag prefix in TensorBoard
-    size: int = 576   # window side in px; 576 = LCM(16,32,48)*6 so it fits any model grid
+    label: str = ""
+    size: int = 576
 
 
-# default per-scroll probe ROIs — the same window size and grid snapping apply to all.
-DEFAULT_PROBE_ROIS: Dict[int, List[ProbeROI]] = {
-    20260115000000: [
-        ProbeROI(3702, 3885, "easy"),
-        ProbeROI(2612, 4900, "hard"),
-    ],
-    20250223000000: [
-        ProbeROI(3826, 4096, "easy"),
-        ProbeROI(5210, 2496, "hard"),
-    ],
-    20260206000001: [
-        ProbeROI(5858, 1585, "easy"),
-        ProbeROI(6419, 2431, "hard"),
-    ],
-    # w056 — labeled band spans y≈1837-4472; split at y=3590 (50%)
-    # probes are approximate; adjust once ink distribution is known
-    20260115000001: [
-        ProbeROI(4870, 2500, "easy"),   # training half, center-ish
-        ProbeROI(4870, 4000, "hard"),   # validation half
-    ],
-}
-
-
-def _load_probe_rois_from_disk(cache_path: str = "probe_rois.json") -> Dict[int, List[ProbeROI]]:
-    """read the unified probe-ROI cache written by roi.py (a single file, like norm_cache.json).
-
-    structure: {"<scroll_id>": {"easy": {x,y,size}, "hard": {x,y,size}}} with top-left coords in
-    full-res px. returns {} when the file is missing so the hardcoded DEFAULT_PROBE_ROIS remain
-    the fallback."""
-    out: Dict[int, List[ProbeROI]] = {}
+def _load_probe_rois(cache_path: str = "probe_rois.json") -> Dict[int, List[ProbeROI]]:
+    """load probe rois from the cache written by roi.py."""
     if not os.path.isfile(cache_path):
-        return out
-    import json as _json
+        return {}
     try:
-        with open(cache_path) as f:
-            data = _json.load(f)
+        with open(cache_path, encoding="utf-8") as handle:
+            raw = json.load(handle)
     except Exception:
-        return out
-    for sid_str, boxes in (data or {}).items():
+        return {}
+
+    out: Dict[int, List[ProbeROI]] = {}
+    for scroll_id, boxes in (raw or {}).items():
         try:
-            sid = int(sid_str)
-        except (ValueError, TypeError):
+            sid = int(scroll_id)
+        except (TypeError, ValueError):
             continue
         rois: List[ProbeROI] = []
         for label in ("easy", "hard"):
-            b = (boxes or {}).get(label)
-            if b and "x" in b and "y" in b:
-                rois.append(ProbeROI(int(b["x"]), int(b["y"]), label, int(b.get("size", 576))))
+            box = (boxes or {}).get(label)
+            if not box or "x" not in box or "y" not in box:
+                continue
+            rois.append(ProbeROI(int(box["x"]), int(box["y"]), label, int(box.get("size", 576))))
         if rois:
             out[sid] = rois
     return out
 
 
-def _default_probe_rois() -> Dict[int, List[ProbeROI]]:
-    """disk-annotated ROIs (roi.py) override the hardcoded defaults per scroll."""
-    merged = {k: list(v) for k, v in DEFAULT_PROBE_ROIS.items()}
-    merged.update(_load_probe_rois_from_disk())
-    return merged
-
-
 DEFAULT_SCROLLS: List[ScrollConfig] = [
-    # original 4 PHerc0139 fragments
-    ScrollConfig(20260115000000, split_axis="y", train_split_frac=0.8055),  # w044
-    ScrollConfig(20250223000000, split_axis="x", train_split_frac=0.75),    # w059
-    ScrollConfig(20260206000001, split_axis="x", train_split_frac=0.75),    # w047
-    ScrollConfig(20260115000001, split_axis="y", train_split_frac=0.5),     # w056
-    # 10 new PHerc0139 fragments (2026-07-21). vertical split, left 75% train / right 25% valid.
-    ScrollConfig(20260210000000, split_axis="x", train_split_frac=0.5),    # w058
-    ScrollConfig(20260227000000, split_axis="x", train_split_frac=0.75),    # w052
-    ScrollConfig(20260318000000, split_axis="x", train_split_frac=0.75),    # w049
-    ScrollConfig(20260325000000, split_axis="x", train_split_frac=0.6),    # w046
-    ScrollConfig(20260108000000, split_axis="x", train_split_frac=0.7),    # w041
-    ScrollConfig(20250831000000, split_axis="x", train_split_frac=0.75),    # w040
-    ScrollConfig(20260302000000, split_axis="x", train_split_frac=0.75),    # w039
-    ScrollConfig(20260306000000, split_axis="x", train_split_frac=0.75),    # w038
-    ScrollConfig(20260310000000, split_axis="x", train_split_frac=0.75),    # w037
-    ScrollConfig(20260303000000, split_axis="y", train_split_frac=0.500),    # w034
-    ScrollConfig(20260317000000, split_axis="y", train_split_frac=0.75),    # w035 (2026-08-12, horizontal: top 75% train)
-    # PHerc0814 segment 46527 (2026-07-22) — different scroll; horizontal split (top 75% train)
-    ScrollConfig(20260226000000, split_axis="y", train_split_frac=0.75),    # seg46527 P0814
-    # PHerc0500P2 front segment (2026-08-07) — different scroll, same 9.362µm/113keV/1.2m scan.
-    # crystal-clear 2.215µm inklabels (eroded fraction ~1.4% in-mask); vertical split.
-    ScrollConfig(20250628074500, split_axis="y", train_split_frac=0.75),    # 500P2_front P0500P2 (vertical: top 75% train, bottom 25% valid)
+    ScrollConfig(20260115000000, split_axis="y", train_split_frac=0.8055),
+    ScrollConfig(20250223000000, split_axis="x", train_split_frac=0.75),
+    ScrollConfig(20260206000001, split_axis="x", train_split_frac=0.75),
+    ScrollConfig(20260115000001, split_axis="y", train_split_frac=0.5),
+    ScrollConfig(20260210000000, split_axis="x", train_split_frac=0.5),
+    ScrollConfig(20260227000000, split_axis="x", train_split_frac=0.75),
+    ScrollConfig(20260318000000, split_axis="x", train_split_frac=0.75),
+    ScrollConfig(20260325000000, split_axis="x", train_split_frac=0.6),
+    ScrollConfig(20260108000000, split_axis="x", train_split_frac=0.7),
+    ScrollConfig(20250831000000, split_axis="x", train_split_frac=0.75),
+    ScrollConfig(20260302000000, split_axis="x", train_split_frac=0.75),
+    ScrollConfig(20260306000000, split_axis="x", train_split_frac=0.75),
+    ScrollConfig(20260310000000, split_axis="x", train_split_frac=0.75),
+    ScrollConfig(20260303000000, split_axis="y", train_split_frac=0.5),
+    ScrollConfig(20260317000000, split_axis="y", train_split_frac=0.75),
+    ScrollConfig(20260226000000, split_axis="y", train_split_frac=0.75),
+    ScrollConfig(20250628074500, split_axis="y", train_split_frac=0.75),
 ]
 
 
 @dataclass
 class DataConfig:
-    zarr_path: str = field(default_factory=lambda: os.getenv(
-        "VESUVIUS_ZARR_PATH",
-        "/vesuvius/ves_zarrs2" if os.name == "posix"
-        else r"C:\Users\ChenJeff\Documents\ves_zarrs2"))
-
+    zarr_path: str = field(
+        default_factory=lambda: os.getenv(
+            "VESUVIUS_ZARR_PATH",
+            "/vesuvius/ves_zarrs2" if os.name == "posix" else r"C:\Users\ChenJeff\Documents\ves_zarrs2",
+        )
+    )
     scrolls: List[ScrollConfig] = field(default_factory=lambda: list(DEFAULT_SCROLLS))
-
-    # test/inference scrolls (all rendered when test_int fires).
-    # default = VC3D segments grown so far (5 test segments across 5 different scrolls).
-    test_scroll_ids: List[int] = field(default_factory=lambda: [
-        20260716083545,   # auto_grown_20260716083545968  2.98cm²  max_gen=175  PHerc0813
-        20260717193517,   # auto_grown_20260717193517520_0_1_2_3_4_merged (7181×6501) PHerc0211
-        20260720090842,   # auto_grown_20260720090842117  7.90cm²  max_gen=345  PHerc1203
-        20250703034159,   # auto_grown_20250703034159599  51.27cm² max_gen=638  PHerc1447 (8.64µm src)
-        20260723112922,   # auto_grown_20260723112922652_merged  (9481×4521)   PHerc0826
-    ])
-
-    # holdout scroll(s): rendered as full-size test figures alongside test_scroll_ids but
-    # NEVER trained on — the hallucination sanity check. w055 = PHerc0139.
+    test_scroll_ids: List[int] = field(
+        default_factory=lambda: [
+            20260716083545,
+            20260717193517,
+            20260720090842,
+            20250703034159,
+            20260723112922,
+        ]
+    )
     holdout_scroll_ids: List[int] = field(default_factory=lambda: [20251226000000])
-
-    @property
-    def test_scroll_id(self) -> Optional[int]:
-        """backward-compat: returns first test scroll id, or None"""
-        return self.test_scroll_ids[0] if self.test_scroll_ids else None
 
     tile_size: int = 16
     depth: int = 8
@@ -172,236 +101,111 @@ class DataConfig:
     train_d_start: int = 0
     train_d_end: int = 28
 
-    # composite (fiber-visibility) test-figure render, matched to VC3D Compositing.hpp:
-    # a MAX filter over a limited ~8-layer surface window, displayed as raw 0-255.
     composite_method: str = "maxproj"
     composite_d0: int = 10
     composite_d1: int = 18
-    composite_display: str = "raw"   # "raw" = linear 0-255 (VC3D); "stretch" = 1-99 in-mask
-    voxel_um: float = 9.362          # microns/pixel at full res (drives the 1 cm scale bar)
+    composite_display: str = "raw"
+    voxel_um: float = 9.362
 
     mask_memmap: bool = True
+    mask_bitpack: bool = True
     ring_negatives: bool = True
     ring_label_source: str = "eroded"
-    # 'closed' ring params (only used when ring_label_source == 'closed'). all radii are in
-    # TILE units, so physical distance = radius * tile_size (16px). closed now builds off the
-    # (hand-cleaned) eroded map, not original inklabels.
-    ring_close_r: int = 3      # tiles: close letter interior holes (dilate then erode)
-    ring_gap_r: int = 3        # tiles: air gap between ink edge and ring start (96px @ tile=16)
-    ring_shell_r: int = 2      # ring shell width; 0 = dynamic (balance to ink count), >0 = fixed
-    context_size: int = 0      # >0: input crop size (px) centered on each tile; model center-pools MIL
-                               # over the tile region. label/mask stay the center tile. 0 = off (plain tile)
-    context_downsample: int = 1    # >1: avg-pool the context crop by this factor at the stem, so the
-                                   # model keeps the FULL context extent but at a coarser resolution
-                                   # (~1/ds^2 the activations -> near-plain compute, less overfit, no OOM)
-    eval_cmap_norm: str = "raw"    # display-only contrast for eval pred panels: "raw" | "percentile" | "rank"
-                                   # raw = true probability (DEFAULT; pool-independent, matches test figs).
-                                   # rank (histogram-equalize) spreads saturated outputs but is pool-relative;
-                                   # percentile stretches [p2,p98]
-    tta_mode: str = "flips"        # TTA transforms: "flips" (4: id,h,v,180 -- fast, contiguous, label-natural)
-                                   # or "dihedral" (6: adds +/-90 rot -- slower, non-contiguous, unnatural for text)
-    eval_infer_bs: int = 128         # 0 = auto-size the eval/test inference batch; >0 = manual override (use spare VRAM)
-    dense_labels: bool = False        # dense per-pixel BCE (model emits (B,1,T,T) map, not a tile scalar)
-    dense_soft_labels: bool = False   # use soft_inklabels probability map as the dense target
-    preload_to_ram: bool = False  # load full zarr into RAM; only useful if disk I/O is the bottleneck (it's not — chunks are uncompressed, OS caches them)
-    # normalization mode: "zscore" = global mean/std (default), "robust_mad" = per-patch median/MAD (villa)
-    normalization_mode: str = "zscore"
-    # per-scroll probe ROIs: {scroll_id: [ProbeROI, ...]}
-    probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_default_probe_rois)
+    ring_close_r: int = 3
+    ring_gap_r: int = 3
+    ring_shell_r: int = 2
+    context_size: int = 0
+    context_downsample: int = 1
+    eval_infer_bs: int = 128
+    probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
+    vis_scroll_ids: Optional[List[int]] = None
 
     @property
-    def vis_scroll_ids(self) -> Optional[list]: return None
+    def test_scroll_id(self) -> Optional[int]:
+        return self.test_scroll_ids[0] if self.test_scroll_ids else None
+
 
 @dataclass
 class DataloaderConfig:
     batch_size: int = 64
     num_workers: int = 0
     data_aug: bool = False
-    channel_mixing_prob: float = 0.25
     rotation_prob: float = 0.25
     flip_prob: float = 0.25
     noise_prob: float = 0.30
     brightness_prob: float = 0.50
     contrast_prob: float = 0.50
-    # --- augmentation MAGNITUDES (were hardcoded in dataloader.Transform; now tracked here) ---
-    # brightness/contrast: factor ~ uniform(1-delta, 1+delta), one shared factor across depth.
     brightness_delta: float = 0.15
     contrast_delta: float = 0.15
-    # gaussian noise: per-voxel std ~ uniform(noise_std_min, noise_std_max) on [0,1] data.
     noise_std_min: float = 0.001
     noise_std_max: float = 0.005
-    # specaugment-style masking (were untracked loose attrs; declared so they hit config.json).
-    cutout_prob: float = 0.0        # prob of applying XY cutout patches to a block
-    cutout_max_frac: float = 0.35   # each patch side up to this fraction of H/W
-    cutout_n_patches: int = 1       # number of cutout patches per block
-    depth_mask_prob: float = 0.0    # per-depth-slice independent zero-out probability
+    cutout_prob: float = 0.0
+    cutout_max_frac: float = 0.35
+    cutout_n_patches: int = 1
+    depth_mask_prob: float = 0.0
+
 
 @dataclass
 class TrainingConfig:
     n_epochs: int = 20
     lr: float = 1e-4
-    weight_decay: float = 0.0        # AdamW decoupled weight decay (overfit lever). 0 = off; sane on-value ~1e-2 for this small model
+    weight_decay: float = 0.0
     l1_lambda: float = 3e-7
     grad_norm: float = 0.5
     patience: int = 5
     lr_decay: float = 0.5
     save_int: int = 10
-    log_dir: str = "./runs_p0139_triple"
+    log_dir: str = "./runs"
     eval_int: int = 20
-    eval_int_scrolls: int = 2         # eval figures: render only the FIRST N scrolls (the slow part); probes/test unaffected
+    eval_int_scrolls: int = 2
     test_int: int = 9999
-    probe_int: int = 5               # render probe ROI figures every N epochs; set > n_epochs to disable
-    probe_rois_enabled: bool = True
-    label_smooth: float = 0.1        # label smoothing: 0 = hard 0/1, 0.1 = soft 0.1/0.9 (default on)
-    pos_weight_enabled: bool = False  # False = ignore the neg/pos pos_weight (temper upward bias toward 1.0)
-    loss_type: str = "gce"           # "bce" | "focal" | "gce" (noise-robust generalized CE) -- default on
-    gce_q: float = 0.7               # GCE q in (0,1]: ->0 behaves like CE, =1 like noise-robust MAE loss
-    focal_gamma: float = 0.0         # >0 = focal loss (down-weights easy tiles); 0 = plain BCE
-    ranking_lambda: float = 0.0      # weight on pairwise ranking (AUC surrogate) added to BCE; 0 = off
-    ranking_neg_frac: float = 1.0    # 1.0 = full-AUC ranking; <1.0 = partial-AUC (hardest negatives only)
-    ranking_margin: float = 0.3      # margin for the ranking hinge
-    # asymmetric label smoothing: different uncertainty for positive vs negative labels.
-    # ink labels at 9.4um are inherently noisy (partial-volume from 1.1um projection),
-    # so positive labels deserve more smoothing than negative ones.
-    # if both are 0, falls back to the symmetric label_smooth value above.
-    label_smooth_pos: float = 0.0    # smoothing for ink tiles (1 -> 1-label_smooth_pos)
-    label_smooth_neg: float = 0.0    # smoothing for papyrus tiles (0 -> label_smooth_neg)
-    # TTA-consistency regularizer: each step forward an EXTRA flipped view and penalize the two
-    # tile predictions' disagreement (invariance regularizer -> fewer holdout hallucinations than
-    # augmentation alone, which never forces two views to AGREE). ~2x forward cost when on.
-    tta_consistency: bool = False         # master switch (False = off, no extra forward). on at run 4
-    tta_consistency_lambda: float = 0.5   # weight of the consistency term (sane default when enabled)
-    tta_consistency_mode: str = "flips"   # "flips" = random h/v/180 flip per step (label-natural for text)
-    seed: int = 41                   # base RNG seed (torch/cuda/numpy/random + dataloader workers)
-    deterministic: bool = True      # True = exact reproducibility (cudnn deterministic, no benchmark);
-                                     # costs ~10-20% speed. False = fast path (cudnn benchmark, GPU atomics
-                                     # -> tiny run-to-run differences even with a fixed seed)
+    probe_int: int = 5
+    loss_type: str = "gce"
+    gce_q: float = 0.7
+    label_smooth_pos: float = 0.0
+    label_smooth_neg: float = 0.0
+    tta_consistency: bool = False
+    tta_consistency_lambda: float = 0.5
+    tta_consistency_mode: str = "flips"
+    seed: int = 41
+    deterministic: bool = True
     epoch_cooldown_secs: int = 9
     val_cooldown_secs: int = 12
     eval_cooldown_secs: int = 60
     fig_chunk_cooldown_ms: int = 60
-    # save the full-size eval figures (one per training scroll) to
-    # ./output/visualizations/<exp_name>/ at eval_int. off by default (TensorBoard only).
     save_vis: bool = False
-    # fast eval figure: only render left 40% x-dim AND bottom 40% y-dim (16% area, much faster)
     fast_eval_figure: bool = False
-    # render the test/holdout figure ONCE on the final epoch even when test_int never fires
-    # (e.g. test_int=9999). used by leave-one-out campaigns to infer the held-out fragment.
     test_on_final: bool = False
 
-    # ---- campaign_archs: architectural regularization levers (all off by default) ----
-    # DANN: domain-adversarial head + gradient reversal (DANN, Ganin 2015). forces the backbone
-    # to produce scroll-invariant features by training a domain classifier adversarially.
-    dann: bool = False
-    dann_lambda: float = 0.1           # gradient reversal strength (ramps up over dann_ramp_epochs)
-    dann_ramp_epochs: int = 5          # linear ramp from 0 -> dann_lambda over this many epochs
-    dann_n_domains: int = 15           # number of scroll-id classes (= number of training scrolls)
-
-    # SupCon: supervised contrastive learning auxiliary head (Khosla 2020). pulls same-class tile
-    # embeddings together and pushes cross-class ones apart -> transferable ink boundary.
     supcon: bool = False
-    supcon_lambda: float = 0.1         # weight of the supcon loss term
-    supcon_temp: float = 0.07          # temperature for the contrastive softmax
-    supcon_proj_dim: int = 128         # projection head output dimension (128=baseline, 512=high-capacity)
-    supcon_hidden_dim: int = 256       # projection head hidden layer dimension
-    # SupCon curriculum: progressive transfer learning (start low, focus on ink detection, 
-    # then gradually increase lambda to focus on cross-scroll transfer)
+    supcon_lambda: float = 0.1
+    supcon_temp: float = 0.07
+    supcon_proj_dim: int = 128
+    supcon_hidden_dim: int = 256
     supcon_curriculum: bool = False
-    supcon_lambda_start: float = 0.1   # starting lambda value
-    supcon_lambda_end: float = 0.5     # ending lambda value
-    supcon_curriculum_epochs: int = 15 # epochs to ramp from start to end
-
-    # mean-teacher self-training on verified negatives from 2.4um inklabels + test scrolls.
-    # VERIFIED NEGATIVES: tiles where 2.4um inklabel < verified_neg_threshold are trusted
-    # papyrus -> hard-negative supervision reinforced during training.
-    mean_teacher: bool = False
-    mean_teacher_alpha: float = 0.999  # EMA decay for teacher weights (higher = slower update)
-    mean_teacher_ramp_epochs: int = 3  # ramp consistency weight from 0 over this many epochs
-    mean_teacher_lambda: float = 0.1   # consistency loss weight (student vs teacher, unlabeled)
-    verified_neg_threshold: int = 31   # 2.4um label < this = definite papyrus (p05-p10, ~5-10%)
-    verified_neg_lambda: float = 0.2   # extra weight on verified-negative supervised tiles
-    # test-scroll consistency: enforce student==teacher on unlabeled test-scroll tiles
-    test_consistency: bool = False
-    test_consistency_lambda: float = 0.1
-    # same-scroll pseudo-labeling: use teacher predictions on validation split (same scrolls)
-    # instead of test scrolls (different scrolls). reduces domain shift in pseudo-labels.
-    pseudo_label_same_scroll: bool = False
-    pseudo_label_threshold: float = 0.95  # confidence threshold for pseudo-labels
-    # consistency on labeled tiles: original MeanTeacher formulation (Tarvainen 2017).
-    # enforce student-teacher consistency on labeled tiles under different augmentations.
-    consistency_on_labeled: bool = False
-
-    # SPATIAL COHERENCE: total variation regularizer on the per-voxel logit map.
-    # penalizes high-frequency spatial variation in voxel logits within the context window,
-    # encouraging spatially smooth (coherent) ink predictions -> better letter shape readability.
-    # cheap: computed on the existing voxel map, no extra forward pass.
-    tv_lambda: float = 0.0   # 0 = off; try 0.1-0.5
-
-    # DEPTH PROFILE SUPCON: contrastive learning on raw mean depth profiles.
-    # separates depth-profile learning (raw CT intensity vs depth) from spatial feature learning.
-    # motivated by: ds=2 == ds=1, surface_dist is best learner -> signal is in depth dimension.
-    # uses a tiny DepthProfileHead (2-layer MLP, proj_dim=32) independent of the backbone.
-    depth_supcon: bool = False
-    depth_supcon_lambda: float = 0.1  # weight of the depth profile contrastive loss
+    supcon_lambda_start: float = 0.1
+    supcon_lambda_end: float = 0.5
+    supcon_curriculum_epochs: int = 15
 
 
 @dataclass
 class ModelConfig:
-    arch: str = "v14_mil_deep"
-    conv1_drop: float = 0.05   # Dropout3d between depth-mix conv blocks (channel-wise)
-    conv2_drop: float = 0.075  # Dropout3d at end of depth-mix stage (channel-wise)
-    head_drop:  float = 0.0    # Dropout3d before voxel head (closest to old FC-head dropout)
-    attn_mil:   bool  = False  # use gated attention-MIL instead of fixed LSE aggregation
-    # attention entropy regularization: penalize low-entropy attention distributions to force
-    # coverage across voxels (prevents attention from collapsing to a single peak)
-    attn_entropy_weight: float = 0.0  # weight for entropy regularization term (0 = off)
-    # depth window count: 3 = standard non-overlapping (seams at abs depths 12 and 20),
-    # 5 = adds intermediate windows at seam depths so ink at any depth is always covered
-    # by a window that sees it near the CENTER, not the edge.
-    n_depth_windows: int = 3  # 3 or 5
-    # physics-informed input channels (ring detector + sharpness):
-    # when True, stage1 stem receives [raw, lcn, dz, DoG, grad_mag] instead of [raw, lcn, dz].
-    # DoG fires on the bright-ring ink signature; grad_mag captures the fuzz/clarity contrast.
-    physics_stem: bool = False
-    # depth-max variant: DoG is max-pooled over the 8-slice depth window before the stem.
-    # addresses the wavy-papyrus problem: ink at only 1-2 slices gives near-zero per-slice DoG
-    # for the other 6. depth-max broadcasts the peak ring response to all depth positions.
-    physics_stem_depthmax: bool = False
-    # surface-aware stems: detect papyrus surface per (y,x) using |dI/dz| soft-argmax.
-    # surface_stem: [raw, lcn, dz, surface_dist, surface_attn] = 5 channels
-    # surface_stem_withdog: [raw, lcn, dz, dog, surface_dist, surface_attn] = 6 channels
-    # surface_dist: signed distance to surface in [-1,+1] (ink always appears near 0)
-    # surface_attn: softmax(|dz|*temp) peaked at the papyrus-air boundary
-    surface_stem: bool = False
-    surface_stem_withdog: bool = False
-    # learned surface finder: adds DepthSurfaceAttn (tiny 1D-depth conv, ~320 params)
-    # that learns which depth slices are surface-proximal from the training signal.
-    # applied as residual amplification to per-slice features after the stem.
-    # advantage over fixed physics: can learn which SIDE of the surface has ink,
-    # and can handle multi-sheet papyrus with two surfaces.
+    arch: str = "nnunet3d_lcndz"
+    conv1_drop: float = 0.05
+    conv2_drop: float = 0.075
+    head_drop: float = 0.0
+    attn_mil: bool = False
+    attn_entropy_weight: float = 0.0
     learned_surface: bool = False
-    # villa-inspired improvements (campaign_archs_7):
-    # depth_attention_mode: how to apply depth attention (villa's key innovation)
-    # "none" = disabled, "hybrid_per_window" = attention+max per 8-slice window (NOT global collapse)
-    depth_attention_mode: str = "none"
-    # normalization_layer: which norm to use in 3D convs
-    # "batch" = BatchNorm3d (default), "group" = GroupNorm (stable), "instance" = InstanceNorm3d (villa's choice)
-    normalization_layer: str = "batch"
-    # activation: "relu" (default) or "leaky" (LeakyReLU with slope=0.01, villa's choice)
-    activation: str = "relu"
 
 
 @dataclass
 class HardMiningConfig:
-    """hard negative / hard positive mining. set enabled=True to activate.
-    mining files are written per-scroll by the evaluator; on multi-scroll runs each
-    scroll mines independently (keyed by scroll_id) and the injector routes records
-    back to the correct volume via the scroll_id field in each JSONL record."""
     enabled: bool = False
-    hn_cutoff: float = 0.8    # tiles scoring above this with label=0 are hard negatives
-    hp_cutoff: float = 0.45   # tiles scoring below this with label=1 are hard positives
-    hm_frac: float = 0.1      # fraction of epoch tiles to replace with hard examples
-    dir: str = "./hard_negs"  # root directory for per-experiment mining JSONL files
+    hn_cutoff: float = 0.8
+    hp_cutoff: float = 0.45
+    hm_frac: float = 0.1
+    dir: str = "./hard_negs"
 
 
 @dataclass
@@ -414,16 +218,13 @@ class Config:
     device: str = field(default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu")
     model_dir: str = "models"
     exp_name: Optional[str] = None
-    init_weights: Optional[str] = None   # path to a (MAE) checkpoint to warm-start from (strict=False)
+    init_weights: Optional[str] = None
 
     def scroll_ids(self) -> List[int]:
-        return [s.scroll_id for s in self.data.scrolls]
+        return [scroll.scroll_id for scroll in self.data.scrolls]
 
     def split_overrides(self) -> dict:
         return {
-            s.scroll_id: {"axis": s.split_axis, "frac": s.train_split_frac}
-            for s in self.data.scrolls
+            scroll.scroll_id: {"axis": scroll.split_axis, "frac": scroll.train_split_frac}
+            for scroll in self.data.scrolls
         }
-
-    def tra_scroll_ids(self) -> List[int]:
-        return self.scroll_ids()

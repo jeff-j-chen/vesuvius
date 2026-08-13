@@ -1,7 +1,7 @@
 # PHerc0139 Ink Detector
 
 Binary tile-level ink detection on 9.362 µm / 113 keV CT scans of Herculaneum papyrus scrolls.
-Current leading architecture: **v14c_mil_lcn** — MIL with LCN preprocessing + learnable depth positional encoding, winner of the triple-scroll sweep (see [Model](#model)). Base variant **v14_mil_deep** is the stable reference.
+Current production path: **nnunet3d_lcndz** — a 3D nnU-Net-style encoder/decoder with a raw + LCN + depth-gradient stem, optional learned surface attention, and optional attention-MIL / spatial SupCon integrations.
 
 ---
 
@@ -14,12 +14,15 @@ Current leading architecture: **v14c_mil_lcn** — MIL with LCN preprocessing + 
 # run training (all config is driven by utils/config.py)
 python train.py -n "experiment_name"
 
-# run a named campaign (overrides config fields per test)
-python campaign_runner_p0139_triple_v2.py   # 12-test arch/tile/depth sweep (completed)
-python campaign_runner_lcn.py                # LCN refinement sweep (3 tests, active)
+# run the current integration sweep
+python campaign_archs_9.py --dry-run
+python campaign_archs_9.py
 
 # compute/cache normalisation stats (needed once per new zarr)
 python precompute_norm.py --scroll-id 20260206000001
+
+# annotate readability probe windows
+python roi.py
 ```
 
 ---
@@ -163,19 +166,16 @@ All five are rendered from their VC3D tifxyz mesh against their respective raw C
 
 ## Model
 
-**v14_mil_deep** (`utils/model.py`), parameters: **1,136,210** (tile 16, depth 8):
+**nnunet3d_lcndz** (`utils/model.py`) is the only active architecture kept in the repo.
 
-1. **Per-slice stem** — two `Conv3d` with depth kernel=1: learns 2D texture per depth layer independently, no depth mixing yet. → `(B, 64, D, H, W)`.
-2. **Depth-mix** — two full `Conv3d(3,3,3)` + CBAM attention, one `MaxPool3d(1,2,2)` (spatial only): learns which depth layers carry the ink signal. → `(B, 256, D, H/2, W/2)`.
-3. **Per-voxel logit head** — `Conv1×1×1` → one scalar logit per voxel. → `(B, 1, D, H/2, W/2)`.
-4. **LSE aggregation** — `tile_logit = (1/r) × (logsumexp(r·v) − log N)`. Temperature `r` is learnable (init 2.0, clamped [0.5, 10]). Interpolates from mean (r→0) to max (r→∞). Backprop concentrates on the highest-confidence voxels.
-5. **Output** — one scalar tile logit → binary cross-entropy (BCE) against the eroded-inklabel tile label.
+1. **Stem inputs** — the network ingests `[raw, lcn, dI/dz]` per tile window. LCN removes the slow papyrus baseline; the depth gradient makes interface structure explicit.
+2. **3D encoder/decoder** — a compact nnU-Net-style 3-level encoder/decoder preserves dense spatial detail while still mixing information across depth.
+3. **Optional learned surface attention** — `DepthSurfaceAttn` can amplify slices that look surface-proximal before the deeper encoder blocks.
+4. **Per-voxel logits** — the decoder emits a `(B, 1, D, H, W)` voxel map.
+5. **Bag aggregation** — default aggregation is learnable log-sum-exp; current sweeps also test gated attention-MIL with entropy regularization.
+6. **Auxiliary representation** — when spatial SupCon is enabled, the bottleneck is pooled to a 256-d embedding and passed through a small projection head.
 
-**Physics rationale:** at 113 keV carbon ink is a sparse, through-depth morphological feature at the sheet interface — not an in-plane brightness change. Global-average-pool (all prior architectures) dilutes that sparse signal ~1000×. MIL's LSE lets a handful of high-confidence voxels drive the tile prediction regardless of surrounding background.
-
-**Physics variants** (same training protocol, same BCE):
-- `v14b_mil_zgrad` — feeds `[raw, dI/dz]` to the per-slice stem. The z-derivative peaks at ink-layer interfaces and is invariant to the slowly-varying papyrus bulk-density baseline dominant at 113 keV.
-- `v14c_mil_lcn` — feeds `[raw, LCN]` (local contrast normalization removes the bulk baseline) plus a learnable depth positional encoding so the model can key on the absolute depth band where ink sits (depth is the dominant variable at 9.4 µm).
+The current campaign (`campaign_archs_9.py`) keeps the backbone fixed and only varies integrations that still fit this path directly: soft augmentation, flip-consistency regularization, GCE + asymmetric label smoothing, spatial SupCon, and learned surface attention.
 
 ---
 
@@ -183,21 +183,23 @@ All five are rendered from their VC3D tifxyz mesh against their respective raw C
 
 | File | Purpose |
 |---|---|
-| `train.py` | Training loop. Only accepts `-n experiment_name`; all config from `utils/config.py`. |
-| `utils/config.py` | **Single source of truth.** All hyperparameters, scroll list, per-scroll splits. Campaign runners override fields by mutating a `Config()` instance before passing to `Trainer`. |
-| `utils/model.py` | Three architectures: `v14_mil_deep`, `v14b_mil_zgrad`, `v14c_mil_lcn` + `create_model()`. |
-| `utils/dataloader.py` | `InkVolumeDataset`, `MultiScrollIterableDataset`, `DataManager`, ring-negative mask building. Reads per-scroll split config from `Config.split_overrides()`. |
-| `utils/visualizer.py` | TensorBoard figure generation: eval figures (per-depth + MAX-collapse row + gold overlay), test figures. Uses YlGnBu (`ylgnbu_nan`) colormap throughout. |
-| `utils/norm.py` | Fast chunk-aligned zarr normalization. Called automatically by DataManager; standalone via `precompute_norm.py`. |
-| `utils/training_utils.py` | Optimizer/scheduler factory, loss function, metrics (F1, AUC, balanced accuracy). |
+| `train.py` | Current training loop for the cleaned nnUNet path. Only accepts `-n experiment_name`; all other config comes from `utils/config.py` or a campaign file. |
+| `utils/config.py` | Current config surface for the nnUNet path: scroll list, tile/depth/context settings, augmentation, SupCon, TTA consistency, and visualization cadence. |
+| `utils/model.py` | Current model definition: `nnunet3d_lcndz`, optional learned surface attention, attention-MIL, and spatial SupCon head. |
+| `utils/dataloader.py` | Sparse-label tile dataset, multi-scroll merge, ring-negative mask building, and cached normalization hookup. |
+| `utils/visualizer.py` | TensorBoard figures for eval/test/probe rendering on the current sparse-label path. |
+| `utils/norm.py` | Shared chunk-aligned normalization cache/compute utility. Used by both the dataloader and visualizer. |
+| `utils/training_utils.py` | Optimizer/scheduler factory, BCE/GCE loss builders, checkpoint save helpers, and scalar metrics. |
 | `precompute_norm.py` | CLI: `python precompute_norm.py --scroll-id <id>`. Writes to `norm_cache.json`. |
+| `roi.py` | Interactive probe ROI picker that writes `probe_rois.json`, now the single source for probe windows. |
 | `assemble_training_zarrs.sh` | Downloads and assembles the three training zarrs from S3. See [Assembling zarrs](#assembling-training-zarrs). |
+| `campaign_archs_9.py` | Current all-scroll integration sweep for the nnUNet backbone. |
+| `old/` | Archived experiments, older campaigns, and retired architecture families. The radical archs6 cluster now lives here. |
 | `old/download_surface_zarr.py` | Downloads a pre-rendered OME-Zarr surface volume from S3 (volume or midslice mode). |
 | `old/render_9um_surface.py` | Renders a tifxyz mesh against the raw zarr via surface-normal sampling. Used for w047 and test segment. |
 | `overlay_2p4_9um.py` | Alignment sanity: hi-res (red, half opacity) over lo-res (green), yellow = overlap. Reports NCC. |
 | `test_inference.ipynb` | Standalone inference notebook. Set `MODEL_PATH` + `SCROLL_ID`, Run All → depth panels + MAX figure. |
-| `campaign_runner_p0139_triple_v2.py` | 12-test sweep: tile 16/24 × base/zgrad/lcn × depth-8/4 × range 0-28/8-16 + aug. **v14c_mil_lcn t24 d8 r8-16 won.** |
-| `campaign_runner_lcn.py` | LCN refinement sweep: 3 tests (tile 16/8 × depth 8/4, range 8-16, l1=7e-6, 4 scrolls). |
+| `campaign_archs_8.py` | Immediate predecessor sweep used as the comparison point for the current nnUNet family. |
 
 ---
 

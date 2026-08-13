@@ -1,10 +1,12 @@
+import os
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import os
+from sklearn.metrics import average_precision_score, roc_auc_score
+
 from .config import Config
-import numpy as np
-from sklearn.metrics import roc_auc_score, average_precision_score
 
 class WarmupThenPlateau:
     """a learning rate scheduler with a warmup phase followed by a plateau phase"""
@@ -54,22 +56,6 @@ def create_optimizer_and_scheduler(model, config: Config):
     
     return optimizer, scheduler
 
-class FocalBCELoss(nn.Module):
-    """focal loss wrapper around BCE: (1-p_t)^gamma * BCE.
-    gamma=0 reduces to standard BCE; gamma>0 down-weights easy examples
-    so the gradient is dominated by hard-to-classify tiles."""
-    def __init__(self, pos_weight=None, gamma=2.0):
-        super().__init__()
-        self.gamma = gamma
-        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction='none')
-
-    def forward(self, logits, targets):
-        bce_loss = self.bce(logits, targets)
-        p_t = torch.exp(-bce_loss)              # probability of correct class
-        focal_weight = (1 - p_t) ** self.gamma
-        return focal_weight * bce_loss          # same shape as input; caller handles masking/reduction
-
-
 class GCEBCELoss(nn.Module):
     """generalized cross-entropy for binary labels (Zhang & Sabuncu, NeurIPS 2018).
 
@@ -96,49 +82,14 @@ class GCEBCELoss(nn.Module):
             loss = loss * (1.0 + (self.pos_weight - 1.0) * targets)
         return loss
 
-
-def pairwise_ranking_loss(scores, labels, margin=0.3, neg_frac=1.0):
-    """pairwise ranking loss (AUC / partial-AUC surrogate): positive tiles must
-    outscore negatives by >= margin.
-
-    scores: (B,) sigmoid probabilities (detached from main graph is fine)
-    labels: (B,) ground truth in {0, 1} or soft values; treated as pos if > 0.5
-    neg_frac: fraction of negatives to keep, selected as the HIGHEST-scoring (hardest)
-        ones. 1.0 -> plain all-pairs ranking (full AUC surrogate). <1.0 -> partial-AUC:
-        only the hardest negatives contribute, so the gradient concentrates on the
-        low-FPR region that the readability metric grades. this is hard-negative mining
-        baked directly into the loss rather than bolted on as a sampling stage.
-    returns a scalar loss; zero if no positives or no negatives in batch.
-    """
-    pos_mask = labels > 0.5
-    neg_mask = ~pos_mask
-    if not pos_mask.any() or not neg_mask.any():
-        return scores.sum() * 0.0  # zero but gradient-connected
-
-    pos_scores = scores[pos_mask]                          # (n_pos,)
-    neg_scores = scores[neg_mask]                          # (n_neg,)
-    # partial-AUC: restrict to the hardest (top-scoring) negatives before pairing
-    if neg_frac < 1.0:
-        k = max(1, int(round(neg_scores.numel() * float(neg_frac))))
-        neg_scores, _ = torch.topk(neg_scores, k)
-    # violation matrix: how much each (pos, neg) pair fails the margin
-    violations = margin - pos_scores.unsqueeze(1) + neg_scores.unsqueeze(0)  # (n_pos, n_neg)
-    return torch.clamp(violations, min=0.0).mean()
-
-
 def create_loss_function(pos_weight, config: Config):
-    """creates the loss function based on config.tra.loss_type (falls back to focal_gamma)."""
+    """create the current tile loss function."""
     pw = pos_weight.to(config.device) if pos_weight is not None else None
     loss_type = str(getattr(config.tra, 'loss_type', 'bce')).lower()
     if loss_type == 'gce':
         q = float(getattr(config.tra, 'gce_q', 0.7))
         print(f"using GCE (noise-robust) loss with q={q}")
         return GCEBCELoss(q=q, pos_weight=pw)
-    gamma = float(getattr(config.tra, 'focal_gamma', 0.0))
-    if loss_type == 'focal' or gamma > 0:
-        g = gamma if gamma > 0 else 2.0
-        print(f"using focal loss with gamma={g}")
-        return FocalBCELoss(pos_weight=pw, gamma=g)
     return nn.BCEWithLogitsLoss(pos_weight=pw, reduction='none')
 
 def calculate_metrics(y_true, y_pred, y_scores):

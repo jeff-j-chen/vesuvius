@@ -121,7 +121,6 @@ def _save_unified_cache(cache, cache_path=UNIFIED_CACHE_PATH):
 class Transform:
     """handles data augmentation transforms"""
     def __init__(self, config: Config):
-        self.channel_mixing_prob = float(getattr(config.dl, "channel_mixing_prob", 0.0))
         self.rotation_prob = float(getattr(config.dl, "rotation_prob", 0.25))
         self.flip_prob = float(getattr(config.dl, "flip_prob", 0.25))
         self.noise_prob = float(getattr(config.dl, "noise_prob", 0.30))
@@ -140,9 +139,6 @@ class Transform:
 
     def __call__(self, block):
         """applies a random sequence of transforms to a block"""
-        # each transform is applied with a certain probability
-        if random.random() < self.channel_mixing_prob:
-            block = self._apply_channel_mixing(block)
         if random.random() < self.rotation_prob:
             block = self._apply_rotation(block)
         if random.random() < self.flip_prob:
@@ -183,13 +179,6 @@ class Transform:
                 out[d] = 0.0
         return out
 
-    def _apply_channel_mixing(self, block):
-        """mixes the order of the depth channels. NOTE: almost certainly ruins training in all cases"""
-        indices = np.random.permutation(block.shape[0])
-        mixed = block[indices]
-        # guard against any non contiguous result from advanced indexing
-        return np.ascontiguousarray(mixed)
-    
     def _apply_brightness_adjustment(self, block):
         """applies ONE brightness factor to the whole block (shared across depth).
         per-depth factors distort the through-depth intensity profile the model keys on."""
@@ -440,20 +429,7 @@ class InkVolumeDataset(IterableDataset):
         return self.samples_per_epoch
 
     def _normalize_block(self, block):
-        """normalizes a block using pre computed global stats"""
-        mode = str(getattr(self.c.data, "normalization_mode", "zscore") or "zscore").lower()
-        if mode == "robust_mad":
-            block = block.astype(np.float32, copy=False)
-            lo = float(np.percentile(block, 1.0))
-            hi = float(np.percentile(block, 99.0))
-            clipped = np.clip(block, lo, hi)
-            median = float(np.median(clipped))
-            mad = float(np.median(np.abs(clipped - median)))
-            scale = max(mad * 1.4826, 1e-6)
-            norm_block = np.clip((block - median) / scale, -3.0, 3.0)
-            norm_block = (norm_block + 3.0) / 6.0
-            return np.ascontiguousarray(norm_block.astype(np.float32, copy=False))
-
+        """normalizes a block using cached global z-score stats"""
         mean, std, g_min, g_max = self.norm_stats
         if std == 0:
             return block.astype(np.float32, copy=False)
@@ -464,81 +440,33 @@ class InkVolumeDataset(IterableDataset):
         # ensure dtype and contiguity
         return np.ascontiguousarray(np.clip(norm_block, 0, 1).astype(np.float32, copy=False))
 
-    def _fetch_block_at_z(self, z_abs, y_off, x_off):
-        """fetch block starting at absolute z position (used for soft label flanking bands)"""
-        y = self.y_start + y_off
-        x = self.x_start + x_off
-        tile = self.tile_size
-        mode = getattr(self.c.data, "input_mode", "single")
-        # flanking bands always return a single-band block of self.depth slices
-        try:
-            block = np.array(self.vol[z_abs:z_abs+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
-        except Exception:
-            block = np.zeros((self.depth, tile, tile), dtype=np.float32)
-        if block.shape != (self.depth, tile, tile):
-            block = np.zeros((self.depth, tile, tile), dtype=np.float32)
-        # for diff mode, compute flanking - pre (flanking IS the reference, so use zeros)
-        if mode == "diff":
-            block = np.zeros_like(block)  # no ink expected in flanking band, diff ≈ 0
-        return self._normalize_block(block)
-
     def _fetch_block(self, z_off, y_off, x_off):
-        """fetches and normalizes a block from zarr volume.
-
-        input_mode controls the returned tensor shape:
-          single: (8, 32, 32)  — current behavior
-          diff:   (8, 32, 32)  — ink_band - pre_band (differential absorption)
-          triple: (24, 32, 32) — concat(pre_band, ink_band, post_band)
-        """
+        """fetches and normalizes a block from zarr volume"""
         z = self.z_start + z_off
         y = self.y_start + y_off
         x = self.x_start + x_off
         tile = self.tile_size
-        mode = getattr(self.c.data, "input_mode", "single")
 
         # context window: for single mode, read a larger crop centered on the tile so the
         # model sees the surround. the LABEL/mask stay the center tile (unchanged), so ring
         # supervision is respected -- context enters only via the conv receptive field.
         ctx = int(getattr(self.c.data, "context_size", 0) or 0)
-        use_ctx = (ctx > tile and mode == "single")
+        use_ctx = ctx > tile
         sp = ctx if use_ctx else tile
 
-        expected_d = {"triple": self.depth * 3, "double": self.depth * 2,
-                      "fulldepth": int(getattr(self.vol, 'shape', [64])[0])}.get(mode, self.depth)
         try:
-            if mode == "diff":
-                ink  = np.array(self.vol[z:z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
-                pre_z = getattr(self.c.data, "pre_band_start", 20)
-                pre  = np.array(self.vol[pre_z:pre_z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
-                block = np.clip(ink - pre, 0, None)  # take positive part of the delta
-            elif mode == "triple":
-                pre_z  = getattr(self.c.data, "pre_band_start", 20)
-                post_z = getattr(self.c.data, "post_band_start", 40)
-                pre    = np.array(self.vol[pre_z:pre_z+self.depth,  y:y+tile, x:x+tile]).astype(np.float32)
-                ink    = np.array(self.vol[z:z+self.depth,           y:y+tile, x:x+tile]).astype(np.float32)
-                post   = np.array(self.vol[post_z:post_z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
-                block  = np.concatenate([pre, ink, post], axis=0)
-            elif mode == "double":
-                pre_z = getattr(self.c.data, "pre_band_start", 20)
-                ink   = np.array(self.vol[z:z+self.depth,            y:y+tile, x:x+tile]).astype(np.float32)
-                pre   = np.array(self.vol[pre_z:pre_z+self.depth,   y:y+tile, x:x+tile]).astype(np.float32)
-                block = np.concatenate([ink, pre], axis=0)  # (16, H, W) for siamese
-            elif mode == "fulldepth":
-                full_d = int(self.vol.shape[0])
-                block = np.array(self.vol[0:full_d, y:y+tile, x:x+tile]).astype(np.float32)
+            if use_ctx:
+                pad = (ctx - tile) // 2
+                block = self._read_ctx_block(z, self.depth, y - pad, x - pad, ctx)
             else:
-                if use_ctx:
-                    pad = (ctx - tile) // 2
-                    block = self._read_ctx_block(z, self.depth, y - pad, x - pad, ctx)
-                else:
-                    block = np.array(self.vol[z:z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
+                block = np.array(self.vol[z:z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
         except Exception:
             # any read error (OSError, corrupt chunk, zarr internal error) — return zeros
-            block = np.zeros((expected_d, sp, sp), dtype=np.float32)
+            block = np.zeros((self.depth, sp, sp), dtype=np.float32)
 
         # guard: zarr can silently return wrong shape on Windows under load
-        if block.shape != (expected_d, sp, sp):
-            block = np.zeros((expected_d, sp, sp), dtype=np.float32)
+        if block.shape != (self.depth, sp, sp):
+            block = np.zeros((self.depth, sp, sp), dtype=np.float32)
 
         return self._normalize_block(block)
 
@@ -560,14 +488,12 @@ class InkVolumeDataset(IterableDataset):
                 pass
         return out
 
-    def _fetch_label(self, y_off, x_off, soft_override: float = -1.0):
-        """fetches a label tile; soft_override replaces ink label if >= 0"""
+    def _fetch_label(self, y_off, x_off):
+        """fetches a binary label tile"""
         y = self.y_start + y_off
         x = self.x_start + x_off
         label_tile = self.labels[y:y+self.tile_size, x:x+self.tile_size]
         has_ink = bool(np.any(label_tile > 0.5))
-        if has_ink and soft_override >= 0:
-            return torch.tensor([soft_override], dtype=torch.float32)
         return torch.tensor([float(has_ink)], dtype=torch.float32)
 
     def _fetch_mask(self, y_off, x_off):
@@ -613,45 +539,8 @@ class InkVolumeDataset(IterableDataset):
         
         # fetch data components
         mask = self._fetch_mask(y_off, x_off)
-
-        # dense per-pixel supervision: emit the full (1,T,T) ink-label MAP instead of a
-        # single scalar tile label. this is the switch away from binary tile labels — the
-        # trainer applies per-pixel masked BCE against this map. soft/flanking label logic
-        # is bypassed (it is a tile-scalar concept). no spatial aug on the label (keep off).
-        if getattr(self.c.data, "dense_labels", False):
-            block = self._fetch_block(z_off, y_off, x_off)
-            block = np.ascontiguousarray(block, dtype=np.float32)
-            block_tensor = torch.from_numpy(block).unsqueeze(0)
-            y = self.y_start + y_off
-            x = self.x_start + x_off
-            soft = self.soft_labels
-            if getattr(self.c.data, "dense_soft_labels", False) and soft is not None:
-                # continuous target: expanded+blurred ink probability in [0,1]
-                lbl = np.asarray(soft[y:y+self.tile_size, x:x+self.tile_size]).astype(np.float32) / 255.0
-            else:
-                lbl = (np.asarray(self.labels[y:y+self.tile_size, x:x+self.tile_size]) > 0.5).astype(np.float32)
-            label_map = torch.from_numpy(lbl).unsqueeze(0)
-            self.current_idx += 1
-            return block_tensor, label_map, mask
-
-        # soft depth label: randomly replace ink-band block with flanking band + soft label
-        soft_label_prob  = float(getattr(self.c.data, "soft_label_prob", 0.0))
-        soft_label_value = float(getattr(self.c.data, "soft_label_value", 0.3))
-        use_soft = (soft_label_prob > 0 and random.random() < soft_label_prob)
-
-        if use_soft:
-            # pick pre or post band randomly, fetch from there
-            if random.random() < 0.5:
-                flanking_z = getattr(self.c.data, "pre_band_start", 20)
-            else:
-                flanking_z = getattr(self.c.data, "post_band_start", 40)
-            flanking_off = flanking_z - self.z_start  # adjust to relative offset
-            # clamp in case of underflow; use absolute z in _fetch_block via override
-            block = self._fetch_block_at_z(flanking_z, y_off, x_off)
-            label = self._fetch_label(y_off, x_off, soft_override=soft_label_value)
-        else:
-            block = self._fetch_block(z_off, y_off, x_off)
-            label = self._fetch_label(y_off, x_off)
+        block = self._fetch_block(z_off, y_off, x_off)
+        label = self._fetch_label(y_off, x_off)
         
         # apply transforms if enabled
         if self.apply_transforms:
@@ -664,15 +553,6 @@ class InkVolumeDataset(IterableDataset):
         block_tensor = torch.from_numpy(block).unsqueeze(0)
         
         self.current_idx += 1
-        # when domain-adversarial training is enabled, append the scroll_id as a 4th tensor
-        # so train_epoch can build per-sample domain labels without modifying the loader API.
-        # when verified_neg is enabled, append (scroll_id, y_global, x_global) for mask lookup
-        if getattr(self.c.tra, "dann", False) or getattr(self.c.tra, "verified_neg_lambda", 0.0) > 0:
-            sid_t = torch.tensor(int(self.scroll_id), dtype=torch.long)
-            y_global = self.y_start + y_off
-            x_global = self.x_start + x_off
-            coords_t = torch.tensor([y_global, x_global], dtype=torch.long)
-            return block_tensor, label, mask, sid_t, coords_t
         return block_tensor, label, mask
 
 
@@ -717,10 +597,12 @@ class DataManager:
     """manages data loading, splitting, and normalization"""
     def __init__(self, config: Config, scroll_id=None):
         """initializes the data manager.
-        scroll_id: which scroll fragment to load; defaults to config.data.tra_scroll_id.
+        scroll_id: which scroll fragment to load; defaults to the first configured scroll.
         passing it explicitly lets the trainer build one manager per fragment."""
         self.c = config
-        self.scroll_id = int(scroll_id) if scroll_id is not None else int(config.data.tra_scroll_id)
+        if scroll_id is None:
+            scroll_id = config.data.scrolls[0].scroll_id
+        self.scroll_id = int(scroll_id)
 
         # load raw data and define splits
         self.vol, self.mask, self.labels, self.train_x, self.valid_x, self.y_range = self._load_raw_data()
@@ -734,27 +616,6 @@ class DataManager:
         zarr_dir = os.path.join(self.c.data.zarr_path, f"{self.scroll_id}.zarr")
         vol = zarr.open(zarr_dir, mode='r')
 
-        # optionally preload the entire volume into RAM so all reads are RAM-speed
-        # keep the zarr object as fallback for large-scale training
-        if getattr(self.c.data, 'preload_to_ram', False):
-            est_gb = (vol.shape[0] * vol.shape[1] * vol.shape[2] * 2) / 1e9
-            # gate on available RAM: need est_gb + ~2GB headroom
-            try:
-                import psutil
-                free_gb = psutil.virtual_memory().available / 1e9
-            except ImportError:
-                free_gb = float('inf')  # can't check; proceed and hope for the best
-            if free_gb < est_gb + 2.0:
-                print(f"[preload] skipping: need {est_gb:.1f} GB but only {free_gb:.1f} GB available")
-            else:
-                print(f"[preload] loading {est_gb:.2f} GB into RAM ({free_gb:.1f} GB available)...")
-                try:
-                    vol = vol[:]   # loads full zarr into a numpy array
-                    print(f"[preload] done — {vol.nbytes / 1e9:.2f} GB in RAM")
-                except Exception as e:
-                    print(f"[preload] FAILED ({e}); falling back to streaming zarr reads")
-                    # vol stays as the zarr object; workers will lazy-open their own handles
-        
         # load labels and mask, and normalize to [0, 1]
         labels = imread_gray(f"./eroded_inklabels/{self.scroll_id}.png")
 
@@ -767,20 +628,6 @@ class DataManager:
 
         labels = (labels.astype(np.float32) / 255.0)  # force float32 to avoid float64 OOM
         mask = mask / 255.0
-
-        # optional soft labels (continuous ink probability) for dense soft-label training.
-        # loaded here so the hard `labels` (used for ring + tile detection) stay unchanged;
-        # only the dense per-pixel TARGET uses the soft map. None if the file is absent.
-        self.soft_labels = None
-        if getattr(self.c.data, "dense_soft_labels", False):
-            soft = imread_gray(f"./soft_inklabels/{self.scroll_id}.png")
-            if soft is None:
-                print(f"[soft_labels] soft_inklabels/{self.scroll_id}.png not found — "
-                      f"dense_soft_labels requested but falling back to hard labels")
-            else:
-                self.soft_labels = (soft / 255.0).astype(np.float32)
-                print(f"[soft_labels] loaded soft_inklabels/{self.scroll_id}.png "
-                      f"(mean={self.soft_labels.mean():.4f})")
 
         # define the working area and split for train/validation.
         # optional region crop (fractions of the full frame) trims the usable area so a run
@@ -884,8 +731,28 @@ class DataManager:
         else:
             train_x, train_y = self.train_range, self.shared_range
             valid_x, valid_y = self.valid_range, self.shared_range
-        train_set = InkVolumeDataset(self.vol, train_mask, self.labels, self.c, train_x, train_y, self.norm_stats, shuffle=True, soft_labels=getattr(self, "soft_labels", None), scroll_id=self.scroll_id)
-        valid_set = InkVolumeDataset(self.vol, valid_mask, self.labels, self.c, valid_x, valid_y, self.norm_stats, shuffle=False, soft_labels=getattr(self, "soft_labels", None), scroll_id=self.scroll_id)
+        train_set = InkVolumeDataset(
+            self.vol,
+            train_mask,
+            self.labels,
+            self.c,
+            train_x,
+            train_y,
+            self.norm_stats,
+            shuffle=True,
+            scroll_id=self.scroll_id,
+        )
+        valid_set = InkVolumeDataset(
+            self.vol,
+            valid_mask,
+            self.labels,
+            self.c,
+            valid_x,
+            valid_y,
+            self.norm_stats,
+            shuffle=False,
+            scroll_id=self.scroll_id,
+        )
         # the datasets have already copied what they need as uint8. the manager's own
         # float64 mask/labels (mask/255.0) are not used on the training side afterward
         # — for the big scroll they are ~1.9 GB EACH, so a many-scroll run would carry
