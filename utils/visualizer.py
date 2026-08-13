@@ -2063,16 +2063,22 @@ class TensorboardVisualizer:
 
         def _overlay(ax, pred):
             if label_binary is not None:
-                ov = np.zeros((*pred.shape, 4))
-                h = min(label_binary.shape[0], ov.shape[0])
-                w = min(label_binary.shape[1], ov.shape[1])
-                ov[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
-                ax.imshow(ov)
+                cmap_fn = plt.get_cmap(SCROLL_CMAP)
+                rgb = cmap_fn(np.clip(pred, 0.0, 1.0))[..., :3].copy()
+                h = min(label_binary.shape[0], rgb.shape[0])
+                w = min(label_binary.shape[1], rgb.shape[1])
+                g = label_binary[:h, :w] > 0.5
+                rgb[:h, :w][~g] = rgb[:h, :w][~g] * (1.0 - 0.15)
+                rgb[:h, :w][g] = 0.5 * rgb[:h, :w][g] + 0.5
+                ax.imshow(rgb, aspect='equal', interpolation='nearest')
+            else:
+                ax.imshow(pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
 
         def _pred_panel(ax, pmap, title, overlay=False):
-            ax.imshow(pmap, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
             if overlay:
                 _overlay(ax, pmap)
+            else:
+                ax.imshow(pmap, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
             _draw_split(ax)
             ax.set_title(title, fontsize=8); ax.axis('off')
 
@@ -2132,13 +2138,18 @@ class TensorboardVisualizer:
                 ax.axvline(x=split_pos, color='red', linestyle='--', linewidth=0.8)
 
         def _overlay(ax, pred):
-            """paint the gold inklabel overlay on top of a prediction panel."""
+            """black barely darkens non-ink; white at half opacity augments ink signal."""
             if label_binary is not None:
-                ov = np.zeros((*pred.shape, 4))
-                h = min(label_binary.shape[0], ov.shape[0])
-                w = min(label_binary.shape[1], ov.shape[1])
-                ov[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
-                ax.imshow(ov)
+                cmap_fn = plt.get_cmap(SCROLL_CMAP)
+                rgb = cmap_fn(np.clip(pred, 0.0, 1.0))[..., :3].copy()
+                h = min(label_binary.shape[0], rgb.shape[0])
+                w = min(label_binary.shape[1], rgb.shape[1])
+                g = label_binary[:h, :w] > 0.5
+                rgb[:h, :w][~g] = rgb[:h, :w][~g] * (1.0 - 0.15)
+                rgb[:h, :w][g] = 0.5 * rgb[:h, :w][g] + 0.5
+                ax.imshow(rgb, aspect='equal', interpolation='nearest')
+            else:
+                ax.imshow(pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
 
         for row, (full_pred, train_pred, d_start, d_end) in enumerate(all_pred_data):
             # left: raw prediction
@@ -2150,7 +2161,6 @@ class TensorboardVisualizer:
 
             # right: same prediction + inklabel overlay
             ax_ov = axes[row, 1]
-            ax_ov.imshow(full_pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
             ax_ov.set_title(f'Overlay {d_start}-{d_end}', fontsize=8)
             _overlay(ax_ov, full_pred)
             _draw_split(ax_ov)
@@ -2560,7 +2570,6 @@ class TensorboardVisualizer:
                                  gridspec_kw={"hspace": 0.28, "wspace": 0.03})
         axes = np.array(axes).reshape(n_rows, n_cols)
         cmap = plt.get_cmap(SCROLL_CMAP)
-        alpha = 0.2  # inklabel overlay strength
         import warnings
 
         def _maxpred(pd, key):
@@ -2589,13 +2598,15 @@ class TensorboardVisualizer:
                 if mp is None:
                     continue
                 overlay = sub in (1, 3)
-                rgb = cmap(np.clip(mp, 0.0, 1.0))[..., :3]
+                rgb = cmap(np.clip(mp, 0.0, 1.0))[..., :3].copy()
                 if overlay:
-                    rgb = rgb * 0.5             # dim base so the white inklabel pops
                     lb = pd["label_binary"]
                     h = min(lb.shape[0], rgb.shape[0]); w = min(lb.shape[1], rgb.shape[1])
                     g = lb[:h, :w] > 0.5
-                    rgb[:h, :w][g] = (1.0 - alpha) * rgb[:h, :w][g] + alpha * np.array([1.0, 1.0, 1.0])
+                    # non-ink: barely darkened by black at 0.15 opacity
+                    rgb[:h, :w][~g] = rgb[:h, :w][~g] * (1.0 - 0.15)
+                    # ink: white at 0.5 opacity augments the signal, shows overlap clearly
+                    rgb[:h, :w][g] = 0.5 * rgb[:h, :w][g] + 0.5
                 ax.imshow(rgb, aspect="equal", interpolation="nearest")
                 lab = pd["spec"].get("label") or pd["spec"]["tag"]
                 suf = "-tta" if is_tta else ""
