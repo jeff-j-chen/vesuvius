@@ -1559,6 +1559,7 @@ class TensorboardVisualizer:
                     crop = img[ry0:ry1, rx0:rx1]
                     if crop.size == 0:
                         return None
+                    # resize to match prediction tile dimensions for proper aspect in figure
                     resized = cv2.resize(crop, (pred_w, pred_h), interpolation=cv2.INTER_LINEAR)
                     return resized
                 raw_1_1 = _raw_ink("1_1um"); raw_2_4 = _raw_ink("2_4um")
@@ -1566,6 +1567,7 @@ class TensorboardVisualizer:
                 fig = self._create_eval_figure_2x3(reg_pred, tta_pred, label_binary,
                                                    raw_1_1, raw_2_4, train_split_n, split_axis)
                 if fig is not None:
+                    # ALWAYS save the full-size eval figure to <log>/eval_figs/ (highest res)
                     try:
                         _ed = os.path.join(self.log_path, "eval_figs"); os.makedirs(_ed, exist_ok=True)
                         _lp = os.path.join(_ed, f"eval_s{self.scroll1_id}_ep{epoch+1:02d}.png")
@@ -1573,6 +1575,7 @@ class TensorboardVisualizer:
                         print(f"[eval-fig] full-size -> {_lp}")
                     except Exception as _e:
                         print(f"[eval-fig] save failed: {_e}")
+                    # also drop a copy into ./output/visualizations/<exp>/ when save_vis is on
                     if getattr(self.c.tra, "save_vis", False):
                         try:
                             _p = os.path.join(self._save_vis_dir(), f"eval_s{self.scroll1_id}_ep{epoch+1:02d}.png")
@@ -1583,12 +1586,30 @@ class TensorboardVisualizer:
                 self.writer.add_figure('Evaluation/Aggregated', fig, epoch)
                 plt.close(fig)
 
+            # ---- voxel map visualization (v13_mil only) ----
+            # log a grid of representative tiles showing WHERE the model fires,
+            # not just WHETHER it fires. only runs when the model exposes last_voxel_map
+            # (i.e. arch=v13_mil). adds 'VoxelMap/InkTiles' and 'VoxelMap/BlankTiles'
+            # to TensorBoard under the Images tab.
             self._log_voxel_maps(epoch, model)
 
+
     def _log_voxel_maps(self, epoch, model):
-        """log voxel maps when model exposes last_voxel_map (attn-MIL runs)."""
+        """log per-tile voxel maps for v13_mil to TensorBoard Images tab.
+
+        for each tile: shows (left) the depth-mean raw scan slice and (right) the
+        depth-max of the model's per-voxel logit map, both normalized to [0,1].
+        logged under VoxelMap/InkTiles and VoxelMap/BlankTiles.
+
+        what to look for:
+          INK TILES — the right panel should show bright spots/streaks at ink stroke
+          positions: thin horizontal ribbons for letter strokes, NOT diffuse blobs.
+          BLANK TILES — right panel should be uniformly dark (low activation everywhere).
+          if ink and blank panels look identical (diffuse/random), the model has not
+          learned spatially localized ink — it's still doing coarse intensity detection.
+        """
         if not hasattr(model, 'last_voxel_map') or model.last_voxel_map is None:
-            return
+            return   # non-MIL architecture; skip silently
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
@@ -1625,7 +1646,7 @@ class TensorboardVisualizer:
                 t = torch.from_numpy(blk).float().unsqueeze(0).unsqueeze(0).to(device)
                 with torch.no_grad(): model(t)
                 vmap = torch.sigmoid(model.last_voxel_map[0, 0]).max(0).values.cpu().numpy()
-                return blk.mean(0), vmap
+                return blk.mean(0), vmap   # (H,W) depth-mean scan; (H',W') depth-max logit
 
             def _make_grid(samples, title):
                 if not samples: return None
@@ -1650,6 +1671,7 @@ class TensorboardVisualizer:
                     plt.close(fig)
         except Exception as e:
             print(f"[voxel map logging] skipped: {e}")
+
 
     def _hard_mining_dir(self):
         """return hard-mining directory for the current experiment (per scroll fragment)"""
@@ -2064,7 +2086,7 @@ class TensorboardVisualizer:
         def _overlay(ax, pred):
             if label_binary is not None:
                 cmap_fn = plt.get_cmap(SCROLL_CMAP)
-                rgb = cmap_fn(np.clip(pred, 0.0, 1.0))[..., :3].copy()
+                rgb = cmap_fn(np.clip(np.nan_to_num(pred, nan=0.0), 0.0, 1.0))[..., :3].copy()
                 h = min(label_binary.shape[0], rgb.shape[0])
                 w = min(label_binary.shape[1], rgb.shape[1])
                 g = label_binary[:h, :w] > 0.5
@@ -2075,10 +2097,9 @@ class TensorboardVisualizer:
                 ax.imshow(pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
 
         def _pred_panel(ax, pmap, title, overlay=False):
+            ax.imshow(pmap, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
             if overlay:
                 _overlay(ax, pmap)
-            else:
-                ax.imshow(pmap, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
             _draw_split(ax)
             ax.set_title(title, fontsize=8); ax.axis('off')
 
@@ -2141,15 +2162,13 @@ class TensorboardVisualizer:
             """black barely darkens non-ink; white at half opacity augments ink signal."""
             if label_binary is not None:
                 cmap_fn = plt.get_cmap(SCROLL_CMAP)
-                rgb = cmap_fn(np.clip(pred, 0.0, 1.0))[..., :3].copy()
+                rgb = cmap_fn(np.clip(np.nan_to_num(pred, nan=0.0), 0.0, 1.0))[..., :3].copy()
                 h = min(label_binary.shape[0], rgb.shape[0])
                 w = min(label_binary.shape[1], rgb.shape[1])
                 g = label_binary[:h, :w] > 0.5
                 rgb[:h, :w][~g] = rgb[:h, :w][~g] * (1.0 - 0.15)
                 rgb[:h, :w][g] = 0.5 * rgb[:h, :w][g] + 0.5
                 ax.imshow(rgb, aspect='equal', interpolation='nearest')
-            else:
-                ax.imshow(pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
 
         for row, (full_pred, train_pred, d_start, d_end) in enumerate(all_pred_data):
             # left: raw prediction
@@ -2161,6 +2180,7 @@ class TensorboardVisualizer:
 
             # right: same prediction + inklabel overlay
             ax_ov = axes[row, 1]
+            ax_ov.imshow(full_pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
             ax_ov.set_title(f'Overlay {d_start}-{d_end}', fontsize=8)
             _overlay(ax_ov, full_pred)
             _draw_split(ax_ov)
