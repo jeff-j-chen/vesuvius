@@ -100,6 +100,14 @@ GCE_ASYM = dict(
     label_smooth_neg=0.02,
 )
 
+# lower q for MAE warm-start runs: q=0.9 refuses to update confident-wrong predictions,
+# which traps MAE-initialized models that start biased toward all-zero logits
+GCE_ASYM_MAE = dict(
+    gce_q=0.7,
+    label_smooth_pos=0.25,
+    label_smooth_neg=0.02,
+)
+
 
 def _base_config(exp_name: str) -> Config:
     c = Config()
@@ -195,15 +203,6 @@ TESTS = [
     #     **TTA_FLIPS,
     # ),
     _mk9(
-        "lcndz_softaug_tta_attn_gceasym_mae",
-        "nnunet3d_ds2_lcndz_softaug_tta_attn_gceasym_mae",
-        arch="nnunet3d_lcndz",
-        init_weights=_MAE_CTX48,
-        **SOFT_AUGS,
-        **TTA_FLIPS,
-        **GCE_ASYM,
-    ),
-    _mk9(
         "lcndz_softaug_tta_attn_supcon_mae",
         "nnunet3d_ds2_lcndz_softaug_tta_attn_supcon_mae",
         arch="nnunet3d_lcndz",
@@ -213,54 +212,40 @@ TESTS = [
         **SPATIAL_SUPCON,
     ),
     _mk9(
-        "lcndz_softaug_tta_attn_gceasym_supcon_mae",
-        "nnunet3d_ds2_lcndz_softaug_tta_attn_gceasym_supcon_mae",
+        "lcndz_softaug_tta_attn_supcon_learnedsurf_mae",
+        "nnunet3d_ds2_lcndz_softaug_tta_attn_supcon_learnedsurf_mae",
         arch="nnunet3d_lcndz",
         init_weights=_MAE_CTX48,
+        learned_surface=True,
         **SOFT_AUGS,
         **TTA_FLIPS,
-        **GCE_ASYM,
         **SPATIAL_SUPCON,
     ),
     # ctx=96 family (MAE warm-start)
     _mk9(
-        "lcndz_ctx96_softaug_tta_attn_gceasym_mae",
-        "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_gceasym_mae",
+        "lcndz_ctx96_softaug_tta_attn_mae",
+        "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_mae",
         arch="nnunet3d_lcndz",
         context_size=96,
         context_downsample=2,
         init_weights=_MAE_CTX96,
         **SOFT_AUGS,
         **TTA_FLIPS,
-        **GCE_ASYM,
     ),
     _mk9(
-        "lcndz_ctx96_softaug_tta_attn_gceasym_learnsurf_mae",
-        "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_gceasym_learnsurf_mae",
-        arch="nnunet3d_lcndz",
-        context_size=96,
-        context_downsample=2,
-        learned_surface=True,
-        init_weights=_MAE_CTX96,
-        **SOFT_AUGS,
-        **TTA_FLIPS,
-        **GCE_ASYM,
-    ),
-    _mk9(
-        "lcndz_ctx96_softaug_tta_attn_gceasym_supcon_mae",
-        "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_gceasym_supcon_mae",
+        "lcndz_ctx96_softaug_tta_attn_supcon_mae",
+        "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_supcon_mae",
         arch="nnunet3d_lcndz",
         context_size=96,
         context_downsample=2,
         init_weights=_MAE_CTX96,
         **SOFT_AUGS,
         **TTA_FLIPS,
-        **GCE_ASYM,
         **SPATIAL_SUPCON,
     ),
     _mk9(
-        "lcndz_ctx96_softaug_tta_attn_gceasym_supcon_learnsurf_mae",
-        "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_gceasym_supcon_learnsurf_mae",
+        "lcndz_ctx96_softaug_tta_attn_supcon_learnsurf_mae",
+        "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_supcon_learnsurf_mae",
         arch="nnunet3d_lcndz",
         context_size=96,
         context_downsample=2,
@@ -268,7 +253,6 @@ TESTS = [
         init_weights=_MAE_CTX96,
         **SOFT_AUGS,
         **TTA_FLIPS,
-        **GCE_ASYM,
         **SPATIAL_SUPCON,
     ),
 ]

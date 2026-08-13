@@ -1549,6 +1549,107 @@ class TensorboardVisualizer:
                 ext_x = full_x
                 mh, mw = self.mask.shape[:2]
                 pred_h, pred_w = reg_pred.shape  # tile dimensions of prediction
+                def _raw_ink(sub):
+                    img = imread_gray(f"./inklabels/{sub}/{self.scroll1_id}.png")
+                    if img is None:
+                        return None
+                    rh, rw = img.shape[:2]
+                    ry0 = int(ext_y[0] * rh / max(mh, 1)); ry1 = int(ext_y[1] * rh / max(mh, 1))
+                    rx0 = int(ext_x[0] * rw / max(mw, 1)); rx1 = int(ext_x[1] * rw / max(mw, 1))
+                    crop = img[ry0:ry1, rx0:rx1]
+                    if crop.size == 0:
+                        return None
+                    resized = cv2.resize(crop, (pred_w, pred_h), interpolation=cv2.INTER_LINEAR)
+                    return resized
+                raw_1_1 = _raw_ink("1_1um"); raw_2_4 = _raw_ink("2_4um")
+
+                fig = self._create_eval_figure_2x3(reg_pred, tta_pred, label_binary,
+                                                   raw_1_1, raw_2_4, train_split_n, split_axis)
+                if fig is not None:
+                    try:
+                        _ed = os.path.join(self.log_path, "eval_figs"); os.makedirs(_ed, exist_ok=True)
+                        _lp = os.path.join(_ed, f"eval_s{self.scroll1_id}_ep{epoch+1:02d}.png")
+                        fig.savefig(_lp, dpi=200, bbox_inches="tight")
+                        print(f"[eval-fig] full-size -> {_lp}")
+                    except Exception as _e:
+                        print(f"[eval-fig] save failed: {_e}")
+                    if getattr(self.c.tra, "save_vis", False):
+                        try:
+                            _p = os.path.join(self._save_vis_dir(), f"eval_s{self.scroll1_id}_ep{epoch+1:02d}.png")
+                            fig.savefig(_p, dpi=200, bbox_inches="tight")
+                            print(f"[save-vis] eval figure -> {_p}")
+                        except Exception as _e:
+                            print(f"[save-vis] eval save failed: {_e}")
+                self.writer.add_figure('Evaluation/Aggregated', fig, epoch)
+                plt.close(fig)
+
+            self._log_voxel_maps(epoch, model)
+
+    def _log_voxel_maps(self, epoch, model):
+        """log voxel maps when model exposes last_voxel_map (attn-MIL runs)."""
+        if not hasattr(model, 'last_voxel_map') or model.last_voxel_map is None:
+            return
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        try:
+            tile   = self.c.data.tile_size
+            depth  = self.c.data.depth
+            z_start = self.c.data.d_start
+            device = self.c.device
+            z_range = (self.c.data.d_start, self.c.data.d_end)
+            if getattr(self, "split_axis", "x") == "y":
+                tr_y, tr_x = self.train_range, self.shared_range
+            else:
+                tr_y, tr_x = self.shared_range, self.train_range
+            all_coords  = self._gen_tile_coords(z_range, tr_y, tr_x, self.mask)
+            ink_tiles   = [(z, y, x) for z, y, x in all_coords
+                           if self.labels[tr_y[0] + y: tr_y[0] + y + tile,
+                                          tr_x[0] + x: tr_x[0] + x + tile].any()]
+            blank_tiles = [(z, y, x) for z, y, x in all_coords
+                           if not self.labels[tr_y[0] + y: tr_y[0] + y + tile,
+                                              tr_x[0] + x: tr_x[0] + x + tile].any()]
+            n_show = 6
+            rng = np.random.default_rng(epoch)
+            ink_sample   = [ink_tiles[i]   for i in rng.choice(len(ink_tiles),   min(n_show, len(ink_tiles)),   replace=False)] if ink_tiles   else []
+            blank_sample = [blank_tiles[i] for i in rng.choice(len(blank_tiles), min(n_show, len(blank_tiles)), replace=False)] if blank_tiles else []
+            g_mean, g_std = self.global_mean, self.global_std
+            g_min,  g_max = self.global_min,  self.global_max
+
+            def _fetch(d_off, y_off, x_off):
+                y = tr_y[0] + y_off; x = tr_x[0] + x_off; z = z_start + d_off
+                if z + depth > self.volume.shape[0]: return None, None
+                blk = np.array(self.volume[z:z + depth, y:y + tile, x:x + tile]).astype(np.float32)
+                blk = np.clip((blk - g_mean) / (g_std + 1e-8), -5, 5)
+                blk = np.clip((blk - g_min) / (g_max - g_min + 1e-8), 0, 1)
+                t = torch.from_numpy(blk).float().unsqueeze(0).unsqueeze(0).to(device)
+                with torch.no_grad(): model(t)
+                vmap = torch.sigmoid(model.last_voxel_map[0, 0]).max(0).values.cpu().numpy()
+                return blk.mean(0), vmap
+
+            def _make_grid(samples, title):
+                if not samples: return None
+                n = len(samples)
+                fig, axes = plt.subplots(n, 2, figsize=(4, n * 2))
+                if n == 1: axes = [axes]
+                for row, (d_off, y_off, x_off) in enumerate(samples):
+                    raw, vmap = _fetch(d_off, y_off, x_off)
+                    if raw is None: continue
+                    axes[row][0].imshow(raw,  cmap='gray', vmin=0, vmax=1, interpolation='nearest')
+                    axes[row][1].imshow(vmap, cmap='hot',  vmin=0, vmax=1, interpolation='nearest')
+                    axes[row][0].axis('off'); axes[row][1].axis('off')
+                axes[0][0].set_title('scan (depth-mean)', fontsize=7)
+                axes[0][1].set_title('voxel map (depth-max sigmoid)', fontsize=7)
+                fig.suptitle(title, fontsize=8); plt.tight_layout()
+                return fig
+
+            for tag, samples in [('VoxelMap/InkTiles', ink_sample), ('VoxelMap/BlankTiles', blank_sample)]:
+                fig = _make_grid(samples, f'{tag.split("/")[1]} — epoch {epoch}')
+                if fig is not None:
+                    self.writer.add_figure(tag, fig, epoch)
+                    plt.close(fig)
+        except Exception as e:
+            print(f"[voxel map logging] skipped: {e}")
 
     def _hard_mining_dir(self):
         """return hard-mining directory for the current experiment (per scroll fragment)"""
