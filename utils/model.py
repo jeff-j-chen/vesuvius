@@ -2356,10 +2356,26 @@ class nnUNet3D(nn.Module):
         self._ds = max(1, int(getattr(config.data, "context_downsample", 1)))
         self._use_attn_mil = bool(getattr(config.model, "attn_mil", False))
         self._attn_entropy_weight = float(getattr(config.model, "attn_entropy_weight", 0.0))
+        self._use_learned_surface = bool(getattr(config.model, "learned_surface", False))
+        self._use_supcon = bool(getattr(config.tra, "supcon", False))
+        self._use_dann = bool(getattr(config.tra, "dann", False))
         self.last_voxel_map = None
         self.last_attn_entropy_loss = None
+        self.last_surface_attn = None
+        self.supcon_head = None
+        self.domain_head = None
         if self._use_attn_mil:
             self.attn_mil = GatedAttentionMIL(feat_dim=1, att_dim=32)
+        if self._use_learned_surface:
+            self.depth_surface_attn = DepthSurfaceAttn(hidden=8)
+        self._emb_dim = 256
+        if self._use_supcon:
+            proj_dim = int(getattr(config.tra, "supcon_proj_dim", 128))
+            hidden_dim = int(getattr(config.tra, "supcon_hidden_dim", 256))
+            self.supcon_head = SupConHead(self._emb_dim, proj_dim=proj_dim, hidden=hidden_dim)
+        if self._use_dann:
+            n_dom = int(getattr(config.tra, "dann_n_domains", 15))
+            self.domain_head = DomainHead(self._emb_dim, n_dom, hidden=64)
         
         # Encoder
         self.enc1 = self._conv_block(1, 32)
@@ -2406,6 +2422,32 @@ class nnUNet3D(nn.Module):
     def _stem_in(self, x):
         return x
 
+    def _apply_learned_surface(self, raw_x, feat):
+        if not self._use_learned_surface:
+            self.last_surface_attn = None
+            return feat
+        attn = self.depth_surface_attn(raw_x)
+        self.last_surface_attn = attn.detach()
+        return feat * (1.0 + attn)
+
+    def _encode_features(self, x):
+        raw_x = self._prepare_input(x)
+        stem_x = self._stem_in(raw_x)
+
+        e1 = self.enc1(stem_x)
+        e1 = self._apply_learned_surface(raw_x, e1)
+        e2 = self.enc2(self.pool(e1))
+        e3 = self.enc3(self.pool(e2))
+        b = self.bottleneck(self.pool(e3))
+
+        d3 = self.dec3(torch.cat([self.up3(b), e3], dim=1))
+        d2 = self.dec2(torch.cat([self.up2(d3), e2], dim=1))
+        d1 = self.dec1(torch.cat([self.up1(d2), e1], dim=1))
+        return b, d1
+
+    def _project_embedding(self, bottleneck):
+        return F.adaptive_avg_pool3d(bottleneck, output_size=1).flatten(1)
+
     def _bag_score(self, out):
         if self._use_attn_mil:
             tile_score, attn_entropy_loss = self.attn_mil(out, entropy_weight=self._attn_entropy_weight)
@@ -2421,26 +2463,17 @@ class nnUNet3D(nn.Module):
         )
     
     def forward(self, x):
-        x = self._prepare_input(x)
-        x = self._stem_in(x)
-        
-        # Encoder
-        e1 = self.enc1(x)
-        e2 = self.enc2(self.pool(e1))
-        e3 = self.enc3(self.pool(e2))
-        
-        # Bottleneck
-        b = self.bottleneck(self.pool(e3))
-        
-        # Decoder with skip connections
-        d3 = self.dec3(torch.cat([self.up3(b), e3], dim=1))
-        d2 = self.dec2(torch.cat([self.up2(d3), e2], dim=1))
-        d1 = self.dec1(torch.cat([self.up1(d2), e1], dim=1))
-        
-        # Deep supervision (use final output for tile score)
+        _, d1 = self._encode_features(x)
         out = self.out1(d1)
         self.last_voxel_map = out.detach()
         return self._bag_score(out)
+
+    def forward_with_extras(self, x):
+        b, d1 = self._encode_features(x)
+        out = self.out1(d1)
+        self.last_voxel_map = out.detach()
+        emb = self._project_embedding(b)
+        return self._bag_score(out), emb, None, None
 
 
 class nnUNet3DLCNZGrad(nnUNet3D):

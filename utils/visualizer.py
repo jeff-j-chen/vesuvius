@@ -3090,15 +3090,17 @@ class TensorboardVisualizer:
         }
 
     def _create_combined_probe_depth_figure(self, probe_data_list):
-        """10 rows x 12 cols: 3 scrolls per row-pair, each scroll = easy | easy+overlay | hard |
-        hard+overlay. every scroll-row is DOUBLED -- top sub-row = raw prediction, bottom sub-row
-        = TTA prediction. 15 scrolls x 2 probes x (raw+overlay) x (plain+TTA) = 120 cells.
+        """dynamic rows x 12 cols: 3 scrolls per row-pair, each scroll = easy | easy+overlay |
+        hard | hard+overlay. every scroll-row is DOUBLED -- top sub-row = raw prediction,
+        bottom sub-row = TTA prediction.
 
         predictions use the SAME display normalization as the eval figure (_display_norm). overlay
         cells dim the base to half brightness and paint the eroded inklabel in white. the list is
         ordered easy,hard per scroll; each probe_data carries per-depth 'pred' and 'pred_tta'.
         """
-        n_scroll_rows, n_cols = 5, 12
+        n_scrolls = max(1, int(np.ceil(len(probe_data_list) / 2.0)))
+        n_scroll_rows = max(1, int(np.ceil(n_scrolls / 3.0)))
+        n_cols = 12
         n_rows = n_scroll_rows * 2
         fig, axes = plt.subplots(n_rows, n_cols, figsize=(1.6 * n_cols, 1.9 * n_rows),
                                  gridspec_kw={"hspace": 0.28, "wspace": 0.03})

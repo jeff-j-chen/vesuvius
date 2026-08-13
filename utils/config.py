@@ -118,11 +118,11 @@ DEFAULT_SCROLLS: List[ScrollConfig] = [
     ScrollConfig(20260206000001, split_axis="x", train_split_frac=0.75),    # w047
     ScrollConfig(20260115000001, split_axis="y", train_split_frac=0.5),     # w056
     # 10 new PHerc0139 fragments (2026-07-21). vertical split, left 75% train / right 25% valid.
-    ScrollConfig(20260210000000, split_axis="x", train_split_frac=0.75),    # w058
+    ScrollConfig(20260210000000, split_axis="x", train_split_frac=0.5),    # w058
     ScrollConfig(20260227000000, split_axis="x", train_split_frac=0.75),    # w052
     ScrollConfig(20260318000000, split_axis="x", train_split_frac=0.75),    # w049
-    ScrollConfig(20260325000000, split_axis="x", train_split_frac=0.75),    # w046
-    ScrollConfig(20260108000000, split_axis="x", train_split_frac=0.75),    # w041
+    ScrollConfig(20260325000000, split_axis="x", train_split_frac=0.6),    # w046
+    ScrollConfig(20260108000000, split_axis="x", train_split_frac=0.7),    # w041
     ScrollConfig(20250831000000, split_axis="x", train_split_frac=0.75),    # w040
     ScrollConfig(20260302000000, split_axis="x", train_split_frac=0.75),    # w039
     ScrollConfig(20260306000000, split_axis="x", train_split_frac=0.75),    # w038

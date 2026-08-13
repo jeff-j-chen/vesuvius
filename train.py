@@ -363,8 +363,9 @@ class Trainer:
 
         # forward pass with automatic mixed precision
         with autocast(self.c.device):
-            # v16_arch_ctx exposes DANN/SupCon embeddings; other archs fall back gracefully
-            use_extras = isinstance(self.model, InkDetectorArch) and (
+            # models that expose forward_with_extras can participate in DANN / SupCon.
+            # older architectures without that hook fall back to the plain forward path.
+            use_extras = hasattr(self.model, "forward_with_extras") and (
                 getattr(self.c.tra, "dann", False) or getattr(self.c.tra, "supcon", False))
             if use_extras:
                 outputs, emb, _, _ = self.model.forward_with_extras(b_imgs)
@@ -465,7 +466,8 @@ class Trainer:
                 loss = loss + tta_cons_lambda * cons
 
             # DANN: domain-adversarial head. linearly ramp lambda from 0 -> dann_lambda
-            if getattr(self.c.tra, "dann", False) and emb is not None and scroll_ids_batch is not None:
+            if (getattr(self.c.tra, "dann", False) and emb is not None and scroll_ids_batch is not None
+                    and hasattr(self.model, "domain_head") and self.model.domain_head is not None):
                 n_ep = max(1, self.c.tra.n_epochs)
                 ramp = min(1.0, epoch / max(1, getattr(self.c.tra, "dann_ramp_epochs", 5)))
                 dann_lam = float(getattr(self.c.tra, "dann_lambda", 0.1)) * ramp

@@ -5,15 +5,18 @@ GOAL: combine the ideas from campaign 7 that looked genuinely compatible:
 - structured attention over preserved depth helps more than exotic global attention
 - top-down cross-window fusion helps when applied to a stable binary head
 - explicitly probe the strongest untested follow-ups: nnunet input channels, nnunet attention-mil,
-  and a less aggressive center crop on the baseline family
+    bigger ds2 context for lcndz, a longer p500 lcndz retry, and a less aggressive center crop
+    on the baseline family
 
-ORGANIZATION (16 TESTS):
+ORGANIZATION (19 TESTS):
 1:     PHerc0500P2 nnU-Net 3D overfit baseline (known hard case)
 2-5:   w044 nnU-Net probes (raw ds2, attn-mil, raw+lcn+dz, raw+lcn+dz+attn-mil)
-6:     w044 relaxed-crop baseline
-7-8:   w044 anchors (latecollapse32, late_unet)
-9-12:  w044 latecollapse32 + {nonlocal, coord, depthse, fpn}
-13-16: w044 late_unet + {nonlocal, coord, depthse, fpn}
+6-7:   w044 nnU-Net lcndz larger-context probes (96x96 ds2, 128x128 ds2)
+8:     PHerc0500P2 nnU-Net lcndz baseline-context retry (48x48 ds2, 15 epochs, full eval figure)
+9:     w044 relaxed-crop baseline
+10-11: w044 anchors (latecollapse32, late_unet)
+12-15: w044 latecollapse32 + {nonlocal, coord, depthse, fpn}
+16-19: w044 late_unet + {nonlocal, coord, depthse, fpn}
 
 BASELINE FOR COMPARISON:
 - cmp_archs7_w044_noaug_w044_no_augs_11_21-34-49 from archs7
@@ -24,16 +27,19 @@ EXPECTED WINNERS:
 - nonlocal / coord / depth-se / fpn were the most compatible structured refinements from archs7
 - raw+lcn+dz should test whether the baseline's useful physics channels transfer into the dense model
 - nnunet attention-mil should test whether the main nnunet failure is bagging/calibration rather than capacity
+- bigger lcndz context may help now that the dense model has shown it can exploit preserved spatial detail
 - relaxed center cropping should test whether the baseline family is discarding too much useful spatial support
 
 CONFIGURATION:
-- 12 epochs, eval at epoch 12 only
+- mostly 12 epochs, eval at epoch 12 only
+- one PHerc0500P2 lcndz retry runs 15 epochs with eval at epoch 15 and fast_eval disabled
 - no augmentation for clean overfit/isolation behavior
 - batch=32, eval_bs=64, workers=4
 
   python campaign_archs_8.py --dry-run
   python campaign_archs_8.py --only p500_nnunet3d
     python campaign_archs_8.py --only w044_nnunet3d_attn,w044_nnunet3d_lcndz_attn
+    python campaign_archs_8.py --only p500_nnunet3d_lcndz_15ep
   python campaign_archs_8.py
 """
 from __future__ import annotations
@@ -191,6 +197,39 @@ TESTS = [
         scrolls=[W044_SCROLL],
     ),
     _mk8(
+        "p500_nnunet3d_lcndz_15ep",
+        "p500_nnunet3d_ds2_lcndz_15ep",
+        arch="nnunet3d_lcndz",
+        init_weights=None,
+        attn_mil=False,
+        scrolls=[P500_SCROLL],
+        context_size=48,
+        context_downsample=2,
+        n_epochs=15,
+        eval_int=15,
+        fast_eval_figure=False,
+    ),
+    _mk8(
+        "w044_nnunet3d_lcndz_ctx96",
+        "w044_nnunet3d_ds2_lcndz_ctx96",
+        arch="nnunet3d_lcndz",
+        init_weights=None,
+        attn_mil=False,
+        scrolls=[W044_SCROLL],
+        context_size=96,
+        context_downsample=2,
+    ),
+    _mk8(
+        "w044_nnunet3d_lcndz_ctx96_attn_mil",
+        "w044_nnunet3d_ds2_lcndz_ctx96_attn_mil",
+        arch="nnunet3d_lcndz",
+        init_weights=None,
+        attn_mil=True,
+        scrolls=[W044_SCROLL],
+        context_size=96,
+        context_downsample=2,
+    ),
+    _mk8(
         "w044_relaxedcrop",
         "w044_baseline_relaxed_crop",
         arch="v16_arch_ctx_relaxedcrop",
@@ -277,6 +316,7 @@ _OVERRIDES = {
     "head_drop": ("model", "head_drop"),
     "n_epochs": ("tra", "n_epochs"),
     "eval_int": ("tra", "eval_int"),
+    "fast_eval_figure": ("tra", "fast_eval_figure"),
     "probe_int": ("tra", "probe_int"),
     "l1": ("tra", "l1_lambda"),
     "weight_decay": ("tra", "weight_decay"),
@@ -355,7 +395,7 @@ def run_test(c: Config, dry_run: bool) -> bool:
     )
     scroll_ids = [getattr(s, "scroll_id", None) for s in c.data.scrolls]
     print(f"  scrolls={scroll_ids}")
-    print(f"  n_epochs={c.tra.n_epochs}  fast_eval_figure={c.tra.fast_eval_figure}")
+    print(f"  n_epochs={c.tra.n_epochs}  eval_int={c.tra.eval_int}  fast_eval_figure={c.tra.fast_eval_figure}")
     print(f"  depth_supcon={c.tra.depth_supcon}  depth_supcon_lam={c.tra.depth_supcon_lambda}")
     print(f"  gce_q={c.tra.gce_q}  n_depth_windows={c.model.n_depth_windows}")
     print(f"  attn_mil={c.model.attn_mil}")
@@ -403,10 +443,11 @@ def main():
 
     print(f"[archs8] {len(selected)} test(s) queued  (log -> {LOG_DIR})")
     print("[archs8] Test 1 is the PHerc0500P2 nnunet3d overfit baseline; the rest stay on isolated w044")
-    print("[archs8] New probes: nnunet attn-mil, nnunet raw+lcn+dz, and a relaxed-crop baseline variant")
+    print("[archs8] New probes: nnunet attn-mil, nnunet raw+lcn+dz, lcndz with 96/128 ds2 context,")
+    print("[archs8]             a 15-epoch PHerc0500P2 lcndz retry, and a relaxed-crop baseline variant")
     print("[archs8] Existing anchors still cover the skip-connected late-fusion idea: latecollapse32 and late_unet")
     print("[archs8] Structured combo tests remain: +nonlocal, +coord, +depthse, +fpn on latecollapse32 and late_unet")
-    print("[archs8] Config: 12ep, no aug, fast_eval (16% area)")
+    print("[archs8] Config: mostly 12ep no-aug fast_eval runs, plus one 15ep PHerc0500P2 full-eval lcndz retry")
 
     results = {}
     for t in selected:

@@ -31,6 +31,7 @@ CACHE = "probe_rois.json"   # single unified probe-ROI cache (keyed by scroll id
 ROI_SIZE = 576          # full-res probe side; divisible by 16/32/48
 GRID = 96               # LCM(16,32,48): snap top-left so the roi aligns to any model grid
 MAX_W = 1600            # display downscale cap (screen width)
+MAX_H = 900             # display downscale cap (screen height)
 BORDER = 2              # rect line thickness, drawn ON the roi boundary (no size bloat)
 INK_OVERLAY_DIR = os.path.join("inklabels", "2_4um")  # raw 2.4um labels shown faintly behind ROIs
 INK_OVERLAY_ALPHA = 0.2                                # 1/5 intensity
@@ -168,7 +169,7 @@ def main():
                 ink = cv2.resize(ink, (W, H), interpolation=cv2.INTER_AREA)
             gray = np.clip(gray.astype(np.float32) + INK_OVERLAY_ALPHA * ink.astype(np.float32),
                            0, 255).astype(np.uint8)
-        scale = min(1.0, MAX_W / float(W))
+        scale = min(1.0, MAX_W / float(W), MAX_H / float(H))
         disp_w, disp_h = int(W * scale), int(H * scale)
         base = cv2.cvtColor(cv2.resize(gray, (disp_w, disp_h)), cv2.COLOR_GRAY2BGR)
 
