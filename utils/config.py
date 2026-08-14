@@ -71,6 +71,7 @@ DEFAULT_SCROLLS: List[ScrollConfig] = [
     ScrollConfig(20260317000000, split_axis="y", train_split_frac=0.75),
     ScrollConfig(20260226000000, split_axis="y", train_split_frac=0.75),
     ScrollConfig(20250628074500, split_axis="y", train_split_frac=0.75),
+    ScrollConfig(20240304141531, split_axis="x", train_split_frac=0.75),  # w013 PHerc1667
 ]
 
 
