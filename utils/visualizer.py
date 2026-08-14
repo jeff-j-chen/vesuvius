@@ -1124,6 +1124,10 @@ class TensorboardVisualizer:
 
         self.writer.add_scalar("G_M/Loss/Train", train_metrics['loss'], epoch)
         self.writer.add_scalar("G_M/Loss/Train_Raw", train_metrics['raw_loss'], epoch)
+        if 'dann_loss' in train_metrics:
+            self.writer.add_scalar("G_M/Loss/Train_DANN", train_metrics['dann_loss'], epoch)
+        if 'spill_loss' in train_metrics:
+            self.writer.add_scalar("G_M/Loss/Train_Spill", train_metrics['spill_loss'], epoch)
         self.writer.add_scalar("G_M/Loss/Valid", val_metrics['loss'], epoch)
 
         self.writer.add_scalar("G_M/Acc/Train", train_metrics['accuracy'], epoch)

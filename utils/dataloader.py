@@ -216,16 +216,16 @@ class Transform:
 
 class InkVolumeDataset(IterableDataset):
     """iterable dataset for ink volume data"""
-    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None):
+    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None):
         """initializes the dataset.
         soft_labels: optional full-res float [0,1] ink-probability map (expanded+blurred
         eroded labels). when given AND config.data.dense_soft_labels is set, the dense
         per-pixel target uses these CONTINUOUS values instead of the hard binary label —
         calibrated soft edges (see _fetch/__next__ dense path). stored as uint8 0-255.
-        scroll_id: integer scroll id; stored so __next__ can emit it as the 4th element
-        of the batch when config.tra.dann=True (for domain-adversarial training)."""
-        # scroll id used by DANN (domain-adversarial) domain label yield
+        scroll_id: integer scroll id for bookkeeping.
+        domain_id: compact 0..N-1 fragment id used by DANN when enabled."""
         self.scroll_id = int(scroll_id) if scroll_id is not None else 0
+        self.domain_id = int(domain_id) if domain_id is not None else 0
         # store zarr path + segment id instead of the open zarr object so that
         # the dataset can be safely pickled for multiprocessing workers on Windows;
         # each worker opens its own zarr handle lazily on first access
@@ -553,6 +553,8 @@ class InkVolumeDataset(IterableDataset):
         block_tensor = torch.from_numpy(block).unsqueeze(0)
         
         self.current_idx += 1
+        if bool(getattr(self.c.tra, "dann", False)):
+            return block_tensor, label, mask, torch.tensor(self.domain_id, dtype=torch.long)
         return block_tensor, label, mask
 
 
@@ -595,7 +597,7 @@ class MultiScrollIterableDataset(IterableDataset):
 
 class DataManager:
     """manages data loading, splitting, and normalization"""
-    def __init__(self, config: Config, scroll_id=None):
+    def __init__(self, config: Config, scroll_id=None, domain_id: int = 0):
         """initializes the data manager.
         scroll_id: which scroll fragment to load; defaults to the first configured scroll.
         passing it explicitly lets the trainer build one manager per fragment."""
@@ -603,6 +605,7 @@ class DataManager:
         if scroll_id is None:
             scroll_id = config.data.scrolls[0].scroll_id
         self.scroll_id = int(scroll_id)
+        self.domain_id = int(domain_id)
 
         # load raw data and define splits
         self.vol, self.mask, self.labels, self.train_x, self.valid_x, self.y_range = self._load_raw_data()
@@ -741,6 +744,7 @@ class DataManager:
             self.norm_stats,
             shuffle=True,
             scroll_id=self.scroll_id,
+            domain_id=self.domain_id,
         )
         valid_set = InkVolumeDataset(
             self.vol,
@@ -752,6 +756,7 @@ class DataManager:
             self.norm_stats,
             shuffle=False,
             scroll_id=self.scroll_id,
+            domain_id=self.domain_id,
         )
         # the datasets have already copied what they need as uint8. the manager's own
         # float64 mask/labels (mask/255.0) are not used on the training side afterward

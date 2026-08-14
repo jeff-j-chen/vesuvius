@@ -18,6 +18,21 @@ import torch.nn.functional as F
 from .config import Config
 
 
+class _GradReverse(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, scale: float) -> torch.Tensor:
+        ctx.scale = float(scale)
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> tuple[torch.Tensor, None]:
+        return -ctx.scale * grad_output, None
+
+
+def grad_reverse(x: torch.Tensor, scale: float = 1.0) -> torch.Tensor:
+    return _GradReverse.apply(x, float(scale))
+
+
 def _mil_lse(voxel_map: torch.Tensor, lse_r: torch.Tensor) -> torch.Tensor:
     """aggregate voxel logits into one tile logit with learnable log-sum-exp."""
     r = lse_r.clamp(min=0.5, max=10.0)
@@ -72,6 +87,21 @@ class SupConHead(nn.Module):
     def forward(self, embedding: torch.Tensor) -> torch.Tensor:
         z = self.net(embedding)
         return F.normalize(z, dim=-1)
+
+
+class DomainClassifier(nn.Module):
+    """small MLP domain head used by DANN over fragment embeddings."""
+
+    def __init__(self, in_features: int, n_domains: int, hidden: int = 128):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_features, hidden),
+            nn.LeakyReLU(0.01, inplace=True),
+            nn.Linear(hidden, n_domains),
+        )
+
+    def forward(self, embedding: torch.Tensor, grl_scale: float = 1.0) -> torch.Tensor:
+        return self.net(grad_reverse(embedding, grl_scale))
 
 
 def supcon_loss(z: torch.Tensor, labels: torch.Tensor, temp: float = 0.07) -> torch.Tensor:
@@ -159,6 +189,8 @@ class NnUnet3dLcndz(nn.Module):
         self._attn_entropy_weight = float(getattr(config.model, "attn_entropy_weight", 0.0))
 
         self.last_voxel_map: torch.Tensor | None = None
+        self.last_voxel_map_full: torch.Tensor | None = None
+        self.last_center_voxel_map: torch.Tensor | None = None
         self.last_attn_entropy_loss: torch.Tensor | None = None
         self.last_surface_attn: torch.Tensor | None = None
 
@@ -195,6 +227,12 @@ class NnUnet3dLcndz(nn.Module):
                 proj_dim=int(getattr(config.tra, "supcon_proj_dim", 128)),
                 hidden=int(getattr(config.tra, "supcon_hidden_dim", 256)),
             )
+
+        self.domain_head: DomainClassifier | None = None
+        if bool(getattr(config.tra, "dann", False)):
+            n_domains = int(getattr(config.tra, "dann_n_domains", 0))
+            if n_domains > 1:
+                self.domain_head = DomainClassifier(in_features=256, n_domains=n_domains)
 
     def _prepare_input(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 4:
@@ -272,15 +310,19 @@ class NnUnet3dLcndz(nn.Module):
     def forward_with_extras(
         self,
         x: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, None, torch.Tensor | None]:
+        grl_scale: float = 1.0,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         bottleneck, decoded = self._encode_decode(x)
         voxel_map = self.out_head(decoded)
         self.last_voxel_map = voxel_map.detach()
+        self.last_voxel_map_full = voxel_map  # non-detached; needed for spill_entropy gradient flow
         # aggregate only the center tile region so the score is anchored to the label footprint
         center_voxels = self._crop_to_center_tile(voxel_map)
+        self.last_center_voxel_map = center_voxels
         embedding = self._embedding(bottleneck)
+        domain_logits = self.domain_head(embedding, grl_scale=grl_scale) if self.domain_head is not None else None
         supcon_z = self.supcon_head(embedding) if self.supcon_head is not None else None
-        return self._bag_score(center_voxels), embedding, None, supcon_z
+        return self._bag_score(center_voxels), embedding, domain_logits, supcon_z
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         score, _, _, _ = self.forward_with_extras(x)

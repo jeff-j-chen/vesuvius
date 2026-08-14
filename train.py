@@ -1,3 +1,4 @@
+import math
 import os
 import random
 import sys
@@ -5,6 +6,7 @@ import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 from tqdm import tqdm
@@ -82,6 +84,8 @@ class Trainer:
         start_time = time.time()
 
         scroll_ids = [int(scroll.scroll_id) for scroll in self.c.data.scrolls]
+        if bool(getattr(self.c.tra, "dann", False)) and int(getattr(self.c.tra, "dann_n_domains", 0)) <= 0:
+            self.c.tra.dann_n_domains = len(scroll_ids)
         self._scroll_ids = scroll_ids
         self._scroll_train_sets = None
 
@@ -90,8 +94,8 @@ class Trainer:
             valid_sets = []
             self._scroll_dms = {}
             self._scroll_train_sets = {}
-            for scroll_id in scroll_ids:
-                data_manager = DataManager(self.c, scroll_id=scroll_id)
+            for domain_id, scroll_id in enumerate(scroll_ids):
+                data_manager = DataManager(self.c, scroll_id=scroll_id, domain_id=domain_id)
                 train_set, valid_set = data_manager.get_datasets()
                 train_sets.append(train_set)
                 valid_sets.append(valid_set)
@@ -112,7 +116,7 @@ class Trainer:
             print(f"Data setup done in {time.time() - start_time:.2f}s")
             return merged_train, train_loader, valid_loader
 
-        data_manager = DataManager(self.c, scroll_id=scroll_ids[0])
+        data_manager = DataManager(self.c, scroll_id=scroll_ids[0], domain_id=0)
         train_set, valid_set = data_manager.get_datasets()
         train_loader, valid_loader = get_dataloaders(train_set, valid_set, self.c)
         self._scroll_dms = {scroll_ids[0]: data_manager}
@@ -190,17 +194,35 @@ class Trainer:
         except Exception as exc:
             print(f"[config] WARN could not dump run config: {exc}", flush=True)
 
-    def _train_batch(self, images, labels, mask, epoch: int = 0):
+    def _train_batch(self, images, labels, mask, domain_ids=None, epoch: int = 0):
         images = images.to(self.c.device)
         labels = labels.to(self.c.device).view(-1, 1)
         mask = (mask.to(self.c.device).view(images.size(0), -1).sum(dim=1) > 0).float().unsqueeze(1)
+        if domain_ids is not None:
+            domain_ids = domain_ids.to(self.c.device, non_blocking=True).view(-1)
 
         self.optimizer.zero_grad()
         with autocast(self.c.device, enabled=self.c.device == "cuda"):
-            if getattr(self.c.tra, "supcon", False) and hasattr(self.model, "forward_with_extras"):
-                outputs, _, _, supcon_z = self.model.forward_with_extras(images)
+            use_extras = hasattr(self.model, "forward_with_extras") and any([
+                bool(getattr(self.c.tra, "supcon", False)),
+                bool(getattr(self.c.tra, "dann", False)),
+                bool(getattr(self.c.tra, "spill_reduction", False)),
+                bool(getattr(self.c.tra, "spill_entropy", False)),
+            ])
+            if bool(getattr(self.c.tra, "dann_grl_anneal", False)):
+                n_ep = float(getattr(self.c.tra, "n_epochs", 12))
+                p = float(epoch) / max(1.0, n_ep)
+                grl_scale = 2.0 / (1.0 + math.exp(-10.0 * p)) - 1.0
+            else:
+                grl_scale = 1.0
+            if use_extras:
+                outputs, _, domain_logits, supcon_z = self.model.forward_with_extras(
+                    images,
+                    grl_scale=grl_scale,
+                )
             else:
                 outputs = self.model(images)
+                domain_logits = None
                 supcon_z = None
 
             if outputs.dim() == 4:
@@ -221,7 +243,7 @@ class Trainer:
             denom = mask.sum()
             if denom <= 0:
                 print("[ERROR] Mask sum is zero, skipping loss calculation.")
-                return np.empty([]), np.empty([]), 0.0, 0.0
+                return np.empty([]), np.empty([]), 0.0, 0.0, 0.0
 
             raw_loss_value = (raw_loss.sum() / denom).item()
             l1_loss = sum(param.abs().sum() for param in self.model.parameters())
@@ -254,6 +276,43 @@ class Trainer:
             if attn_entropy_loss is not None and attn_entropy_loss.item() != 0.0:
                 loss = loss + attn_entropy_loss
 
+            dann_loss_value = outputs.new_zeros(())
+            if (
+                bool(getattr(self.c.tra, "dann", False))
+                and domain_ids is not None
+                and domain_logits is not None
+            ):
+                dann_loss_value = F.cross_entropy(domain_logits, domain_ids)
+                loss = loss + float(getattr(self.c.tra, "dann_lambda", 0.0)) * dann_loss_value
+
+            spill_loss_value = outputs.new_zeros(())
+            center_voxel_map = getattr(self.model, "last_center_voxel_map", None)
+            if bool(getattr(self.c.tra, "spill_reduction", False)) and center_voxel_map is not None:
+                pos_mask = (labels.view(-1) > 0.5).float()
+                if pos_mask.sum() > 0:
+                    # variance of mean logit per depth slice: high var = depth-selective (good)
+                    # low var = uniform across all layers (spill); no cap on prediction confidence
+                    depth_logits = center_voxel_map.mean(dim=(3, 4)).squeeze(1)  # [B, D]
+                    depth_var = depth_logits.var(dim=1, unbiased=False)           # [B]
+                    min_var = float(getattr(self.c.tra, "spill_min_depth_var", 0.5))
+                    spill_loss_value = (F.relu(min_var - depth_var) * pos_mask).sum() / pos_mask.sum().clamp(min=1.0)
+                    loss = loss + float(getattr(self.c.tra, "spill_lambda", 0.0)) * spill_loss_value
+
+            if bool(getattr(self.c.tra, "spill_entropy", False)):
+                full_voxel_map = getattr(self.model, "last_voxel_map_full", None)
+                if full_voxel_map is not None:
+                    pos_mask_e = (labels.view(-1) > 0.5).float()
+                    if pos_mask_e.sum() > 0:
+                        # softmax entropy of full-context depth profile: scale-invariant depth sparsity
+                        # uses full spatial extent (not just center) for a robust depth estimate
+                        full_depth = full_voxel_map.mean(dim=(3, 4)).squeeze(1)  # [B, D]
+                        depth_attn = F.softmax(full_depth, dim=1)
+                        entropy = -(depth_attn * depth_attn.log()).sum(dim=1)    # [B]
+                        max_ent = float(getattr(self.c.tra, "spill_max_depth_entropy", 2.1))
+                        ent_spill = (F.relu(entropy - max_ent) * pos_mask_e).sum() / pos_mask_e.sum().clamp(min=1.0)
+                        spill_loss_value = spill_loss_value + ent_spill
+                        loss = loss + float(getattr(self.c.tra, "spill_entropy_lambda", 0.3)) * ent_spill
+
             if getattr(self.c.tra, "supcon", False) and supcon_z is not None:
                 if getattr(self.c.tra, "supcon_curriculum", False):
                     curriculum_epochs = int(getattr(self.c.tra, "supcon_curriculum_epochs", 15))
@@ -273,7 +332,14 @@ class Trainer:
 
         scores = torch.sigmoid(outputs).detach().cpu().numpy().flatten()
         label_values = labels.detach().cpu().numpy().flatten().astype(int)
-        return scores, label_values, loss.item(), raw_loss_value
+        return (
+            scores,
+            label_values,
+            loss.item(),
+            raw_loss_value,
+            float(dann_loss_value.detach().item()),
+            float(spill_loss_value.detach().item()),
+        )
 
     def _ins_hard_samples(self, images, labels, mask, hard_injector, remaining_batches: int) -> int:
         if not hard_injector or not hard_injector.has_next():
@@ -304,6 +370,8 @@ class Trainer:
         self.model.train()
         loss_total = 0.0
         raw_loss_total = 0.0
+        dann_loss_total = 0.0
+        spill_loss_total = 0.0
         labels = []
         preds = []
         scores = []
@@ -312,7 +380,8 @@ class Trainer:
         for batch_index, batch in enumerate(
             tqdm(self.train_loader, desc="Training", mininterval=5, miniters=1, file=sys.stderr)
         ):
-            images, batch_labels, mask = batch
+            images, batch_labels, mask = batch[:3]
+            domain_ids = batch[3] if len(batch) > 3 else None
             total_injected += self._ins_hard_samples(
                 images,
                 batch_labels,
@@ -320,16 +389,26 @@ class Trainer:
                 hard_injector,
                 len(self.train_loader) - batch_index,
             )
-            batch_scores, batch_labels_out, batch_loss, batch_raw_loss = self._train_batch(
+            (
+                batch_scores,
+                batch_labels_out,
+                batch_loss,
+                batch_raw_loss,
+                batch_dann_loss,
+                batch_spill_loss,
+            ) = self._train_batch(
                 images,
                 batch_labels,
                 mask,
+                domain_ids=domain_ids,
                 epoch=epoch,
             )
             if batch_scores.size == 0:
                 continue
             loss_total += batch_loss
             raw_loss_total += batch_raw_loss
+            dann_loss_total += batch_dann_loss
+            spill_loss_total += batch_spill_loss
             labels.extend(batch_labels_out)
             preds.extend((batch_scores > 0.5).astype(int))
             scores.extend(batch_scores)
@@ -337,6 +416,8 @@ class Trainer:
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
         metrics["loss"] = loss_total / len(self.train_loader)
         metrics["raw_loss"] = raw_loss_total / len(self.train_loader)
+        metrics["dann_loss"] = dann_loss_total / len(self.train_loader)
+        metrics["spill_loss"] = spill_loss_total / len(self.train_loader)
         metrics["scores"] = scores
         metrics["hard_injected"] = total_injected
 
@@ -356,13 +437,14 @@ class Trainer:
         scores = []
 
         with torch.no_grad(), autocast(self.c.device, enabled=self.c.device == "cuda"):
-            for images, batch_labels, mask in tqdm(
+            for batch in tqdm(
                 self.valid_loader,
                 desc="Validating",
                 mininterval=5,
                 miniters=1,
                 file=sys.stderr,
             ):
+                images, batch_labels, mask = batch[:3]
                 if mask.view(mask.size(0), -1).sum() <= 0:
                     print("[ERROR] Encountered batch with mask sum == 0 in validation. This block should not be loaded!")
                     continue
@@ -450,10 +532,12 @@ class Trainer:
             test_due = True
 
         max_eval_scrolls = getattr(self.c.tra, "eval_int_scrolls", 2)
+        eval_rendered = 0
         for index, (scroll_id, visualizer) in enumerate(self.scroll_vis.items()):
-            if eval_due and index < max_eval_scrolls and getattr(visualizer, "eval_enabled", True):
+            if eval_due and getattr(visualizer, "eval_enabled", True) and eval_rendered < max_eval_scrolls:
                 try:
                     visualizer.add_evaluation_figures(epoch, self.model)
+                    eval_rendered += 1
                 except Exception as exc:
                     print(f"[ERROR] eval figures failed for scroll {scroll_id}: {exc}")
                     import traceback
