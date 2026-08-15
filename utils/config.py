@@ -178,6 +178,7 @@ class TrainingConfig:
     spill_active_depth_tau: float = 0.08
     spill_max_active_depth_frac: float = 0.35
     spill_min_depth_var: float = 0.5
+    spill_prob: bool = False  # old probability-based active-depth-fraction approach
     spill_entropy: bool = False
     spill_entropy_lambda: float = 0.3
     spill_max_depth_entropy: float = 2.1

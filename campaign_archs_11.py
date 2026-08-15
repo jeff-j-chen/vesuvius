@@ -254,48 +254,48 @@ TESTS = [
     # overrides were missing from _OVERRIDES; fixed -- re-run included below)
     # _mk11("ctx128_fast", "ctx128_fast", context_size=128),
     # _mk11("ctx128_ds4", "ctx128_ds4", context_size=128, context_downsample=4),
-    _mk11("ctx128_gceasym", "ctx128_gceasym", context_size=128, **GCE_ASYM),
+    # _mk11("ctx128_gceasym", "ctx128_gceasym", context_size=128, **GCE_ASYM),
 
     # PHASE 2b: ctx128 modifier tests
-    _mk11(
-        "ctx128_dann",
-        "ctx128_dann",
-        context_size=128,
-        dann=True,
-        dann_lambda=0.25,
-        dann_grl_anneal=True,
-    ),
-    _mk11(
-        "ctx128_spill",
-        "ctx128_spill",
-        context_size=128,
-        spill_reduction=True,
-        spill_lambda=0.4,
-        spill_min_depth_var=0.5,
-    ),
+    # _mk11(
+    #     "ctx128_dann",
+    #     "ctx128_dann",
+    #     context_size=128,
+    #     dann=True,
+    #     dann_lambda=0.25,
+    #     dann_grl_anneal=True,
+    # ),
+    # _mk11(
+    #     "ctx128_spill"
+    #     "ctx128_spill",
+    #     context_size=128,
+    #     spill_reduction=True,
+    #     spill_lambda=0.4,
+    #     spill_min_depth_var=0.5,
+    # ),
 
     # PHASE 2c: ctx192 tests (192x192 context, ds2, 4-scroll fast subset)
-    _mk11(
-        "ctx192_fast",
-        "ctx192_fast",
-        context_size=192,
-    ),
-    _mk11(
-        "ctx192_newspill",
-        "ctx192_newspill",
-        context_size=192,
-        spill_entropy=True,
-        spill_entropy_lambda=0.3,
-        spill_max_depth_entropy=2.1,
-    ),
-    _mk11(
-        "ctx192_fullscroll",
-        "ctx192_fullscroll",
-        context_size=192,
-        scrolls=list(ALL_SCROLLS),
-        eval_int_scrolls=4,
-        dann_n_domains=len(ALL_SCROLLS),
-    ),
+    # _mk11(
+    #     "ctx192_fast",
+    #     "ctx192_fast",
+    #     context_size=192,
+    # ),
+    # _mk11(
+    #     "ctx192_newspill",
+    #     "ctx192_newspill",
+    #     context_size=192,
+    #     spill_entropy=True,
+    #     spill_entropy_lambda=0.3,
+    #     spill_max_depth_entropy=2.1,
+    # ),
+    # _mk11(
+    #     "ctx192_fullscroll",
+    #     "ctx192_fullscroll",
+    #     context_size=192,
+    #     scrolls=list(ALL_SCROLLS),
+    #     eval_int_scrolls=4,
+    #     dann_n_domains=len(ALL_SCROLLS),
+    # ),
     _mk11(
         "ctx192_fullscroll_fullres",
         "ctx192_fullscroll_fullres",
@@ -304,6 +304,59 @@ TESTS = [
         scrolls=list(ALL_SCROLLS),
         eval_int_scrolls=4,
         dann_n_domains=len(ALL_SCROLLS),
+        # 5090 (32GB): ctx192/ds1 activation ~1.98GB/sample; batch=12 -> ~26GB
+        batch_size=12,
+        lr=9e-5,   # sqrt(12/32) * 1.5e-4
+        eval_infer_bs=24,
+        num_workers=8,
+    ),
+    _mk11(
+        "ctx192_fullscroll_fullres_spill",
+        "ctx192_fullres_oldspill",
+        context_size=192,
+        context_downsample=1,
+        scrolls=list(ALL_SCROLLS),
+        eval_int_scrolls=4,
+        dann_n_domains=len(ALL_SCROLLS),
+        batch_size=12,
+        lr=9e-5,
+        eval_infer_bs=24,
+        num_workers=8,
+        # old prob-based spill; lambda=0.5 (down from 0.6) because larger spatial
+        # extent at ctx192/ds1 gives a more stable depth profile -> stronger effective signal
+        spill_prob=True,
+        spill_lambda=0.5,
+        spill_depth_threshold=0.35,
+        spill_active_depth_tau=0.08,
+        spill_max_active_depth_frac=0.35,
+    ),
+    _mk11(
+        "ctx256_fullscroll_ds2",
+        "ctx256_fullscroll_ds2",
+        context_size=256,
+        context_downsample=2,
+        scrolls=list(ALL_SCROLLS),
+        eval_int_scrolls=4,
+        dann_n_domains=len(ALL_SCROLLS),
+        # ctx256/ds2 activation ~0.88GB/sample; batch=28 -> ~27GB
+        batch_size=28,
+        lr=get_default_lr(),  # batch=28 ~= default batch=32
+        eval_infer_bs=48,
+        num_workers=8,
+    ),
+    _mk11(
+        "ctx256_fullscroll_fullres",
+        "ctx256_fullscroll_fullres",
+        context_size=256,
+        context_downsample=1,
+        scrolls=list(ALL_SCROLLS),
+        eval_int_scrolls=4,
+        dann_n_domains=len(ALL_SCROLLS),
+        # ctx256/ds1 activation ~3.52GB/sample; batch=7 -> ~27GB
+        batch_size=7,
+        lr=7e-5,   # sqrt(7/32) * 1.5e-4
+        eval_infer_bs=14,
+        num_workers=8,
     ),
 ]
 
@@ -350,11 +403,16 @@ _OVERRIDES = {
     "spill_entropy": ("tra", "spill_entropy"),
     "spill_entropy_lambda": ("tra", "spill_entropy_lambda"),
     "spill_max_depth_entropy": ("tra", "spill_max_depth_entropy"),
+    "spill_prob": ("tra", "spill_prob"),
     "gce_q": ("tra", "gce_q"),
     "label_smooth_pos": ("tra", "label_smooth_pos"),
     "label_smooth_neg": ("tra", "label_smooth_neg"),
     "scrolls": ("data", "scrolls"),
     "eval_int_scrolls": ("tra", "eval_int_scrolls"),
+    "batch_size": ("dl", "batch_size"),
+    "eval_infer_bs": ("data", "eval_infer_bs"),
+    "lr": ("tra", "lr"),
+    "num_workers": ("dl", "num_workers"),
     "vis_scroll_ids": ("data", "vis_scroll_ids"),
 }
 

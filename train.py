@@ -208,6 +208,7 @@ class Trainer:
                 bool(getattr(self.c.tra, "dann", False)),
                 bool(getattr(self.c.tra, "spill_reduction", False)),
                 bool(getattr(self.c.tra, "spill_entropy", False)),
+                bool(getattr(self.c.tra, "spill_prob", False)),
             ])
             if bool(getattr(self.c.tra, "dann_grl_anneal", False)):
                 n_ep = float(getattr(self.c.tra, "n_epochs", 12))
@@ -296,6 +297,24 @@ class Trainer:
                     depth_var = depth_logits.var(dim=1, unbiased=False)           # [B]
                     min_var = float(getattr(self.c.tra, "spill_min_depth_var", 0.5))
                     spill_loss_value = (F.relu(min_var - depth_var) * pos_mask).sum() / pos_mask.sum().clamp(min=1.0)
+                    loss = loss + float(getattr(self.c.tra, "spill_lambda", 0.0)) * spill_loss_value
+
+            if bool(getattr(self.c.tra, "spill_prob", False)) and center_voxel_map is not None:
+                pos_mask = (labels.view(-1) > 0.5).float()
+                if pos_mask.sum() > 0:
+                    # original prob-based spill: penalize active-depth-fraction > max_active_frac
+                    center_probs = torch.sigmoid(center_voxel_map)
+                    depth_profile = center_probs.mean(dim=(3, 4)).squeeze(1)  # [B, D]
+                    depth_thresh = float(getattr(self.c.tra, "spill_depth_threshold", 0.35))
+                    depth_tau = float(getattr(self.c.tra, "spill_active_depth_tau", 0.08))
+                    max_active_frac = float(getattr(self.c.tra, "spill_max_active_depth_frac", 0.35))
+                    active_depth_frac = torch.sigmoid(
+                        (depth_profile - depth_thresh) / max(depth_tau, 1e-6)
+                    ).mean(dim=1)
+                    spill_loss_value = spill_loss_value + (
+                        (F.relu(active_depth_frac - max_active_frac) * pos_mask).sum()
+                        / pos_mask.sum().clamp(min=1.0)
+                    )
                     loss = loss + float(getattr(self.c.tra, "spill_lambda", 0.0)) * spill_loss_value
 
             if bool(getattr(self.c.tra, "spill_entropy", False)):

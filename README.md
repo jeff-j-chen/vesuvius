@@ -29,9 +29,7 @@ python roi.py
 
 ## Training data
 
-Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113 keV, 1.2 m detector distance, raw volume ID `20250728140407`). The training set is **18 fragments**: the original 4, plus 11 PHerc0139 fragments, plus 1 PHerc0814 segment (seg46527), plus 1 PHerc0500P2 segment (500P2_front), plus 1 PHerc1667 segment (w013).
-
-**Original 4:**
+Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113 keV, 1.2 m detector distance, raw volume ID `20250728140407`). The training set is **18 fragments**: 15 PHerc0139 fragments, 1 PHerc0814 segment (seg46527), 1 PHerc0500P2 segment (500P2_front), 1 PHerc1667 segment (w013).
 
 | ID | Fragment | Zarr shape (D,H,W) | Mask valid frac | Split |
 |---|---|---|---|---|
