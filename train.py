@@ -194,8 +194,36 @@ class Trainer:
         except Exception as exc:
             print(f"[config] WARN could not dump run config: {exc}", flush=True)
 
+    def _apply_fda(self, images: torch.Tensor) -> torch.Tensor:
+        """within-batch FDA: swap low-freq amplitude between random tile pairs.
+        targets fragment-specific amplitude texture; preserves phase (ink structure)."""
+        fda_prob = float(getattr(self.c.dl, "fda_prob", 0.0))
+        if fda_prob <= 0.0:
+            return images
+        fda_beta = float(getattr(self.c.dl, "fda_beta", 0.05))
+        B, D, H, W = images.shape
+        apply_mask = torch.rand(B, device=images.device) < fda_prob
+        if not apply_mask.any():
+            return images
+        perm = torch.randperm(B, device=images.device)
+        fft = torch.fft.rfft2(images)           # (B, D, H, W//2+1) complex
+        amp = fft.abs()
+        phase = fft.angle()
+        style_amp = amp[perm]
+        # replace low-freq corners; ink strokes are high-freq and survive this
+        h = max(1, int(fda_beta * H / 2))
+        w = max(1, int(fda_beta * W / 2) + 1)
+        new_amp = amp.clone()
+        new_amp[:, :, :h, :w] = style_amp[:, :, :h, :w]
+        if h > 1:
+            new_amp[:, :, -h + 1:, :w] = style_amp[:, :, -h + 1:, :w]
+        blended = torch.where(apply_mask.view(B, 1, 1, 1), new_amp, amp)
+        out = torch.fft.irfft2(torch.polar(blended, phase), s=(H, W))
+        return out.clamp(0.0, 1.0)
+
     def _train_batch(self, images, labels, mask, domain_ids=None, epoch: int = 0):
         images = images.to(self.c.device)
+        images = self._apply_fda(images)
         labels = labels.to(self.c.device).view(-1, 1)
         mask = (mask.to(self.c.device).view(images.size(0), -1).sum(dim=1) > 0).float().unsqueeze(1)
         if domain_ids is not None:
@@ -342,12 +370,18 @@ class Trainer:
                 else:
                     supcon_lambda = float(getattr(self.c.tra, "supcon_lambda", 0.1))
                 supcon_temp = float(getattr(self.c.tra, "supcon_temp", 0.07))
-                loss = loss + supcon_lambda * supcon_loss(supcon_z, labels.view(-1).long(), temp=supcon_temp)
+                cross_frag_ids = domain_ids if bool(getattr(self.c.tra, "supcon_cross_frag", False)) else None
+                loss = loss + supcon_lambda * supcon_loss(supcon_z, labels.view(-1).long(), temp=supcon_temp, domain_ids=cross_frag_ids)
 
         self.scaler.scale(loss).backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()
+
+        if hasattr(self.model, "prototype_head") and self.model.prototype_head is not None:
+            emb = getattr(self.model, "last_embedding_detached", None)
+            if emb is not None:
+                self.model.prototype_head.update(emb, labels)
 
         scores = torch.sigmoid(outputs).detach().cpu().numpy().flatten()
         label_values = labels.detach().cpu().numpy().flatten().astype(int)

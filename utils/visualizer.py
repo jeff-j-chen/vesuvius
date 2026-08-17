@@ -831,7 +831,8 @@ class TensorboardVisualizer:
         """load eroded labels as a compact binary (uint8 0/1) map. only the >0.5 threshold
         is ever used downstream (label_fraction is the mean of the binarized ink), so the old
         float64 /255 was 8x wasted RAM. >127 matches the prior `/255 > 0.5` cut exactly."""
-        path = f"./eroded_inklabels/{seg_id}.png"
+        lbl_dir = getattr(self.c.data, 'inklabel_dir', './eroded_inklabels')
+        path = f"{lbl_dir}/{seg_id}.png"
         labels = imread_gray(path)
         if labels is None:
             raise RuntimeError(f"could not read labels at {path}")
@@ -1467,6 +1468,7 @@ class TensorboardVisualizer:
         if fig is not None:
             self.writer.add_figure(f"HardMined/Overlay", fig, epoch)
             plt.close(fig)
+        self.writer.flush()
 
         if all_pred_data:
             # label map spans the full split extent along the split axis, shared range on the other
@@ -1515,6 +1517,7 @@ class TensorboardVisualizer:
             # per-depth summary heatmap for the train split (representative)
             _sumfig = self._create_readability_summary_figure(group_aggr["Train"], groups["Train"], depth_labels)
             self.writer.add_figure("Readability/Summary", _sumfig, epoch); plt.close(_sumfig)
+            self.writer.flush()
 
             if getattr(self.c.tra, "eval_aggregate", True):
                 # train_split_n: number of tiles in the train region along the split axis
@@ -1589,6 +1592,7 @@ class TensorboardVisualizer:
                             print(f"[save-vis] eval save failed: {_e}")
                 self.writer.add_figure('Evaluation/Aggregated', fig, epoch)
                 plt.close(fig)
+                self.writer.flush()
 
             # ---- voxel map visualization (v13_mil only) ----
             # log a grid of representative tiles showing WHERE the model fires,
@@ -2445,44 +2449,39 @@ class TensorboardVisualizer:
         print("Logging probe-region figures...")
         model.eval()
 
+        probe_figs_dir = os.path.join(self.log_path, "probe_figs")
+        os.makedirs(probe_figs_dir, exist_ok=True)
+
         probe_data_list = []
+        all_composites = {"ALL": [], "Easy": [], "Hard": []}
+        all_composites_tta = {"ALL": [], "Easy": [], "Hard": []}
+
         for spec in self.probe_specs:
             probe_data = self._collect_probe_region_predictions(model, spec)
             if probe_data is None:
                 continue
-
             probe_data_list.append(probe_data)
 
-            aggregate_metrics = probe_data["aggregate_metrics"]
-            # per-scroll probe composites removed — only the ALL aggregate is logged below
-
-            aggregate_tta = probe_data.get("aggregate_metrics_tta")
-            # tta ReadabilityComposite rolled into the ALL/ReadabilityComposite_tta aggregate;
-            # skip per-probe tta scalars to avoid 30 more clutter tags.
+            lbl = (spec.get("label") or "").capitalize()
+            rc = probe_data["aggregate_metrics"].get("readability_composite", float("nan"))
+            rc_t = probe_data.get("aggregate_metrics_tta", {}).get("readability_composite", float("nan"))
+            all_composites["ALL"].append(rc)
+            all_composites_tta["ALL"].append(rc_t)
+            if lbl in all_composites:
+                all_composites[lbl].append(rc)
+                all_composites_tta[lbl].append(rc_t)
 
         if probe_data_list:
             fig = self._create_combined_probe_depth_figure(probe_data_list)
-            # patch the epoch number into the suptitle (avoids passing epoch deep into the figure method)
             fig.texts[0].set_text(fig.texts[0].get_text().format(epoch + 1))
+            try:
+                fig_path = os.path.join(probe_figs_dir, f"probe_grid_ep{epoch+1:02d}.png")
+                fig.savefig(fig_path, dpi=150, bbox_inches="tight")
+                print(f"[probe-fig] -> {fig_path}")
+            except Exception as _e:
+                print(f"[probe-fig] save failed: {_e}")
             self.writer.add_figure("ProbeROIs/Grid", fig, epoch)
             plt.close(fig)
-
-            # aggregate readability composite across all probes — total + per-label splits
-            all_composites = {
-                "ALL":  [], "Easy": [], "Hard": []
-            }
-            all_composites_tta = {
-                "ALL":  [], "Easy": [], "Hard": []
-            }
-            for pd in probe_data_list:
-                lbl   = (pd["spec"].get("label") or "").capitalize()  # "easy"->"Easy" etc.
-                rc    = pd["aggregate_metrics"].get("readability_composite", float("nan"))
-                rc_t  = pd.get("aggregate_metrics_tta", {}).get("readability_composite", float("nan"))
-                all_composites["ALL"].append(rc)
-                all_composites_tta["ALL"].append(rc_t)
-                if lbl in all_composites:
-                    all_composites[lbl].append(rc)
-                    all_composites_tta[lbl].append(rc_t)
 
             for group, vals in all_composites.items():
                 finite = [v for v in vals if np.isfinite(v)]
@@ -2497,6 +2496,7 @@ class TensorboardVisualizer:
                 if finite:
                     self.writer.add_scalar(f"R_M/Probe/{group}/ReadabilityComposite_tta",
                                           float(np.mean(finite)), epoch)
+            self.writer.flush()
 
     def _collect_probe_region_predictions(self, model, spec):
         """prepare per-depth predictions and readability stats for one fixed probe region"""

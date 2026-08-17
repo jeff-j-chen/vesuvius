@@ -120,6 +120,7 @@ class DataConfig:
     eval_infer_bs: int = 128
     probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
     vis_scroll_ids: Optional[List[int]] = None
+    inklabel_dir: str = "./eroded_inklabels"
 
     @property
     def test_scroll_id(self) -> Optional[int]:
@@ -144,6 +145,11 @@ class DataloaderConfig:
     cutout_max_frac: float = 0.35
     cutout_n_patches: int = 1
     depth_mask_prob: float = 0.0
+    fda_prob: float = 0.0
+    fda_beta: float = 0.05  # fraction of low-freq spectrum to swap
+    elastic_prob: float = 0.0
+    elastic_alpha: float = 15.0  # displacement magnitude in pixels
+    elastic_sigma: float = 5.0   # gaussian smoothing sigma for displacement field
 
 
 @dataclass
@@ -201,6 +207,7 @@ class TrainingConfig:
     supcon_lambda_start: float = 0.1
     supcon_lambda_end: float = 0.5
     supcon_curriculum_epochs: int = 15
+    supcon_cross_frag: bool = False  # restrict supcon positives to cross-fragment pairs only
 
 
 @dataclass
@@ -212,6 +219,9 @@ class ModelConfig:
     attn_mil: bool = False
     attn_entropy_weight: float = 0.0
     learned_surface: bool = False
+    use_ibn: bool = False  # IBN-a: IN+BN hybrid in shallow encoder blocks
+    use_prototype: bool = False  # replace bag-score with online prototype cosine classifier
+    prototype_ema: float = 0.99
 
 
 @dataclass

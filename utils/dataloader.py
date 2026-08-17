@@ -136,6 +136,9 @@ class Transform:
         self.cutout_max_frac  = float(getattr(config.dl, "cutout_max_frac", 0.35))
         self.cutout_n_patches = int(getattr(config.dl, "cutout_n_patches", 1))
         self.depth_mask_prob  = float(getattr(config.dl, "depth_mask_prob", 0.0))
+        self.elastic_prob     = float(getattr(config.dl, "elastic_prob", 0.0))
+        self.elastic_alpha    = float(getattr(config.dl, "elastic_alpha", 15.0))
+        self.elastic_sigma    = float(getattr(config.dl, "elastic_sigma", 5.0))
 
     def __call__(self, block):
         """applies a random sequence of transforms to a block"""
@@ -153,8 +156,28 @@ class Transform:
             block = self._apply_cutout(block)
         if self.depth_mask_prob > 0:
             block = self._apply_depth_mask(block)
+        if self.elastic_prob > 0 and random.random() < self.elastic_prob:
+            block = self._apply_elastic_deformation(block)
         # ensure the final result is contiguous to avoid negative strides
         return np.ascontiguousarray(block)
+
+    def _apply_elastic_deformation(self, block):
+        """smooth elastic deformation on the XY plane, shared across all depth slices.
+        uses the same displacement field for every depth slice so the through-depth
+        intensity profile (and dz signal) is preserved -- only spatial shape is warped."""
+        from scipy.ndimage import gaussian_filter, map_coordinates
+        _, H, W = block.shape
+        rng = np.random.default_rng()
+        dy = gaussian_filter(rng.standard_normal((H, W)), sigma=self.elastic_sigma) * self.elastic_alpha
+        dx = gaussian_filter(rng.standard_normal((H, W)), sigma=self.elastic_sigma) * self.elastic_alpha
+        y_grid, x_grid = np.mgrid[0:H, 0:W]
+        coords_y = (y_grid + dy).clip(0, H - 1)
+        coords_x = (x_grid + dx).clip(0, W - 1)
+        coords_flat = [coords_y.ravel(), coords_x.ravel()]
+        out = np.empty_like(block)
+        for d in range(block.shape[0]):
+            out[d] = map_coordinates(block[d], coords_flat, order=1, mode='reflect').reshape(H, W)
+        return out
 
     def _apply_cutout(self, block):
         """zero out random XY patches across all depth slices (specaugment-style).
@@ -620,7 +643,8 @@ class DataManager:
         vol = zarr.open(zarr_dir, mode='r')
 
         # load labels and mask, and normalize to [0, 1]
-        labels = imread_gray(f"./eroded_inklabels/{self.scroll_id}.png")
+        lbl_dir = getattr(self.c.data, 'inklabel_dir', './eroded_inklabels')
+        labels = imread_gray(f"{lbl_dir}/{self.scroll_id}.png")
 
         mask = imread_gray(f"./masks/{self.scroll_id}.png")
 
@@ -905,7 +929,7 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
         "batch_size": config.dl.batch_size,
         "num_workers": config.dl.num_workers,
         "pin_memory": True,
-        "persistent_workers": False,  # disabled on Windows - spawn deadlocks with persistent workers
+        "persistent_workers": True,  # safe on Linux; avoids worker respawn per epoch
         "drop_last": True,   # prevents trailing batch of 1 from crashing BatchNorm
     }
     
@@ -923,7 +947,7 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
         valid_dataset,
         batch_size=config.dl.batch_size,
         num_workers=0,
-        pin_memory=False,
+        pin_memory=True,
     )
 
     return train_loader, valid_loader

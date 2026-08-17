@@ -1,45 +1,28 @@
-"""campaign_archs_11.py -- baseline-family follow-up on the 18-fragment default set (2026-08-14).
+"""campaign_archs_12.py -- ctx192/ds2 modifier sweep on the 4-scroll fast subset (2026-08-17).
 
-GOAL: promote the new all-data baseline and probe the next structural follow-ups now that
-PHerc1667 w013 is part of the default training pool.
+BASELINE (already tested in archs11, not rerun here):
+  ctx192_fast = ctx192/ds2, FAST_SCROLLS, SOFT_AUGS, TTA, attn-MIL, supcon, MAE init
 
-BASELINE GOING FORWARD:
-  baseline_softaug = nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_supcon_learnsurf_mae
+GOAL: probe the key regularization/label modifiers at ctx192/ds2 resolution.
 
-TRAINING SET:
-  all 18 default fragments from utils.config DEFAULT_SCROLLS, including:
-    - PHerc0139 fragments
-    - PHerc0814 seg46527
-    - PHerc0500P2 500P2_front
-    - PHerc1667 w013
+TESTS:
+  nonoise     -- flip+rot only; all photometric augmentations off (ablate aug contribution)
+  oldspill    -- variance-based spill regularization (lambda=0.4, min_depth_var=0.5)
+  dann        -- DANN with GRL annealing (lambda=0.25, anneal 0->1)
+  oldspill_dann -- conjugate: both spill and DANN active
+  eroded2     -- same baseline but labels from eroded2_inklabels (~36% additional erosion)
 
-NOTE ON MAE WARM-STARTS:
-  models/mae_nnunet_96.pth is used for BOTH ctx96 and ctx128 tests. this backbone is fully
-  convolutional, so the checkpoint is shape-compatible across the larger context size.
-
-PHASE 1 RESULTS (2026-08-14, all 5 ctx96 runs + baseline_ctx128):
-  - DANN: mixed per-patch; net positive but kills low-contrast regions (fixed-grl_scale=1.0 is the
-    root cause; annealing warmup added below)
-  - regular aug: severely damaging -- the dz stem makes this model sensitive to per-slice jitter;
-    soft aug is correct; could try even weaker or zero
-  - spill reduction (prob-based): beneficial but confidence-capping: equilibrium lands at logit~0
-    because the prob-space penalty fights the classification gradient; replaced with logit-variance
-  - ctx128: simply better, consistent with prior results
-
-PHASE 2 (this run): ctx128 variants only, probing modified DANN + modified spill
-  9: ctx128 + DANN with grl annealing (lambda=0.25, schedule 0->1 over training)
-  10: ctx128 + variance-based spill (logit std target, lambda=0.4, min_depth_var=0.5)
+MEMORY NOTE (RTX 5090 / 32GB):
+  ctx192/ds2 activations ~0.495 GB/sample; batch=48 -> ~26 GB (safe).
+  batch=96 would need ~47 GB -- does not fit. eval_infer_bs=96 is fine (no grad storage).
 
 CONFIGURATION:
-  12 epochs, eval at epoch 12 only, probes every 6 epochs
-  test_int=999, fast_eval_figure=False, eval_int_scrolls=4
-    selected eval scrolls: 500P2_front, w013, seg46527, w035
-  batch=32, eval_bs=64, workers=4
-  keep default GCE q=0.7, NO asymmetric label smoothing
+  12 epochs, eval at epoch 12 only, probes every 6 epochs, fast_eval_figure=True
+  eval_int_scrolls=4 (all 4 vis scrolls: 500P2_front, w013, seg46527, w035)
+  batch=48, lr=1.8e-4 (sqrt(48/32) scaled from default), eval_bs=96, workers=8
 
-  python campaign_archs_11.py --dry-run
-  python campaign_archs_11.py --only dann_ctx128_annealed,spill_ctx128_var
-  python campaign_archs_11.py
+  python campaign_archs_12.py --dry-run
+  python campaign_archs_12.py
 """
 from __future__ import annotations
 
@@ -59,11 +42,10 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 from utils.config import Config, DEFAULT_SCROLLS
 from utils.platform import get_default_lr, get_zarr_dir
 
-LOG_DIR = "./runs_archs11"
+LOG_DIR = "./runs_archs12"
 ALL_SCROLLS = list(DEFAULT_SCROLLS)
 _MAE_CTX96 = "models/mae_nnunet_96.pth"
 
-# 4-scroll fast subset matching vis_scroll_ids: 500P2_front, w013, seg46527, w035
 _FAST_IDS = {20250628074500, 20240304141531, 20260226000000, 20260317000000}
 FAST_SCROLLS = [s for s in ALL_SCROLLS if s.scroll_id in _FAST_IDS]
 
@@ -79,15 +61,16 @@ SOFT_AUGS = dict(
     depth_mask_prob=0.0,
 )
 
-REGULAR_AUGS = dict(
-    flip_prob=0.6,
-    rotation_prob=0.6,
-    noise_prob=0.3,
-    brightness_prob=0.6,
-    contrast_prob=0.6,
-    cutout_prob=0.4,
-    cutout_max_frac=0.2,
-    cutout_n_patches=2,
+# flip + rotation only; all photometric noise off
+NO_NOISE_AUGS = dict(
+    flip_prob=0.25,
+    rotation_prob=0.25,
+    noise_prob=0.0,
+    brightness_prob=0.0,
+    contrast_prob=0.0,
+    cutout_prob=0.0,
+    cutout_max_frac=0.0,
+    cutout_n_patches=0,
     depth_mask_prob=0.0,
 )
 
@@ -106,11 +89,10 @@ SPATIAL_SUPCON = dict(
     supcon_temp=0.07,
 )
 
-GCE_ASYM = dict(
-    gce_q=0.9,
-    label_smooth_pos=0.25,
-    label_smooth_neg=0.02,
-)
+_BATCH = 48
+_LR = 1.8e-4   # sqrt(48/32) * 1.5e-4; keeps per-sample effective LR matched to baseline
+_EVAL_BS = 96
+_WORKERS = 8
 
 
 def _base_config(exp_name: str) -> Config:
@@ -127,7 +109,7 @@ def _base_config(exp_name: str) -> Config:
     c.data.train_d_end = 28
     c.data.d_start = 4
     c.data.d_end = 28
-    c.data.context_size = 96
+    c.data.context_size = 192
     c.data.context_downsample = 2
     c.model.conv1_drop = 0.15
     c.model.conv2_drop = 0.15
@@ -139,17 +121,17 @@ def _base_config(exp_name: str) -> Config:
     c.tra.save_int = 6
     c.tra.log_dir = LOG_DIR
     c.tra.deterministic = False
-    c.tra.lr = get_default_lr()
-    c.data.eval_infer_bs = 64
-    c.tra.eval_int_scrolls = 1
+    c.tra.lr = _LR
+    c.data.eval_infer_bs = _EVAL_BS
+    c.tra.eval_int_scrolls = 4
     c.data.vis_scroll_ids = [20250628074500, 20240304141531, 20260226000000, 20260317000000]
     c.tra.weight_decay = 3e-1
     c.data.ring_label_source = "closed"
     c.tra.tta_consistency = False
     c.tra.l1_lambda = 0.0
     c.tra.dann_n_domains = len(FAST_SCROLLS)
-    c.dl.batch_size = 32
-    c.dl.num_workers = 4
+    c.dl.batch_size = _BATCH
+    c.dl.num_workers = _WORKERS
     c.dl.data_aug = True
     c.data.mask_memmap = True
     setattr(c.data, "mask_bitpack", True)
@@ -157,7 +139,7 @@ def _base_config(exp_name: str) -> Config:
     c.data.ring_close_r = 3
     c.data.ring_gap_r = 3
     c.data.ring_shell_r = 2
-    c.tra.fast_eval_figure = False
+    c.tra.fast_eval_figure = True
     c.dl.flip_prob = 0.0
     c.dl.rotation_prob = 0.0
     c.dl.noise_prob = 0.0
@@ -174,7 +156,7 @@ def _base_config(exp_name: str) -> Config:
     return c
 
 
-_BASE11 = dict(
+_BASE12 = dict(
     arch="nnunet3d_lcndz",
     init_weights=_MAE_CTX96,
     attn_mil=True,
@@ -193,8 +175,8 @@ _BASE11 = dict(
 )
 
 
-def _mk11(tid: str, tag: str, **overrides: object) -> dict:
-    d = dict(_BASE11)
+def _mk12(tid: str, tag: str, **overrides: object) -> dict:
+    d = dict(_BASE12)
     d.update(overrides)
     d["tid"] = tid
     d["tag"] = tag
@@ -202,162 +184,77 @@ def _mk11(tid: str, tag: str, **overrides: object) -> dict:
 
 
 TESTS = [
-    # PHASE 1 (ctx96 + baseline ctx128) -- all completed 2026-08-14; commented out
-    # _mk11(
-    #     "baseline_softaug",
-    #     "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_supcon_learnsurf_mae",
-    # ),
-    # _mk11(
-    #     "regularaug_softaug",
-    #     "nnunet3d_ds2_lcndz_ctx96_regularaug_tta_attn_supcon_learnsurf_mae",
-    #     **REGULAR_AUGS,
-    # ),
-    # _mk11(
-    #     "dann_softaug",
-    #     "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_supcon_learnsurf_dann035_mae",
-    #     dann=True,
-    #     dann_lambda=0.35,
-    # ),
-    # _mk11(
-    #     "spill_softaug",
-    #     "nnunet3d_ds2_lcndz_ctx96_softaug_tta_attn_supcon_learnsurf_spillred_mae",
-    #     spill_reduction=True,
-    #     spill_lambda=0.6,
-    # ),
-    # _mk11(
-    #     "baseline_ctx128",
-    #     "nnunet3d_ds2_lcndz_ctx128_softaug_tta_attn_supcon_learnsurf_mae96",
-    #     context_size=128,
-    # ),
-    # _mk11(
-    #     "regularaug_ctx128",
-    #     "nnunet3d_ds2_lcndz_ctx128_regularaug_tta_attn_supcon_learnsurf_mae96",
-    #     context_size=128,
-    #     **REGULAR_AUGS,
-    # ),
-    # _mk11(
-    #     "dann_ctx128",
-    #     "nnunet3d_ds2_lcndz_ctx128_softaug_tta_attn_supcon_learnsurf_dann035_mae96",
-    #     context_size=128,
-    #     dann=True,
-    #     dann_lambda=0.35,
-    # ),
-    # _mk11(
-    #     "spill_ctx128",
-    #     "nnunet3d_ds2_lcndz_ctx128_softaug_tta_attn_supcon_learnsurf_spillred_mae96",
-    #     context_size=128,
-    #     spill_reduction=True,
-    #     spill_lambda=0.6,
-    # ),
+    # ctx192_fast baseline tested in archs11; not rerun
+    # _mk12("baseline", "ctx192_ds2_softaug_tta_attn_supcon_mae"),
 
-    # PHASE 2a: ctx128 fast explorations -- completed; ctx128_gceasym ran as no-op (GCE_ASYM
-    # overrides were missing from _OVERRIDES; fixed -- re-run included below)
-    # _mk11("ctx128_fast", "ctx128_fast", context_size=128),
-    # _mk11("ctx128_ds4", "ctx128_ds4", context_size=128, context_downsample=4),
-    # _mk11("ctx128_gceasym", "ctx128_gceasym", context_size=128, **GCE_ASYM),
-
-    # PHASE 2b: ctx128 modifier tests
-    # _mk11(
-    #     "ctx128_dann",
-    #     "ctx128_dann",
-    #     context_size=128,
-    #     dann=True,
-    #     dann_lambda=0.25,
-    #     dann_grl_anneal=True,
-    # ),
-    # _mk11(
-    #     "ctx128_spill"
-    #     "ctx128_spill",
-    #     context_size=128,
-    #     spill_reduction=True,
-    #     spill_lambda=0.4,
-    #     spill_min_depth_var=0.5,
-    # ),
-
-    # PHASE 2c: ctx192 tests (192x192 context, ds2, 4-scroll fast subset)
-    # _mk11(
-    #     "ctx192_fast",
-    #     "ctx192_fast",
-    #     context_size=192,
-    # ),
-    # _mk11(
-    #     "ctx192_newspill",
-    #     "ctx192_newspill",
-    #     context_size=192,
-    #     spill_entropy=True,
-    #     spill_entropy_lambda=0.3,
-    #     spill_max_depth_entropy=2.1,
-    # ),
-    # _mk11(
-    #     "ctx192_fullscroll",
-    #     "ctx192_fullscroll",
-    #     context_size=192,
-    #     scrolls=list(ALL_SCROLLS),
-    #     eval_int_scrolls=4,
-    #     dann_n_domains=len(ALL_SCROLLS),
-    # ),
-    # _mk11(
-    #     "ctx192_fullscroll_fullres",
-    #     "ctx192_fullscroll_fullres",
-    #     context_size=192,
-    #     context_downsample=1,
-    #     scrolls=list(ALL_SCROLLS),
-    #     eval_int_scrolls=4,
-    #     dann_n_domains=len(ALL_SCROLLS),
-    #     # 5090 (32GB): ctx192/ds1 activation ~1.98GB/sample; batch=12 -> ~26GB
-    #     batch_size=12,
-    #     lr=9e-5,   # sqrt(12/32) * 1.5e-4
-    #     eval_infer_bs=24,
-    #     num_workers=8,
-    # ),
-    # _mk11(
-    #     "ctx192_fullscroll_fullres_spill",
-    #     "ctx192_fullres_oldspill",
-    #     context_size=192,
-    #     context_downsample=1,
-    #     scrolls=list(ALL_SCROLLS),
-    #     eval_int_scrolls=4,
-    #     dann_n_domains=len(ALL_SCROLLS),
-    #     batch_size=12,
-    #     lr=9e-5,
-    #     eval_infer_bs=24,
-    #     num_workers=8,
-    #     # old prob-based spill; lambda=0.5 (down from 0.6) because larger spatial
-    #     # extent at ctx192/ds1 gives a more stable depth profile -> stronger effective signal
-    #     spill_prob=True,
-    #     spill_lambda=0.5,
-    #     spill_depth_threshold=0.35,
-    #     spill_active_depth_tau=0.08,
-    #     spill_max_active_depth_frac=0.35,
-    # ),
-    # _mk11(
-    #     "ctx256_fullscroll_ds2",
-    #     "ctx256_fullscroll_ds2",
-    #     context_size=256,
-    #     context_downsample=2,
-    #     scrolls=list(ALL_SCROLLS),
-    #     eval_int_scrolls=4,
-    #     dann_n_domains=len(ALL_SCROLLS),
-    #     # ctx256/ds2 activation ~0.88GB/sample; batch=28 -> ~27GB
-    #     batch_size=28,
-    #     lr=get_default_lr(),  # batch=28 ~= default batch=32
-    #     eval_infer_bs=48,
-    #     num_workers=8,
-    # ),
-    # _mk11(
-    #     "ctx256_fullscroll_fullres",
-    #     "ctx256_fullscroll_fullres",
-    #     context_size=256,
-    #     context_downsample=1,
-    #     scrolls=list(ALL_SCROLLS),
-    #     eval_int_scrolls=4,
-    #     dann_n_domains=len(ALL_SCROLLS),
-    #     # ctx256/ds1 activation ~3.52GB/sample; batch=7 -> ~27GB
-    #     batch_size=7,
-    #     lr=7e-5,   # sqrt(7/32) * 1.5e-4
-    #     eval_infer_bs=14,
-    #     num_workers=8,
-    # ),
+    _mk12(
+        "nonoise",
+        "192_ds2_nonoise",
+        **NO_NOISE_AUGS,
+    ),
+    _mk12(
+        "oldspill",
+        "192_ds2_oldspill",
+        spill_reduction=True,
+        spill_lambda=0.4,
+        spill_min_depth_var=0.5,
+    ),
+    _mk12(
+        "dann",
+        "192_ds2_dann",
+        dann=True,
+        dann_lambda=0.25,
+        dann_grl_anneal=True,
+    ),
+    _mk12(
+        "oldspill_dann",
+        "192_ds2_oldspill_dann",
+        spill_reduction=True,
+        spill_lambda=0.4,
+        spill_min_depth_var=0.5,
+        dann=True,
+        dann_lambda=0.25,
+        dann_grl_anneal=True,
+    ),
+    _mk12(
+        "eroded2",
+        "192_ds2_eroded2",
+        inklabel_dir="./eroded2_inklabels",
+    ),
+    _mk12(
+        "fda",
+        "192_ds2_fda",
+        # beta=0.05 swaps wavelengths > ~48px (background texture); ink strokes are high-freq and survive
+        fda_prob=0.5,
+        fda_beta=0.05,
+    ),
+    _mk12(
+        "ibn",
+        "192_ds2_ibn",
+        # IBN-a in enc1+enc2: IN strips fragment-specific amplitude style, BN preserves content
+        use_ibn=True,
+    ),
+    _mk12(
+        "cross_frag_sc",
+        "192_ds2_cross_frag_supcon",
+        # restrict supcon positives to cross-fragment pairs only -> forces fragment-invariant ink embedding
+        supcon_cross_frag=True,
+    ),
+    _mk12(
+        "prototype",
+        "192_ds2_prototype",
+        # replace bag score (MIL) with online prototype cosine classifier over bottleneck embedding
+        use_prototype=True,
+    ),
+    _mk12(
+        "elastic",
+        "192_ds2_elastic",
+        # elastic deformation: preserves ink signal (no cutout), warps spatial shape only
+        # alpha=15px displacement, sigma=5 smoothing -- moderate for 192x192 context
+        elastic_prob=0.5,
+        elastic_alpha=15.0,
+        elastic_sigma=5.0,
+    ),
 ]
 
 
@@ -414,6 +311,16 @@ _OVERRIDES = {
     "lr": ("tra", "lr"),
     "num_workers": ("dl", "num_workers"),
     "vis_scroll_ids": ("data", "vis_scroll_ids"),
+    "inklabel_dir": ("data", "inklabel_dir"),
+    "fda_prob": ("dl", "fda_prob"),
+    "fda_beta": ("dl", "fda_beta"),
+    "use_ibn": ("model", "use_ibn"),
+    "supcon_cross_frag": ("tra", "supcon_cross_frag"),
+    "use_prototype": ("model", "use_prototype"),
+    "prototype_ema": ("model", "prototype_ema"),
+    "elastic_prob": ("dl", "elastic_prob"),
+    "elastic_alpha": ("dl", "elastic_alpha"),
+    "elastic_sigma": ("dl", "elastic_sigma"),
 }
 
 
@@ -431,7 +338,7 @@ def build_config(t: dict) -> Config:
     if iw and os.path.exists(iw):
         c.init_weights = iw
     elif iw:
-        print(f"[archs11] init_weights '{iw}' not found -- {tid} trains from scratch")
+        print(f"[archs12] init_weights '{iw}' not found -- {tid} trains from scratch")
     c.dl.data_aug = any([
         c.dl.flip_prob,
         c.dl.rotation_prob,
@@ -441,14 +348,14 @@ def build_config(t: dict) -> Config:
         c.dl.cutout_prob,
         c.dl.depth_mask_prob,
     ])
-    os.makedirs("models/archs11", exist_ok=True)
-    setattr(c, "save_final", f"models/archs11/{tid}_final.pth")
+    os.makedirs("models/archs12", exist_ok=True)
+    setattr(c, "save_final", f"models/archs12/{tid}_final.pth")
     return c
 
 
 def run_test(c: Config, dry_run: bool) -> bool:
     scroll_ids = [getattr(s, "scroll_id", None) for s in c.data.scrolls]
-    print(f"\n{'=' * 70}\n[archs11] {c.exp_name}\n{'=' * 70}", flush=True)
+    print(f"\n{'=' * 70}\n[archs12] {c.exp_name}\n{'=' * 70}", flush=True)
     print(
         f"  arch={c.model.arch}  ctx={c.data.context_size} ds={c.data.context_downsample}"
         f"  train_scrolls={len(scroll_ids)}"
@@ -465,7 +372,7 @@ def run_test(c: Config, dry_run: bool) -> bool:
     print(f"  eval_scroll_ids={getattr(c.data, 'vis_scroll_ids', None)}")
     print(
         f"  loss={c.tra.loss_type}  gce_q={c.tra.gce_q}  supcon={c.tra.supcon}"
-        f"  learned_surface={c.model.learned_surface}"
+        f"  learned_surface={c.model.learned_surface}  inklabel_dir={c.data.inklabel_dir}"
     )
     print(
         f"  attn_mil={c.model.attn_mil}  tta_consistency={c.tra.tta_consistency}"
@@ -496,7 +403,7 @@ def run_test(c: Config, dry_run: bool) -> bool:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="campaign_archs_11: 18-fragment baseline-family sweep")
+    ap = argparse.ArgumentParser(description="campaign_archs_12: ctx192/ds2 modifier sweep")
     ap.add_argument("--only", type=str, default=None)
     ap.add_argument("--from", dest="from_id", type=str, default=None)
     ap.add_argument("--dry-run", action="store_true")
@@ -517,9 +424,9 @@ def main() -> None:
             return
         selected = TESTS[ids.index(args.from_id):]
 
-    print(f"[archs11] {len(selected)} test(s) queued  (log -> {LOG_DIR})")
-    print(f"[archs11] default training set: {len(ALL_SCROLLS)} fragments from 4 scroll families")
-    print("[archs11] baseline = baseline_softaug (ctx96, ds2, softaug, tta, attn, supcon, learned surface, MAE)")
+    print(f"[archs12] {len(selected)} test(s) queued  (log -> {LOG_DIR})")
+    print(f"[archs12] 4-scroll fast subset, ctx192/ds2, batch={_BATCH}, lr={_LR:.1e}")
+    print("[archs12] baseline = ctx192_fast (archs11; not rerun)")
 
     results = {}
     for t in selected:
@@ -533,7 +440,7 @@ def main() -> None:
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
 
-    print(f"\n{'=' * 70}\n[archs11] SUMMARY\n{'=' * 70}")
+    print(f"\n{'=' * 70}\n[archs12] SUMMARY\n{'=' * 70}")
     for tid, status in results.items():
         tag = next(str(t["tag"]) for t in TESTS if str(t["tid"]) == tid)
         print(f"  {tid} ({tag}): {status}")

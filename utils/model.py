@@ -104,8 +104,8 @@ class DomainClassifier(nn.Module):
         return self.net(grad_reverse(embedding, grl_scale))
 
 
-def supcon_loss(z: torch.Tensor, labels: torch.Tensor, temp: float = 0.07) -> torch.Tensor:
-    """supervised contrastive loss for binary labels."""
+def supcon_loss(z: torch.Tensor, labels: torch.Tensor, temp: float = 0.07, domain_ids: torch.Tensor | None = None) -> torch.Tensor:
+    """supervised contrastive loss; domain_ids restricts positives to cross-fragment pairs only."""
     batch = z.shape[0]
     if batch < 2:
         return z.new_zeros(())
@@ -114,6 +114,9 @@ def supcon_loss(z: torch.Tensor, labels: torch.Tensor, temp: float = 0.07) -> to
     labels = labels.view(-1)
     eye = torch.eye(batch, dtype=torch.bool, device=z.device)
     pos_mask = (labels.unsqueeze(0) == labels.unsqueeze(1)) & (~eye)
+    if domain_ids is not None:
+        d = domain_ids.view(-1)
+        pos_mask = pos_mask & (d.unsqueeze(0) != d.unsqueeze(1))
     if not pos_mask.any():
         return z.new_zeros(())
 
@@ -160,14 +163,58 @@ def _init_norm(norm: nn.Module) -> None:
         nn.init.constant_(norm.bias, 0.0)
 
 
+class PrototypeHead(nn.Module):
+    """online ink/papyrus prototypes updated via EMA; classifies by cosine distance."""
+
+    def __init__(self, feat_dim: int = 256, ema: float = 0.99):
+        super().__init__()
+        self.ema = ema
+        self.register_buffer("proto_ink", F.normalize(torch.ones(feat_dim), dim=0))
+        self.register_buffer("proto_pap", F.normalize(-torch.ones(feat_dim), dim=0))
+
+    @torch.no_grad()
+    def update(self, embedding: torch.Tensor, labels: torch.Tensor) -> None:
+        for z, key in [
+            (embedding[labels.view(-1) > 0.5], "proto_ink"),
+            (embedding[labels.view(-1) <= 0.5], "proto_pap"),
+        ]:
+            if z.shape[0] == 0:
+                continue
+            z_mean = F.normalize(z.mean(dim=0), dim=0)
+            proto = getattr(self, key)
+            proto.copy_(F.normalize(self.ema * proto + (1 - self.ema) * z_mean, dim=0))
+
+    def forward(self, embedding: torch.Tensor) -> torch.Tensor:
+        """logit: sim(z, ink_proto) - sim(z, pap_proto), shaped (B, 1)."""
+        z = F.normalize(embedding, dim=-1)
+        return (z @ self.proto_ink - z @ self.proto_pap).unsqueeze(-1)
+
+
+class IBN3d(nn.Module):
+    """IBN-a: instance norm on first half of channels, batch norm on second (Pan et al. 2018).
+    IN strips fragment-specific style; BN preserves discriminative content statistics."""
+
+    def __init__(self, channels: int):
+        super().__init__()
+        half = channels // 2
+        self.in_norm = nn.InstanceNorm3d(half, affine=True)
+        self.bn_norm = nn.BatchNorm3d(channels - half, affine=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        half = x.shape[1] // 2
+        return torch.cat([self.in_norm(x[:, :half]), self.bn_norm(x[:, half:])], dim=1)
+
+
 class ConvBlock3d(nn.Module):
     """two-conv nnU-Net block with instance norm and leaky relu."""
 
-    def __init__(self, in_channels: int, out_channels: int):
+    def __init__(self, in_channels: int, out_channels: int, use_ibn: bool = False):
         super().__init__()
+        # IBN only on the first conv's norm; second conv always uses pure IN
+        norm1: nn.Module = IBN3d(out_channels) if use_ibn else nn.InstanceNorm3d(out_channels, affine=True)
         self.net = nn.Sequential(
             nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.InstanceNorm3d(out_channels, affine=True),
+            norm1,
             nn.LeakyReLU(0.01, inplace=True),
             nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.InstanceNorm3d(out_channels, affine=True),
@@ -197,8 +244,9 @@ class NnUnet3dLcndz(nn.Module):
         self.lse_r = nn.Parameter(torch.tensor(2.0, dtype=torch.float32))
         self.pool = nn.MaxPool3d(2)
 
-        self.enc1 = ConvBlock3d(3, 32)
-        self.enc2 = ConvBlock3d(32, 64)
+        use_ibn = bool(getattr(config.model, "use_ibn", False))
+        self.enc1 = ConvBlock3d(3, 32, use_ibn=use_ibn)
+        self.enc2 = ConvBlock3d(32, 64, use_ibn=use_ibn)
         self.enc3 = ConvBlock3d(64, 128)
         self.bottleneck = ConvBlock3d(128, 256)
 
@@ -233,6 +281,13 @@ class NnUnet3dLcndz(nn.Module):
             n_domains = int(getattr(config.tra, "dann_n_domains", 0))
             if n_domains > 1:
                 self.domain_head = DomainClassifier(in_features=256, n_domains=n_domains)
+
+        self.prototype_head: PrototypeHead | None = None
+        if bool(getattr(config.model, "use_prototype", False)):
+            self.prototype_head = PrototypeHead(
+                feat_dim=256,
+                ema=float(getattr(config.model, "prototype_ema", 0.99)),
+            )
 
     def _prepare_input(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 4:
@@ -320,9 +375,11 @@ class NnUnet3dLcndz(nn.Module):
         center_voxels = self._crop_to_center_tile(voxel_map)
         self.last_center_voxel_map = center_voxels
         embedding = self._embedding(bottleneck)
+        self.last_embedding_detached = embedding.detach()
         domain_logits = self.domain_head(embedding, grl_scale=grl_scale) if self.domain_head is not None else None
         supcon_z = self.supcon_head(embedding) if self.supcon_head is not None else None
-        return self._bag_score(center_voxels), embedding, domain_logits, supcon_z
+        score = self.prototype_head(embedding) if self.prototype_head is not None else self._bag_score(center_voxels)
+        return score, embedding, domain_logits, supcon_z
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         score, _, _, _ = self.forward_with_extras(x)
@@ -363,4 +420,6 @@ def create_model(config: Config):
 
     params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters ({arch}): {params:,}")
+    # compile the hot path; graph breaks at self.lastXxx assignments are fine
+    model.forward_with_extras = torch.compile(model.forward_with_extras)
     return model, params
