@@ -1,0 +1,26 @@
+disamb:
+  boostCustomEntity: 100000
+  contextRadius: 10
+  contextBonusDirectLink: 100
+  contextBonusTransitiveLink: 1
+  penaltyCaseMismatch: 1000
+  minEntityLen: 3
+  penaltyTypeEntityMismatch: PERSON:PERSON:1 GEO:GPE,LOC:1 ORG:ORG:1
+  penaltyMiddleOfEntity: 100
+  penaltyPOSMismatch: 10000
+  boostByType: PERSON:50 GEO:50 ORG:50
+  minScoreUntilContext: -999
+  minContextScore: 1
+  minCandidateScore: 0
+  urlOpenAIAPI: ""
+  llmAuthenticationKey: ""
+  llmContextSentences: 2
+  llmRunThreshold: 100
+  llmModel: ""
+  disambiguationLLMPrompt: >-
+    You are a text annotator. Your job is to identity the provided entities in the provided text.  The entities may not
+    match exactly, your job is to focus on the context. You answer with the original text only, enriched with XML tags,
+    like <entity id="KB ID">.
+
+    Your knowledge base is provided in the format: KB ID: Lemma - Description
+  debug: false
