@@ -263,7 +263,7 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
 # mesh (verified against each mesh bbox). NOTE: 1447's only volume is 8.640um (not 9.362um) -- that
 # IS the volume its mesh was built on (vc3d folder 20250521151220_editable).
 FRAGMENTS = [
-    ("20260716083545", "auto_grown_20260716083545968", 
+    ("20260814140748", "auto_grown_20260814140748456",
      f"{BUCKET}/PHerc0813/volumes/20250821151723-9.362um-1.2m-113keV-masked.zarr/0",
      "16993,7947,7947"),
     # PHerc0211 large merged segment (replaces 20260717193517520 and 20260719202304218)

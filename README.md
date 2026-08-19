@@ -90,23 +90,22 @@ Ink labels (1.129 µm source, 59 keV) live in `inklabels/` (continuous 0–255 i
 
 Four VC3D-grown patches are configured as default test targets (`test_scroll_ids` in `utils/config.py`): PHerc0813 ×1, PHerc0211 ×1, PHerc1203 ×1, PHerc1447 ×1. Test figures are generated when `test_int` fires (currently set to 9999 — disabled until a sufficiently good model is found). The visualizer loads each segment sequentially with CUDA cache cleared between renders to keep VRAM bounded for the larger segments.
 
-### Segment 1 — original reference patch
+### Segment 1 — PHerc0813 updated patch (2026-08-18)
 
 | | |
 |---|---|
-| Segment name | `auto_grown_20260716083545968` |
-| Scroll Source | Pherc0813 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151723`)
-| Zarr ID | `20260716083545` |
-| Zarr shape | (28, 4421, 4421) |
-| BBox | (1892×2111) |
-| Area | **2.98 cm²** |
-| max_gen | 175 (VC3D growth iterations, restored from autosave snap 9) |
-| Mask valid frac | 0.87 (compact rectangular patch) |
-| tifxyz grid | 222 × 222 vertices |
-| tifxyz bbox | x 4176–5730 µm, y 3261–4570 µm, z 9208–11370 µm (raw-volume voxel coords) |
+| Segment name | `auto_grown_20260814140748456` |
+| Scroll Source | PHerc0813 (9.362 µm / 113 keV / 1.2 m, raw volume `20250821151723`)
+| Zarr ID | `20260814140748` |
+| Zarr shape | (28, 5081, 5701) |
+| Area | **33.31 cm²** |
+| max_gen | 1359 (VC3D growth iterations) |
+| Mask valid frac | TBD |
+| tifxyz grid | 495 × 495 vertices (cropped to 255×286 valid region) |
+| tifxyz bbox | x 29,468–57,955 µm, y 35,457–58,178 µm, z 45,994–84,581 µm (raw-volume voxel coords at 9.362 µm/vox) |
 | tifxyz scale | 0.05 cm per grid step |
-| tifxyz location | `~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260716083545968/` |
-| Notes | First segment I unrolled; results are shoddy | 
+| tifxyz location | `~/.VC3D/remote_cache/open_data/projects/paths/auto_grown_20260814140748456/` |
+| Notes | Replaces `auto_grown_20260716083545968`; much larger area (33 cm² vs 3 cm²), max_gen 1359 vs 175 | 
 
 ### Segment 2 — PHerc0211 large merged patch (2026-08-05)
 
