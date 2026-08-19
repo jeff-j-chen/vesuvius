@@ -70,7 +70,7 @@ DEFAULT_SCROLLS: List[ScrollConfig] = [
     ScrollConfig(20260303000000, split_axis="y", train_split_frac=0.5),
     ScrollConfig(20260317000000, split_axis="y", train_split_frac=0.75),
     ScrollConfig(20260226000000, split_axis="y", train_split_frac=0.75),
-    ScrollConfig(20250628074500, split_axis="y", train_split_frac=0.75),
+    ScrollConfig(20250628074500, split_axis="x", train_split_frac=0.6),
     ScrollConfig(20240304141531, split_axis="x", train_split_frac=0.75),  # w013 PHerc1667
 ]
 
@@ -121,6 +121,9 @@ class DataConfig:
     probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
     vis_scroll_ids: Optional[List[int]] = None
     inklabel_dir: str = "./eroded_inklabels"
+    dot_inklabel_dir: str = ""  # optional dir of binary dot labels; only positives are added to train
+    ctx_jitter: int = 0  # max pixel jitter for context window; varies surrounding context during training
+    depth_jitter: int = 0  # max slice jitter for depth window start; attacks depth-profile position memorization
 
     @property
     def test_scroll_id(self) -> Optional[int]:
@@ -208,7 +211,8 @@ class TrainingConfig:
     supcon_lambda_end: float = 0.5
     supcon_curriculum_epochs: int = 15
     supcon_cross_frag: bool = False  # restrict supcon positives to cross-fragment pairs only
-
+    entropy_min_lambda: float = 0.0  # weight for entropy reward on unlabeled (validation) tiles
+    entropy_min_batch_size: int = 8  # unlabeled samples per step; kept small to avoid OOM
 
 @dataclass
 class ModelConfig:
@@ -222,6 +226,9 @@ class ModelConfig:
     use_ibn: bool = False  # IBN-a: IN+BN hybrid in shallow encoder blocks
     use_prototype: bool = False  # replace bag-score with online prototype cosine classifier
     prototype_ema: float = 0.99
+    skip_drop: float = 0.0  # prob of zeroing each skip connection; forces bottleneck reliance
+    use_depth_profile: bool = False  # replace bag-score with depth-profile-only MLP (no spatial info)
+    no_dz: bool = False  # zero the dz input channel; tests whether depth gradient or raw signal carries ink
 
 
 @dataclass

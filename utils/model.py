@@ -58,9 +58,9 @@ class DepthSurfaceAttn(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv3d(1, hidden, kernel_size=(3, 1, 1), padding=(1, 0, 0), bias=True),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
             nn.Conv3d(hidden, hidden, kernel_size=(3, 1, 1), padding=(1, 0, 0), bias=True),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
             nn.Conv3d(hidden, 1, kernel_size=1, bias=True),
         )
         self.reset_output_layer()
@@ -80,7 +80,7 @@ class SupConHead(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(in_features, hidden),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
             nn.Linear(hidden, proj_dim),
         )
 
@@ -96,7 +96,7 @@ class DomainClassifier(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(in_features, hidden),
-            nn.LeakyReLU(0.01, inplace=True),
+            nn.LeakyReLU(0.01, inplace=False),
             nn.Linear(hidden, n_domains),
         )
 
@@ -190,6 +190,24 @@ class PrototypeHead(nn.Module):
         return (z @ self.proto_ink - z @ self.proto_pap).unsqueeze(-1)
 
 
+class DepthProfileHead(nn.Module):
+    """spatial-free classifier: averages center voxel map over H,W then classifies depth profile.
+    has zero spatial capacity -- cannot memorize tile coordinates, only depth signal."""
+
+    def __init__(self, depth: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(depth, 32),
+            nn.ReLU(inplace=False),
+            nn.Linear(32, 1),
+        )
+
+    def forward(self, center_voxels: torch.Tensor) -> torch.Tensor:
+        """center_voxels: (B, 1, D, H, W) → (B, 1) logit via depth profile only."""
+        profile = center_voxels.mean(dim=(1, 3, 4))  # (B, D): collapse spatial, keep depth
+        return self.net(profile)
+
+
 class IBN3d(nn.Module):
     """IBN-a: instance norm on first half of channels, batch norm on second (Pan et al. 2018).
     IN strips fragment-specific style; BN preserves discriminative content statistics."""
@@ -215,10 +233,10 @@ class ConvBlock3d(nn.Module):
         self.net = nn.Sequential(
             nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
             norm1,
-            nn.LeakyReLU(0.01, inplace=True),
+            nn.LeakyReLU(0.01, inplace=False),
             nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.InstanceNorm3d(out_channels, affine=True),
-            nn.LeakyReLU(0.01, inplace=True),
+            nn.LeakyReLU(0.01, inplace=False),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -249,6 +267,14 @@ class NnUnet3dLcndz(nn.Module):
         self.enc2 = ConvBlock3d(32, 64, use_ibn=use_ibn)
         self.enc3 = ConvBlock3d(64, 128)
         self.bottleneck = ConvBlock3d(128, 256)
+
+        # spatial channel dropout after early encoder stages and before classification head
+        _d1 = float(getattr(config.model, "conv1_drop", 0.0))
+        _d2 = float(getattr(config.model, "conv2_drop", 0.0))
+        _dh = float(getattr(config.model, "head_drop", 0.0))
+        self._enc1_drop = nn.Dropout3d(p=_d1) if _d1 > 0 else None
+        self._enc2_drop = nn.Dropout3d(p=_d2) if _d2 > 0 else None
+        self._head_drop = nn.Dropout3d(p=_dh) if _dh > 0 else None
 
         self.up3 = nn.ConvTranspose3d(256, 128, kernel_size=2, stride=2)
         self.dec3 = ConvBlock3d(256, 128)
@@ -288,6 +314,12 @@ class NnUnet3dLcndz(nn.Module):
                 feat_dim=256,
                 ema=float(getattr(config.model, "prototype_ema", 0.99)),
             )
+        self._skip_drop = float(getattr(config.model, "skip_drop", 0.0))
+        self._no_dz = bool(getattr(config.model, "no_dz", False))
+
+        self.depth_profile_head: DepthProfileHead | None = None
+        if bool(getattr(config.model, "use_depth_profile", False)):
+            self.depth_profile_head = DepthProfileHead(depth=int(getattr(config.data, "depth", 24)))
 
     def _prepare_input(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 4:
@@ -300,16 +332,19 @@ class NnUnet3dLcndz(nn.Module):
             )
         return x
 
-    @staticmethod
-    def _stem_in(x: torch.Tensor) -> torch.Tensor:
+    def _stem_in(self, x: torch.Tensor) -> torch.Tensor:
         dz = torch.zeros_like(x)
-        dz[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
+        if not self._no_dz:
+            dz[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
         return torch.cat([x, _lcn2d(x, 5), dz], dim=1)
 
-    @staticmethod
-    def _merge_skip(upsampled: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+    def _merge_skip(self, upsampled: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         if upsampled.shape[2:] != skip.shape[2:]:
             upsampled = F.interpolate(upsampled, size=skip.shape[2:], mode="trilinear", align_corners=False)
+        if self.training and self._skip_drop > 0:
+            # zero whole skip connection with probability skip_drop; forces decoder bottleneck reliance
+            mask = torch.bernoulli(torch.full((1,), 1.0 - self._skip_drop, device=skip.device))
+            skip = skip * mask
         return torch.cat([upsampled, skip], dim=1)
 
     def _apply_learned_surface(self, raw_x: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
@@ -325,13 +360,19 @@ class NnUnet3dLcndz(nn.Module):
         stem_x = self._stem_in(raw_x)
 
         enc1 = self._apply_learned_surface(raw_x, self.enc1(stem_x))
+        if self._enc1_drop is not None:
+            enc1 = self._enc1_drop(enc1)
         enc2 = self.enc2(self.pool(enc1))
+        if self._enc2_drop is not None:
+            enc2 = self._enc2_drop(enc2)
         enc3 = self.enc3(self.pool(enc2))
         bottleneck = self.bottleneck(self.pool(enc3))
 
         dec3 = self.dec3(self._merge_skip(self.up3(bottleneck), enc3))
         dec2 = self.dec2(self._merge_skip(self.up2(dec3), enc2))
         dec1 = self.dec1(self._merge_skip(self.up1(dec2), enc1))
+        if self._head_drop is not None:
+            dec1 = self._head_drop(dec1)
         return bottleneck, dec1
 
     @staticmethod
@@ -378,7 +419,12 @@ class NnUnet3dLcndz(nn.Module):
         self.last_embedding_detached = embedding.detach()
         domain_logits = self.domain_head(embedding, grl_scale=grl_scale) if self.domain_head is not None else None
         supcon_z = self.supcon_head(embedding) if self.supcon_head is not None else None
-        score = self.prototype_head(embedding) if self.prototype_head is not None else self._bag_score(center_voxels)
+        if self.depth_profile_head is not None:
+            score = self.depth_profile_head(center_voxels)
+        elif self.prototype_head is not None:
+            score = self.prototype_head(embedding)
+        else:
+            score = self._bag_score(center_voxels)
         return score, embedding, domain_logits, supcon_z
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

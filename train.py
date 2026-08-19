@@ -12,7 +12,7 @@ from torch.cuda.amp.grad_scaler import GradScaler
 from tqdm import tqdm
 
 from utils.config import Config
-from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders
+from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray
 from utils.hard_mining import HardMiningInjector, HardMiningManager
 from utils.model import create_model, supcon_loss
 from utils.training_utils import (
@@ -105,6 +105,19 @@ class Trainer:
                     f"[multi-scroll] scroll {scroll_id}: "
                     f"train_tiles={len(train_set)} valid_tiles={len(valid_set)}"
                 )
+
+            dot_dir = str(getattr(self.c.data, "dot_inklabel_dir", "") or "")
+            if dot_dir:
+                for scroll_id, dm in self._scroll_dms.items():
+                    dot_path = os.path.join(dot_dir, f"{scroll_id}.png")
+                    if not os.path.exists(dot_path):
+                        continue
+                    dot_lbl = imread_gray(dot_path)
+                    if dot_lbl is None:
+                        continue
+                    dot_ds = DotPositiveDataset(dm, dot_lbl)
+                    if len(dot_ds) > 0:
+                        train_sets.append(dot_ds)
 
             merged_train = MultiScrollIterableDataset(train_sets)
             merged_valid = MultiScrollIterableDataset(valid_sets)
@@ -201,12 +214,13 @@ class Trainer:
         if fda_prob <= 0.0:
             return images
         fda_beta = float(getattr(self.c.dl, "fda_beta", 0.05))
-        B, D, H, W = images.shape
+        B = images.shape[0]
+        H, W = images.shape[-2], images.shape[-1]
         apply_mask = torch.rand(B, device=images.device) < fda_prob
         if not apply_mask.any():
             return images
         perm = torch.randperm(B, device=images.device)
-        fft = torch.fft.rfft2(images)           # (B, D, H, W//2+1) complex
+        fft = torch.fft.rfft2(images)           # (..., H, W//2+1) complex
         amp = fft.abs()
         phase = fft.angle()
         style_amp = amp[perm]
@@ -214,14 +228,15 @@ class Trainer:
         h = max(1, int(fda_beta * H / 2))
         w = max(1, int(fda_beta * W / 2) + 1)
         new_amp = amp.clone()
-        new_amp[:, :, :h, :w] = style_amp[:, :, :h, :w]
+        new_amp[..., :h, :w] = style_amp[..., :h, :w]
         if h > 1:
-            new_amp[:, :, -h + 1:, :w] = style_amp[:, :, -h + 1:, :w]
-        blended = torch.where(apply_mask.view(B, 1, 1, 1), new_amp, amp)
+            new_amp[..., -h + 1:, :w] = style_amp[..., -h + 1:, :w]
+        mask_shape = (B,) + (1,) * (images.dim() - 1)
+        blended = torch.where(apply_mask.view(*mask_shape), new_amp, amp)
         out = torch.fft.irfft2(torch.polar(blended, phase), s=(H, W))
         return out.clamp(0.0, 1.0)
 
-    def _train_batch(self, images, labels, mask, domain_ids=None, epoch: int = 0):
+    def _train_batch(self, images, labels, mask, domain_ids=None, epoch: int = 0, unlabeled_images=None):
         images = images.to(self.c.device)
         images = self._apply_fda(images)
         labels = labels.to(self.c.device).view(-1, 1)
@@ -293,7 +308,11 @@ class Trainer:
                 else:
                     dims = ([-1], [-2], [-1, -2])[int(torch.randint(0, 3, (1,)).item())]
                     view = torch.flip(images, dims=dims)
+                # eval mode for TTA second pass: BN uses running stats (no in-place updates)
+                # which prevents the autograd version conflict with the compiled first-pass graph
+                self.model.eval()
                 other = self.model(view.contiguous())
+                self.model.train()
                 if other.dim() == 4:
                     other = other.flatten(1).max(dim=1, keepdim=True).values
                 p1 = torch.sigmoid(outputs)
@@ -373,6 +392,19 @@ class Trainer:
                 cross_frag_ids = domain_ids if bool(getattr(self.c.tra, "supcon_cross_frag", False)) else None
                 loss = loss + supcon_lambda * supcon_loss(supcon_z, labels.view(-1).long(), temp=supcon_temp, domain_ids=cross_frag_ids)
 
+            # entropy maximization on unlabeled (validation) tiles: rewards uncertainty outside
+            # the labeled region, attacking the "predict not-ink everywhere" fixed point
+            entropy_lambda = float(getattr(self.c.tra, "entropy_min_lambda", 0.0))
+            if entropy_lambda > 0 and unlabeled_images is not None:
+                cap = int(getattr(self.c.tra, "entropy_min_batch_size", 8))
+                u_imgs = unlabeled_images[:cap].to(self.c.device)
+                u_out = self.model(u_imgs)
+                if u_out.dim() == 4:
+                    u_out = u_out.flatten(1).max(dim=1, keepdim=True).values
+                p = torch.sigmoid(u_out).clamp(1e-6, 1.0 - 1e-6)
+                h = -(p * p.log() + (1 - p) * (1 - p).log()).mean()
+                loss = loss - entropy_lambda * h  # subtract to maximize H on unlabeled
+
         self.scaler.scale(loss).backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
         self.scaler.step(self.optimizer)
@@ -430,11 +462,23 @@ class Trainer:
         scores = []
         total_injected = 0
 
+        entropy_lambda = float(getattr(self.c.tra, "entropy_min_lambda", 0.0))
+        u_iter = iter(self.valid_loader) if entropy_lambda > 0 else None
+
         for batch_index, batch in enumerate(
             tqdm(self.train_loader, desc="Training", mininterval=5, miniters=1, file=sys.stderr)
         ):
             images, batch_labels, mask = batch[:3]
             domain_ids = batch[3] if len(batch) > 3 else None
+
+            u_imgs = None
+            if u_iter is not None:
+                try:
+                    u_batch = next(u_iter)
+                except StopIteration:
+                    u_iter = iter(self.valid_loader)
+                    u_batch = next(u_iter)
+                u_imgs = u_batch[0]
             total_injected += self._ins_hard_samples(
                 images,
                 batch_labels,
@@ -455,6 +499,7 @@ class Trainer:
                 mask,
                 domain_ids=domain_ids,
                 epoch=epoch,
+                unlabeled_images=u_imgs,
             )
             if batch_scores.size == 0:
                 continue
@@ -473,6 +518,11 @@ class Trainer:
         metrics["spill_loss"] = spill_loss_total / len(self.train_loader)
         metrics["scores"] = scores
         metrics["hard_injected"] = total_injected
+
+        # explicitly release the unlabeled iterator so its worker processes terminate
+        # before predict_tiles and eval figures start reading zarr (prevents IO saturation)
+        if u_iter is not None:
+            del u_iter
 
         if hard_injector:
             stats = hard_injector.stats()
@@ -615,7 +665,9 @@ class Trainer:
             print(f"\n--- Epoch {epoch + 1}/{self.c.tra.n_epochs} ---")
             start_time = time.time()
 
-            self.train_dataset.apply_transforms = bool(epoch >= 5 and self.c.dl.data_aug)
+            self.train_dataset.apply_transforms = bool(
+                epoch >= int(getattr(self.c.tra, "aug_start_epoch", 5)) and self.c.dl.data_aug
+            )
             self._update_hard_mining_samples(epoch)
 
             hard_injector = None

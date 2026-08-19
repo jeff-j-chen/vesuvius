@@ -1347,25 +1347,39 @@ class TensorboardVisualizer:
             tr_y, tr_x = self.shared_range, self.train_range
             full_y = self.shared_range; full_x = (self.train_range[0], self.valid_range[1])
         
-        # fast_eval_figure: only render left 40% x-dimension AND bottom 40% y-dimension
-        # (makes 16% area figures - much faster rendering for single-scroll campaigns)
+        # fast_eval_figure: render a 40%w x 40%h block anchored at the easy probe ROI for
+        # this scroll, falling back to the top-left if no easy ROI is found
         if getattr(self.c.tra, "fast_eval_figure", False):
-            def _snap_start(candidate, anchor, stop, tile):
-                """keep the cropped eval region on the same tile grid as training."""
-                rem = (candidate - anchor) % tile
-                if rem:
-                    candidate += tile - rem
-                return max(anchor, min(candidate, stop - tile))
-
             tile = self.c.data.tile_size
             full_width_x = full_x[1] - full_x[0]
-            fast_x_end = full_x[0] + int(full_width_x * 0.4)
-            full_x = (full_x[0], fast_x_end)
-            
             full_height_y = full_y[1] - full_y[0]
-            fast_y_start = full_y[1] - int(full_height_y * 0.4)
-            fast_y_start = _snap_start(fast_y_start, full_y[0], full_y[1], tile)
-            full_y = (fast_y_start, full_y[1])
+
+            def _snap(v, lo, hi):
+                rem = (v - lo) % tile
+                if rem:
+                    v += tile - rem
+                return max(lo, min(v, hi - tile))
+
+            easy_roi = next(
+                (s for s in self.probe_specs
+                 if s["segment_id"] == self.scroll1_id
+                 and str(s.get("label", "")).lower() == "easy"),
+                None,
+            )
+            if easy_roi is not None:
+                x_start = _snap(int(easy_roi["x"]), full_x[0], full_x[1])
+                y_start = _snap(int(easy_roi["y"]), full_y[0], full_y[1])
+                x_end = min(full_x[1], x_start + int(full_width_x * 0.4))
+                y_end = min(full_y[1], y_start + int(full_height_y * 0.4))
+                if x_end > x_start + tile and y_end > y_start + tile:
+                    full_x = (x_start, x_end)
+                    full_y = (y_start, y_end)
+                else:
+                    full_x = (full_x[0], full_x[0] + int(full_width_x * 0.4))
+                    full_y = (full_y[0], full_y[0] + int(full_height_y * 0.4))
+            else:
+                full_x = (full_x[0], full_x[0] + int(full_width_x * 0.4))
+                full_y = (full_y[0], full_y[0] + int(full_height_y * 0.4))
 
         hm_dir = self._hard_mining_dir()
         hm_enabled = getattr(self.c.hm, "enabled", True)

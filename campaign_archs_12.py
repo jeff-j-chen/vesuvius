@@ -55,9 +55,21 @@ SOFT_AUGS = dict(
     noise_prob=0.15,
     brightness_prob=0.15,
     contrast_prob=0.15,
-    cutout_prob=0.1,
+    cutout_prob=0,
     cutout_max_frac=0.1,
     cutout_n_patches=1,
+    depth_mask_prob=0.0,
+)
+
+PHOTOM = dict(
+    flip_prob=0.6,
+    rotation_prob=0.6,
+    noise_prob=0.3,
+    brightness_prob=0.6,
+    contrast_prob=0.6,
+    cutout_prob=0,
+    cutout_max_frac=0,
+    cutout_n_patches=0,
     depth_mask_prob=0.0,
 )
 
@@ -187,17 +199,23 @@ TESTS = [
     # ctx192_fast baseline tested in archs11; not rerun
     # _mk12("baseline", "ctx192_ds2_softaug_tta_attn_supcon_mae"),
 
-    _mk12(
-        "nonoise",
-        "192_ds2_nonoise",
-        **NO_NOISE_AUGS,
-    ),
+    # _mk12(
+    #     "nonoise",
+    #     "192_ds2_nonoise",
+    #     **NO_NOISE_AUGS,
+    # ),
     _mk12(
         "oldspill",
         "192_ds2_oldspill",
         spill_reduction=True,
         spill_lambda=0.4,
         spill_min_depth_var=0.5,
+    ),
+    _mk12(
+        "dots",
+        "192_ds2_dots",
+        # inject sparse positive-only tiles from dot labels (no ring negatives from dots)
+        dot_inklabel_dir="./dots",
     ),
     _mk12(
         "dann",
@@ -254,6 +272,41 @@ TESTS = [
         elastic_prob=0.5,
         elastic_alpha=15.0,
         elastic_sigma=5.0,
+    ),
+    _mk12(
+        "photom",
+        "192_ds2_photom",
+        **PHOTOM,
+    ),
+    _mk12(
+        "entropy_min",
+        "192_ds2_entropy_min",
+        # maximize entropy on unlabeled (validation) tiles; attacks confident not-ink fixed point
+        entropy_min_lambda=0.1,
+    ),
+    # COMBO TESTS: stack of confirmed-safe conjugates
+    _mk12(
+        "combo1",
+        "192_ds2_combo1",
+        fda_prob=0.5, fda_beta=0.05,
+        elastic_prob=0.5, elastic_alpha=15.0, elastic_sigma=5.0,
+        inklabel_dir="./eroded2_inklabels",
+        dot_inklabel_dir="./dots",
+        dann=True, dann_lambda=0.25, dann_grl_anneal=True,
+        spill_reduction=True, spill_lambda=0.4, spill_min_depth_var=0.5,
+    ),
+    _mk12(
+        "combo2",
+        "192_ds2_combo2",
+        fda_prob=0.5, fda_beta=0.05,
+        elastic_prob=0.5, elastic_alpha=15.0, elastic_sigma=5.0,
+        inklabel_dir="./eroded2_inklabels",
+        dot_inklabel_dir="./dots",
+        dann=True, dann_lambda=0.25, dann_grl_anneal=True,
+        spill_reduction=True, spill_lambda=0.4, spill_min_depth_var=0.5,
+        entropy_min_lambda=0.1,
+        use_ibn=True,
+        use_prototype=True,
     ),
 ]
 
@@ -321,6 +374,9 @@ _OVERRIDES = {
     "elastic_prob": ("dl", "elastic_prob"),
     "elastic_alpha": ("dl", "elastic_alpha"),
     "elastic_sigma": ("dl", "elastic_sigma"),
+    "entropy_min_lambda": ("tra", "entropy_min_lambda"),
+    "entropy_min_batch_size": ("tra", "entropy_min_batch_size"),
+    "dot_inklabel_dir": ("data", "dot_inklabel_dir"),
 }
 
 
@@ -347,6 +403,7 @@ def build_config(t: dict) -> Config:
         c.dl.contrast_prob,
         c.dl.cutout_prob,
         c.dl.depth_mask_prob,
+        getattr(c.dl, "elastic_prob", 0.0),
     ])
     os.makedirs("models/archs12", exist_ok=True)
     setattr(c, "save_final", f"models/archs12/{tid}_final.pth")

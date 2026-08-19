@@ -66,6 +66,15 @@ def get_default_workers() -> int:
         return 8  # fast SSD can handle multiple workers
 
 
+def get_default_val_workers() -> int:
+    """default validation dataloader workers (subset of training workers)"""
+    platform = detect_platform()
+    if platform in ("windows", "linux-desktop"):
+        return 0
+    else:  # linux-runpod
+        return 4  # half of training workers; validation is sequential so fewer needed
+
+
 def get_default_batch_size() -> int:
     """default batch size for this platform"""
     platform = detect_platform()

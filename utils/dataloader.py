@@ -480,7 +480,18 @@ class InkVolumeDataset(IterableDataset):
         try:
             if use_ctx:
                 pad = (ctx - tile) // 2
-                block = self._read_ctx_block(z, self.depth, y - pad, x - pad, ctx)
+                max_j = int(getattr(self.c.data, "ctx_jitter", 0))
+                if max_j > 0 and self.shuffle:
+                    # shift the context window; labeled tile moves to (pad+jy, pad+jx) in the block
+                    # while center crop still fires at (pad, pad) -> intentional ~50% label overlap
+                    jy = random.randint(-max_j, max_j)
+                    jx = random.randint(-max_j, max_j)
+                else:
+                    jy = jx = 0
+                # depth window jitter: shift which slices we read to attack depth-profile position memorization
+                max_dj = int(getattr(self.c.data, "depth_jitter", 0))
+                dj = random.randint(-max_dj, max_dj) if max_dj > 0 and self.shuffle else 0
+                block = self._read_ctx_block(z + dj, self.depth, y - pad - jy, x - pad - jx, ctx)
             else:
                 block = np.array(self.vol[z:z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
         except Exception:
@@ -576,7 +587,7 @@ class InkVolumeDataset(IterableDataset):
         block_tensor = torch.from_numpy(block).unsqueeze(0)
         
         self.current_idx += 1
-        if bool(getattr(self.c.tra, "dann", False)):
+        if bool(getattr(self.c.tra, "dann", False)) or bool(getattr(self.c.tra, "supcon_cross_frag", False)):
             return block_tensor, label, mask, torch.tensor(self.domain_id, dtype=torch.long)
         return block_tensor, label, mask
 
@@ -616,6 +627,94 @@ class MultiScrollIterableDataset(IterableDataset):
                 yield next(iters[i])   # passes through the optional 4th (scroll_id) element
             except StopIteration:
                 active.remove(i)
+
+
+class DotPositiveDataset(IterableDataset):
+    """yields only positive tiles from a binary dot-label image, no negatives or ring.
+    used to inject sparse location-prior positives from ./dots/ alongside main training."""
+
+    def __init__(self, data_manager: "DataManager", dot_label: np.ndarray):
+        super().__init__()
+        self.c = data_manager.c
+        self._dm = data_manager
+        T = self.c.data.tile_size
+        mask = np.asarray(data_manager.mask)
+        H = min(dot_label.shape[0], mask.shape[0])
+        W = min(dot_label.shape[1], mask.shape[1])
+        dot_b = dot_label[:H, :W] > 127
+        mask_b = mask[:H, :W] > 0
+        self._coords: list[tuple[int, int]] = []
+        for ty in range(H // T):
+            for tx in range(W // T):
+                sl = (slice(ty * T, (ty + 1) * T), slice(tx * T, (tx + 1) * T))
+                if dot_b[sl].any() and mask_b[sl].any():
+                    self._coords.append((ty * T, tx * T))
+        print(f"[dot-pos] scroll {data_manager.scroll_id}: {len(self._coords)} positive tiles from dots")
+
+    def __len__(self):
+        return len(self._coords)
+
+    # flag required by MultiScrollIterableDataset.apply_transforms setter
+    @property
+    def apply_transforms(self):
+        return False
+
+    @apply_transforms.setter
+    def apply_transforms(self, _value):
+        pass
+
+    def __iter__(self):
+        coords = list(self._coords)
+        random.shuffle(coords)
+        worker_info = get_worker_info()
+        if worker_info is not None:
+            per = int(np.ceil(len(coords) / float(worker_info.num_workers)))
+            coords = coords[worker_info.id * per: (worker_info.id + 1) * per]
+
+        c = self.c
+        T = c.data.tile_size
+        D = c.data.depth
+        z0 = c.data.d_start
+        ctx = int(getattr(c.data, "context_size", 0) or 0)
+        use_ctx = ctx > T
+        sp = ctx if use_ctx else T
+        pad = (ctx - T) // 2 if use_ctx else 0
+        mean, std, g_min, g_max = self._dm.norm_stats
+        domain_id = self._dm.domain_id
+        mask_arr = np.asarray(self._dm.mask)
+        with_dann = bool(getattr(c.tra, "dann", False)) or bool(getattr(c.tra, "supcon_cross_frag", False))
+
+        for y0, x0 in coords:
+            vol = self._dm.vol
+            if z0 + D > int(vol.shape[0]):
+                continue
+            try:
+                if use_ctx:
+                    ys0, xs0 = y0 - pad, x0 - pad
+                    Hv, Wv = int(vol.shape[1]), int(vol.shape[2])
+                    out = np.zeros((D, ctx, ctx), dtype=np.float32)
+                    ys, ye = max(0, ys0), min(Hv, ys0 + ctx)
+                    xs, xe = max(0, xs0), min(Wv, xs0 + ctx)
+                    if ys < ye and xs < xe:
+                        src = np.array(vol[z0:z0 + D, ys:ye, xs:xe], dtype=np.float32)
+                        out[:, ys - ys0:ye - ys0, xs - xs0:xe - xs0] = src
+                    block = out
+                else:
+                    block = np.array(vol[z0:z0 + D, y0:y0 + T, x0:x0 + T], dtype=np.float32)
+            except Exception:
+                continue
+            if block.shape != (D, sp, sp):
+                continue
+            block = (block - mean) / max(std, 1e-8)
+            block = np.clip((block - g_min) / max(g_max - g_min, 1e-8), 0.0, 1.0)
+            mask_tile = mask_arr[y0:y0 + T, x0:x0 + T].astype(np.float32)
+            block_t = torch.from_numpy(np.ascontiguousarray(block, dtype=np.float32)).unsqueeze(0)
+            label_t = torch.tensor([1.0])
+            mask_t = torch.from_numpy(mask_tile)
+            if with_dann:
+                yield block_t, label_t, mask_t, torch.tensor(domain_id, dtype=torch.long)
+            else:
+                yield block_t, label_t, mask_t
 
 
 class DataManager:
@@ -940,15 +1039,19 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
     
     train_loader = DataLoader(train_dataset, **train_loader_kwargs)
 
-    # validation always uses 0 workers (main thread only) — on Windows, spawned
-    # worker subprocesses receive CTRL_CLOSE_EVENT from the OS console job object
-    # which kills them unpredictably, causing RuntimeError mid-validation
-    valid_loader = DataLoader(
-        valid_dataset,
-        batch_size=config.dl.batch_size,
-        num_workers=0,
-        pin_memory=True,
-    )
+    # validation uses platform-default workers (0 on Windows/desktop, 4 on runpod)
+    from .platform import get_default_val_workers
+    val_workers = get_default_val_workers()
+    valid_loader_kwargs: dict = {
+        "batch_size": config.dl.batch_size,
+        "num_workers": val_workers,
+        "pin_memory": True,
+    }
+    if val_workers > 0:
+        valid_loader_kwargs["prefetch_factor"] = 2
+        valid_loader_kwargs["persistent_workers"] = True  # prevents zombie accumulation when iter() is cycled (entropy_min)
+        valid_loader_kwargs["worker_init_fn"] = partial(_worker_init, base_seed=_base_seed + 9999)
+    valid_loader = DataLoader(valid_dataset, **valid_loader_kwargs)
 
     return train_loader, valid_loader
 

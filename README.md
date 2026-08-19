@@ -55,7 +55,7 @@ Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 11
 |---|---|---|---|---|
 | `20260226000000` | **seg46527** (PHerc0814) | (28, 2180, 3560) | 0.565 (content bbox 2110×3480) | 0.032 (in-mask) |
 
-**PHerc0500P2 (2026-08-07)** — different scroll, same 9.362 µm / 113 keV / 1.2 m scan parameters as PHerc0139. Vertical split (top 75% train / bottom 25% valid):
+**PHerc0500P2 (2026-08-07)** — different scroll, same 9.362 µm / 113 keV / 1.2 m scan parameters as PHerc0139. Horizontal split (left 60% train / right 40% valid):
 
 | ID | Fragment | Zarr shape (D,H,W) | Mask valid frac | Eroded ink frac |
 |---|---|---|---|---|
