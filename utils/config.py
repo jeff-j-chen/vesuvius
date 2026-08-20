@@ -128,6 +128,7 @@ class DataConfig:
     ctx_jitter: int = 0  # max pixel jitter for context window; varies surrounding context during training
     depth_jitter: int = 0  # max slice jitter for depth window start; attacks depth-profile position memorization
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
+    multitile_pos_only: bool = False  # in ink-containing windows, supervise ONLY ink sub-tiles (mask out non-ink ones to avoid labelling unlabelled-ink neighbours as negatives); ink-free ring windows still give negatives
 
     @property
     def test_scroll_id(self) -> Optional[int]:
@@ -181,6 +182,9 @@ class TrainingConfig:
     tta_consistency: bool = False
     tta_consistency_lambda: float = 0.5
     tta_consistency_mode: str = "flips"
+    tta_consistency_prob: float = 1.0  # fraction of steps that run the consistency 2nd forward; <1 trades signal for speed
+    tile_pos_weight: float = 0.0  # >0 up-weights positive tiles in the loss; needed for multitile (8px sub-tile imbalance ~5:1)
+    tile_pos_weight_auto: bool = False  # when tile_pos_weight==0, compute pos_weight from data (neg/pos over supervised units) and cache per scroll+mode
     dann: bool = False
     dann_lambda: float = 0.0
     dann_n_domains: int = 0

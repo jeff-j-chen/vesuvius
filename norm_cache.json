@@ -229,6 +229,30 @@
         "mean": 69.95426058056434,
         "std": 39.39110149690319,
         "min": -1.7758899325540296,
-        "max": 4.697653337619498
+        "max": 4.697653337619498,
+        "class_weight": {
+            "pos_weight": 1.6408450704225352,
+            "counts": {
+                "0": 1864,
+                "1": 1136
+            },
+            "sig": "single_eroded_inklabels"
+        },
+        "class_weight_multitile_s8_g4_pos0": {
+            "pos_weight": 5.348404255319149,
+            "counts": {
+                "0": 40220,
+                "1": 7520
+            },
+            "sig": "mt_s8_g4_pos0_eroded_inklabels"
+        },
+        "class_weight_multitile_s8_g4_pos1": {
+            "pos_weight": 4.4989013829649735,
+            "counts": {
+                "0": 34808,
+                "1": 7737
+            },
+            "sig": "mt_s8_g4_pos1_eroded_inklabels"
+        }
     }
 }

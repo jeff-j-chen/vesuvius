@@ -340,6 +340,8 @@ class InkVolumeDataset(IterableDataset):
         self._mt = bool(getattr(config.model, "multitile", False))
         self._mt_grid = max(1, int(getattr(config.model, "multitile_grid", 4)))
         self._mt_sub = max(1, int(getattr(config.model, "multitile_subtile", 8)))
+        # pos-only: in ink windows, supervise only ink sub-tiles (mask out non-ink ones)
+        self._mt_pos_only = bool(getattr(config.data, "multitile_pos_only", False))
 
         self.z_start = getattr(self.c.data, "train_d_start", self.c.data.d_start)
         self.z_end   = getattr(self.c.data, "train_d_end",   self.c.data.d_end)
@@ -646,6 +648,13 @@ class InkVolumeDataset(IterableDataset):
                     continue
                 if np.all(m[ys:ye, xs:xe] > 0):
                     out[iy * n + ix] = 1.0
+        # pos-only: inside a window that HAS ink, drop the non-ink sub-tiles so we never train
+        # them as (possibly false) negatives. ink-free windows keep all in-scroll sub-tiles as
+        # negatives, so the batch still has both classes.
+        if self._mt_pos_only:
+            lbl = self._fetch_label_mt(y_off, x_off).numpy()
+            if lbl.sum() > 0:
+                out = out * lbl
         return torch.from_numpy(out)
 
     def _fetch_mask(self, y_off, x_off):
@@ -1295,3 +1304,69 @@ def calc_class_wgts(train_set, valid_set, scroll_id=None, cache_path=UNIFIED_CAC
         _save_unified_cache(cache, cache_path)
 
     return None
+
+
+def _count_supervised_units(dataset, n_samples=3000):
+    """(pos, neg) over the SUPERVISED units of a dataset, mode-aware:
+    single-tile -> one tile label per window (gated by the window mask);
+    multitile   -> per-sub-tile labels, counting only sub-tiles the mask keeps.
+    reads labels/mask (memmapped numpy) only -- no zarr/image reads."""
+    coords = list(getattr(dataset, "block_coords", []))
+    if not coords:
+        return 0, 0
+    if len(coords) > n_samples:
+        sel = np.random.choice(len(coords), n_samples, replace=False)
+        coords = [coords[i] for i in sel]
+    pos = neg = 0
+    for (_d, y, x) in coords:
+        lbl = np.asarray(dataset._fetch_label(y, x)).reshape(-1)
+        msk = np.asarray(dataset._fetch_mask(y, x)).reshape(-1)
+        if msk.shape[0] == lbl.shape[0]:      # multitile: per-unit validity mask
+            keep = msk > 0
+            units = lbl[keep]
+        else:                                  # single-tile: window-level gate
+            if msk.sum() <= 0:
+                continue
+            units = lbl
+        pos += int((units > 0.5).sum())
+        neg += int((units <= 0.5).sum())
+    return pos, neg
+
+
+def get_tile_pos_weight(train_children, config, cache_path=UNIFIED_CACHE_PATH, clamp=(1.0, 20.0)):
+    """mode-aware pos_weight (neg/pos over supervised units), cached per scroll + mode signature.
+    the signature captures mode (single/multitile), sub-tile grid, pos_only, and the inklabel dir,
+    so switching any of them recomputes instead of reusing a stale value. aggregates the per-scroll
+    counts into ONE global pos_weight for the loss. returns a (1,) tensor or None."""
+    tot_pos = tot_neg = 0
+    for ds in train_children:
+        mt = bool(getattr(ds, "_mt", False))
+        ink = os.path.basename(str(getattr(config.data, "inklabel_dir", "")).rstrip("/"))
+        if mt:
+            sig = f"mt_s{ds._mt_sub}_g{ds._mt_grid}_pos{int(ds._mt_pos_only)}_{ink}"
+            key = f"class_weight_multitile_s{ds._mt_sub}_g{ds._mt_grid}_pos{int(ds._mt_pos_only)}"
+        else:
+            sig = f"single_{ink}"
+            key = "class_weight"
+        sid = str(getattr(ds, "scroll_id", 0))
+        cache = _load_unified_cache(cache_path)
+        entry = cache.get(sid, {})
+        if not isinstance(entry, dict):
+            entry = {}
+        cached = entry.get(key)
+        if isinstance(cached, dict) and cached.get("sig") == sig and "counts" in cached:
+            p = int(cached["counts"].get("1", 0)); n = int(cached["counts"].get("0", 0))
+        else:
+            p, n = _count_supervised_units(ds)
+            pw = float(np.clip(n / max(p, 1), *clamp)) if p > 0 else None
+            entry[key] = {"pos_weight": pw, "counts": {"0": int(n), "1": int(p)}, "sig": sig}
+            cache[sid] = entry
+            _save_unified_cache(cache, cache_path)
+            print(f"[pos_weight] {key} scroll {sid} ({sig}): pos={p} neg={n} pw={pw}")
+        tot_pos += p; tot_neg += n
+    if tot_pos <= 0:
+        print("[pos_weight] no positives sampled -> pos_weight=None")
+        return None
+    pw = float(np.clip(tot_neg / tot_pos, *clamp))
+    print(f"[pos_weight] aggregate over {len(train_children)} scroll(s): pos={tot_pos} neg={tot_neg} -> pos_weight={pw:.2f}")
+    return torch.tensor([pw], dtype=torch.float32)

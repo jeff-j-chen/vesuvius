@@ -12,7 +12,7 @@ from torch.cuda.amp.grad_scaler import GradScaler
 from tqdm import tqdm
 
 from utils.config import Config
-from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray
+from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray, get_tile_pos_weight
 from utils.hard_mining import HardMiningInjector, HardMiningManager
 from utils.model import create_model, supcon_loss
 from utils.training_utils import (
@@ -127,6 +127,8 @@ class Trainer:
             merged_train = MultiScrollIterableDataset(train_sets)
             merged_valid = MultiScrollIterableDataset(valid_sets)
             train_loader, valid_loader = get_dataloaders(merged_train, merged_valid, self.c)
+            # per-scroll InkVolumeDatasets (excludes DotPositiveDataset) for pos_weight sampling
+            self._train_children = list(self._scroll_train_sets.values())
             print(
                 f"[multi-scroll] merged train_tiles={len(merged_train)} "
                 f"valid_tiles={len(merged_valid)}"
@@ -138,6 +140,7 @@ class Trainer:
         train_set, valid_set = data_manager.get_datasets()
         train_loader, valid_loader = get_dataloaders(train_set, valid_set, self.c)
         self._scroll_dms = {scroll_ids[0]: data_manager}
+        self._train_children = [train_set]
         print(f"Data setup done in {time.time() - start_time:.2f}s")
         return train_set, train_loader, valid_loader
 
@@ -163,7 +166,18 @@ class Trainer:
             )
 
         optimizer, scheduler = create_optimizer_and_scheduler(model, self.c)
-        criterion = create_loss_function(None, self.c)
+        # multitile supervises at the 8px sub-tile level, whose class balance (~5:1 neg:pos) is
+        # far worse than the ring-balanced single-tile grid; without pos_weight the rare positives
+        # get abandoned (GCE/BCE alike) and the head collapses to all-negative.
+        # precedence: explicit tile_pos_weight (>0) -> auto (compute+cache from data) -> None.
+        _tpw = float(getattr(self.c.tra, "tile_pos_weight", 0.0) or 0.0)
+        if _tpw > 0:
+            _pw = torch.tensor([_tpw], dtype=torch.float32)
+        elif bool(getattr(self.c.tra, "tile_pos_weight_auto", False)):
+            _pw = get_tile_pos_weight(getattr(self, "_train_children", []), self.c)
+        else:
+            _pw = None
+        criterion = create_loss_function(_pw, self.c)
         print(f" done in {time.time() - start_time:.2f}s")
         return model, params, optimizer, scheduler, criterion
 
@@ -305,20 +319,35 @@ class Trainer:
             loss = (raw_loss.sum() / denom) + self.c.tra.l1_lambda * l1_loss
 
             tta_lambda = float(getattr(self.c.tra, "tta_consistency_lambda", 0.0))
-            if getattr(self.c.tra, "tta_consistency", False) and tta_lambda > 0:
+            _tta_on = getattr(self.c.tra, "tta_consistency", False) and tta_lambda > 0
+            if _tta_on:
+                # optional subsampling: skip the 2nd forward on (1-prob) of steps for speed.
+                # only draw RNG when prob<1 so the default (1.0) stays byte-identical to before.
+                tta_prob = float(getattr(self.c.tra, "tta_consistency_prob", 1.0))
+                if tta_prob < 1.0 and torch.rand(1).item() >= tta_prob:
+                    _tta_on = False
+            if _tta_on:
                 mode = str(getattr(self.c.tra, "tta_consistency_mode", "flips")).lower()
+                # each entry pairs an INPUT transform with the inverse applied to the multitile
+                # (B,n,n) sub-tile grid (grid dims -2,-1 == image H,W) so a flipped/rotated input
+                # is compared cell-for-cell. single-tile output is a scalar -> inverse never runs.
                 if mode == "dihedral":
-                    transforms = (
-                        lambda tensor: torch.flip(tensor, dims=[-1]),
-                        lambda tensor: torch.flip(tensor, dims=[-2]),
-                        lambda tensor: torch.flip(tensor, dims=[-1, -2]),
-                        lambda tensor: torch.rot90(tensor, 1, dims=[-2, -1]),
-                        lambda tensor: torch.rot90(tensor, -1, dims=[-2, -1]),
+                    choices = (
+                        (lambda t: torch.flip(t, dims=[-1]),          lambda g: torch.flip(g, dims=[-1])),
+                        (lambda t: torch.flip(t, dims=[-2]),          lambda g: torch.flip(g, dims=[-2])),
+                        (lambda t: torch.flip(t, dims=[-1, -2]),      lambda g: torch.flip(g, dims=[-1, -2])),
+                        (lambda t: torch.rot90(t, 1, dims=[-2, -1]),  lambda g: torch.rot90(g, -1, dims=[-2, -1])),
+                        (lambda t: torch.rot90(t, -1, dims=[-2, -1]), lambda g: torch.rot90(g, 1, dims=[-2, -1])),
                     )
-                    view = transforms[int(torch.randint(0, len(transforms), (1,)).item())](images)
+                    tf_in, tf_grid_inv = choices[int(torch.randint(0, len(choices), (1,)).item())]
                 else:
-                    dims = ([-1], [-2], [-1, -2])[int(torch.randint(0, 3, (1,)).item())]
-                    view = torch.flip(images, dims=dims)
+                    choices = (
+                        (lambda t: torch.flip(t, dims=[-1]),     lambda g: torch.flip(g, dims=[-1])),
+                        (lambda t: torch.flip(t, dims=[-2]),     lambda g: torch.flip(g, dims=[-2])),
+                        (lambda t: torch.flip(t, dims=[-1, -2]), lambda g: torch.flip(g, dims=[-1, -2])),
+                    )
+                    tf_in, tf_grid_inv = choices[int(torch.randint(0, 3, (1,)).item())]
+                view = tf_in(images)
                 # eval mode for TTA second pass: BN uses running stats (no in-place updates)
                 # which prevents the autograd version conflict with the compiled first-pass graph
                 self.model.eval()
@@ -326,6 +355,10 @@ class Trainer:
                 self.model.train()
                 if other.dim() == 4:
                     other = other.flatten(1).max(dim=1, keepdim=True).values
+                # multitile: undo the input transform on the (B,n,n) grid so cells line up
+                mt_n = int(getattr(self.model, "_mt_grid", 1)) if getattr(self.model, "_multitile", False) else 1
+                if mt_n > 1 and other.dim() == 2 and other.shape[1] == mt_n * mt_n:
+                    other = tf_grid_inv(other.view(-1, mt_n, mt_n)).reshape(other.shape[0], mt_n * mt_n)
                 p1 = torch.sigmoid(outputs)
                 p2 = torch.sigmoid(other)
                 consistency = ((p2 - p1.detach()) ** 2) * mask

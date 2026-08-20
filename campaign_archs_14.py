@@ -13,10 +13,15 @@ TESTS (side-by-side, same backbone + warm-start, only the head/target differ):
 
 SCROLL (1): 20240304141531  w013 (PHerc1667) -- train on w013 only, per request
 
+BASELINE: shared by ALL arms == the archs-13 combo baseline (_BASE13 + _ALL_KW), imported
+  directly. that includes fda + elastic + eroded2 + PHOTOM + IBN + dann + tta_consistency +
+  spill + supcon + dropouts (conv .25/.25, head .4, skip .4) + depth_jitter=4. the ONLY
+  intended deviations are: w013-only scroll, dann_n_domains=1 (so dann is a no-op), and the
+  eval/epoch schedule (n_epochs=15, eval_int=15, probe_int=999).
+
 CONFIG:
   15 epochs, eval at epoch 15, probe_int=999 (never), fast_eval_figure=False
-  1 eval figure (w013), batch=32, lr=1e-4, eval_bs=64, workers=8
-  dann OFF (single scroll -> nothing to adversarially align)
+  1 eval figure (w013), batch=32, lr=1e-4, eval_bs=96, workers=8
 
   python campaign_archs_14.py --dry-run
   python campaign_archs_14.py --only single,multi16
@@ -39,6 +44,9 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 from utils.config import Config, DEFAULT_SCROLLS
 from utils.platform import get_zarr_dir
+# the campaign-14 baseline IS the archs-13 combo baseline (_BASE13 + _ALL_KW). import it
+# directly so the two stay in lockstep instead of transcribing (and drifting from) the recipe.
+from campaign_archs_13 import _BASE13, _ALL_KW
 
 LOG_DIR = "./runs_archs14"
 ALL_SCROLLS = list(DEFAULT_SCROLLS)
@@ -47,30 +55,9 @@ _MAE_CTX96 = "models/mae_nnunet_96.pth"
 _W013_ID = 20240304141531
 ONE_SCROLL = [s for s in ALL_SCROLLS if s.scroll_id == _W013_ID]
 
-PHOTOM = dict(
-    flip_prob=0.6,
-    rotation_prob=0.6,
-    noise_prob=0.3,
-    brightness_prob=0.6,
-    contrast_prob=0.6,
-    cutout_prob=0,
-    cutout_max_frac=0,
-    cutout_n_patches=0,
-    depth_mask_prob=0.0,
-)
-
-SPATIAL_SUPCON = dict(
-    supcon=True,
-    supcon_curriculum=True,
-    supcon_lambda_start=0.05,
-    supcon_lambda_end=0.5,
-    supcon_curriculum_epochs=15,
-    supcon_temp=0.07,
-)
-
 _BATCH = 32
 _LR = 1e-4
-_EVAL_BS = 96.
+_EVAL_BS = 96
 _WORKERS = 8
 
 
@@ -113,6 +100,10 @@ def _base_config(exp_name: str) -> Config:
     c.data.ring_label_source = "closed"
     c.tra.tta_consistency = False
     c.tra.l1_lambda = 0.0
+    # use BCE going forward; auto-derive pos_weight from data (per scroll+mode, cached) so both
+    # single-tile (~1.9:1) and multitile (~5:1) arms get the right class weighting, no hardcode.
+    c.tra.loss_type = "bce"
+    c.tra.tile_pos_weight_auto = True
     c.dl.batch_size = _BATCH
     c.dl.num_workers = _WORKERS
     c.dl.data_aug = True
@@ -140,34 +131,21 @@ def _base_config(exp_name: str) -> Config:
     return c
 
 
-# combo stack shared by both arms (dann dropped: single scroll has nothing to align)
-_BASE14 = dict(
-    arch="nnunet3d_lcndz",
-    init_weights=_MAE_CTX96,
-    attn_mil=True,
-    attn_entropy_weight=0.03,
-    learned_surface=True,
-    # depth spill regularization
-    spill_reduction=True,
-    spill_lambda=0.4,
-    spill_min_depth_var=0.5,
-    spill_depth_threshold=0.35,
-    spill_active_depth_tau=0.08,
-    spill_max_active_depth_frac=0.35,
-    # labels
-    inklabel_dir="./eroded2_inklabels",
-    dot_inklabel_dir="./dots",
+# the campaign-14 baseline == the archs-13 combo baseline (_BASE13 + _ALL_KW), used by ALL arms.
+# only w013, the domain count (1 scroll), and the eval/epoch schedule deviate from it.
+_BASE14 = dict(_BASE13)
+_BASE14.update(_ALL_KW)
+_BASE14.update(
+    scrolls=list(ONE_SCROLL),
+    dann_n_domains=1,               # w013 only -> 1 domain (dann is a no-op here, kept for parity)
     dot_scroll_whitelist=[_W013_ID],
-    # input augmentation
-    fda_prob=0.5,
-    fda_beta=0.05,
-    elastic_prob=0.5,
-    elastic_alpha=15.0,
-    elastic_sigma=5.0,
-    **PHOTOM,
-    # architecture
-    use_ibn=True,
-    **SPATIAL_SUPCON,
+    eval_int_scrolls=1,
+    vis_scroll_ids=[_W013_ID],
+    # the ONLY intended deviations from the archs-13 baseline:
+    n_epochs=15,
+    probe_int=999,
+    eval_int=15,
+    inklabel_dir="./eroded_inklabels",
 )
 
 
@@ -179,8 +157,10 @@ def _mk14(tid: str, tag: str, **overrides: object) -> dict:
     return d
 
 
-# multitile arms disable attn_mil (the multitile aggregator replaces the bag scorer entirely);
-# everything else is identical to `single` so the head/target density is the only variable.
+# multitile arms disable attn_mil (the LSE aggregator replaces the bag scorer); every other
+# ingredient is inherited from the shared baseline so only the head/target density differs.
+# pos_weight is derived automatically from the data (tile_pos_weight_auto in _base_config) --
+# multitile's ~5:1 sub-tile imbalance would otherwise collapse the head to all-negative.
 _MT_KW = dict(
     multitile=True,
     multitile_subtile=8,
@@ -190,21 +170,29 @@ _MT_KW = dict(
 
 
 TESTS = [
-    _mk14("single", "14_single"),
+    _mk14("single_tinydrop", "14_single_tinydrop",
+        conv1_drop=0.05,
+        conv2_drop=0.05,
+        head_drop=0.1,
+        skip_drop=0.2,
+    ),
+    # pos-only labelling: in ink windows only the ink sub-tiles are supervised, non-ink
+    # neighbours are masked out (negatives come from ink-free ring windows).
+    _mk14("multi16_pos", "14_multi16_pos", multitile_train_step=16, multitile_pos_only=True, **_MT_KW),
     _mk14("multi16", "14_multi16", multitile_train_step=16, **_MT_KW),
     # multitile with per-sub-tile gated attention-MIL (instead of LSE pooling) + attn entropy;
     # step 16 matches multi16 so the ONLY change vs it is the sub-tile aggregator.
-    _mk14(
-        "multi16_attn",
-        "14_multi16_attn",
-        multitile=True,
-        multitile_subtile=8,
-        multitile_grid=4,
-        multitile_train_step=16,
-        attn_mil=True,
-        attn_entropy_weight=0.03,
-    ),
-    _mk14("multi32", "14_multi32", multitile_train_step=32, **_MT_KW),
+    # _mk14(
+    #     "multi16_attn",
+    #     "14_multi16_attn",
+    #     multitile=True,
+    #     multitile_subtile=8,
+    #     multitile_grid=4,
+    #     multitile_train_step=16,
+    #     attn_mil=True,
+    #     attn_entropy_weight=0.03,
+    # ),
+    # _mk14("multi32", "14_multi32", multitile_train_step=32, **_MT_KW),
 ]
 
 
@@ -218,6 +206,7 @@ _OVERRIDES = {
     "multitile_subtile": ("model", "multitile_subtile"),
     "multitile_grid": ("model", "multitile_grid"),
     "multitile_train_step": ("data", "multitile_train_step"),
+    "multitile_pos_only": ("data", "multitile_pos_only"),
     "n_epochs": ("tra", "n_epochs"),
     "eval_int": ("tra", "eval_int"),
     "probe_int": ("tra", "probe_int"),
@@ -246,6 +235,20 @@ _OVERRIDES = {
     "spill_active_depth_tau": ("tra", "spill_active_depth_tau"),
     "spill_max_active_depth_frac": ("tra", "spill_max_active_depth_frac"),
     "spill_min_depth_var": ("tra", "spill_min_depth_var"),
+    # domain-adversarial + tta-consistency + extra regularizers inherited from the archs-13 baseline
+    "dann": ("tra", "dann"),
+    "dann_lambda": ("tra", "dann_lambda"),
+    "dann_grl_anneal": ("tra", "dann_grl_anneal"),
+    "dann_n_domains": ("tra", "dann_n_domains"),
+    "tta_consistency": ("tra", "tta_consistency"),
+    "tta_consistency_lambda": ("tra", "tta_consistency_lambda"),
+    "tta_consistency_mode": ("tra", "tta_consistency_mode"),
+    "tta_consistency_prob": ("tra", "tta_consistency_prob"),
+    "tile_pos_weight": ("tra", "tile_pos_weight"),
+    "tile_pos_weight_auto": ("tra", "tile_pos_weight_auto"),
+    "loss_type": ("tra", "loss_type"),
+    "skip_drop": ("model", "skip_drop"),
+    "depth_jitter": ("data", "depth_jitter"),
     "scrolls": ("data", "scrolls"),
     "eval_int_scrolls": ("tra", "eval_int_scrolls"),
     "batch_size": ("dl", "batch_size"),
@@ -315,6 +318,7 @@ def run_test(c: Config, dry_run: bool) -> bool:
         f"  subtile={getattr(c.model, 'multitile_subtile', 0)}"
         f"  grid={getattr(c.model, 'multitile_grid', 0)}"
         f"  train_step={getattr(c.data, 'multitile_train_step', 0)}"
+        f"  pos_only={getattr(c.data, 'multitile_pos_only', False)}"
         f"  attn_mil={c.model.attn_mil}"
     )
     print(
