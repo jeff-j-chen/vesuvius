@@ -396,21 +396,74 @@ def _verify_zarr_integrity(zarr_path, zid):
         raise RuntimeError(f"Failed to verify zarr integrity for {zid}: {e}")
 
 
-def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x):
+SWEEP_GRID = 16           # NxN probe grid across the frame
+SWEEP_MIN_COVERAGE = 0.5  # min fraction of mask-valid probes that must carry data
+
+
+def _zarr_integrity(zid, mask_dir="masks", grid=SWEEP_GRID, min_coverage=SWEEP_MIN_COVERAGE):
+    """cheap spatial integrity check for one scroll's on-disk zarr. samples an NxN grid of
+    depth-columns across the frame and verifies the zarr carries data wherever the mask says
+    the surface is valid. a partial/interrupted write covers only a sliver of its mask (e.g.
+    w044/w047 were ~7%); a middle-row-only check misses this. returns (ok: bool, msg: str)."""
+    import zarr
+    zpath = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    if not os.path.isdir(zpath):
+        return False, "MISSING zarr"
+    try:
+        z = zarr.open(zpath, mode="r")
+        D, H, W = map(int, z.shape)
+    except Exception as e:
+        return False, f"UNREADABLE ({type(e).__name__})"
+    mpath = os.path.join(mask_dir, f"{zid}.png")
+    if not os.path.exists(mpath):
+        return False, "MISSING mask"
+    m = np.array(Image.open(mpath).convert("L"))
+    hh, ww = min(H, m.shape[0]), min(W, m.shape[1])
+    ys = np.linspace(0, hh - 1, grid).astype(int)
+    xs = np.linspace(0, ww - 1, grid).astype(int)
+    valid = have = 0
+    for y in ys:
+        for x in xs:
+            if m[y, x] > 0:                       # mask claims valid surface here
+                valid += 1
+                if bool((np.asarray(z[:, y, x]) > 0).any()):   # any depth carries data
+                    have += 1
+    if valid == 0:
+        return False, "MASK_EMPTY"
+    cov = have / valid
+    mb_frac = float((m > 0).mean()) * 100
+    if cov < min_coverage:
+        return False, f"DATA_UNDERFILL cov={cov:.2f} (mask={mb_frac:.0f}% valid)"
+    return True, f"cov={cov:.2f}"
+
+
+def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
     # w013 uses a dedicated assembly script (level-2 surface zarr, z-pooled to 28 layers)
     if FRAG_OPTS.get(name, {}).get("custom_assemble"):
         zpath = os.path.join(ZARR_DIR, f"{zid}.zarr")
         mpath = f"masks/{zid}.png"
-        if os.path.exists(zpath) and os.path.exists(mpath):
+        if os.path.exists(zpath) and os.path.exists(mpath) and not force:
             print(f"  [1/3] volume+mask exist -> skip")
             return
         run([sys.executable, "assemble_w013_1667.py", "--skip-norm"])
         return
     zpath = os.path.join(ZARR_DIR, f"{zid}.zarr")
     mpath = f"masks/{zid}.png"
-    if os.path.exists(zpath) and os.path.exists(mpath):
+    if os.path.exists(zpath) and os.path.exists(mpath) and not force:
         print(f"  [1/3] volume+mask exist -> skip")
         return
+    if force:
+        # clear stale outputs + the per-fragment chunk cache so the re-download is clean;
+        # a reused cache can carry the corrupt/air chunks that blanked the volume
+        cache = os.path.join(TMP, f"dl_{zid}")
+        if os.path.isdir(zpath):
+            shutil.rmtree(zpath, ignore_errors=True)
+        if os.path.exists(mpath):
+            try: os.remove(mpath)
+            except OSError: pass
+        if os.path.isdir(cache):
+            shutil.rmtree(cache, ignore_errors=True)
+        print(f"  [1/3] --force: cleared zarr/mask + chunk cache, re-downloading")
     # per-fragment volume name override (non-PHerc0139 scrolls have a different raw vol id)
     vol9 = FRAG_OPTS.get(name, {}).get("vol9_name", VOL9_NAME)
     url = f"{BUCKET}/{seg}/surface-volumes/{vol9}"
@@ -449,12 +502,12 @@ def step2_check_eroded_labels(name, seg, zid):
     print(f"  {'='*60}\033[0m")
 
 
-def step3_norm(name, seg, zid, skip):
+def step3_norm(name, seg, zid, skip, force=False):
     if skip:
         print(f"  [3/3] --skip-norm -> skip")
         return
     import json
-    if os.path.exists("norm_cache.json"):
+    if not force and os.path.exists("norm_cache.json"):
         try:
             if zid in json.load(open("norm_cache.json")):
                 print(f"  [3/3] norm cached -> skip")
@@ -464,19 +517,19 @@ def step3_norm(name, seg, zid, skip):
     run([sys.executable, "precompute_norm.py", "--scroll-id", zid, "--zarr-path", ZARR_DIR])
 
 
-def process_fragment(name, seg, zid, workers, skip_norm, chunk_depth, chunk_y, chunk_x, prefix=""):
+def process_fragment(name, seg, zid, workers, skip_norm, chunk_depth, chunk_y, chunk_x, prefix="", force=False):
     """run the full assembly pipeline for one fragment. isolated in try/except so a
     single failure never kills a concurrent batch. respects FRAG_OPTS (skip_labels)."""
     opts = FRAG_OPTS.get(name, {})
     tag = f"{prefix}{name} ({zid})"
     try:
         print(f"\n{'='*70}\n{tag}  id={zid}\n{'='*70}", flush=True)
-        step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x)
+        step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
         if not opts.get("skip_labels"):
             step2_check_eroded_labels(name, seg, zid)
         else:
             print(f"  [labels] skip_labels -> keeping existing eroded_inklabels")
-        step3_norm(name, seg, zid, skip_norm)
+        step3_norm(name, seg, zid, skip_norm, force=force)
         print(f"[done] {tag}")
         return (name, "OK")
     except Exception as e:
@@ -497,6 +550,9 @@ def main():
                          "each uses --workers download threads, so total connections "
                          "= concurrent_fragments * workers; watch RAM (~2-5GB per fragment).")
     ap.add_argument("--skip-norm", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="re-download/re-render + recompute norm even if outputs exist; also clears "
+                         "the per-fragment chunk cache for a clean S3 re-fetch (use to fix a corrupted zarr)")
     ap.add_argument("--chunk-depth", type=int, default=DEFAULT_CHUNK_DEPTH,
                     help=f"zarr depth chunk size (default {DEFAULT_CHUNK_DEPTH}, optimized for 8-slice windows)")
     ap.add_argument("--chunk-y", type=int, default=DEFAULT_CHUNK_Y,
@@ -507,7 +563,9 @@ def main():
 
     segs = SEGMENTS
     if args.only:
-        segs = [s for s in SEGMENTS if s[0] == args.only]
+        # comma-separated list so several fragments can be forced in one run
+        want = {o.strip() for o in args.only.split(",") if o.strip()}
+        segs = [s for s in SEGMENTS if s[0] in want]
     elif args.from_name:
         names = [s[0] for s in SEGMENTS]
         segs = SEGMENTS[names.index(args.from_name):]
@@ -521,13 +579,14 @@ def main():
     if cf == 1:
         for name, seg, zid in segs:
             results.append(process_fragment(name, seg, zid, args.workers, args.skip_norm,
-                                          args.chunk_depth, args.chunk_y, args.chunk_x))
+                                          args.chunk_depth, args.chunk_y, args.chunk_x,
+                                          force=args.force))
     else:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         with ThreadPoolExecutor(max_workers=cf) as ex:
             futs = {ex.submit(process_fragment, name, seg, zid, args.workers,
                               args.skip_norm, args.chunk_depth, args.chunk_y, args.chunk_x,
-                              prefix=f"[{name}] "): name
+                              prefix=f"[{name}] ", force=args.force): name
                     for name, seg, zid in segs}
             for fut in as_completed(futs):
                 results.append(fut.result())
@@ -535,6 +594,24 @@ def main():
     print(f"\n{'='*70}\n[assemble] SUMMARY\n{'='*70}")
     for nm, status in results:
         print(f"  {nm}: {status}")
+
+    # HARDENING: integrity-sweep EVERY scroll (not just the ones touched this run) so a
+    # partial/interrupted zarr that 'exists -> skip' silently kept gets caught and reported.
+    print(f"\n{'='*70}\n[assemble] INTEGRITY SWEEP ({len(SEGMENTS)} scrolls)\n{'='*70}")
+    broken = []
+    for name, _seg, zid in SEGMENTS:
+        ok, msg = _zarr_integrity(zid)
+        if ok:
+            print(f"  OK   {name:<12} {zid}  {msg}")
+        else:
+            print(f"  \033[91mFAIL {name:<12} {zid}  {msg}\033[0m")
+            broken.append(name)
+    if broken:
+        ids = ",".join(broken)
+        print(f"\n\033[91m[assemble] {len(broken)} scroll(s) FAILED integrity: {broken}")
+        print(f"  fix with: python assemble_training_segments.py --force --only {ids}\033[0m")
+    else:
+        print(f"[assemble] integrity sweep: all {len(SEGMENTS)} scrolls OK")
 
 
 if __name__ == "__main__":

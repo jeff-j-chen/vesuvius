@@ -239,8 +239,10 @@ class Transform:
 
 class InkVolumeDataset(IterableDataset):
     """iterable dataset for ink volume data"""
-    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None):
+    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, scroll_mask=None):
         """initializes the dataset.
+        scroll_mask: optional papyrus mask distinct from `mask` (which may be ring-restricted);
+        multitile uses it to drop sub-tiles straddling the scroll boundary. defaults to `mask`.
         soft_labels: optional full-res float [0,1] ink-probability map (expanded+blurred
         eroded labels). when given AND config.data.dense_soft_labels is set, the dense
         per-pixel target uses these CONTINUOUS values instead of the hard binary label —
@@ -296,6 +298,24 @@ class InkVolumeDataset(IterableDataset):
             self._mask_shape = None
             self._labels_shape = None
             self._use_bitpack = False
+        # scroll (papyrus) mask, kept separate from the training `mask` (a ring-restricted
+        # subset when ring_negatives is on). multitile uses it to mask out sub-tiles that
+        # straddle the papyrus boundary (req c). absent -> equals the training mask.
+        self._has_scroll_mask = scroll_mask is not None
+        if self._has_scroll_mask:
+            sm_u8 = (np.asarray(scroll_mask) > 0.5).astype(np.uint8)
+            if getattr(config.data, "mask_memmap", False):
+                self._scroll_mask_path = _write_memmap(sm_u8, pack_bits=use_bitpack, original_shape=sm_u8.shape)
+                self._scroll_mask_arr = None
+                self._scroll_mask_shape = sm_u8.shape
+            else:
+                self._scroll_mask_path = None
+                self._scroll_mask_arr = sm_u8
+                self._scroll_mask_shape = None
+        else:
+            self._scroll_mask_path = None
+            self._scroll_mask_arr = None
+            self._scroll_mask_shape = None
         # optional soft labels (continuous ink probability, 0-255 uint8). stored parallel
         # to the hard labels; used only by the dense target path when dense_soft_labels is on.
         self._soft_path = None
@@ -316,6 +336,10 @@ class InkVolumeDataset(IterableDataset):
         self.shuffle = shuffle
         self.norm_stats = norm_stats
         self.transform = Transform(config)
+        # multitile: emit a grid x grid map of per-sub-tile labels (papyrus unless .any() ink)
+        self._mt = bool(getattr(config.model, "multitile", False))
+        self._mt_grid = max(1, int(getattr(config.model, "multitile_grid", 4)))
+        self._mt_sub = max(1, int(getattr(config.model, "multitile_subtile", 8)))
 
         self.z_start = getattr(self.c.data, "train_d_start", self.c.data.d_start)
         self.z_end   = getattr(self.c.data, "train_d_end",   self.c.data.d_end)
@@ -337,6 +361,26 @@ class InkVolumeDataset(IterableDataset):
             self.samples_per_epoch = min(len(self.block_coords), int(self._max_samples))
         else:
             self.samples_per_epoch = len(self.block_coords)
+
+    def _mt_center_bounds(self, y_off, x_off):
+        """absolute y/x bounds of the multitile center window for this sample.
+        for tile16 + grid4*sub8 this is a 32x32 window centered on the 16x16 tile."""
+        n, sub = self._mt_grid, self._mt_sub
+        center = n * sub
+        y0 = self.y_start + y_off + (self.tile_size - center) // 2
+        x0 = self.x_start + x_off + (self.tile_size - center) // 2
+        return y0, y0 + center, x0, x0 + center
+
+    def _mt_window_touches_ring(self, y_off, x_off):
+        """true when the 32x32 multitile center overlaps any training (ring) mask pixel."""
+        y0, y1, x0, x1 = self._mt_center_bounds(y_off, x_off)
+        lbl = self.mask
+        H, W = int(lbl.shape[0]), int(lbl.shape[1])
+        ys, ye = max(0, y0), min(H, y1)
+        xs, xe = max(0, x0), min(W, x1)
+        if ys >= ye or xs >= xe:
+            return False
+        return bool(np.any(lbl[ys:ye, xs:xe] > 0.5))
 
     @property
     def mask(self):
@@ -378,6 +422,22 @@ class InkVolumeDataset(IterableDataset):
             return None
         return self._soft_arr
 
+    @property
+    def scroll_mask(self):
+        """binary papyrus mask; falls back to the training mask when none was provided
+        (ring_negatives off). lazily memmapped per process, mirroring `mask`."""
+        if not self._has_scroll_mask:
+            return self.mask
+        if self._scroll_mask_arr is None and self._scroll_mask_path is not None:
+            packed = np.load(self._scroll_mask_path, mmap_mode='r')
+            if self._use_bitpack:
+                unpacked = np.unpackbits(packed)
+                total_pixels = int(np.prod(self._scroll_mask_shape))
+                self._scroll_mask_arr = unpacked[:total_pixels].reshape(self._scroll_mask_shape)
+            else:
+                self._scroll_mask_arr = packed
+        return self._scroll_mask_arr
+
     def __getstate__(self):
         """pickle only the memmap PATHS, never the open memmap. pickling a numpy
         memmap would copy its full contents into the pickle stream — exactly the
@@ -391,6 +451,8 @@ class InkVolumeDataset(IterableDataset):
             state["_labels_arr"] = None
         if state.get("_soft_path") is not None:
             state["_soft_arr"] = None
+        if state.get("_scroll_mask_path") is not None:
+            state["_scroll_mask_arr"] = None
         # never pickle an open zarr handle to a spawned worker (unpicklable on Windows,
         # OSError [Errno 22]). the main process may now hold one (vol opens lazily in the
         # main process too, for num_workers=0 validation); drop it so workers reopen via
@@ -432,12 +494,23 @@ class InkVolumeDataset(IterableDataset):
         
         coords = []
         z_step = max(1, int(self.depth // 2))
+        # multitile steps the window by a larger stride (each window supervises grid^2 sub-tiles);
+        # single-tile steps by tile_size as before.
+        xy_step = int(getattr(self.c.data, "multitile_train_step", self.tile_size)) if getattr(self, "_mt", False) else self.tile_size
+        xy_step = max(1, xy_step)
 
         # iterate over the volume with specified step sizes to generate coordinates
         for d in range(0, z_range_size, z_step):
             if self.z_start + d + self.depth > self.z_end: continue
-            for y in range(0, y_range_size, self.tile_size):
-                for x in range(0, x_range_size, self.tile_size):
+            for y in range(0, y_range_size, xy_step):
+                for x in range(0, x_range_size, xy_step):
+                    # multitile training windows: keep ONLY windows whose 32x32 center overlaps
+                    # the ring (training) mask. inside those windows each 8x8 sub-tile is labeled
+                    # ink iff .any() ink (ring membership ignored) and masked to the scroll bounds.
+                    if self._mt and self.shuffle:
+                        if self._mt_window_touches_ring(y, x):
+                            coords.append((d, y, x))
+                        continue
                     # check if the corresponding mask area has any valid pixels
                     mask_block = self.mask[
                         self.y_start + y : self.y_start + y + self.tile_size,
@@ -524,14 +597,61 @@ class InkVolumeDataset(IterableDataset):
 
     def _fetch_label(self, y_off, x_off):
         """fetches a binary label tile"""
+        if self._mt:
+            return self._fetch_label_mt(y_off, x_off)
         y = self.y_start + y_off
         x = self.x_start + x_off
         label_tile = self.labels[y:y+self.tile_size, x:x+self.tile_size]
         has_ink = bool(np.any(label_tile > 0.5))
         return torch.tensor([float(has_ink)], dtype=torch.float32)
 
+    def _fetch_label_mt(self, y_off, x_off):
+        """per-sub-tile labels over the grid*sub px center: 1 if .any() eroded ink else 0.
+        every sub-tile is a target (papyrus unless ink); OOB reads clamp to papyrus (0)."""
+        n, sub = self._mt_grid, self._mt_sub
+        y0, _, x0, _ = self._mt_center_bounds(y_off, x_off)
+        lbl = self.labels
+        Hl, Wl = int(lbl.shape[0]), int(lbl.shape[1])
+        out = np.zeros(n * n, dtype=np.float32)
+        for iy in range(n):
+            ys, ye = y0 + iy * sub, y0 + (iy + 1) * sub
+            if ye <= 0 or ys >= Hl:
+                continue
+            ysc, yec = max(0, ys), min(Hl, ye)
+            for ix in range(n):
+                xs, xe = x0 + ix * sub, x0 + (ix + 1) * sub
+                if xe <= 0 or xs >= Wl:
+                    continue
+                xsc, xec = max(0, xs), min(Wl, xe)
+                if np.any(lbl[ysc:yec, xsc:xec] > 0.5):
+                    out[iy * n + ix] = 1.0
+        return torch.from_numpy(out)
+
+    def _fetch_mask_mt(self, y_off, x_off):
+        """per-sub-tile validity over the grid: a sub-tile is a target ONLY if it lies fully
+        inside the scroll mask. any pixel outside the mask (or off-frame) -> masked out (0), so
+        we never supervise a sub-tile that straddles the papyrus boundary. order iy*n+ix."""
+        n, sub = self._mt_grid, self._mt_sub
+        y0, _, x0, _ = self._mt_center_bounds(y_off, x_off)
+        m = self.scroll_mask
+        Hm, Wm = int(m.shape[0]), int(m.shape[1])
+        out = np.zeros(n * n, dtype=np.float32)
+        for iy in range(n):
+            ys, ye = y0 + iy * sub, y0 + (iy + 1) * sub
+            if ys < 0 or ye > Hm:
+                continue
+            for ix in range(n):
+                xs, xe = x0 + ix * sub, x0 + (ix + 1) * sub
+                if xs < 0 or xe > Wm:
+                    continue
+                if np.all(m[ys:ye, xs:xe] > 0):
+                    out[iy * n + ix] = 1.0
+        return torch.from_numpy(out)
+
     def _fetch_mask(self, y_off, x_off):
         """fetches a mask tile"""
+        if self._mt:
+            return self._fetch_mask_mt(y_off, x_off)
         y = self.y_start + y_off
         x = self.x_start + x_off
         
@@ -851,6 +971,13 @@ class DataManager:
         # the full valid region (tens of thousands of easy tiles) swamps the validation
         # loop and makes it take 5-10× longer than necessary.
         valid_mask = train_mask if getattr(self.c.data, 'ring_negatives', False) else self.mask
+        # multitile needs the true scroll mask (papyrus bounds) separate from the ring-
+        # restricted training mask. only allocate it for multitile: single-tile never reads
+        # scroll_mask, so passing None keeps the control byte-identical (no extra array).
+        scroll_mask_arg = self.mask if (
+            getattr(self.c.data, 'ring_negatives', False)
+            and getattr(self.c.model, 'multitile', False)
+        ) else None
         if getattr(self, "split_axis", "x") == "y":
             train_x, train_y = self.shared_range, self.train_range
             valid_x, valid_y = self.shared_range, self.valid_range
@@ -868,6 +995,7 @@ class DataManager:
             shuffle=True,
             scroll_id=self.scroll_id,
             domain_id=self.domain_id,
+            scroll_mask=scroll_mask_arg,
         )
         valid_set = InkVolumeDataset(
             self.vol,
@@ -880,6 +1008,7 @@ class DataManager:
             shuffle=False,
             scroll_id=self.scroll_id,
             domain_id=self.domain_id,
+            scroll_mask=scroll_mask_arg,
         )
         # the datasets have already copied what they need as uint8. the manager's own
         # float64 mask/labels (mask/255.0) are not used on the training side afterward

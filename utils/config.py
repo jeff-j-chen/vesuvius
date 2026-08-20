@@ -118,12 +118,16 @@ class DataConfig:
     context_size: int = 0
     context_downsample: int = 1
     eval_infer_bs: int = 128
+    eval_prefetch: int = 0   # >0 reads eval rows in N background threads to overlap disk i/o with gpu inference (0=serial)
+    tta_mode: str = "flips"  # eval TTA view set: "light"=id+hflip (2x), "flips"=id+h+v+180 (4x), "dihedral"=+/-90 too (6x)
     probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
     vis_scroll_ids: Optional[List[int]] = None
     inklabel_dir: str = "./eroded_inklabels"
     dot_inklabel_dir: str = ""  # optional dir of binary dot labels; only positives are added to train
+    dot_scroll_whitelist: List[int] = field(default_factory=list)  # if non-empty, load dots ONLY for these scroll ids
     ctx_jitter: int = 0  # max pixel jitter for context window; varies surrounding context during training
     depth_jitter: int = 0  # max slice jitter for depth window start; attacks depth-profile position memorization
+    multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
 
     @property
     def test_scroll_id(self) -> Optional[int]:
@@ -229,6 +233,10 @@ class ModelConfig:
     skip_drop: float = 0.0  # prob of zeroing each skip connection; forces bottleneck reliance
     use_depth_profile: bool = False  # replace bag-score with depth-profile-only MLP (no spatial info)
     no_dz: bool = False  # zero the dz input channel; tests whether depth gradient or raw signal carries ink
+    channels_mult: float = 1.0  # width multiplier on the 32/64/128/256 channel ladder (0.5 = half)
+    multitile: bool = False       # predict a grid of sub-tiles over the center instead of one 16px tile
+    multitile_subtile: int = 8    # px per sub-tile prediction
+    multitile_grid: int = 4       # grid side: 4 -> 4x4=16 sub-tiles over a 32px center
 
 
 @dataclass

@@ -244,3 +244,83 @@ Default: set `MODEL_PATH` to your best checkpoint (latest: `runs_lcn/` from the 
 ## Historical notes
 
 See `old/KNOWLEDGE.md` for the full research log: pre-2026 campaigns (arch10/18/28, scroll1/4 at 7.91 µm), 2.4 µm vs 9.4 µm investigation, scroll4 teacher-zarr work, and the 2026-07 PHerc0139 9.362 µm campaign series (triple-scroll sweep, LCN win, w056 addition).
+
+## CATCH UP TO SPEED:
+The latest results:
+campaign 5 was our original cnn baseline. capable of overfitting on small amounts of data, but fell apart with larger scrolls.
+campaign 7 8 and 9 proved that our nnunet is king; it can overfit no matter the amount of data we throw at it.
+campaigns 11 and 12 proved that context is king (up to 192ds2, any higher is useless) and tested a bunch of further refinements (e.g. ibn, fda, etc.)
+
+The *crux of the issue*: the model can overfit but cannot generalize. 
+
+Note that per patch, we label ~10 letters (out of ~50 actual letters). The model can overfit very easily onto all 10 letters across all 18 patches, but it has NEVER found a SINGLE LETTER not in it's immediate training corpus, even those right next to labelled letters. It predicts what basically amounts to illegible noise in every location except those perfectly labelled. 
+
+Our labels are uncertain, hence the ring setup (we strictly want to avoid accidentally labelling ink as papyrus). Previous agents have contended that this is a geometry issue: this is not true. Each tile only knows the immedaite information of it's context; it doesn't see that it's 'surrounded' by a ring of papyrus or anything like that.
+
+Incredibly, no amount of regularization we throw at the model hinders it's progress. Campaign 11 and 12 are evidence of this, but we have done testing outside of that. l1, l2, adamw, and photometric are all useless. tta consistency helped a little. the spill reduction helped a little (it forces the model to focus on a handful of depths, as we intend). the ones that actually have an effect: depth mixing (catastrophic failure, model absolutely requires depth preservation) and cutout (model eventually overfits again, but the problem space is fundamentally changed and it simply performs much worse).
+
+Campaign 13 is out attempt at faster iteration plus a smaller dataset. Note that scroll 20240304141531 hold by far the largest amount of labels, and we are slightly more confident than usual about it's label quality. For this smaller dataset (notably not regularized by the larger training corpus and cross scroll information): every test stil overfits, hard. 
+
+the baseline (13_baseline_18_21-12-15) quickly climbs to 0.8 train pr auc after just 10 epochs, if i trained it more it would likely reach >0.9. The valid pr auc climbs, then stalls at 0.7: not catastrophic overfitting, but looking out our inference, again the model is failing to predict any letter not directly in its training corpus. 
+
+in fact, a pr_auc of 0.8 means that the model fails on quite a number of the training corpus as well, but this is not the issue at hand. it's expected that the model cannot learn the representation on this smaller subset, this is an observed and assured phenomenon.. I know that if I add more data, the model will actually fit better to the training subset, but I just want faster iteration right now.
+
+jitter and jitter large were uesless. skip drop and skip drop hard (0.6!!) were both useless. depth profile was useless. strong spill was useless. no dz was useless. 'useless' means that it basically followed the baseline curve for as long as it trained, witth minimal deviation.
+
+The only two things with any punch: dropout took the train pr_auc from 0.8 to 0.7; the valid_pr auc matched the old 0.7. depth jitter took the train pr_auc to 0.6, and the valid pr_auc matched the old 0.7. These are actually very good signs and I feel silly not trying the most basic regularization earlier. I'm considering slamming these together and training the whole training corpus. 
+
+the ring negative does not (in the vast vast majority of cases) ever eat into a positive letter, I've made sure of it. The close and gap were chosen to allow for the model to have wiggle room for it's ink label, while not eating into other letters. Note that the model does perform better if we label the boundary perfectly, but given the uncertainty of our labels, doing so is currently actively detrimental.
+
+adding pure papyrus data does not help in the slightest. the model most needs to learn the differentiation point between ink and papyrus; closer labels help but again we cannot dot hat rightnow.
+
+The ring is how we generate positive and negative labels; the pr_auc metric is over each 16x16 prediction at the center of the chosen 192x192 tiles. 
+
+the papyrus actually 'undulates' up and down throughout the mesh (a necessary evil of segmentation), hence why we have tried and added depth aware components (learned surface, dl/dz, etc.). I sincerely doubt the model is predicting based on the same depth every time. Not to mention, the previous iteration of our model had even more depth information but failed to capitalize on it.
+
+Let's also talk about the metrics. I don't understand your logic - how can it be blind to the failure mode? there are labels in both the train and validation section. if the model cannot learn the letters on the held-out region (learning letters = scoring well, because it must label the letter correctly and isolate it), then it will score badly on validation. Furthermore, note that this is actually almost a *meaningless* distinction: because of the way we've set up our model, *everything that is in the training corpus* is functionally a held-out section. That's why I have the eval figure at the end: I'm literally looking at the model output and seeing that it can learn the vast majority of the training letters, yet nothing *between* the training letters. Think of it this way: we have word spelled 'h e l l o'. We are unsure of the 2nd character, so we label 'h . l l o'. And we want a validation character, so then we take the o. We can look at both the performance on the 'e' and the 'o' (not trained on, we only trained on h l l) to see how the model does.
+
+# multitile prediction head (nnunet3d_lcndz)
+
+behind flag `config.model.multitile` (default False). single-tile path stays byte-identical.
+
+## what it does
+predicts the 32px center as a 4x4 grid of 8px sub-tiles (16 targets/window) instead of one
+16px score. denser gradient without going fully dense.
+- WINDOW GATING (train only, shuffle=True): keep a window only if its 32px center overlaps the
+  RING/training mask (`_mt_window_touches_ring` in _gen_tile_coords). the dataset's `self.mask`
+  IS the ring mask when ring_negatives is on. negatives = papyrus sub-tiles inside those windows.
+- LABELS (`_fetch_label_mt`): each 8x8 sub-tile = 1 if .any() ink else 0 (ring ignored).
+- MASK (`_fetch_mask_mt`): sub-tile valid ONLY if fully inside the SCROLL mask (papyrus bounds),
+  which is threaded separately as `scroll_mask` (self.scroll_mask; falls back to self.mask when
+  ring off). ring mask != scroll mask. train.py loss divides by mask.sum(); metrics drop masked
+  sub-tiles (guarded by labels.shape[1]>1 so single-tile stays byte-identical).
+
+## aggregators (multitile)
+- default: per-cell log-sum-exp (`_multitile_aggregate`), param-light (just lse_r).
+- attn_mil=True: per-sub-tile gated attention-MIL (`_multitile_attn_aggregate`) folds the 4x4
+  grid into the batch dim, one attn_mil call pools each 8px bag; sets last_attn_entropy_loss.
+  campaign arm `multi16_attn` uses this (attn_mil=True, attn_entropy_weight=0.03).
+
+## config knobs
+- model.multitile (bool), model.multitile_subtile=8, model.multitile_grid=4
+- data.multitile_train_step (dataloader window stride px, default 16)
+
+## CRITICAL invariant: cell ordering must match across 3 files
+flat index = iy*grid + ix  (iy = y-block/row, ix = x-block/col, row-major)
+- model.py `_multitile_aggregate`: reshape (B,D,ny,suby,nx,subx)->permute->(B, ny*n+nx, ...)
+- dataloader.py `_fetch_label_mt`: out[iy*n+ix]
+- visualizer.py `_process_chunk_mt._scatter`: cell (base_y+iy, base_x+ix)
+
+## centering
+32px label/pred region centered on the 16px tile: top-left offset = (tile-32)//2 = -8.
+model crops 16 feat px center (=32 input px at ds2). all three agree.
+
+## eval/visualizer
+multitile output map is at sub-tile (8px) resolution, not tile(16px). predict_tiles builds
+sum/count accumulators (windows overlap 4x at stride 16) and averages. TTA flips/rot must be
+UNDONE on the (B,n,n) grid before averaging (grid dims 1=y,2=x). `_compute_tile_maps` takes a
+`tile` arg (pass out_tile=8); add_evaluation_figures uses `_out_tile` for label maps + split idx.
+
+## campaign
+campaign_archs_14.py: single vs multi16 vs multi32 on w013 only. multitile arms set attn_mil=False
+(the mt aggregator replaces the bag scorer; last_attn_entropy_loss stays None so no stray loss).

@@ -3,7 +3,7 @@ import numpy as np
 import os
 from pathlib import Path
 
-def erode_ink_labels(input_folder="inklabels", output_folder="eroded_inklabels", erosion_size=3, iterations=1):
+def erode_ink_labels(input_folder="eroded_inklabels", output_folder="eroded2_inklabels", erosion_size=3, iterations=3):
     """
     Apply erosion to grayscale ink label images to shrink white regions (1s).
     
@@ -64,10 +64,10 @@ def erode_ink_labels(input_folder="inklabels", output_folder="eroded_inklabels",
 
 if __name__ == "__main__":
     # Configuration - modify these values as needed
-    INPUT_FOLDER = "inklabels"
-    OUTPUT_FOLDER = "eroded_inklabels"
+    INPUT_FOLDER = "eroded_inklabels"
+    OUTPUT_FOLDER = "eroded2_inklabels"
     EROSION_SIZE = 3  # Size of erosion kernel (3x3, 5x5, etc.)
-    ITERATIONS = 12    # Number of erosion iterations
+    ITERATIONS = 3    # ~18% shrink from eroded_inklabels
     
     # Run the erosion process
     erode_ink_labels(

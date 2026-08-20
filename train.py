@@ -107,8 +107,13 @@ class Trainer:
                 )
 
             dot_dir = str(getattr(self.c.data, "dot_inklabel_dir", "") or "")
+            # when a whitelist is set, only these scrolls have processed dots; the rest
+            # of dots/*.png are unprocessed placeholders and must be skipped
+            dot_whitelist = {int(s) for s in (getattr(self.c.data, "dot_scroll_whitelist", []) or [])}
             if dot_dir:
                 for scroll_id, dm in self._scroll_dms.items():
+                    if dot_whitelist and int(scroll_id) not in dot_whitelist:
+                        continue
                     dot_path = os.path.join(dot_dir, f"{scroll_id}.png")
                     if not os.path.exists(dot_path):
                         continue
@@ -239,8 +244,14 @@ class Trainer:
     def _train_batch(self, images, labels, mask, domain_ids=None, epoch: int = 0, unlabeled_images=None):
         images = images.to(self.c.device)
         images = self._apply_fda(images)
-        labels = labels.to(self.c.device).view(-1, 1)
-        mask = (mask.to(self.c.device).view(images.size(0), -1).sum(dim=1) > 0).float().unsqueeze(1)
+        B = images.size(0)
+        labels = labels.to(self.c.device).view(B, -1)          # (B,1) single or (B,K) multitile
+        mask = mask.to(self.c.device).view(B, -1)
+        if mask.shape[1] == labels.shape[1]:
+            mask = (mask > 0).float()                          # per-sub-tile validity (multitile)
+        else:
+            mask = (mask.sum(dim=1) > 0).float().unsqueeze(1)  # single-tile window gate
+        sample_pos = (labels.amax(dim=1) > 0.5).float()        # window-level positive, (B,)
         if domain_ids is not None:
             domain_ids = domain_ids.to(self.c.device, non_blocking=True).view(-1)
 
@@ -336,7 +347,7 @@ class Trainer:
             spill_loss_value = outputs.new_zeros(())
             center_voxel_map = getattr(self.model, "last_center_voxel_map", None)
             if bool(getattr(self.c.tra, "spill_reduction", False)) and center_voxel_map is not None:
-                pos_mask = (labels.view(-1) > 0.5).float()
+                pos_mask = sample_pos
                 if pos_mask.sum() > 0:
                     # variance of mean logit per depth slice: high var = depth-selective (good)
                     # low var = uniform across all layers (spill); no cap on prediction confidence
@@ -347,7 +358,7 @@ class Trainer:
                     loss = loss + float(getattr(self.c.tra, "spill_lambda", 0.0)) * spill_loss_value
 
             if bool(getattr(self.c.tra, "spill_prob", False)) and center_voxel_map is not None:
-                pos_mask = (labels.view(-1) > 0.5).float()
+                pos_mask = sample_pos
                 if pos_mask.sum() > 0:
                     # original prob-based spill: penalize active-depth-fraction > max_active_frac
                     center_probs = torch.sigmoid(center_voxel_map)
@@ -367,7 +378,7 @@ class Trainer:
             if bool(getattr(self.c.tra, "spill_entropy", False)):
                 full_voxel_map = getattr(self.model, "last_voxel_map_full", None)
                 if full_voxel_map is not None:
-                    pos_mask_e = (labels.view(-1) > 0.5).float()
+                    pos_mask_e = sample_pos
                     if pos_mask_e.sum() > 0:
                         # softmax entropy of full-context depth profile: scale-invariant depth sparsity
                         # uses full spatial extent (not just center) for a robust depth estimate
@@ -390,7 +401,7 @@ class Trainer:
                     supcon_lambda = float(getattr(self.c.tra, "supcon_lambda", 0.1))
                 supcon_temp = float(getattr(self.c.tra, "supcon_temp", 0.07))
                 cross_frag_ids = domain_ids if bool(getattr(self.c.tra, "supcon_cross_frag", False)) else None
-                loss = loss + supcon_lambda * supcon_loss(supcon_z, labels.view(-1).long(), temp=supcon_temp, domain_ids=cross_frag_ids)
+                loss = loss + supcon_lambda * supcon_loss(supcon_z, sample_pos.long(), temp=supcon_temp, domain_ids=cross_frag_ids)
 
             # entropy maximization on unlabeled (validation) tiles: rewards uncertainty outside
             # the labeled region, attacking the "predict not-ink everywhere" fixed point
@@ -413,10 +424,14 @@ class Trainer:
         if hasattr(self.model, "prototype_head") and self.model.prototype_head is not None:
             emb = getattr(self.model, "last_embedding_detached", None)
             if emb is not None:
-                self.model.prototype_head.update(emb, labels)
+                self.model.prototype_head.update(emb, sample_pos.view(-1, 1))
 
         scores = torch.sigmoid(outputs).detach().cpu().numpy().flatten()
         label_values = labels.detach().cpu().numpy().flatten().astype(int)
+        if labels.shape[1] > 1:  # multitile: drop out-of-mask sub-tiles from the metric arrays
+            keep = (mask > 0).detach().cpu().numpy().flatten()
+            scores = scores[keep]
+            label_values = label_values[keep]
         return (
             scores,
             label_values,
@@ -553,8 +568,13 @@ class Trainer:
                     continue
 
                 images = images.to(self.c.device, non_blocking=True)
-                batch_labels = batch_labels.to(self.c.device, non_blocking=True).view(-1, 1)
-                mask = (mask.to(self.c.device).view(images.size(0), -1).sum(dim=1) > 0).float().unsqueeze(1)
+                B = images.size(0)
+                batch_labels = batch_labels.to(self.c.device, non_blocking=True).view(B, -1)
+                mask = mask.to(self.c.device).view(B, -1)
+                if mask.shape[1] == batch_labels.shape[1]:
+                    mask = (mask > 0).float()                          # per-sub-tile validity (multitile)
+                else:
+                    mask = (mask.sum(dim=1) > 0).float().unsqueeze(1)  # single-tile window gate
 
                 outputs = self.model(images)
                 if outputs.dim() == 4:
@@ -564,7 +584,12 @@ class Trainer:
                 loss_total += ((raw_loss * mask).sum() / mask.sum()).item()
 
                 batch_scores = torch.sigmoid(outputs).cpu().numpy().flatten()
-                labels.extend(batch_labels.cpu().numpy().flatten().astype(int))
+                batch_lab = batch_labels.cpu().numpy().flatten().astype(int)
+                if batch_labels.shape[1] > 1:  # multitile: exclude out-of-mask sub-tiles
+                    keep = (mask > 0).cpu().numpy().flatten()
+                    batch_scores = batch_scores[keep]
+                    batch_lab = batch_lab[keep]
+                labels.extend(batch_lab)
                 preds.extend((batch_scores > 0.5).astype(int))
                 scores.extend(batch_scores)
 

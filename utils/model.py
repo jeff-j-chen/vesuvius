@@ -263,10 +263,13 @@ class NnUnet3dLcndz(nn.Module):
         self.pool = nn.MaxPool3d(2)
 
         use_ibn = bool(getattr(config.model, "use_ibn", False))
-        self.enc1 = ConvBlock3d(3, 32, use_ibn=use_ibn)
-        self.enc2 = ConvBlock3d(32, 64, use_ibn=use_ibn)
-        self.enc3 = ConvBlock3d(64, 128)
-        self.bottleneck = ConvBlock3d(128, 256)
+        # width multiplier on the 32/64/128/256 channel ladder (0.5 = half -> ~4x fewer conv FLOPs)
+        _m = float(getattr(config.model, "channels_mult", 1.0) or 1.0)
+        c1, c2, c3, c4 = (max(1, int(round(ch * _m))) for ch in (32, 64, 128, 256))
+        self.enc1 = ConvBlock3d(3, c1, use_ibn=use_ibn)
+        self.enc2 = ConvBlock3d(c1, c2, use_ibn=use_ibn)
+        self.enc3 = ConvBlock3d(c2, c3)
+        self.bottleneck = ConvBlock3d(c3, c4)
 
         # spatial channel dropout after early encoder stages and before classification head
         _d1 = float(getattr(config.model, "conv1_drop", 0.0))
@@ -276,13 +279,13 @@ class NnUnet3dLcndz(nn.Module):
         self._enc2_drop = nn.Dropout3d(p=_d2) if _d2 > 0 else None
         self._head_drop = nn.Dropout3d(p=_dh) if _dh > 0 else None
 
-        self.up3 = nn.ConvTranspose3d(256, 128, kernel_size=2, stride=2)
-        self.dec3 = ConvBlock3d(256, 128)
-        self.up2 = nn.ConvTranspose3d(128, 64, kernel_size=2, stride=2)
-        self.dec2 = ConvBlock3d(128, 64)
-        self.up1 = nn.ConvTranspose3d(64, 32, kernel_size=2, stride=2)
-        self.dec1 = ConvBlock3d(64, 32)
-        self.out_head = nn.Conv3d(32, 1, kernel_size=1, bias=True)
+        self.up3 = nn.ConvTranspose3d(c4, c3, kernel_size=2, stride=2)
+        self.dec3 = ConvBlock3d(c3 * 2, c3)   # cat(up3, enc3)
+        self.up2 = nn.ConvTranspose3d(c3, c2, kernel_size=2, stride=2)
+        self.dec2 = ConvBlock3d(c2 * 2, c2)
+        self.up1 = nn.ConvTranspose3d(c2, c1, kernel_size=2, stride=2)
+        self.dec1 = ConvBlock3d(c1 * 2, c1)
+        self.out_head = nn.Conv3d(c1, 1, kernel_size=1, bias=True)
 
         if bool(getattr(config.model, "learned_surface", False)):
             self.depth_surface_attn: DepthSurfaceAttn | None = DepthSurfaceAttn(hidden=8)
@@ -297,7 +300,7 @@ class NnUnet3dLcndz(nn.Module):
         self.supcon_head: SupConHead | None = None
         if bool(getattr(config.tra, "supcon", False)):
             self.supcon_head = SupConHead(
-                in_features=256,
+                in_features=c4,
                 proj_dim=int(getattr(config.tra, "supcon_proj_dim", 128)),
                 hidden=int(getattr(config.tra, "supcon_hidden_dim", 256)),
             )
@@ -306,16 +309,22 @@ class NnUnet3dLcndz(nn.Module):
         if bool(getattr(config.tra, "dann", False)):
             n_domains = int(getattr(config.tra, "dann_n_domains", 0))
             if n_domains > 1:
-                self.domain_head = DomainClassifier(in_features=256, n_domains=n_domains)
+                self.domain_head = DomainClassifier(in_features=c4, n_domains=n_domains)
 
         self.prototype_head: PrototypeHead | None = None
         if bool(getattr(config.model, "use_prototype", False)):
             self.prototype_head = PrototypeHead(
-                feat_dim=256,
+                feat_dim=c4,
                 ema=float(getattr(config.model, "prototype_ema", 0.99)),
             )
         self._skip_drop = float(getattr(config.model, "skip_drop", 0.0))
         self._no_dz = bool(getattr(config.model, "no_dz", False))
+        # multitile head: predict a grid x grid map of sub-tile logits over a (grid*subtile)px
+        # center, instead of one scalar. sub-tile size is in feature-map px (subtile // downsample).
+        self._multitile = bool(getattr(config.model, "multitile", False))
+        self._mt_grid = max(1, int(getattr(config.model, "multitile_grid", 4)))
+        self._mt_sub_feat = max(1, int(getattr(config.model, "multitile_subtile", 8)) // self._downsample)
+        self._mt_center_feat = self._mt_grid * self._mt_sub_feat
 
         self.depth_profile_head: DepthProfileHead | None = None
         if bool(getattr(config.model, "use_depth_profile", False)):
@@ -395,6 +404,37 @@ class NnUnet3dLcndz(nn.Module):
         cs = (H - t) // 2                        # top-left of center crop
         return voxel_map[:, :, :, cs:cs + t, cs:cs + t]
 
+    def _crop_center_feat(self, voxel_map: torch.Tensor, feat: int) -> torch.Tensor:
+        """crop the voxel map to a centered feat x feat region (feature-map pixels)."""
+        H, W = voxel_map.shape[3], voxel_map.shape[4]
+        cy = max(0, (H - feat) // 2)
+        cx = max(0, (W - feat) // 2)
+        return voxel_map[:, :, :, cy:cy + feat, cx:cx + feat]
+
+    def _multitile_aggregate(self, center: torch.Tensor) -> torch.Tensor:
+        """aggregate the (B,1,D,cf,cf) center crop into a (B, grid*grid) map of per-sub-tile
+        logits via per-cell log-sum-exp. cell (iy, ix) pools its D*sub*sub voxel bag; the flat
+        output index is iy*grid + ix (row-major, iy indexes y) to match the label ordering."""
+        n, sub = self._mt_grid, self._mt_sub_feat
+        c = center.squeeze(1)                              # (B, D, cf, cf)
+        B, D, cf, _ = c.shape
+        c = c.reshape(B, D, n, sub, n, sub).permute(0, 2, 4, 1, 3, 5).reshape(B, n * n, D * sub * sub)
+        r = self.lse_r.clamp(min=0.5, max=10.0)
+        m = c.new_tensor(float(c.shape[-1]))
+        return (1.0 / r) * (torch.logsumexp(r * c, dim=2) - torch.log(m))   # (B, grid*grid)
+
+    def _multitile_attn_aggregate(self, center: torch.Tensor) -> torch.Tensor:
+        """per-sub-tile gated attention-MIL: fold the grid into the batch dim so one attn_mil
+        call pools every 8px sub-tile bag (D*sub*sub voxels) independently. returns (B, grid*grid)
+        in iy*grid+ix order and sets last_attn_entropy_loss (averaged over all sub-tile bags)."""
+        n, sub = self._mt_grid, self._mt_sub_feat
+        c = center.squeeze(1)                              # (B, D, cf, cf)
+        B, D, cf, _ = c.shape
+        c = c.reshape(B, D, n, sub, n, sub).permute(0, 2, 4, 1, 3, 5).reshape(B * n * n, 1, D, sub, sub)
+        score, entropy_loss = self.attn_mil(c, entropy_weight=self._attn_entropy_weight)
+        self.last_attn_entropy_loss = entropy_loss
+        return score.view(B, n * n)
+
     def _bag_score(self, voxel_map: torch.Tensor) -> torch.Tensor:
         if self.attn_mil is not None:
             score, entropy_loss = self.attn_mil(voxel_map, entropy_weight=self._attn_entropy_weight)
@@ -410,16 +450,26 @@ class NnUnet3dLcndz(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         bottleneck, decoded = self._encode_decode(x)
         voxel_map = self.out_head(decoded)
-        self.last_voxel_map = voxel_map.detach()
+        # break output aliasing so torch.compile's AOTAutograd doesn't hit its alias-regen bug
+        # ('TensorAlias' has no attribute 'is_complex'). last_voxel_map is vis-only (read at eval),
+        # so skip the full-size copy during training; clone (not view) otherwise.
+        self.last_voxel_map = None if self.training else voxel_map.detach().clone()
         self.last_voxel_map_full = voxel_map  # non-detached; needed for spill_entropy gradient flow
-        # aggregate only the center tile region so the score is anchored to the label footprint
-        center_voxels = self._crop_to_center_tile(voxel_map)
+        # clone (grad-preserving) so the center crop owns its storage: it is stored for the spill
+        # loss (needs grad) and must not alias voxel_map / last_voxel_map_full
+        if self._multitile:
+            center_voxels = self._crop_center_feat(voxel_map, self._mt_center_feat).clone()
+        else:
+            center_voxels = self._crop_to_center_tile(voxel_map).clone()
         self.last_center_voxel_map = center_voxels
         embedding = self._embedding(bottleneck)
-        self.last_embedding_detached = embedding.detach()
+        self.last_embedding_detached = embedding.detach().clone()
         domain_logits = self.domain_head(embedding, grl_scale=grl_scale) if self.domain_head is not None else None
         supcon_z = self.supcon_head(embedding) if self.supcon_head is not None else None
-        if self.depth_profile_head is not None:
+        if self._multitile:
+            score = self._multitile_attn_aggregate(center_voxels) if self.attn_mil is not None \
+                else self._multitile_aggregate(center_voxels)     # (B, grid*grid)
+        elif self.depth_profile_head is not None:
             score = self.depth_profile_head(center_voxels)
         elif self.prototype_head is not None:
             score = self.prototype_head(embedding)
@@ -466,6 +516,9 @@ def create_model(config: Config):
 
     params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters ({arch}): {params:,}")
-    # compile the hot path; graph breaks at self.lastXxx assignments are fine
+    # keep an EAGER handle for the figure/probe predict path: it feeds variable batch/tile
+    # shapes that make torch.compile recompile on every chunk (dynamo/inductor runs on CPU,
+    # GPU idles ~0%). training uses one fixed shape, so it keeps the compiled hot path below.
+    model._eager_forward_with_extras = model.forward_with_extras
     model.forward_with_extras = torch.compile(model.forward_with_extras)
     return model, params

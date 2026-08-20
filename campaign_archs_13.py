@@ -83,9 +83,9 @@ SPATIAL_SUPCON = dict(
     supcon_temp=0.07,
 )
 
-_BATCH = 48
-_LR = 1.8e-4
-_EVAL_BS = 96
+_BATCH = 32
+_LR = 1e-4
+_EVAL_BS = 64
 _WORKERS = 8
 
 
@@ -195,6 +195,28 @@ def _mk13(tid: str, tag: str, **overrides: object) -> dict:
     return d
 
 
+# shared overrides for the full 18-fragment runs ('all' full-capacity, 'all_half' half-width)
+_ALL_KW = dict(
+    scrolls=list(ALL_SCROLLS),
+    dann_n_domains=len(ALL_SCROLLS),
+    # dots only from the four fragments whose dot maps are actually processed
+    dot_scroll_whitelist=[20250628074500, 20240304141531, 20260226000000, 20260317000000],
+    conv1_drop=0.25,
+    conv2_drop=0.25,
+    head_drop=0.4,
+    skip_drop=0.4,
+    depth_jitter=4,
+    spill_min_depth_var=0.8,
+    spill_lambda=0.5,
+    n_epochs=20,
+    probe_int=5,
+    eval_int=20,
+    save_int=5,
+    eval_int_scrolls=len(ALL_SCROLLS),
+    vis_scroll_ids=[s.scroll_id for s in ALL_SCROLLS],
+)
+
+
 TESTS = [
     _mk13("baseline", "13_baseline"),
     _mk13(
@@ -248,6 +270,11 @@ TESTS = [
         # if learning collapses: depth gradient IS the primary ink discriminator
         no_dz=True,
     ),
+    # full 18-fragment runs. 'all' = full capacity; 'all_half' = half channel width (~4x fewer
+    # conv FLOPs, ~1.5M params). NB: the MAE warm-start is full-width, so 'all_half' trains from
+    # scratch (shape-mismatched tensors are skipped at load).
+    _mk13("all", "13_all", **_ALL_KW),
+    _mk13("all_half", "13_all_half", channels_mult=0.5, **_ALL_KW),
 ]
 
 
@@ -326,6 +353,9 @@ _OVERRIDES = {
     "conv1_drop": ("model", "conv1_drop"),
     "conv2_drop": ("model", "conv2_drop"),
     "head_drop": ("model", "head_drop"),
+    "save_int": ("tra", "save_int"),
+    "dot_scroll_whitelist": ("data", "dot_scroll_whitelist"),
+    "channels_mult": ("model", "channels_mult"),
 }
 
 
