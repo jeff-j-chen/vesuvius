@@ -15,15 +15,15 @@
     "dot_scroll_whitelist": [
       20240304141531
     ],
-    "eval_infer_bs": 96,
+    "eval_infer_bs": 128,
     "eval_prefetch": 3,
     "holdout_scroll_ids": [
       20251226000000
     ],
-    "inklabel_dir": "./eroded2_inklabels",
+    "inklabel_dir": "./eroded_inklabels",
     "mask_bitpack": true,
     "mask_memmap": true,
-    "multitile_pos_only": false,
+    "multitile_pos_only": true,
     "multitile_train_step": 16,
     "probe_rois": {
       "20240304141531": [
@@ -318,7 +318,7 @@
   },
   "device": "cuda",
   "dl": {
-    "batch_size": 32,
+    "batch_size": 48,
     "brightness_delta": 0.15,
     "brightness_prob": 0.6,
     "contrast_delta": 0.15,
@@ -340,7 +340,7 @@
     "num_workers": 8,
     "rotation_prob": 0.6
   },
-  "exp_name": "14_single_lowdrop",
+  "exp_name": "14_multi16_pos_tinydrop",
   "hm": {
     "dir": "./hard_negs",
     "enabled": false,
@@ -352,13 +352,13 @@
   "model": {
     "arch": "nnunet3d_lcndz",
     "attn_entropy_weight": 0.03,
-    "attn_mil": true,
+    "attn_mil": false,
     "channels_mult": 1.0,
-    "conv1_drop": 0.1,
-    "conv2_drop": 0.1,
-    "head_drop": 0.2,
+    "conv1_drop": 0.05,
+    "conv2_drop": 0.05,
+    "head_drop": 0.1,
     "learned_surface": true,
-    "multitile": false,
+    "multitile": true,
     "multitile_grid": 4,
     "multitile_subtile": 8,
     "no_dz": false,
@@ -389,8 +389,8 @@
     "label_smooth_neg": 0.0,
     "label_smooth_pos": 0.0,
     "log_dir": "./runs_archs14",
-    "loss_type": "gce",
-    "lr": 0.0001,
+    "loss_type": "bce",
+    "lr": 0.00015,
     "lr_decay": 0.5,
     "n_epochs": 15,
     "patience": 5,
@@ -420,6 +420,8 @@
     "supcon_temp": 0.07,
     "test_int": 999,
     "test_on_final": false,
+    "tile_pos_weight": 0.0,
+    "tile_pos_weight_auto": true,
     "tta_consistency": true,
     "tta_consistency_lambda": 0.3,
     "tta_consistency_mode": "flips",

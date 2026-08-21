@@ -55,9 +55,9 @@ _MAE_CTX96 = "models/mae_nnunet_96.pth"
 _W013_ID = 20240304141531
 ONE_SCROLL = [s for s in ALL_SCROLLS if s.scroll_id == _W013_ID]
 
-_BATCH = 32
-_LR = 1e-4
-_EVAL_BS = 96
+_BATCH = 48
+_LR = 1.5e-4
+_EVAL_BS = 128
 _WORKERS = 8
 
 
@@ -179,20 +179,37 @@ TESTS = [
     # pos-only labelling: in ink windows only the ink sub-tiles are supervised, non-ink
     # neighbours are masked out (negatives come from ink-free ring windows).
     _mk14("multi16_pos", "14_multi16_pos", multitile_train_step=16, multitile_pos_only=True, **_MT_KW),
-    _mk14("multi16", "14_multi16", multitile_train_step=16, **_MT_KW),
+    _mk14("multi16_pos_tinydrop", "14_multi16_pos_tinydrop", multitile_train_step=16, multitile_pos_only=True, **_MT_KW,
+        conv1_drop=0.05,
+        conv2_drop=0.05,
+        head_drop=0.1,
+        skip_drop=0.2),
+    _mk14("multi16_tinydrop", "14_multi16_tinydrop", multitile_train_step=16, **_MT_KW, 
+        conv1_drop=0.05,
+        conv2_drop=0.05,
+        head_drop=0.1,
+        skip_drop=0.2,),
     # multitile with per-sub-tile gated attention-MIL (instead of LSE pooling) + attn entropy;
     # step 16 matches multi16 so the ONLY change vs it is the sub-tile aggregator.
-    # _mk14(
-    #     "multi16_attn",
-    #     "14_multi16_attn",
-    #     multitile=True,
-    #     multitile_subtile=8,
-    #     multitile_grid=4,
-    #     multitile_train_step=16,
-    #     attn_mil=True,
-    #     attn_entropy_weight=0.03,
-    # ),
-    # _mk14("multi32", "14_multi32", multitile_train_step=32, **_MT_KW),
+    _mk14(
+        "multi16_attn_tinydrop",
+        "14_multi16_attn_tinydrop",
+        multitile=True,
+        multitile_subtile=8,
+        multitile_grid=4,
+        multitile_train_step=16,
+        attn_mil=True,
+        attn_entropy_weight=0.03,
+        conv1_drop=0.05,
+        conv2_drop=0.05,
+        head_drop=0.1,
+        skip_drop=0.2,
+    ),
+    _mk14("multi32_tinydrop", "14_multi32_tinydrop", multitile_train_step=32, **_MT_KW,
+        conv1_drop=0.05,
+        conv2_drop=0.05,
+        head_drop=0.1,
+        skip_drop=0.2,),
 ]
 
 
