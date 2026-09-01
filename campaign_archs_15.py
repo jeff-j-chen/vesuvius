@@ -1,4 +1,11 @@
-"""campaign_archs_15.py -- center-size / sub-tile-density A/B on all 18 scrolls (2026-08-22).
+"""campaign_archs_15.py -- center-size / sub-tile-density A/B on w013 only (runpod, 2026-09-01).
+
+SEQUENCING: choose the ARCHITECTURE (head geometry) first, THEN tune DANN separately.
+  the first (desktop, 18-scroll) attempt of this campaign was catastrophic -- it conflated
+  three changes at once (1->18 scrolls, dann no-op -> active-but-unlearnable at bs=4, and
+  bs 48->4). the DANN adversary in particular was never actually exercised in campaign-14
+  (dann_n_domains=1 => loss=-log(1)=0), so 18-way DANN was untested territory. this rerun
+  strips all that back to the CLEAN c14 operating point so center-size is the ONLY variable.
 
 QUESTION: what center size and sub-tile density maximize useful gradient?
   the current head (campaign-14 multi16_pos_tinydrop) uses a 32px center split into a 4x4
@@ -15,23 +22,20 @@ QUESTION: what center size and sub-tile density maximize useful gradient?
     48px center = ~half stroke width (cleanest boundary: ~24px ink, ~24px non-ink)
     64px center = ~2/3 stroke width (wide coverage, some boundary contamination)
 
-BASELINE: campaign-14 multi16_pos_tinydrop (restored to all 18 scrolls):
+BASELINE: campaign-14 multi16_pos_tinydrop -- REPRODUCED, not modified:
   archs-13 combo (_BASE13 + _ALL_KW) + multitile(subtile=8, grid=4, step=16, pos_only=True)
   + tinydrop (conv1=.05, conv2=.05, head=.10, skip=.20) + inklabel_dir=eroded_inklabels.
-  dann_n_domains=18 (restored; campaign-14 used 1 for the w013-only run).
-  attn_mil=False (LSE aggregator; same as campaign-14 multitile arms).
+  w013 ONLY (scroll 20240304141531), dann_n_domains=1 (DANN is a no-op, exactly as in c14).
+  attn_mil=True + attn_entropy_weight=0.03 (campaign-14 attn winner beats LSE).
   all archs-13 ingredients held fixed: fda, elastic, IBN, spill, supcon, tta=light.
-  note: supcon with bs=8 yields very few positive pairs per batch; it remains but
-  contributes little at this batch size. kept for baseline parity, not effectiveness.
+  the c32_t8 arm SHOULD reproduce the c14 best performer; if it doesn't, something drifted.
 
-HARDWARE (linux-desktop, rtx 3060 mobile):
-  6GB vram, 32GB ram. single-scroll campaign-14 used 27GB vram @ bs=48.
-  batch=8, lr=6e-5 = 1.5e-4 * sqrt(8/48) (square-root batch scaling), workers=0
-  (external seagate HDD; multi-worker contention is slower than single-threaded).
-  eval_bs=32. eval_prefetch=0 (no disk prefetch on HDD).
+HARDWARE (runpod, rtx 5090 / a4500):
+  exact c14 operating point where the whole recipe was tuned -- do NOT sqrt-scale.
+  batch=48, lr=1.5e-4, workers=8, eval_bs=128, eval_prefetch=3 (SSD).
 
 TESTS (8 total, 6 user-specified + 2 additional):
-  c32_t8    32px center, 8px tile, 4x4=16 targets  -- CONTROL (campaign-14 baseline)
+  c32_t8    32px center, 8px tile, 4x4=16 targets  -- CONTROL (reproduces campaign-14 best)
   c16_t8    16px center, 8px tile, 2x2=4  targets  -- sub-stroke, very few targets
   c16_t4    16px center, 4px tile, 4x4=16 targets  -- fine tile, small center
   c32_t4    32px center, 4px tile, 8x8=64 targets  -- fine tile (near noise floor)
@@ -40,9 +44,8 @@ TESTS (8 total, 6 user-specified + 2 additional):
   c64_t8    64px center, 8px tile, 8x8=64 targets  -- full-stroke width
   c64_t16   64px center, 16px tile, 4x4=16 targets -- full-stroke, coarse tile
 
-  WHY c32_t8: running the campaign-14 config with 18 scrolls is a necessary control.
-  1->18 scrolls is a large distribution shift; without it we cannot separate scroll-count
-  effects from center-size effects when comparing against campaign-14 results.
+  WHY c32_t8: it is the c14 best-performer config. reproducing it on w013 at the c14
+  operating point is the anchor that makes every other arm interpretable.
 
   WHY c48_t8: 48px ~= half a 100px ink stroke. a window centered on a stroke edge sees
   ~24px of clean ink and ~24px of clean non-ink, giving the sharpest class boundary of
@@ -50,13 +53,17 @@ TESTS (8 total, 6 user-specified + 2 additional):
   6x6=36 targets is between the 16 (c32_t8) and 64 (c64_t8) extremes.
 
   NOT TESTED (kept for focus on center-size axis, one variable at a time):
-    multitile_train_step (step=8 vs 16): secondary question, separate campaign
     pos_only ablation (pos_only=False): separately testable but kept fixed here
+    multi-scroll + DANN: deferred to a follow-up campaign on the WINNING geometry
+
+  STEP POLICY: step = 16 FIXED for all arms (matches c14's multi16 operating point).
+  this gives every center size EQUAL (maximal) gradient updates, so geometry is the only
+  variable. equal-coverage (step=center) was tried in the failed run and starved large
+  centers of gradient steps (c64 got ~5x fewer windows than c16) -- avoided here.
 
 CONFIG:
   15 epochs, eval at epoch 15, probe_int=999 (never), test_int=999 (off).
-  4 eval figures: 20250628074500, 20240304141531, 20260226000000, 20260317000000.
-  fast_eval_figure=False (full scroll figures).
+  1 eval figure (w013). fast_eval_figure=False (full scroll figure).
 
   python campaign_archs_15.py --dry-run
   python campaign_archs_15.py --only c32_t8,c16_t8
@@ -85,14 +92,21 @@ from campaign_archs_14 import _OVERRIDES   # reuse the full override map; avoids
 LOG_DIR = "./runs_archs15"
 ALL_SCROLLS = list(DEFAULT_SCROLLS)    # all 18 fragments
 
-# desktop hardware: 6GB vram, 32GB ram, external HDD.
-# lr scaled from runpod (bs=48, lr=1.5e-4) using square-root rule: 1.5e-4 * sqrt(8/48) = 6.1e-5
-_BATCH = 8
-_LR = 6e-5
-_EVAL_BS = 32
-_WORKERS = 0    # external seagate HDD; single-threaded beats multi-worker contention
+# ARCHITECTURE-SELECTION campaign: isolate center-size/tile-density as the ONLY variable.
+# run on w013 ONLY (like campaign-14) so results are directly comparable to the c14 baseline,
+# and so scroll-count / multi-domain-DANN are NOT confounded into the center-size question.
+# multi-scroll + DANN tuning is a SEPARATE follow-up on the winning geometry.
+_W013_ID = 20240304141531
+ONE_SCROLL = [s for s in ALL_SCROLLS if s.scroll_id == _W013_ID]
 
-_EVAL_VIS_IDS = [20250628074500, 20240304141531, 20260226000000, 20260317000000]
+# runpod hardware (5090 / a4500): exact c14 operating point where the whole recipe was tuned.
+# bs=48, lr=1.5e-4, workers=8, eval_bs=128. do NOT sqrt-scale -- this IS the reference point.
+_BATCH = 48
+_LR = 1.5e-4
+_EVAL_BS = 128
+_WORKERS = 8
+
+_EVAL_VIS_IDS = [_W013_ID]
 
 
 def _base_config(exp_name: str) -> Config:
@@ -101,7 +115,7 @@ def _base_config(exp_name: str) -> Config:
     c.model.arch = "nnunet3d_lcndz"
 
     c.data.zarr_path = get_zarr_dir()
-    c.data.scrolls = list(ALL_SCROLLS)
+    c.data.scrolls = list(ONE_SCROLL)
 
     c.data.tile_size = 16
     c.data.depth = 24
@@ -124,9 +138,9 @@ def _base_config(exp_name: str) -> Config:
     c.tra.lr = _LR
     c.tra.aug_start_epoch = 0
     c.data.eval_infer_bs = _EVAL_BS
-    c.data.eval_prefetch = 0        # no prefetch on external HDD
+    c.data.eval_prefetch = 3        # runpod SSD: overlap zarr reads with gpu inference
     c.data.tta_mode = "light"
-    c.tra.eval_int_scrolls = 4      # generate figures for only the 4 eval scrolls
+    c.tra.eval_int_scrolls = 1      # single eval figure (w013)
     c.data.vis_scroll_ids = list(_EVAL_VIS_IDS)
     c.tra.weight_decay = 3e-1
     c.data.ring_label_source = "closed"
@@ -161,22 +175,28 @@ def _base_config(exp_name: str) -> Config:
     return c
 
 
-# campaign-15 baseline: archs-13 combo restored to 18 scrolls + multi16_pos_tinydrop settings.
+# campaign-15 baseline: archs-13 combo + multi16_pos_tinydrop settings, reduced to the c14
+# operating point (w013-only, dann no-op, bs=48/lr=1.5e-4).
 #
 # construction order:
 #   _BASE13   -> init_weights(MAE96), attn_mil=True, dann, spill, fda, elastic, IBN, supcon,
 #                inklabel_dir=eroded2_inklabels
 #   _ALL_KW   -> 18 scrolls, dann_n_domains=18, heavy dropouts, depth_jitter=4,
 #                spill_min_depth_var=0.8, spill_lambda=0.5
-#   .update() -> override dropouts with tinydrop; add multitile; apply desktop constraints;
-#                fix eval schedule; restore dann_n_domains for 18 scrolls; switch inklabel_dir
+#   .update() -> override dropouts with tinydrop; add multitile (fixed step=16); reduce to
+#                w013-only + dann_n_domains=1 (no-op); apply runpod hyperparams; fix eval;
+#                switch inklabel_dir to eroded_inklabels
 _BASE15 = dict(_BASE13)
 _BASE15.update(_ALL_KW)
 _BASE15.update(
-    # MULTITILE: subtile/grid overridden per test; these match the campaign-14 control
+    # MULTITILE: subtile/grid overridden per test; step FIXED at 16 for all arms so every
+    # center size gets equal (maximal) gradient updates -- geometry is the only variable.
+    # (equal-coverage step=center would starve large centers of updates; see campaign notes.)
+    # campaign-14 finding: attn_mil=True + entropy reg beats LSE aggregator for multitile.
     multitile=True,
-    attn_mil=False,             # LSE aggregator replaces bag-MIL for multitile arms
-    multitile_train_step=16,    # window stride (px); fixed across tests to isolate center-size
+    attn_mil=True,              # gated attention-MIL (beats LSE per campaign-14 results)
+    attn_entropy_weight=0.03,
+    multitile_train_step=16,    # FIXED across all arms (matches c14 multi16 operating point)
     multitile_pos_only=True,    # in ink windows, supervise only ink sub-tiles (not boundary-adjacent non-ink)
 
     # TINYDROP: override the heavy _ALL_KW dropouts (.25/.25/.4/.4) with the lighter recipe
@@ -185,26 +205,28 @@ _BASE15.update(
     head_drop=0.1,
     skip_drop=0.2,
 
-    # DESKTOP CONSTRAINTS: 6GB vram, external HDD
+    # RUNPOD 5090/A4500: exact c14 operating point (bs=48, lr=1.5e-4, workers=8, eval_bs=128)
     batch_size=_BATCH,
     lr=_LR,
     num_workers=_WORKERS,
     eval_infer_bs=_EVAL_BS,
-    eval_prefetch=0,
+    eval_prefetch=3,
 
     # EVAL SCHEDULE: fire once at epoch 15, no probe, no test
     n_epochs=15,
     eval_int=15,
     probe_int=999,
     save_int=15,
-    eval_int_scrolls=4,
+    eval_int_scrolls=1,
     vis_scroll_ids=list(_EVAL_VIS_IDS),
 
-    # 18 SCROLLS: restore from campaign-14's w013-only run
-    scrolls=list(ALL_SCROLLS),
-    dann_n_domains=len(ALL_SCROLLS),
+    # W013 ONLY: single scroll, like c14, so center-size is the only variable.
+    # dann_n_domains=1 => DANN loss is -log(1)=0 (a no-op), matching the c14 baseline.
+    # multi-scroll + real DANN is a SEPARATE follow-up once the geometry is chosen.
+    scrolls=list(ONE_SCROLL),
+    dann_n_domains=1,
 
-    # dot labels: only the 4 fragments whose dot maps are processed (same as _ALL_KW whitelist)
+    # dot labels: only w013 (the single training/eval scroll here)
     dot_scroll_whitelist=list(_EVAL_VIS_IDS),
 
     # eroded_inklabels: carried from campaign-14 (differs from _BASE13's eroded2_inklabels)
@@ -220,34 +242,35 @@ def _mk15(tid: str, tag: str, **overrides: object) -> dict:
     return d
 
 
-# all tests inherit: pos_only=True, step=16px, tinydrop, 18 scrolls, desktop constraints.
-# only multitile_subtile (sub-tile px) and multitile_grid (grid side length) vary.
+# all tests inherit: pos_only=True, step=16 FIXED (equal gradient updates), tinydrop,
+# w013-only, dann no-op, c14 hyperparams. only multitile_subtile / multitile_grid vary.
 # center_px = subtile * grid; targets_per_window = grid^2.
 TESTS = [
-    # CONTROL: exact campaign-14 multi16_pos_tinydrop config, now on 18 scrolls.
-    # necessary reference: 1->18 scroll shift is large; without this we cannot separate
-    # scroll-count effects from center-size effects when comparing to campaign-14.
-    _mk15("c32_t8", "15_c32_t8", multitile_subtile=8, multitile_grid=4),    # center=32px 4x4=16 targets
+    # from 14: attn and pos are best
+
+    # CONTROL: exact campaign-14 multi16_pos_tinydrop_attn config (w013-only, c14 hyperparams).
+    # this SHOULD reproduce the c14 best performer -- if it doesn't, something else drifted.
+    _mk15("c32_t8",  "15_c32_t8",  multitile_subtile=8,  multitile_grid=4),  # center=32px 4x4=16 targets
 
     # 16px center: sub-stroke coverage; a window centered on ink usually sees homogeneous
     # signal (all-ink or all-papyrus). tests whether small centers give enough gradient.
-    _mk15("c16_t8", "15_c16_t8", multitile_subtile=8, multitile_grid=2),    # center=16px 2x2=4  targets
-    _mk15("c16_t4", "15_c16_t4", multitile_subtile=4, multitile_grid=4),    # center=16px 4x4=16 targets (finer tile)
+    _mk15("c16_t8",  "15_c16_t8",  multitile_subtile=8,  multitile_grid=2),  # center=16px 2x2=4  targets
+    _mk15("c16_t4",  "15_c16_t4",  multitile_subtile=4,  multitile_grid=4),  # center=16px 4x4=16 targets (finer tile)
 
     # 32px center with tile sizes above and below the control (8px):
     # c32_t4: 64 targets/window, 4px sub-tiles are ~1 fiber width -- near the label noise floor
-    _mk15("c32_t4", "15_c32_t4", multitile_subtile=4, multitile_grid=8),    # center=32px 8x8=64 targets
+    _mk15("c32_t4",  "15_c32_t4",  multitile_subtile=4,  multitile_grid=8),  # center=32px 8x8=64 targets
     # c32_t16: 4 targets/window, same gradient count as c16_t8 but each target covers 16px
-    _mk15("c32_t16", "15_c32_t16", multitile_subtile=16, multitile_grid=2), # center=32px 2x2=4  targets
+    _mk15("c32_t16", "15_c32_t16", multitile_subtile=16, multitile_grid=2),  # center=32px 2x2=4  targets
 
     # ADDED: 48px center, 8px tile. ~half a 100px ink stroke per window when centered on
     # a stroke edge: ~24px of clean ink + ~24px of clean non-ink -> sharpest class boundary.
     # 6x6=36 targets bridges the 16-target (c32_t8) and 64-target (c64_t8) density extremes.
-    _mk15("c48_t8", "15_c48_t8", multitile_subtile=8, multitile_grid=6),    # center=48px 6x6=36 targets
+    _mk15("c48_t8",  "15_c48_t8",  multitile_subtile=8,  multitile_grid=6),  # center=48px 6x6=36 targets
 
     # 64px center: spans ~2/3 of an ink stroke width; many targets but each may straddle boundary
-    _mk15("c64_t8", "15_c64_t8", multitile_subtile=8, multitile_grid=8),    # center=64px 8x8=64 targets
-    _mk15("c64_t16", "15_c64_t16", multitile_subtile=16, multitile_grid=4), # center=64px 4x4=16 targets
+    _mk15("c64_t8",  "15_c64_t8",  multitile_subtile=8,  multitile_grid=8),  # center=64px 8x8=64 targets
+    _mk15("c64_t16", "15_c64_t16", multitile_subtile=16, multitile_grid=4),  # center=64px 4x4=16 targets
 ]
 
 
@@ -339,7 +362,7 @@ def run_test(c: Config, dry_run: bool) -> bool:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="campaign_archs_15: center-size A/B on 18 scrolls (desktop)")
+    ap = argparse.ArgumentParser(description="campaign_archs_15: center-size A/B on w013 (runpod)")
     ap.add_argument("--only", type=str, default=None)
     ap.add_argument("--from", dest="from_id", type=str, default=None)
     ap.add_argument("--dry-run", action="store_true")
@@ -361,7 +384,7 @@ def main() -> None:
         selected = TESTS[ids.index(args.from_id):]
 
     print(f"[archs15] {len(selected)} test(s) queued  (log -> {LOG_DIR})")
-    print(f"[archs15] 18-scroll center-size sweep  batch={_BATCH}  lr={_LR:.2e}  eval_bs={_EVAL_BS}")
+    print(f"[archs15] w013-only center-size sweep  batch={_BATCH}  lr={_LR:.2e}  eval_bs={_EVAL_BS}")
 
     results = {}
     for t in selected:

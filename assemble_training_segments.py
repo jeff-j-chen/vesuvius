@@ -30,9 +30,14 @@ Image.MAX_IMAGE_PIXELS = None
 BUCKET = "https://vesuvius-challenge-open-data.s3.amazonaws.com"
 # output zarr dir: honor $VESUVIUS_ZARR_PATH (same var config/precompute read); default is
 # /vesuvius/ves_zarrs2 on linux, the local documents path on windows.
-ZARR_DIR = os.getenv("VESUVIUS_ZARR_PATH",
-                     "/vesuvius/ves_zarrs2" if os.name == "posix"
-                     else r"C:\Users\ChenJeff\Documents\ves_zarrs2")
+def _default_zarr_dir():
+    if os.name != "posix":
+        return r"C:\Users\ChenJeff\Documents\ves_zarrs2"
+    # distinguish desktop (external Seagate) from runpod
+    if os.path.exists("/media/jeff/Seagate/"):
+        return "/media/jeff/Seagate/ves_zarrs2"
+    return "/vesuvius/ves_zarrs2"
+ZARR_DIR = os.getenv("VESUVIUS_ZARR_PATH", _default_zarr_dir())
 TMP = "_ves_tmp"
 
 # constant across all PHerc0139 segments

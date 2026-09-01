@@ -812,6 +812,10 @@ class DotPositiveDataset(IterableDataset):
         domain_id = self._dm.domain_id
         mask_arr = np.asarray(self._dm.mask)
         with_dann = bool(getattr(c.tra, "dann", False)) or bool(getattr(c.tra, "supcon_cross_frag", False))
+        # multitile mode: dot labels/masks must match InkVolumeDataset's [grid²] shape
+        mt = bool(getattr(c.model, "multitile", False))
+        mt_grid = max(1, int(getattr(c.model, "multitile_grid", 4))) if mt else 1
+        mt_sub  = max(1, int(getattr(c.model, "multitile_subtile", 8))) if mt else T
 
         for y0, x0 in coords:
             vol = self._dm.vol
@@ -836,10 +840,17 @@ class DotPositiveDataset(IterableDataset):
                 continue
             block = (block - mean) / max(std, 1e-8)
             block = np.clip((block - g_min) / max(g_max - g_min, 1e-8), 0.0, 1.0)
-            mask_tile = mask_arr[y0:y0 + T, x0:x0 + T].astype(np.float32)
             block_t = torch.from_numpy(np.ascontiguousarray(block, dtype=np.float32)).unsqueeze(0)
-            label_t = torch.tensor([1.0])
-            mask_t = torch.from_numpy(mask_tile)
+            if mt:
+                # multitile: label = all-1 [grid²] (dot = confirmed ink); mask = all-1 [grid²]
+                # (all sub-tiles are fully positive; no boundary ambiguity at a dot location)
+                n2 = mt_grid * mt_grid
+                label_t = torch.ones(n2, dtype=torch.float32)
+                mask_t  = torch.ones(n2, dtype=torch.float32)
+            else:
+                mask_tile = mask_arr[y0:y0 + T, x0:x0 + T].astype(np.float32)
+                label_t = torch.tensor([1.0])
+                mask_t  = torch.from_numpy(mask_tile)
             if with_dann:
                 yield block_t, label_t, mask_t, torch.tensor(domain_id, dtype=torch.long)
             else:
@@ -1166,12 +1177,12 @@ def get_dataloaders(train_dataset, valid_dataset, config: Config):
         "batch_size": config.dl.batch_size,
         "num_workers": config.dl.num_workers,
         "pin_memory": True,
-        "persistent_workers": True,  # safe on Linux; avoids worker respawn per epoch
         "drop_last": True,   # prevents trailing batch of 1 from crashing BatchNorm
     }
     
     # only add these params when using multiprocessing (num_workers > 0)
     if config.dl.num_workers > 0:
+        train_loader_kwargs["persistent_workers"] = True  # avoids worker respawn per epoch
         train_loader_kwargs["prefetch_factor"] = 3
         train_loader_kwargs["worker_init_fn"] = partial(_worker_init, base_seed=_base_seed)
     

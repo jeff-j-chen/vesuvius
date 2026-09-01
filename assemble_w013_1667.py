@@ -55,9 +55,13 @@ LAYERS_OUT = 28       # target depth layers (matches all other training zarrs)
 LEFT_FRAC  = 0.25     # keep left 25% of W (right side is blank)
 CHUNK_XY   = 128      # source chunk size in XY
 
-ZARR_DIR = os.getenv("VESUVIUS_ZARR_PATH",
-                     "/vesuvius/ves_zarrs2" if os.name == "posix"
-                     else r"C:\Users\ChenJeff\Documents\ves_zarrs2")
+def _default_zarr_dir():
+    if os.name != "posix":
+        return r"C:\Users\ChenJeff\Documents\ves_zarrs2"
+    if os.path.exists("/media/jeff/Seagate/"):
+        return "/media/jeff/Seagate/ves_zarrs2"
+    return "/vesuvius/ves_zarrs2"
+ZARR_DIR = os.getenv("VESUVIUS_ZARR_PATH", _default_zarr_dir())
 TMP = "_ves_tmp"
 
 # output zarr: W_crop = left 25% of 19900 = 4975

@@ -519,6 +519,8 @@ def create_model(config: Config):
     # keep an EAGER handle for the figure/probe predict path: it feeds variable batch/tile
     # shapes that make torch.compile recompile on every chunk (dynamo/inductor runs on CPU,
     # GPU idles ~0%). training uses one fixed shape, so it keeps the compiled hot path below.
+    # torch.compile requires pytorch >= 2.0; skip silently on older installs.
     model._eager_forward_with_extras = model.forward_with_extras
-    model.forward_with_extras = torch.compile(model.forward_with_extras)
+    if hasattr(torch, "compile"):
+        model.forward_with_extras = torch.compile(model.forward_with_extras)
     return model, params
