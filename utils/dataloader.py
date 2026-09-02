@@ -239,10 +239,12 @@ class Transform:
 
 class InkVolumeDataset(IterableDataset):
     """iterable dataset for ink volume data"""
-    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, scroll_mask=None):
+    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, scroll_mask=None, split_mask=None):
         """initializes the dataset.
         scroll_mask: optional papyrus mask distinct from `mask` (which may be ring-restricted);
         multitile uses it to drop sub-tiles straddling the scroll boundary. defaults to `mask`.
+        split_mask: optional manual train/validation assignment for multitile targets. `mask`
+        still gates the same ring windows as the legacy path; this mask partitions their targets.
         soft_labels: optional full-res float [0,1] ink-probability map (expanded+blurred
         eroded labels). when given AND config.data.dense_soft_labels is set, the dense
         per-pixel target uses these CONTINUOUS values instead of the hard binary label —
@@ -316,6 +318,23 @@ class InkVolumeDataset(IterableDataset):
             self._scroll_mask_path = None
             self._scroll_mask_arr = None
             self._scroll_mask_shape = None
+        self._has_split_mask = split_mask is not None
+        if self._has_split_mask:
+            split_u8 = (np.asarray(split_mask) > 0.5).astype(np.uint8)
+            if getattr(config.data, "mask_memmap", False):
+                self._split_mask_path = _write_memmap(
+                    split_u8, pack_bits=use_bitpack, original_shape=split_u8.shape
+                )
+                self._split_mask_arr = None
+                self._split_mask_shape = split_u8.shape
+            else:
+                self._split_mask_path = None
+                self._split_mask_arr = split_u8
+                self._split_mask_shape = None
+        else:
+            self._split_mask_path = None
+            self._split_mask_arr = None
+            self._split_mask_shape = None
         # optional soft labels (continuous ink probability, 0-255 uint8). stored parallel
         # to the hard labels; used only by the dense target path when dense_soft_labels is on.
         self._soft_path = None
@@ -342,6 +361,7 @@ class InkVolumeDataset(IterableDataset):
         self._mt_sub = max(1, int(getattr(config.model, "multitile_subtile", 8)))
         # pos-only: in ink windows, supervise only ink sub-tiles (mask out non-ink ones)
         self._mt_pos_only = bool(getattr(config.data, "multitile_pos_only", False))
+        self._manual_split = not bool(getattr(config.data, "simple_split", True))
 
         self.z_start = getattr(self.c.data, "train_d_start", self.c.data.d_start)
         self.z_end   = getattr(self.c.data, "train_d_end",   self.c.data.d_end)
@@ -383,6 +403,17 @@ class InkVolumeDataset(IterableDataset):
         if ys >= ye or xs >= xe:
             return False
         return bool(np.any(lbl[ys:ye, xs:xe] > 0.5))
+
+    def _mt_window_touches_split(self, y_off, x_off):
+        """true when the multitile center contains a target assigned to this split."""
+        if not self._has_split_mask:
+            return True
+        y0, y1, x0, x1 = self._mt_center_bounds(y_off, x_off)
+        split = self.split_mask
+        h, w = int(split.shape[0]), int(split.shape[1])
+        ys, ye = max(0, y0), min(h, y1)
+        xs, xe = max(0, x0), min(w, x1)
+        return ys < ye and xs < xe and bool(np.any(split[ys:ye, xs:xe] > 0))
 
     @property
     def mask(self):
@@ -440,6 +471,21 @@ class InkVolumeDataset(IterableDataset):
                 self._scroll_mask_arr = packed
         return self._scroll_mask_arr
 
+    @property
+    def split_mask(self):
+        """binary manual assignment mask, lazily reopened in each worker."""
+        if not self._has_split_mask:
+            return None
+        if self._split_mask_arr is None and self._split_mask_path is not None:
+            packed = np.load(self._split_mask_path, mmap_mode='r')
+            if self._use_bitpack:
+                unpacked = np.unpackbits(packed)
+                total_pixels = int(np.prod(self._split_mask_shape))
+                self._split_mask_arr = unpacked[:total_pixels].reshape(self._split_mask_shape)
+            else:
+                self._split_mask_arr = packed
+        return self._split_mask_arr
+
     def __getstate__(self):
         """pickle only the memmap PATHS, never the open memmap. pickling a numpy
         memmap would copy its full contents into the pickle stream — exactly the
@@ -455,6 +501,8 @@ class InkVolumeDataset(IterableDataset):
             state["_soft_arr"] = None
         if state.get("_scroll_mask_path") is not None:
             state["_scroll_mask_arr"] = None
+        if state.get("_split_mask_path") is not None:
+            state["_split_mask_arr"] = None
         # never pickle an open zarr handle to a spawned worker (unpicklable on Windows,
         # OSError [Errno 22]). the main process may now hold one (vol opens lazily in the
         # main process too, for num_workers=0 validation); drop it so workers reopen via
@@ -507,10 +555,11 @@ class InkVolumeDataset(IterableDataset):
             for y in range(0, y_range_size, xy_step):
                 for x in range(0, x_range_size, xy_step):
                     # multitile training windows: keep ONLY windows whose 32x32 center overlaps
-                    # the ring (training) mask. inside those windows each 8x8 sub-tile is labeled
-                    # ink iff .any() ink (ring membership ignored) and masked to the scroll bounds.
-                    if self._mt and self.shuffle:
-                        if self._mt_window_touches_ring(y, x):
+                    # the ring (training) mask. pos_only later keeps actual ink cells and true
+                    # ring-negative cells while leaving the exclusion gap unsupervised.
+                    if self._mt and (self.shuffle or self._manual_split):
+                        if (self._mt_window_touches_ring(y, x)
+                                and self._mt_window_touches_split(y, x)):
                             coords.append((d, y, x))
                         continue
                     # check if the corresponding mask area has any valid pixels
@@ -630,12 +679,18 @@ class InkVolumeDataset(IterableDataset):
         return torch.from_numpy(out)
 
     def _fetch_mask_mt(self, y_off, x_off):
-        """per-sub-tile validity over the grid: a sub-tile is a target ONLY if it lies fully
-        inside the scroll mask. any pixel outside the mask (or off-frame) -> masked out (0), so
-        we never supervise a sub-tile that straddles the papyrus boundary. order iy*n+ix."""
+        """per-sub-tile validity over the grid in row-major order.
+
+        pos_only keeps actual ink sub-tiles plus true ring-negative sub-tiles. non-ink cells
+        inside a positive base tile stay unlabeled, and the closed-ring exclusion gap remains
+        unlabeled. without pos_only, retain the legacy all-in-scroll center behavior.
+        """
         n, sub = self._mt_grid, self._mt_sub
         y0, _, x0, _ = self._mt_center_bounds(y_off, x_off)
         m = self.scroll_mask
+        target_mask = self.split_mask
+        supervision_mask = self.mask if self._mt_pos_only else None
+        lbl = self._fetch_label_mt(y_off, x_off).numpy()
         Hm, Wm = int(m.shape[0]), int(m.shape[1])
         out = np.zeros(n * n, dtype=np.float32)
         for iy in range(n):
@@ -646,14 +701,29 @@ class InkVolumeDataset(IterableDataset):
                 xs, xe = x0 + ix * sub, x0 + (ix + 1) * sub
                 if xs < 0 or xe > Wm:
                     continue
-                if np.all(m[ys:ye, xs:xe] > 0):
-                    out[iy * n + ix] = 1.0
+                if (np.all(m[ys:ye, xs:xe] > 0)
+                        and (target_mask is None or np.all(target_mask[ys:ye, xs:xe] > 0))
+                        and (supervision_mask is None
+                             or np.all(supervision_mask[ys:ye, xs:xe] > 0))):
+                    idx = iy * n + ix
+                    if self._mt_pos_only and lbl[idx] <= 0:
+                        # the combined supervision mask also covers the full positive 16px
+                        # base tile. reject its non-ink 8px cells; only true ring tiles may
+                        # provide negatives.
+                        py0 = (ys // self.tile_size) * self.tile_size
+                        px0 = (xs // self.tile_size) * self.tile_size
+                        parent = self.labels[
+                            py0:py0 + self.tile_size,
+                            px0:px0 + self.tile_size,
+                        ]
+                        if np.any(parent > 0.5):
+                            continue
+                    out[idx] = 1.0
         # pos-only: inside a window that HAS ink, drop the non-ink sub-tiles so we never train
         # them as (possibly false) negatives. ink-free windows keep all in-scroll sub-tiles as
         # negatives, so the batch still has both classes.
         if self._mt_pos_only:
-            lbl = self._fetch_label_mt(y_off, x_off).numpy()
-            if lbl.sum() > 0:
+            if (lbl * out).sum() > 0:
                 out = out * lbl
         return torch.from_numpy(out)
 
@@ -919,6 +989,32 @@ class DataManager:
         y0 = (int(H * float(cyf[0])) // T) * T
         y1 = (int(H * float(cyf[1])) // T) * T
         x1 = max(x1, x0 + T); y1 = max(y1, y0 + T)
+        self.full_x_range = (x0, x1)
+        self.full_y_range = (y0, y1)
+
+        # manual split mode assigns the existing positive/ring supervision units by a
+        # per-scroll binary image. fail loudly rather than silently reverting to the old
+        # axis split: a missing mask would invalidate the experiment's train/valid meaning.
+        self.manual_train_mask = None
+        if not bool(getattr(self.c.data, "simple_split", True)):
+            train_mask_dir = str(getattr(self.c.data, "train_mask_dir", "./train_masks"))
+            train_mask_path = os.path.join(train_mask_dir, f"{self.scroll_id}.png")
+            manual_mask = imread_gray(train_mask_path)
+            if manual_mask is None:
+                raise FileNotFoundError(
+                    f"manual train mask not found for scroll {self.scroll_id}: {train_mask_path}"
+                )
+            if manual_mask.shape != mask.shape or manual_mask.shape != labels.shape:
+                raise ValueError(
+                    f"manual train mask shape {manual_mask.shape} does not match scroll mask "
+                    f"{mask.shape} and labels {labels.shape} for scroll {self.scroll_id}"
+                )
+            self.manual_train_mask = (manual_mask > 0).astype(np.uint8)
+            frac_train = float(self.manual_train_mask.mean())
+            print(
+                f"[split] scroll {self.scroll_id}: manual mask={train_mask_path} "
+                f"train_pixels={100.0 * frac_train:.1f}%"
+            )
 
         # resolve split axis and fraction: ScrollConfig takes priority, then split_overrides
         # dict (backward compat with campaign runners), then global config defaults.
@@ -983,14 +1079,49 @@ class DataManager:
         """creates train and validation datasets.
         for split_axis='y' (horizontal): train=top rows, valid=bottom rows, x fully shared.
         for split_axis='x' (legacy vertical): train=left cols, valid=right cols, y fully shared.
+        when simple_split=False, both datasets span the full cropped frame and the binary
+        train_masks/<scroll_id>.png partitions the existing ring supervision into disjoint
+        train and validation masks.
         InkVolumeDataset takes (x_range, y_range); we feed the split range on the split axis and
         the shared range on the other axis."""
-        train_mask = self._make_ring_mask() if getattr(self.c.data, 'ring_negatives', False) else self.mask
+        supervision_mask = self._make_ring_mask() if getattr(self.c.data, 'ring_negatives', False) else self.mask
+        manual_split = not bool(getattr(self.c.data, "simple_split", True))
+        if manual_split:
+            if self.manual_train_mask is None:
+                raise RuntimeError(f"manual split mask was not loaded for scroll {self.scroll_id}")
+
+            # align the hand mask to the model's actual target grid. a target unit is assigned
+            # to train if any hand-mask pixel touches it; the expanded unit is then wholly train
+            # or wholly valid, so no multitile target can leak into both datasets.
+            split_unit = (
+                int(getattr(self.c.model, "multitile_subtile", self.c.data.tile_size))
+                if getattr(self.c.model, "multitile", False)
+                else int(self.c.data.tile_size)
+            )
+            assignment = self._align_manual_mask(self.manual_train_mask, split_unit)
+            eligible = np.asarray(supervision_mask) > 0.5
+            if getattr(self.c.model, "multitile", False):
+                # preserve the legacy ring-window gate and partition only the emitted targets
+                train_mask = valid_mask = supervision_mask
+                train_split_mask = assignment
+                valid_split_mask = (assignment == 0).astype(np.uint8)
+            else:
+                train_mask = (eligible & (assignment > 0)).astype(np.uint8)
+                valid_mask = (eligible & (assignment == 0)).astype(np.uint8)
+                train_split_mask = valid_split_mask = None
+            print(
+                f"[manual-split] scroll {self.scroll_id}: unit={split_unit}px "
+                f"train_ring={int((eligible & (assignment > 0)).sum())}px "
+                f"valid_ring={int((eligible & (assignment == 0)).sum())}px"
+            )
+        else:
+            train_mask = supervision_mask
         # when ring_negatives is on, restrict validation to ring tiles too so validation
         # throughput and signal quality match the training distribution. without this,
         # the full valid region (tens of thousands of easy tiles) swamps the validation
         # loop and makes it take 5-10× longer than necessary.
-        valid_mask = train_mask if getattr(self.c.data, 'ring_negatives', False) else self.mask
+            valid_mask = train_mask if getattr(self.c.data, 'ring_negatives', False) else self.mask
+            train_split_mask = valid_split_mask = None
         # multitile needs the true scroll mask (papyrus bounds) separate from the ring-
         # restricted training mask. only allocate it for multitile: single-tile never reads
         # scroll_mask, so passing None keeps the control byte-identical (no extra array).
@@ -998,7 +1129,10 @@ class DataManager:
             getattr(self.c.data, 'ring_negatives', False)
             and getattr(self.c.model, 'multitile', False)
         ) else None
-        if getattr(self, "split_axis", "x") == "y":
+        if manual_split:
+            train_x = valid_x = self.full_x_range
+            train_y = valid_y = self.full_y_range
+        elif getattr(self, "split_axis", "x") == "y":
             train_x, train_y = self.shared_range, self.train_range
             valid_x, valid_y = self.shared_range, self.valid_range
         else:
@@ -1016,6 +1150,7 @@ class DataManager:
             scroll_id=self.scroll_id,
             domain_id=self.domain_id,
             scroll_mask=scroll_mask_arg,
+            split_mask=train_split_mask,
         )
         valid_set = InkVolumeDataset(
             self.vol,
@@ -1029,6 +1164,7 @@ class DataManager:
             scroll_id=self.scroll_id,
             domain_id=self.domain_id,
             scroll_mask=scroll_mask_arg,
+            split_mask=valid_split_mask,
         )
         # the datasets have already copied what they need as uint8. the manager's own
         # float64 mask/labels (mask/255.0) are not used on the training side afterward
@@ -1040,6 +1176,24 @@ class DataManager:
         self.mask = (np.asarray(self.mask) > 0.5).astype(np.uint8)
         self.labels = (np.asarray(self.labels) > 0.5).astype(np.uint8)
         return train_set, valid_set
+
+    @staticmethod
+    def _align_manual_mask(mask, unit):
+        """expand a binary hand mask to disjoint, origin-anchored model target units."""
+        mask = np.asarray(mask) > 0
+        unit = max(1, int(unit))
+        h, w = mask.shape
+        h_full = (h // unit) * unit
+        w_full = (w // unit) * unit
+        aligned = np.zeros((h, w), dtype=np.uint8)
+        if h_full > 0 and w_full > 0:
+            cells = mask[:h_full, :w_full].reshape(
+                h_full // unit, unit, w_full // unit, unit
+            ).any(axis=(1, 3))
+            aligned[:h_full, :w_full] = np.repeat(
+                np.repeat(cells, unit, axis=0), unit, axis=1
+            )
+        return aligned
 
     def _make_ring_mask(self):
         """build training mask from ring around ink labels, computed at TILE level.
@@ -1354,11 +1508,13 @@ def get_tile_pos_weight(train_children, config, cache_path=UNIFIED_CACHE_PATH, c
         mt = bool(getattr(ds, "_mt", False))
         ink = os.path.basename(str(getattr(config.data, "inklabel_dir", "")).rstrip("/"))
         if mt:
-            sig = f"mt_s{ds._mt_sub}_g{ds._mt_grid}_pos{int(ds._mt_pos_only)}_{ink}"
+            sig = f"mt_ringtargets_v2_s{ds._mt_sub}_g{ds._mt_grid}_pos{int(ds._mt_pos_only)}_{ink}"
             key = f"class_weight_multitile_s{ds._mt_sub}_g{ds._mt_grid}_pos{int(ds._mt_pos_only)}"
         else:
             sig = f"single_{ink}"
             key = "class_weight"
+        if not bool(getattr(config.data, "simple_split", True)):
+            sig += "_manual_split"
         sid = str(getattr(ds, "scroll_id", 0))
         cache = _load_unified_cache(cache_path)
         entry = cache.get(sid, {})

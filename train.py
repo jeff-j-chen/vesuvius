@@ -265,7 +265,9 @@ class Trainer:
             mask = (mask > 0).float()                          # per-sub-tile validity (multitile)
         else:
             mask = (mask.sum(dim=1) > 0).float().unsqueeze(1)  # single-tile window gate
-        sample_pos = (labels.amax(dim=1) > 0.5).float()        # window-level positive, (B,)
+        # only supervised targets determine whether this split sees a positive window.
+        # held-out ink cells can be present in the same multitile center with mask=0.
+        sample_pos = ((labels * mask).amax(dim=1) > 0.5).float()
         if domain_ids is not None:
             domain_ids = domain_ids.to(self.c.device, non_blocking=True).view(-1)
 
@@ -293,6 +295,9 @@ class Trainer:
                 outputs = self.model(images)
                 domain_logits = None
                 supcon_z = None
+
+            attn_entropy_loss = getattr(self.model, "last_attn_entropy_loss", None)
+            attn_entropy_per_target = getattr(self.model, "last_attn_entropy_per_target", None)
 
             if outputs.dim() == 4:
                 outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
@@ -364,8 +369,10 @@ class Trainer:
                 consistency = ((p2 - p1.detach()) ** 2) * mask
                 loss = loss + tta_lambda * (consistency.sum() / denom.clamp(min=1))
 
-            attn_entropy_loss = getattr(self.model, "last_attn_entropy_loss", None)
-            if attn_entropy_loss is not None and attn_entropy_loss.item() != 0.0:
+            if (attn_entropy_per_target is not None
+                    and attn_entropy_per_target.shape == mask.shape):
+                loss = loss + (attn_entropy_per_target * mask).sum() / denom.clamp(min=1)
+            elif attn_entropy_loss is not None and attn_entropy_loss.item() != 0.0:
                 loss = loss + attn_entropy_loss
 
             dann_loss_value = outputs.new_zeros(())
@@ -379,12 +386,28 @@ class Trainer:
 
             spill_loss_value = outputs.new_zeros(())
             center_voxel_map = getattr(self.model, "last_center_voxel_map", None)
+
+            def _positive_depth_profile(voxel_map):
+                """mean each depth over supervised positive multitile cells only."""
+                if labels.shape[1] <= 1:
+                    return voxel_map.mean(dim=(3, 4)).squeeze(1)
+                n = int(round(labels.shape[1] ** 0.5))
+                h, w = voxel_map.shape[3], voxel_map.shape[4]
+                if n * n != labels.shape[1] or h % n or w % n:
+                    return voxel_map.mean(dim=(3, 4)).squeeze(1)
+                positive = ((labels > 0.5) & (mask > 0)).float().view(B, n, n)
+                spatial = positive.repeat_interleave(h // n, dim=1).repeat_interleave(
+                    w // n, dim=2
+                ).unsqueeze(1).unsqueeze(2)
+                spatial_denom = spatial.sum(dim=(3, 4)).clamp(min=1.0)
+                return ((voxel_map * spatial).sum(dim=(3, 4)) / spatial_denom).squeeze(1)
+
             if bool(getattr(self.c.tra, "spill_reduction", False)) and center_voxel_map is not None:
                 pos_mask = sample_pos
                 if pos_mask.sum() > 0:
                     # variance of mean logit per depth slice: high var = depth-selective (good)
                     # low var = uniform across all layers (spill); no cap on prediction confidence
-                    depth_logits = center_voxel_map.mean(dim=(3, 4)).squeeze(1)  # [B, D]
+                    depth_logits = _positive_depth_profile(center_voxel_map)     # [B, D]
                     depth_var = depth_logits.var(dim=1, unbiased=False)           # [B]
                     min_var = float(getattr(self.c.tra, "spill_min_depth_var", 0.5))
                     spill_loss_value = (F.relu(min_var - depth_var) * pos_mask).sum() / pos_mask.sum().clamp(min=1.0)
@@ -395,7 +418,7 @@ class Trainer:
                 if pos_mask.sum() > 0:
                     # original prob-based spill: penalize active-depth-fraction > max_active_frac
                     center_probs = torch.sigmoid(center_voxel_map)
-                    depth_profile = center_probs.mean(dim=(3, 4)).squeeze(1)  # [B, D]
+                    depth_profile = _positive_depth_profile(center_probs)  # [B, D]
                     depth_thresh = float(getattr(self.c.tra, "spill_depth_threshold", 0.35))
                     depth_tau = float(getattr(self.c.tra, "spill_active_depth_tau", 0.08))
                     max_active_frac = float(getattr(self.c.tra, "spill_max_active_depth_frac", 0.35))

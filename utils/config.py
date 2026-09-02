@@ -115,6 +115,8 @@ class DataConfig:
     ring_close_r: int = 3
     ring_gap_r: int = 3
     ring_shell_r: int = 2
+    simple_split: bool = True  # true: axis/fraction split; false: train_masks/<scroll_id>.png
+    train_mask_dir: str = "./train_masks"
     context_size: int = 0
     context_downsample: int = 1
     eval_infer_bs: int = 128

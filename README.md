@@ -288,12 +288,12 @@ predicts the 32px center as a 4x4 grid of 8px sub-tiles (16 targets/window) inst
 16px score. denser gradient without going fully dense.
 - WINDOW GATING (train only, shuffle=True): keep a window only if its 32px center overlaps the
   RING/training mask (`_mt_window_touches_ring` in _gen_tile_coords). the dataset's `self.mask`
-  IS the ring mask when ring_negatives is on. negatives = papyrus sub-tiles inside those windows.
-- LABELS (`_fetch_label_mt`): each 8x8 sub-tile = 1 if .any() ink else 0 (ring ignored).
-- MASK (`_fetch_mask_mt`): sub-tile valid ONLY if fully inside the SCROLL mask (papyrus bounds),
-  which is threaded separately as `scroll_mask` (self.scroll_mask; falls back to self.mask when
-  ring off). ring mask != scroll mask. train.py loss divides by mask.sum(); metrics drop masked
-  sub-tiles (guarded by labels.shape[1]>1 so single-tile stays byte-identical).
+  IS the combined positive/ring mask when ring_negatives is on.
+- LABELS (`_fetch_label_mt`): each 8x8 sub-tile = 1 if .any() ink else 0.
+- MASK (`_fetch_mask_mt`): with `multitile_pos_only=True`, supervise only actual 8px ink targets
+  and true ring-negative targets. non-ink cells in a positive 16px base tile and the closed-ring
+  exclusion gap remain masked out. targets must also lie fully inside the SCROLL mask, threaded
+  separately as `scroll_mask`. train.py loss divides by mask.sum(); metrics drop masked sub-tiles.
 
 ## aggregators (multitile)
 - default: per-cell log-sum-exp (`_multitile_aggregate`), param-light (just lse_r).

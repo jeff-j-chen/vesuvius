@@ -137,6 +137,7 @@ class GatedAttentionMIL(nn.Module):
         self.w = nn.Linear(att_dim, 1, bias=False)
         self.out = nn.Linear(feat_dim, 1, bias=True)
         self.last_attn_weights: torch.Tensor | None = None
+        self.last_entropy_loss_per_bag: torch.Tensor | None = None
 
     def forward(
         self,
@@ -149,10 +150,12 @@ class GatedAttentionMIL(nn.Module):
         self.last_attn_weights = weights.detach()
         score = (weights.unsqueeze(-1) * self.out(features)).sum(dim=1)
 
+        self.last_entropy_loss_per_bag = voxel_map.new_zeros((voxel_map.shape[0],))
         entropy_loss = voxel_map.new_zeros(())
         if entropy_weight > 0:
-            entropy = -(weights * torch.log(weights + 1e-8)).sum(dim=-1).mean()
-            entropy_loss = -entropy_weight * entropy
+            entropy = -(weights * torch.log(weights + 1e-8)).sum(dim=-1)
+            self.last_entropy_loss_per_bag = -entropy_weight * entropy
+            entropy_loss = self.last_entropy_loss_per_bag.mean()
         return score, entropy_loss
 
 
@@ -257,6 +260,7 @@ class NnUnet3dLcndz(nn.Module):
         self.last_voxel_map_full: torch.Tensor | None = None
         self.last_center_voxel_map: torch.Tensor | None = None
         self.last_attn_entropy_loss: torch.Tensor | None = None
+        self.last_attn_entropy_per_target: torch.Tensor | None = None
         self.last_surface_attn: torch.Tensor | None = None
 
         self.lse_r = nn.Parameter(torch.tensor(2.0, dtype=torch.float32))
@@ -433,9 +437,14 @@ class NnUnet3dLcndz(nn.Module):
         c = c.reshape(B, D, n, sub, n, sub).permute(0, 2, 4, 1, 3, 5).reshape(B * n * n, 1, D, sub, sub)
         score, entropy_loss = self.attn_mil(c, entropy_weight=self._attn_entropy_weight)
         self.last_attn_entropy_loss = entropy_loss
+        per_bag = self.attn_mil.last_entropy_loss_per_bag
+        self.last_attn_entropy_per_target = (
+            per_bag.view(B, n * n) if per_bag is not None else None
+        )
         return score.view(B, n * n)
 
     def _bag_score(self, voxel_map: torch.Tensor) -> torch.Tensor:
+        self.last_attn_entropy_per_target = None
         if self.attn_mil is not None:
             score, entropy_loss = self.attn_mil(voxel_map, entropy_weight=self._attn_entropy_weight)
             self.last_attn_entropy_loss = entropy_loss

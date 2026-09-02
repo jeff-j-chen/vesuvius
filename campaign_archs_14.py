@@ -289,6 +289,8 @@ _OVERRIDES = {
     "head_drop": ("model", "head_drop"),
     "save_int": ("tra", "save_int"),
     "channels_mult": ("model", "channels_mult"),
+    "simple_split": ("data", "simple_split"),
+    "train_mask_dir": ("data", "train_mask_dir"),
 }
 
 

@@ -754,6 +754,10 @@ class TensorboardVisualizer:
         self.train_range = getattr(dm, "train_range", dm.train_x)
         self.valid_range = getattr(dm, "valid_range", dm.valid_x)
         self.shared_range = getattr(dm, "shared_range", dm.y_range)
+        self.manual_split = not bool(getattr(self.c.data, "simple_split", True))
+        self.manual_train_mask = getattr(dm, "manual_train_mask", None)
+        self.full_x_range = getattr(dm, "full_x_range", (0, self.mask.shape[1]))
+        self.full_y_range = getattr(dm, "full_y_range", (0, self.mask.shape[0]))
         self.global_mean, self.global_std, self.global_min, self.global_max = dm.norm_stats
 
         # load test data region with stats
@@ -1535,7 +1539,10 @@ class TensorboardVisualizer:
         # functionally a single eval over the whole region. so read+predict the FULL region in
         # ONE pass instead of two (train then valid) -- half the per-call overhead, and for an
         # x-split one wide strip read per row instead of two.
-        if getattr(self, "split_axis", "x") == "y":
+        if self.manual_split:
+            tr_y = full_y = self.full_y_range
+            tr_x = full_x = self.full_x_range
+        elif getattr(self, "split_axis", "x") == "y":
             tr_y, tr_x = self.train_range, self.shared_range
             full_y = (self.train_range[0], self.valid_range[1]); full_x = self.shared_range
         else:
@@ -1583,8 +1590,9 @@ class TensorboardVisualizer:
         full_grouped = group_by_depth(full_coords)
         # train-region coords (coord-only, no read) -- only needed to route hard-negative mining
         # to the training portion; the full-region origin == train origin so indices line up.
+        train_coord_mask = self.manual_train_mask if self.manual_split else eval_mask
         train_grouped = group_by_depth(
-            self._gen_tile_coords(z_range, tr_y, tr_x, eval_mask, z_step=self.c.data.depth)
+            self._gen_tile_coords(z_range, tr_y, tr_x, train_coord_mask, z_step=self.c.data.depth)
         ) if hm_enabled else {}
         depth_offsets = sorted(full_grouped.keys())
         all_pred_data = []
@@ -1686,7 +1694,7 @@ class TensorboardVisualizer:
             # use the sub-tile stride too; single-tile keeps tile_size.
             _mt = bool(getattr(self.c.model, "multitile", False))
             _out_tile = int(getattr(self.c.model, "multitile_subtile", 8)) if _mt else self.c.data.tile_size
-            if getattr(self.c.tra, "fast_eval_figure", False):
+            if getattr(self.c.tra, "fast_eval_figure", False) or self.manual_split:
                 # full_y and full_x were already cropped above
                 full_y_range = full_y
                 full_x_range = full_x
@@ -1707,11 +1715,34 @@ class TensorboardVisualizer:
             # split the tile-grid maps into train/valid along the split axis so readability is
             # reported PER SPLIT (the combined region was ~75% train, masking the valid signal).
             # each depth's TTA map (all_tta_data, from the same read) yields the *_tta groups.
-            n_split = (self.train_range[1] - self.train_range[0]) // _out_tile
-            _ax = "y" if getattr(self, "split_axis", "x") == "y" else "x"
-            def _sp(m):
-                return (m[:n_split], m[n_split:]) if _ax == "y" else (m[:, :n_split], m[:, n_split:])
-            lb_t, lb_v = _sp(label_binary); lf_t, lf_v = _sp(label_fraction); vt_t, vt_v = _sp(valid_tiles)
+            if self.manual_split:
+                aligned = DataManager._align_manual_mask(self.manual_train_mask, _out_tile)
+                y0, _ = full_y_range
+                x0, _ = full_x_range
+                h_grid, w_grid = label_binary.shape
+                assignment = aligned[
+                    y0:y0 + h_grid * _out_tile,
+                    x0:x0 + w_grid * _out_tile,
+                ].reshape(
+                    h_grid, _out_tile, w_grid, _out_tile
+                ).all(axis=(1, 3))
+                lb_t = lb_v = label_binary
+                lf_t = lf_v = label_fraction
+                vt_t = valid_tiles & assignment
+                vt_v = valid_tiles & ~assignment
+
+                def _sp(m):
+                    return m, m
+            else:
+                n_split = (self.train_range[1] - self.train_range[0]) // _out_tile
+                _ax = "y" if getattr(self, "split_axis", "x") == "y" else "x"
+
+                def _sp(m):
+                    return (m[:n_split], m[n_split:]) if _ax == "y" else (m[:, :n_split], m[:, n_split:])
+
+                lb_t, lb_v = _sp(label_binary)
+                lf_t, lf_v = _sp(label_fraction)
+                vt_t, vt_v = _sp(valid_tiles)
 
             depth_labels = [f"{pd[2]}-{pd[3]}" for pd in all_pred_data]
             groups = {"Train": [], "Valid": [], "Train_tta": [], "Valid_tta": []}
@@ -1736,7 +1767,10 @@ class TensorboardVisualizer:
             if getattr(self.c.tra, "eval_aggregate", True):
                 # train_split_n: number of tiles in the train region along the split axis
                 # when fast_eval_figure is enabled, compute based on the cropped extent
-                if getattr(self.c.tra, "fast_eval_figure", False):
+                if self.manual_split:
+                    train_split_n = None
+                    split_axis = None
+                elif getattr(self.c.tra, "fast_eval_figure", False):
                     # full_y and full_x were cropped above; compute train_split_n relative to crop
                     split_axis = "y" if getattr(self, "split_axis", "x") == "y" else "x"
                     if split_axis == "y":
@@ -2297,9 +2331,11 @@ class TensorboardVisualizer:
         fig_h = panel_h * 3 + 0.5
 
         fig, axes = plt.subplots(3, 2, figsize=(fig_w, fig_h), squeeze=False)
-        split_pos = train_split_n - 0.5
+        split_pos = train_split_n - 0.5 if train_split_n is not None else None
 
         def _draw_split(ax):
+            if split_pos is None:
+                return
             if split_axis == "y":
                 ax.axhline(y=split_pos, color='red', linestyle='--', linewidth=0.8)
             else:
