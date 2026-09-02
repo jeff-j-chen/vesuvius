@@ -1,6 +1,6 @@
-*.pth
+#*.pth
 # keep MAE pretraining bases (warm-start weights) tracked despite the blanket *.pth ignore
-!models/mae_*.pth
+#!models/mae_*.pth
 *.npz
 .venv
 __pycache__/
