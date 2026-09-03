@@ -246,16 +246,16 @@ def _mk15(tid: str, tag: str, **overrides: object) -> dict:
 # w013-only, dann no-op, c14 hyperparams. only multitile_subtile / multitile_grid vary.
 # center_px = subtile * grid; targets_per_window = grid^2.
 TESTS = [
-    # # from 14: attn and pos are best
+    # from 14: attn and pos are best
 
-    # # CONTROL: exact campaign-14 multi16_pos_tinydrop_attn config (w013-only, c14 hyperparams).
-    # # this SHOULD reproduce the c14 best performer -- if it doesn't, something else drifted.
-    # _mk15("c32_t8",  "15_c32_t8",  multitile_subtile=8,  multitile_grid=4),  # center=32px 4x4=16 targets
+    # CONTROL: exact campaign-14 multi16_pos_tinydrop_attn config (w013-only, c14 hyperparams).
+    # this SHOULD reproduce the c14 best performer -- if it doesn't, something else drifted.
+    _mk15("c32_t8",  "15_c32_t8",  multitile_subtile=8,  multitile_grid=4),  # center=32px 4x4=16 targets
 
-    # # 16px center: sub-stroke coverage; a window centered on ink usually sees homogeneous
-    # # signal (all-ink or all-papyrus). tests whether small centers give enough gradient.
-    # _mk15("c16_t8",  "15_c16_t8",  multitile_subtile=8,  multitile_grid=2),  # center=16px 2x2=4  targets
-    # _mk15("c16_t4",  "15_c16_t4",  multitile_subtile=4,  multitile_grid=4),  # center=16px 4x4=16 targets (finer tile)
+    # 16px center: sub-stroke coverage; a window centered on ink usually sees homogeneous
+    # signal (all-ink or all-papyrus). tests whether small centers give enough gradient.
+    _mk15("c16_t8",  "15_c16_t8",  multitile_subtile=8,  multitile_grid=2),  # center=16px 2x2=4  targets
+    _mk15("c16_t4",  "15_c16_t4",  multitile_subtile=4,  multitile_grid=4),  # center=16px 4x4=16 targets (finer tile)
 
     _mk15("c16_t4_b32",  "15_c16_t4_b32",  multitile_subtile=4,  multitile_grid=4),  # center=16px 4x4=16 targets (finer tile)
 

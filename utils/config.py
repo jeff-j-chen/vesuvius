@@ -201,6 +201,8 @@ class TrainingConfig:
     spill_entropy: bool = False
     spill_entropy_lambda: float = 0.3
     spill_max_depth_entropy: float = 2.1
+    new_surface_lambda: float = 0.1
+    new_surface_smooth_lambda: float = 0.02
     seed: int = 41
     deterministic: bool = True
     epoch_cooldown_secs: int = 9
@@ -232,7 +234,12 @@ class ModelConfig:
     head_drop: float = 0.0
     attn_mil: bool = False
     attn_entropy_weight: float = 0.0
+    feature_attn_mil: bool = False
     learned_surface: bool = False
+    new_learned_surface: bool = False
+    surface_guided_mil: bool = False
+    surface_guided_mix: float = 0.5
+    surface_band_sigma: float = 1.5
     use_ibn: bool = False  # IBN-a: IN+BN hybrid in shallow encoder blocks
     use_prototype: bool = False  # replace bag-score with online prototype cosine classifier
     prototype_ema: float = 0.99

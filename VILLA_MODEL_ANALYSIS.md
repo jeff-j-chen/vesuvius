@@ -1,9 +1,45 @@
 # VILLA vs Current Model Analysis
 **Date**: 2026-08-11  
-**Last Updated**: 2026-08-11 (HuggingFace README verified)  
+**Last Updated**: 2026-09-03
 **Models Compared**:  
 - **VILLA**: aligned21_hybrid_3d2d (3D stem → 2D U-Net)  
-- **OURS**: v16_arch_ctx (2-stage MIL with context window)
+- **OURS AT ORIGINAL WRITING**: v16_arch_ctx (2-stage MIL with context window)
+
+## 2026-09-03 status correction
+
+This document below is a historical comparison against a retired model. Its VILLA notes remain
+useful, but recommendations and descriptions of the current model are superseded by this section
+and the repository README.
+
+The active model is now `nnunet3d_lcndz`:
+
+- full 3D nnU-Net encoder/decoder with raw + LCN + dI/dz inputs
+- 192x192 context with spatial downsampling 2
+- IBN in shallow encoder blocks
+- 16x16 prediction center split into four 8x8 multitile targets
+- gated attention-MIL with entropy regularization
+- closed-ring, `pos_only` supervision and a hand-authored train/validation split on w013
+- legacy learned-surface attention plus the campaign-17 supervised depth-softmax surface branch
+- MAE warm start, variance spill, SupCon, TTA consistency, and weak feature dropout
+
+Corrections to the historical recommendations:
+
+1. Dense labels exist, but dense training repeatedly failed because the transferred labels are
+  uncertain. The project intentionally uses sparse multitile supervision rather than competing
+  with VILLA's dense recipe.
+2. Instance normalization and LeakyReLU are already used throughout the nnU-Net; IBN-a is used in
+  the first normalization of the two shallow blocks.
+3. Depth jitter is already active at +/-4 slices in campaign 17.
+4. The current campaign uses weighted BCE, not GCE, Dice, or label smoothing.
+5. DANN cannot help the one-scroll campaign because `dann_n_domains=1` makes it a no-op. Earlier
+  multi-domain DANN was too strong and damaged low-contrast regions.
+6. Context has been swept through 256px. The measured optimum is 192px/ds2; 256px adds substantial
+  cost without useful improvement.
+7. Multitile flips and rotations now transform the image and 2x2 target/mask grids together.
+  Elastic and context jitter remain disabled until exact dense-target warping is implemented.
+
+Do not use the numerical gain projections at the bottom of this historical document for planning;
+they were speculative and predate campaigns 9-17.
 
 ---
 

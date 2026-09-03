@@ -40,7 +40,7 @@ _W013_ID = 20240304141531
 
 # copy the complete resolved campaign-dictionary input for the c15 control. this is safer than
 # reconstructing its inheritance chain and accidentally dropping an inherited setting.
-_C15_CONTROL = next(t for t in _TESTS15 if str(t["tid"]) == "c32_t8")
+_C15_CONTROL = next(t for t in _TESTS15 if str(t["tid"]) == "c16_t8")
 _BASE16 = {k: v for k, v in _C15_CONTROL.items() if k not in {"tid", "tag"}}
 
 _OVERRIDES = dict(_OVERRIDES15)
@@ -55,7 +55,7 @@ def _mk16(tid: str, tag: str, **overrides: object) -> dict:
 
 
 TESTS = [
-    # exact c15 c32_t8 control. simple_split=True is the new explicit name for the unchanged
+    # exact c15 c16t8 control. simple_split=True is the new explicit name for the unchanged
     # axis/fraction behavior and is also the DataConfig default.
     _mk16(
         "baseline", "16_baseline",

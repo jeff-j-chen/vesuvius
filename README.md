@@ -1,22 +1,18 @@
 # PHerc0139 Ink Detector
 
 Binary tile-level ink detection on 9.362 µm / 113 keV CT scans of Herculaneum papyrus scrolls.
-Current production path: **nnunet3d_lcndz** — a 3D nnU-Net-style encoder/decoder with a raw + LCN + depth-gradient stem, optional learned surface attention, and optional attention-MIL / spatial SupCon integrations.
+Current production path: **nnunet3d_lcndz** — a 3D nnU-Net-style encoder/decoder with a raw + LCN + depth-gradient stem, IBN, learned surface features, attention-MIL, spatial SupCon, and a sparse multitile objective.
 
 ---
 
 ## Quick start
 
-```powershell
-# activate venv
-.venv\Scripts\Activate.ps1
+```bash
+# inspect the active campaign without training
+python campaign_archs_17.py --dry-run
 
-# run training (all config is driven by utils/config.py)
-python train.py -n "experiment_name"
-
-# run the current integration sweep
-python campaign_archs_9.py --dry-run
-python campaign_archs_9.py
+# run the active surface experiment
+python campaign_archs_17.py
 
 # compute/cache normalisation stats (needed once per new zarr)
 python precompute_norm.py --scroll-id 20260206000001
@@ -24,6 +20,46 @@ python precompute_norm.py --scroll-id 20260206000001
 # annotate readability probe windows
 python roi.py
 ```
+
+The active environment is a Docker image using system Python; no project venv is required.
+
+---
+
+## Current operating point — campaign 17
+
+Campaign 17 is a fast-iteration experiment on **w013 only** (`20240304141531`). It inherits
+campaign 16's hand-authored train/validation mask rather than using an axis split. Its six arms
+test corrected augmentation, the supervised surface feature, entropy-gated surface aggregation,
+feature-level attention-MIL, and three center/subtile geometries.
+
+Effective configuration:
+
+- input: 24 depth slices, z=4:28
+- context: 192x192, spatially averaged by 2 before the backbone
+- prediction center: 16x16, divided into a 2x2 grid of four 8x8 targets
+- labels: binary `eroded_inklabels`, closed-ring negatives, `multitile_pos_only=True`
+- split: `train_masks/20240304141531.png`; train and validation target cells are disjoint
+- model: 32/64/128/256-channel 3D nnU-Net, IBN in the shallow blocks
+- aggregation: per-subtile gated attention-MIL with entropy weight 0.03
+- regularization: conv dropout 0.05/0.05, head dropout 0.10, skip-drop 0.20
+- auxiliary objectives: variance spill, spatial SupCon curriculum, TTA consistency, surface loss
+- initialization: `models/mae_nnunet_96.pth`
+- optimizer objective: auto-positive-weighted **BCE**
+
+Important corrections:
+
+- Campaign 17 does **not** currently use GCE. `gce_q=0.7` is configured but inactive because
+  `loss_type="bce"`.
+- Campaign 17 does **not** currently use soft ink targets or ink-label smoothing. Both positive
+  and negative smoothing values are zero. Its auxiliary surface target is soft across depth.
+- DANN is configured but inactive on this one-scroll run: one domain produces no adversarial
+  classification signal.
+- The intended future MAE geometry is 192x192/ds2 with IBN, not 196x196. The current checkpoint
+  was pretrained at 96x96/ds2 without IBN.
+- Active campaign-17 augmentation probabilities are flip 0.6, rotation 0.6, noise 0.3,
+  brightness 0.6, contrast 0.6, and FDA 0.5. Flip and rotation now transform the multitile
+  labels and masks identically. Elastic and context jitter are disabled until dense target
+  warping is implemented.
 
 ---
 
@@ -171,14 +207,28 @@ All five are rendered from their VC3D tifxyz mesh against their respective raw C
 
 **nnunet3d_lcndz** (`utils/model.py`) is the only active architecture kept in the repo.
 
-1. **Stem inputs** — the network ingests `[raw, lcn, dI/dz]` per tile window. LCN removes the slow papyrus baseline; the depth gradient makes interface structure explicit.
-2. **3D encoder/decoder** — a compact nnU-Net-style 3-level encoder/decoder preserves dense spatial detail while still mixing information across depth.
-3. **Optional learned surface attention** — `DepthSurfaceAttn` can amplify slices that look surface-proximal before the deeper encoder blocks.
-4. **Per-voxel logits** — the decoder emits a `(B, 1, D, H, W)` voxel map.
-5. **Bag aggregation** — default aggregation is learnable log-sum-exp; current sweeps also test gated attention-MIL with entropy regularization.
-6. **Auxiliary representation** — when spatial SupCon is enabled, the bottleneck is pooled to a 256-d embedding and passed through a small projection head.
+1. **Input preparation** — 192px context is average-pooled to 96px; depth remains 24.
+2. **Stem** — concatenate `[raw, LCN(raw), dI/dz]`, then map 3 channels to 32.
+3. **Encoder** — three spatial/depth pooling levels with 32/64/128 channels and a 256-channel
+  bottleneck. IBN-a is used in the first normalization of `enc1` and `enc2`; other norms are IN.
+4. **Decoder** — three transposed-convolution stages with nnU-Net skip connections and a
+  one-channel voxel-logit head.
+5. **Legacy surface gate** — a tiny depth-only sigmoid branch amplifies early features by 1-2x.
+6. **New surface branch** — a spatial/depth CNN predicts a softmax distribution over the 24
+  depths at every downsampled spatial point. A zero-initialized 1x1 projection adds that volume
+  residually to `enc1`; an auxiliary soft-target loss supervises the papyrus-air transition.
+7. **Multitile output** — crop the decoded voxel map to the central 16px and divide it into four
+  8px cells. Each cell is aggregated independently over its depth/spatial voxel bag.
+8. **Attention-MIL** — the active aggregator applies gated attention to scalar voxel logits.
+  Entropy regularization is required empirically to stop brittle attention collapse. Campaign 17
+  also tests attention over the full 32-channel decoder vectors.
+9. **Auxiliary embedding** — multitile SupCon now pools one decoder embedding per target cell and
+  filters it with that cell's label/mask. DANN still uses the global bottleneck embedding.
 
-The current campaign (`campaign_archs_9.py`) keeps the backbone fixed and only varies integrations that still fit this path directly: soft augmentation, flip-consistency regularization, GCE + asymmetric label smoothing, spatial SupCon, and learned surface attention.
+The surface feature is generated internally. The model receives `(B,1,24,192,192)`, downsamples
+to `(B,1,24,96,96)`, and predicts `(B,1,24,96,96)` surface probabilities. It is not handed a
+precomputed 192x192 scalar surface map at inference time. The full-scroll surface files are review
+artifacts; campaign 17 currently generates its soft targets online from each sampled input crop.
 
 ---
 
@@ -196,8 +246,10 @@ The current campaign (`campaign_archs_9.py`) keeps the backbone fixed and only v
 | `precompute_norm.py` | CLI: `python precompute_norm.py --scroll-id <id>`. Writes to `norm_cache.json`. |
 | `roi.py` | Interactive probe ROI picker that writes `probe_rois.json`, now the single source for probe windows. |
 | `assemble_training_zarrs.sh` | Downloads and assembles the three training zarrs from S3. See [Assembling zarrs](#assembling-training-zarrs). |
-| `campaign_archs_9.py` | Current all-scroll integration sweep for the nnUNet backbone. |
-| `old/` | Archived experiments, older campaigns, and retired architecture families. The radical archs6 cluster now lives here. |
+| `campaign_archs_17.py` | Current w013 hand-mask experiment for the supervised depth-softmax surface feature. |
+| `generate_surface_supervision.py` | Builds full-resolution papyrus-air pseudo-labels and review figures. |
+| `utils/surface.py` | Online soft surface targets and robust smoothness loss. |
+| `old/` | Archived experiments, older campaigns, and retired architecture families. |
 | `old/download_surface_zarr.py` | Downloads a pre-rendered OME-Zarr surface volume from S3 (volume or midslice mode). |
 | `old/render_9um_surface.py` | Renders a tifxyz mesh against the raw zarr via surface-normal sampling. Used for w047 and test segment. |
 | `overlay_2p4_9um.py` | Alignment sanity: hi-res (red, half opacity) over lo-res (green), yellow = overlap. Reports NCC. |
@@ -245,82 +297,76 @@ Default: set `MODEL_PATH` to your best checkpoint (latest: `runs_lcn/` from the 
 
 See `old/KNOWLEDGE.md` for the full research log: pre-2026 campaigns (arch10/18/28, scroll1/4 at 7.91 µm), 2.4 µm vs 9.4 µm investigation, scroll4 teacher-zarr work, and the 2026-07 PHerc0139 9.362 µm campaign series (triple-scroll sweep, LCN win, w056 addition).
 
-## CATCH UP TO SPEED:
-The latest results:
-campaign 5 was our original cnn baseline. capable of overfitting on small amounts of data, but fell apart with larger scrolls.
-campaign 7 8 and 9 proved that our nnunet is king; it can overfit no matter the amount of data we throw at it.
-campaigns 11 and 12 proved that context is king (up to 192ds2, any higher is useless) and tested a bunch of further refinements (e.g. ibn, fda, etc.)
+## Current research status and constraints
 
-The *crux of the issue*: the model can overfit but cannot generalize. 
+### Problem definition
 
-Note that per patch, we label ~10 letters (out of ~50 actual letters). The model can overfit very easily onto all 10 letters across all 18 patches, but it has NEVER found a SINGLE LETTER not in it's immediate training corpus, even those right next to labelled letters. It predicts what basically amounts to illegible noise in every location except those perfectly labelled. 
+- Ink is detectable at approximately 9.3-9.6 microns. The signal may occupy only one or a few
+  decisive depths within a 24-slice box around an imperfectly flattened, undulating sheet.
+- Labels come from much higher-resolution scans and are sparse and uncertain after registration.
+- The immediate objective is generalization between held-out letters on w013, not scale-up.
+  Multi-fragment training improves representation capacity but slows iteration substantially.
+- No model in this project has yet recovered a convincing character outside its immediate
+  supervised corpus. Self-training or pseudo-ink labeling is therefore prohibited for now.
 
-Our labels are uncertain, hence the ring setup (we strictly want to avoid accidentally labelling ink as papyrus). Previous agents have contended that this is a geometry issue: this is not true. Each tile only knows the immedaite information of it's context; it doesn't see that it's 'surrounded' by a ring of papyrus or anything like that.
+### Hard architectural constraints
 
-Incredibly, no amount of regularization we throw at the model hinders it's progress. Campaign 11 and 12 are evidence of this, but we have done testing outside of that. l1, l2, adamw, and photometric are all useless. tta consistency helped a little. the spill reduction helped a little (it forces the model to focus on a handful of depths, as we intend). the ones that actually have an effect: depth mixing (catastrophic failure, model absolutely requires depth preservation) and cutout (model eventually overfits again, but the problem space is fundamentally changed and it simply performs much worse).
+- Dense segmentation has repeatedly failed under these imperfect labels. Villa succeeds with
+  dense supervision because its labels and recipe are better suited to that objective; copying
+  its dense path is not the objective of this project.
+- Single-tile MIL supplies too little spatially resolved gradient. Multitile is the chosen middle
+  ground between one scalar/window and dense pixel supervision.
+- The current optimum is a 16px center split into four 8px targets. Its advantage over nearby
+  geometries is real but narrow.
+- `pos_only` is a window-level safety rule: if a center contains a supervised positive, every
+  non-positive subtile in that center is ignored. Ink-free closed-ring windows supply negatives.
+  Positive and negative labels must never touch within one supervised center.
+- The closed ring is part of the label definition, not generic negative sampling: close radius 3,
+  gap radius 3, shell radius 2. More distant blank papyrus has not helped.
+- The manual split assigns easy/concrete letters plus a small hard subset to training and reserves
+  difficult letters for validation. Validation is intentionally harder than training but directly
+  measures the failure mode of interest.
 
-Campaign 13 is out attempt at faster iteration plus a smaller dataset. Note that scroll 20240304141531 hold by far the largest amount of labels, and we are slightly more confident than usual about it's label quality. For this smaller dataset (notably not regularized by the larger training corpus and cross scroll information): every test stil overfits, hard. 
+### Campaign findings through 17
 
-the baseline (13_baseline_18_21-12-15) quickly climbs to 0.8 train pr auc after just 10 epochs, if i trained it more it would likely reach >0.9. The valid pr auc climbs, then stalls at 0.7: not catastrophic overfitting, but looking out our inference, again the model is failing to predict any letter not directly in its training corpus. 
+- Campaigns 7-9: 3D nnU-Net is the strongest architecture family and can fit the available labels.
+- Campaigns 10-12: larger context helps through 192px/ds2. At 256px, quality is effectively flat
+  while computation rises sharply.
+- Legacy learned surface attention helps. Campaign 17 tests a physically supervised depth-softmax
+  surface estimate with spatial context and robust smoothness.
+- Variance spill is useful initially but saturates quickly after the voxel logits become selective
+  across depth. Stronger spill does not continue improving the representation.
+- Weak convolution/head dropout helps. Heavy dropout reduces learning too much.
+- Skip-drop 0.2 versus 0.6 produced little observable difference; this does not yet prove that skip
+  features are unused because the implementation drops whole batch-level branches during training
+  and restores all skips during evaluation.
+- Gated attention-MIL helps only with entropy regularization. The entropy term prevents attention
+  collapse; without it the learned pooling is brittle.
+- Spatial SupCon has been useful. It is now aligned to one decoder embedding, label, and validity
+  value per multitile cell; campaign 17 is the first campaign using the corrected version.
+- DANN was too destructive in multi-domain testing. In current w013-only campaigns it is a no-op.
+- Photometric, FDA, and elastic augmentations produced negligible gains over broad strength ranges.
+- Earlier geometric augmentation and context-jitter results were confounded by target misalignment.
+  Campaign 17 synchronizes flips/rotations and disables elastic/context jitter.
+- Campaign 14 established multitile as materially better than one-score-per-center MIL.
+- Campaign 15 found the 16px center / 8px subtile / four-target geometry narrowly best.
+- Campaign 16 replaced the geographic axis split with a hand-authored target partition.
+- Campaign 17 is the active supervised-surface experiment on that manual split.
 
-in fact, a pr_auc of 0.8 means that the model fails on quite a number of the training corpus as well, but this is not the issue at hand. it's expected that the model cannot learn the representation on this smaller subset, this is an observed and assured phenomenon.. I know that if I add more data, the model will actually fit better to the training subset, but I just want faster iteration right now.
+### Multitile invariants
 
-jitter and jitter large were uesless. skip drop and skip drop hard (0.6!!) were both useless. depth profile was useless. strong spill was useless. no dz was useless. 'useless' means that it basically followed the baseline curve for as long as it trained, witth minimal deviation.
+- Flat target index is `iy * grid + ix` everywhere.
+- The active geometry is grid=2 and subtile=8, producing four targets over a 16px center.
+- Training windows advance by 16px while reading 192px context.
+- The loss divides by the target validity-mask sum; masked cells produce no gradient.
+- In a positive window, `pos_only` masks every non-positive cell. In an ink-free ring window,
+  valid ring cells remain negative.
+- Inference reverses TTA transforms on the 2x2 output grid before overlap averaging.
 
-The only two things with any punch: dropout took the train pr_auc from 0.8 to 0.7; the valid_pr auc matched the old 0.7. depth jitter took the train pr_auc to 0.6, and the valid pr_auc matched the old 0.7. These are actually very good signs and I feel silly not trying the most basic regularization earlier. I'm considering slamming these together and training the whole training corpus. 
+### Geometric augmentation status
 
-the ring negative does not (in the vast vast majority of cases) ever eat into a positive letter, I've made sure of it. The close and gap were chosen to allow for the model to have wiggle room for it's ink label, while not eating into other letters. Note that the model does perform better if we label the boundary perfectly, but given the uncertainty of our labels, doing so is currently actively detrimental.
-
-adding pure papyrus data does not help in the slightest. the model most needs to learn the differentiation point between ink and papyrus; closer labels help but again we cannot dot hat rightnow.
-
-The ring is how we generate positive and negative labels; the pr_auc metric is over each 16x16 prediction at the center of the chosen 192x192 tiles. 
-
-the papyrus actually 'undulates' up and down throughout the mesh (a necessary evil of segmentation), hence why we have tried and added depth aware components (learned surface, dl/dz, etc.). I sincerely doubt the model is predicting based on the same depth every time. Not to mention, the previous iteration of our model had even more depth information but failed to capitalize on it.
-
-Let's also talk about the metrics. I don't understand your logic - how can it be blind to the failure mode? there are labels in both the train and validation section. if the model cannot learn the letters on the held-out region (learning letters = scoring well, because it must label the letter correctly and isolate it), then it will score badly on validation. Furthermore, note that this is actually almost a *meaningless* distinction: because of the way we've set up our model, *everything that is in the training corpus* is functionally a held-out section. That's why I have the eval figure at the end: I'm literally looking at the model output and seeing that it can learn the vast majority of the training letters, yet nothing *between* the training letters. Think of it this way: we have word spelled 'h e l l o'. We are unsure of the 2nd character, so we label 'h . l l o'. And we want a validation character, so then we take the o. We can look at both the performance on the 'e' and the 'o' (not trained on, we only trained on h l l) to see how the model does.
-
-# multitile prediction head (nnunet3d_lcndz)
-
-behind flag `config.model.multitile` (default False). single-tile path stays byte-identical.
-
-## what it does
-predicts the 32px center as a 4x4 grid of 8px sub-tiles (16 targets/window) instead of one
-16px score. denser gradient without going fully dense.
-- WINDOW GATING (train only, shuffle=True): keep a window only if its 32px center overlaps the
-  RING/training mask (`_mt_window_touches_ring` in _gen_tile_coords). the dataset's `self.mask`
-  IS the combined positive/ring mask when ring_negatives is on.
-- LABELS (`_fetch_label_mt`): each 8x8 sub-tile = 1 if .any() ink else 0.
-- MASK (`_fetch_mask_mt`): with `multitile_pos_only=True`, supervise only actual 8px ink targets
-  and true ring-negative targets. non-ink cells in a positive 16px base tile and the closed-ring
-  exclusion gap remain masked out. targets must also lie fully inside the SCROLL mask, threaded
-  separately as `scroll_mask`. train.py loss divides by mask.sum(); metrics drop masked sub-tiles.
-
-## aggregators (multitile)
-- default: per-cell log-sum-exp (`_multitile_aggregate`), param-light (just lse_r).
-- attn_mil=True: per-sub-tile gated attention-MIL (`_multitile_attn_aggregate`) folds the 4x4
-  grid into the batch dim, one attn_mil call pools each 8px bag; sets last_attn_entropy_loss.
-  campaign arm `multi16_attn` uses this (attn_mil=True, attn_entropy_weight=0.03).
-
-## config knobs
-- model.multitile (bool), model.multitile_subtile=8, model.multitile_grid=4
-- data.multitile_train_step (dataloader window stride px, default 16)
-
-## CRITICAL invariant: cell ordering must match across 3 files
-flat index = iy*grid + ix  (iy = y-block/row, ix = x-block/col, row-major)
-- model.py `_multitile_aggregate`: reshape (B,D,ny,suby,nx,subx)->permute->(B, ny*n+nx, ...)
-- dataloader.py `_fetch_label_mt`: out[iy*n+ix]
-- visualizer.py `_process_chunk_mt._scatter`: cell (base_y+iy, base_x+ix)
-
-## centering
-32px label/pred region centered on the 16px tile: top-left offset = (tile-32)//2 = -8.
-model crops 16 feat px center (=32 input px at ds2). all three agree.
-
-## eval/visualizer
-multitile output map is at sub-tile (8px) resolution, not tile(16px). predict_tiles builds
-sum/count accumulators (windows overlap 4x at stride 16) and averages. TTA flips/rot must be
-UNDONE on the (B,n,n) grid before averaging (grid dims 1=y,2=x). `_compute_tile_maps` takes a
-`tile` arg (pass out_tile=8); add_evaluation_figures uses `_out_tile` for label maps + split idx.
-
-## campaign
-campaign_archs_14.py: single vs multi16 vs multi32 on w013 only. multitile arms set attn_mil=False
-(the mt aggregator replaces the bag scorer; last_attn_entropy_loss stays None so no stray loss).
+Multitile flips and 90-degree rotations now transform the input, target grid, and validity grid
+together. Elastic deformation is fail-safe disabled when multitile targets are present because
+warping a 2x2 grid is not physically correct; it requires warping the dense source labels and
+masks with the same displacement field before reducing them to target cells. Context jitter is
+also disabled for multitile until the output crop follows the shifted target.

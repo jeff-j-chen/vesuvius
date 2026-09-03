@@ -15,6 +15,7 @@ from utils.config import Config
 from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray, get_tile_pos_weight
 from utils.hard_mining import HardMiningInjector, HardMiningManager
 from utils.model import create_model, supcon_loss
+from utils.surface import surface_supervision_loss
 from utils.training_utils import (
     calculate_metrics,
     create_loss_function,
@@ -257,6 +258,7 @@ class Trainer:
 
     def _train_batch(self, images, labels, mask, domain_ids=None, epoch: int = 0, unlabeled_images=None):
         images = images.to(self.c.device)
+        surface_source = images
         images = self._apply_fda(images)
         B = images.size(0)
         labels = labels.to(self.c.device).view(B, -1)          # (B,1) single or (B,K) multitile
@@ -298,6 +300,7 @@ class Trainer:
 
             attn_entropy_loss = getattr(self.model, "last_attn_entropy_loss", None)
             attn_entropy_per_target = getattr(self.model, "last_attn_entropy_per_target", None)
+            new_surface_logits = getattr(self.model, "last_new_surface_logits", None)
 
             if outputs.dim() == 4:
                 outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
@@ -317,7 +320,7 @@ class Trainer:
             denom = mask.sum()
             if denom <= 0:
                 print("[ERROR] Mask sum is zero, skipping loss calculation.")
-                return np.empty([]), np.empty([]), 0.0, 0.0, 0.0
+                return np.empty([]), np.empty([]), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
             raw_loss_value = (raw_loss.sum() / denom).item()
             l1_loss = sum(param.abs().sum() for param in self.model.parameters())
@@ -446,6 +449,34 @@ class Trainer:
                         spill_loss_value = spill_loss_value + ent_spill
                         loss = loss + float(getattr(self.c.tra, "spill_entropy_lambda", 0.3)) * ent_spill
 
+            surface_loss_value = outputs.new_zeros(())
+            surface_alpha_value = outputs.new_zeros(())
+            if bool(getattr(self.c.model, "new_learned_surface", False)) and new_surface_logits is not None:
+                downsample = max(1, int(getattr(self.c.data, "context_downsample", 1)))
+                if downsample > 1:
+                    surface_volume = F.avg_pool3d(
+                        surface_source,
+                        kernel_size=(1, downsample, downsample),
+                        stride=(1, downsample, downsample),
+                    )
+                else:
+                    surface_volume = surface_source
+                surface_total, surface_ce, surface_smooth, surface_valid = surface_supervision_loss(
+                    new_surface_logits,
+                    surface_volume,
+                    smooth_weight=float(getattr(self.c.tra, "new_surface_smooth_lambda", 0.02)),
+                )
+                surface_loss_value = surface_total
+                loss = loss + float(getattr(self.c.tra, "new_surface_lambda", 0.1)) * surface_total
+                self._last_surface_parts = (
+                    float(surface_ce.item()),
+                    float(surface_smooth.item()),
+                    float(surface_valid.item()),
+                )
+            surface_alpha = getattr(self.model, "last_surface_guided_alpha", None)
+            if surface_alpha is not None:
+                surface_alpha_value = surface_alpha.float().mean()
+
             if getattr(self.c.tra, "supcon", False) and supcon_z is not None:
                 if getattr(self.c.tra, "supcon_curriculum", False):
                     curriculum_epochs = int(getattr(self.c.tra, "supcon_curriculum_epochs", 15))
@@ -456,8 +487,28 @@ class Trainer:
                 else:
                     supcon_lambda = float(getattr(self.c.tra, "supcon_lambda", 0.1))
                 supcon_temp = float(getattr(self.c.tra, "supcon_temp", 0.07))
-                cross_frag_ids = domain_ids if bool(getattr(self.c.tra, "supcon_cross_frag", False)) else None
-                loss = loss + supcon_lambda * supcon_loss(supcon_z, sample_pos.long(), temp=supcon_temp, domain_ids=cross_frag_ids)
+                if supcon_z.dim() == 3 and supcon_z.shape[:2] == labels.shape:
+                    supervised = mask > 0
+                    supcon_input = supcon_z[supervised]
+                    supcon_labels = labels[supervised].long()
+                    if domain_ids is not None and bool(getattr(self.c.tra, "supcon_cross_frag", False)):
+                        cell_domains = domain_ids.unsqueeze(1).expand_as(labels)[supervised]
+                    else:
+                        cell_domains = None
+                    loss = loss + supcon_lambda * supcon_loss(
+                        supcon_input,
+                        supcon_labels,
+                        temp=supcon_temp,
+                        domain_ids=cell_domains,
+                    )
+                else:
+                    cross_frag_ids = domain_ids if bool(getattr(self.c.tra, "supcon_cross_frag", False)) else None
+                    loss = loss + supcon_lambda * supcon_loss(
+                        supcon_z,
+                        sample_pos.long(),
+                        temp=supcon_temp,
+                        domain_ids=cross_frag_ids,
+                    )
 
             # entropy maximization on unlabeled (validation) tiles: rewards uncertainty outside
             # the labeled region, attacking the "predict not-ink everywhere" fixed point
@@ -495,6 +546,8 @@ class Trainer:
             raw_loss_value,
             float(dann_loss_value.detach().item()),
             float(spill_loss_value.detach().item()),
+            float(surface_loss_value.detach().item()),
+            float(surface_alpha_value.detach().item()),
         )
 
     def _ins_hard_samples(self, images, labels, mask, hard_injector, remaining_batches: int) -> int:
@@ -528,6 +581,8 @@ class Trainer:
         raw_loss_total = 0.0
         dann_loss_total = 0.0
         spill_loss_total = 0.0
+        surface_loss_total = 0.0
+        surface_alpha_total = 0.0
         labels = []
         preds = []
         scores = []
@@ -564,6 +619,8 @@ class Trainer:
                 batch_raw_loss,
                 batch_dann_loss,
                 batch_spill_loss,
+                batch_surface_loss,
+                batch_surface_alpha,
             ) = self._train_batch(
                 images,
                 batch_labels,
@@ -578,6 +635,8 @@ class Trainer:
             raw_loss_total += batch_raw_loss
             dann_loss_total += batch_dann_loss
             spill_loss_total += batch_spill_loss
+            surface_loss_total += batch_surface_loss
+            surface_alpha_total += batch_surface_alpha
             labels.extend(batch_labels_out)
             preds.extend((batch_scores > 0.5).astype(int))
             scores.extend(batch_scores)
@@ -587,6 +646,8 @@ class Trainer:
         metrics["raw_loss"] = raw_loss_total / len(self.train_loader)
         metrics["dann_loss"] = dann_loss_total / len(self.train_loader)
         metrics["spill_loss"] = spill_loss_total / len(self.train_loader)
+        metrics["surface_loss"] = surface_loss_total / len(self.train_loader)
+        metrics["surface_alpha"] = surface_alpha_total / len(self.train_loader)
         metrics["scores"] = scores
         metrics["hard_injected"] = total_injected
 

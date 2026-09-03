@@ -1331,3 +1331,155 @@ Key changes vs triple_v2:
 - only LCN arch tested (winner confirmed, refining not re-searching)
 
 Logs in `runs_lcn/`. Runner: `campaign_runner_lcn.py`.
+
+---
+
+## 17) Current nnU-Net / Multitile Era (2026-09-03)
+
+This section supersedes earlier statements about the active architecture, objective, and campaign.
+Sections 1-16 remain historical evidence and should not be interpreted as the current runbook.
+
+### 17.1 Current scientific objective
+
+- Ink is demonstrably detectable in the approximately 9.3-9.6 micron isotropic volumes.
+- The papyrus sheet undulates through the 24-slice input box. Ink is expected at one or a few
+  decisive depths near one physical papyrus-air surface.
+- Ink labels are transferred from much higher-resolution scans. They are sparse and uncertain;
+  a wrong ink/papyrus boundary is more damaging than leaving a target unsupervised.
+- The immediate iteration target is w013 (`20240304141531`), which has the largest and most
+  trustworthy label set. It has different acquisition physics from the eventual 9.362 micron /
+  113 keV deployment domain, so success here is necessary but not sufficient for final transfer.
+- No current model has recovered a convincing character outside its immediate labeled corpus.
+  Do not use model predictions as ink pseudo-labels until that changes.
+
+### 17.2 Why sparse multitile supervision is mandatory
+
+Dense supervision repeatedly failed with imperfect labels. Single-score MIL at the other extreme
+did not provide enough localized gradient. Multitile is the successful middle ground:
+
+- read a 192x192 context window
+- average-pool XY by 2 before the backbone
+- predict only the central 16x16 area
+- divide that center into a 2x2 grid of four 8x8 targets
+- aggregate each target's depth/spatial voxel bag independently
+
+The four targets per window narrowly beat the tested 4px/8px/16px subtile and 16px-64px center
+alternatives. The margin is not large, but the direction is consistent: more useful localized
+gradient than single-tile MIL without imposing dense-label correctness.
+
+### 17.3 Label safety invariants
+
+The active dataset uses `ring_label_source="closed"`:
+
+- close radius 3 tiles
+- gap radius 3 tiles
+- negative shell radius 2 tiles
+- positive labels from `eroded_inklabels`
+
+`multitile_pos_only=True` is a WINDOW-LEVEL invariant. If a window contains any supervised
+positive, only its positive subtiles contribute to loss; every non-positive cell in that center
+is masked, including otherwise valid ring negatives. Ink-free ring windows provide negative
+supervision. Positive and negative labels must never touch inside one supervised center.
+
+Campaign 16 replaced the geographic axis split with `train_masks/20240304141531.png`. The hand
+mask is expanded to complete 8px target cells. Training and validation target masks are disjoint:
+training contains concrete/easy letters plus a small hard subset, while validation contains the
+difficult held-out letters. This validation distribution is intentionally harder than training
+and directly measures the desired letter-to-letter transfer.
+
+### 17.4 Current model: `nnunet3d_lcndz`
+
+1. Input `(B,1,24,192,192)` is average-pooled to `(B,1,24,96,96)`.
+2. Stem concatenates raw, 5x5 per-slice LCN, and forward depth difference.
+3. Three-level 3D nnU-Net uses channels 32/64/128 with a 256-channel bottleneck.
+4. IBN-a is used on the first normalization in `enc1` and `enc2`; remaining norms are IN.
+5. Decoder skip connections restore high-resolution detail; weak conv/head dropout is active.
+6. Legacy `DepthSurfaceAttn` applies an unsupervised depth-local multiplicative feature gate.
+7. Campaign 17 adds `NewDepthSurfaceHead`: a spatial/dilated 3D CNN predicts one softmax depth
+  distribution per spatial position and injects it into `enc1` through a zero-initialized
+  residual 1x1 projection.
+8. Decoder emits one voxel logit channel. The 16px center is divided into four 8px bags.
+9. Gated attention-MIL pools each bag. Attention entropy regularization is essential empirically.
+10. The global bottleneck embedding feeds SupCon. DANN uses the same embedding only when more
+   than one domain exists.
+
+The legacy attention-MIL path attends over scalar voxel logits (`feat_dim=1`). Campaign 17 adds an
+optional feature-level path over 32-channel decoder vectors. Multitile SupCon now pools one decoder
+embedding per target cell and uses that cell's label and validity mask.
+
+### 17.5 Campaign findings, 9 through 17
+
+- nnU-Net is the strongest tested family and can fit all supplied labels.
+- Context improves results through 192px/ds2. 256px provides no useful gain for much more cost.
+- MAE initialization is dramatically better than random initialization.
+- Legacy learned surface attention is beneficial.
+- Variance-based spill is beneficial but rapidly reaches its hinge threshold; stronger spill
+  does not keep improving the model.
+- Weak convolution/head dropout helps. Heavy dropout harms learning.
+- Skip-drop 0.2 versus 0.6 showed little difference. This does not prove skip features are absent:
+  the implementation drops each whole skip for the entire batch and restores all skips at eval.
+- Attention-MIL helps only with entropy regularization.
+- Spatial SupCon helps, although its current global-label use is not multitile-aligned.
+- DANN damaged low-contrast regions when genuinely active and needs weaker, cleaner testing.
+  It is a no-op in current one-scroll runs because `dann_n_domains=1`.
+- FDA, brightness/contrast/noise, and elastic augmentation have shown negligible improvements.
+- Depth jitter and weak dropout were the only campaign-13 regularizers that materially reduced
+  training fit; validation remained approximately flat.
+- Multitile beat single-tile MIL. Campaign 15 selected the 16px center with four 8px targets by
+  a narrow margin.
+- Campaign 16 introduced the manual target split. Campaign 17 tests the new supervised surface.
+
+### 17.6 Effective campaign-17 configuration
+
+- six arms: corrected baseline, surface feature, surface-guided aggregation, feature attention,
+  and two alternate center/subtile geometries
+- w013 only, manual split, 15 epochs, batch 32, learning rate 1e-4
+- context 192, ds2, depth 24, z=4:28
+- center 16, subtile 8, grid 2x2, train step 16, `pos_only=True`
+- BCE with automatic positive weight
+- no ink-label smoothing and no soft ink labels; the auxiliary depth target is soft
+- `gce_q=0.7` exists in config but is inactive because `loss_type="bce"`
+- attention-MIL with entropy 0.03
+- legacy surface enabled; new surface enabled with loss 0.1 and smoothness 0.02
+- variance spill lambda 0.5, minimum depth variance 0.8
+- SupCon curriculum 0.05 -> 0.5 over 8 epochs
+- IBN enabled; dropout 0.05/0.05/head 0.10; skip-drop 0.20
+- depth jitter 4; TTA consistency enabled
+- flip/rotation 0.6, noise 0.3, brightness/contrast 0.6, FDA 0.5; elastic disabled
+- DANN configured at 0.25 but inactive with one domain
+- current warm start: `models/mae_nnunet_96.pth` (96px/ds2, no IBN)
+- planned warm start: 192px/ds2 MAE with IBN
+- full-scroll surface arrays are QA artifacts; campaign 17 derives surface targets online per crop
+
+### 17.7 Geometric augmentation correction
+
+Before campaign 17, flips, rotations, and elastic deformation transformed the input without
+transforming the multitile target and validity grids. Earlier multitile geometric-augmentation
+results are therefore confounded. Campaign 17 applies identical flips/rotations to all three.
+Elastic is fail-safe disabled for multitile until the dense source label/mask can be warped with
+the exact displacement field. Context jitter is disabled because the fixed output crop otherwise
+ceases to coincide with its target. Photometric/FDA/noise transforms remain spatially safe.
+
+### 17.8 Highest-priority roadmap
+
+1. Rerun the manual baseline and surface tests with corrected joint flip/rotation augmentation.
+2. If campaign 17 validates the surface head, use its probability distribution directly in the
+  depth aggregator. Blend a surface-band branch with the existing global branch according to
+  surface entropy so uncertain surface predictions cannot erase the ink signal.
+3. Replace scalar-logit attention-MIL with feature-level attention over decoder vectors inside
+  each subtile. Keep a low-capacity shared scorer and entropy regularization to limit overfit.
+4. Pretrain at 192px/ds2 with IBN. Then test frozen-encoder/head-only warmup followed by gradual
+  unfreezing and a lower encoder learning rate to prevent immediate destruction of MAE features.
+5. Make SupCon target-aligned: pool one decoder embedding per 8px cell and apply contrastive loss
+  only to supervised cells. The current global context embedding inherits one window label.
+6. Sample uniformly by connected ink component/letter rather than by overlapping windows. A large
+  letter currently contributes many highly correlated examples and can dominate the objective.
+7. Add character/component-level validation metrics so large letters and abundant papyrus cells
+  cannot dominate PR-AUC. Retain target-level PR-AUC as a secondary metric.
+8. Do not prioritize GCE yet. Current campaign uses BCE and the manual/closed/pos-only pipeline
+  deliberately removes ambiguous labels. GCE suppresses confident-wrong gradients and can also
+  suppress genuinely hard ink. If retested, sweep q=0.3/0.5/0.7 against BCE; do not return first
+  to q=0.9, which previously killed MAE fine-tuning.
+9. Once the w013 methodology transfers between held-out letters, add fragments back gradually.
+  Test weak delayed DANN only after domain-balanced batches exist; it cannot be evaluated on one
+  scroll and should not be bundled with the data-scale change.

@@ -1343,12 +1343,12 @@
             "sig": "mt_s8_g4_pos1_eroded_inklabels"
         },
         "class_weight_multitile_s8_g2_pos1": {
-            "pos_weight": 2.014038876889849,
+            "pos_weight": 1.9715206878022569,
             "counts": {
-                "0": 7460,
-                "1": 3704
+                "0": 7338,
+                "1": 3722
             },
-            "sig": "mt_s8_g2_pos1_eroded_inklabels"
+            "sig": "mt_ringtargets_v2_s8_g2_pos1_eroded_inklabels_manual_split"
         },
         "class_weight_multitile_s4_g4_pos1": {
             "pos_weight": 2.2664438705757255,

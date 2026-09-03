@@ -11,6 +11,8 @@ This file keeps only the integrations still exercised by the current sweep:
 """
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -71,6 +73,39 @@ class DepthSurfaceAttn(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return torch.sigmoid(self.net(x))
+
+
+class NewDepthSurfaceHead(nn.Module):
+    """predict one papyrus-air boundary using local and dilated spatial context."""
+
+    def __init__(self, hidden: int = 8):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv3d(1, hidden, kernel_size=(5, 3, 3), padding=(2, 1, 1), bias=True),
+            nn.LeakyReLU(0.01, inplace=False),
+            nn.Conv3d(
+                hidden,
+                hidden,
+                kernel_size=3,
+                padding=(1, 2, 2),
+                dilation=(1, 2, 2),
+                bias=True,
+            ),
+            nn.LeakyReLU(0.01, inplace=False),
+            nn.Conv3d(
+                hidden,
+                hidden,
+                kernel_size=3,
+                padding=(1, 4, 4),
+                dilation=(1, 4, 4),
+                bias=True,
+            ),
+            nn.LeakyReLU(0.01, inplace=False),
+            nn.Conv3d(hidden, 1, kernel_size=1, bias=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
 
 
 class SupConHead(nn.Module):
@@ -262,6 +297,9 @@ class NnUnet3dLcndz(nn.Module):
         self.last_attn_entropy_loss: torch.Tensor | None = None
         self.last_attn_entropy_per_target: torch.Tensor | None = None
         self.last_surface_attn: torch.Tensor | None = None
+        self.last_new_surface_logits: torch.Tensor | None = None
+        self.last_new_surface_probs: torch.Tensor | None = None
+        self.last_surface_guided_alpha: torch.Tensor | None = None
 
         self.lse_r = nn.Parameter(torch.tensor(2.0, dtype=torch.float32))
         self.pool = nn.MaxPool3d(2)
@@ -291,6 +329,14 @@ class NnUnet3dLcndz(nn.Module):
         self.dec1 = ConvBlock3d(c1 * 2, c1)
         self.out_head = nn.Conv3d(c1, 1, kernel_size=1, bias=True)
 
+        if bool(getattr(config.model, "new_learned_surface", False)):
+            self.new_surface_head: NewDepthSurfaceHead | None = NewDepthSurfaceHead(hidden=8)
+            # keep the pretrained three-channel stem intact and inject the new map residually
+            self.new_surface_input = nn.Conv3d(1, c1, kernel_size=1, bias=False)
+        else:
+            self.new_surface_head = None
+            self.new_surface_input = None
+
         if bool(getattr(config.model, "learned_surface", False)):
             self.depth_surface_attn: DepthSurfaceAttn | None = DepthSurfaceAttn(hidden=8)
         else:
@@ -301,10 +347,22 @@ class NnUnet3dLcndz(nn.Module):
         else:
             self.attn_mil = None
 
+        if bool(getattr(config.model, "feature_attn_mil", False)):
+            self.feature_attn_mil: GatedAttentionMIL | None = GatedAttentionMIL(
+                feat_dim=c1,
+                att_dim=32,
+            )
+        else:
+            self.feature_attn_mil = None
+
+        self._surface_guided_mil = bool(getattr(config.model, "surface_guided_mil", False))
+        self._surface_guided_mix = float(getattr(config.model, "surface_guided_mix", 0.5))
+        self._surface_band_sigma = float(getattr(config.model, "surface_band_sigma", 1.5))
+
         self.supcon_head: SupConHead | None = None
         if bool(getattr(config.tra, "supcon", False)):
             self.supcon_head = SupConHead(
-                in_features=c4,
+                in_features=c1 if bool(getattr(config.model, "multitile", False)) else c4,
                 proj_dim=int(getattr(config.tra, "supcon_proj_dim", 128)),
                 hidden=int(getattr(config.tra, "supcon_hidden_dim", 256)),
             )
@@ -372,7 +430,17 @@ class NnUnet3dLcndz(nn.Module):
         raw_x = self._prepare_input(x)
         stem_x = self._stem_in(raw_x)
 
-        enc1 = self._apply_learned_surface(raw_x, self.enc1(stem_x))
+        enc1 = self.enc1(stem_x)
+        if self.new_surface_head is not None and self.new_surface_input is not None:
+            surface_logits = self.new_surface_head(raw_x)
+            surface_probs = F.softmax(surface_logits, dim=2)
+            self.last_new_surface_logits = surface_logits
+            self.last_new_surface_probs = surface_probs.detach()
+            enc1 = enc1 + self.new_surface_input(surface_probs)
+        else:
+            self.last_new_surface_logits = None
+            self.last_new_surface_probs = None
+        enc1 = self._apply_learned_surface(raw_x, enc1)
         if self._enc1_drop is not None:
             enc1 = self._enc1_drop(enc1)
         enc2 = self.enc2(self.pool(enc1))
@@ -443,6 +511,73 @@ class NnUnet3dLcndz(nn.Module):
         )
         return score.view(B, n * n)
 
+    def _multitile_feature_bags(self, decoded: torch.Tensor) -> tuple[torch.Tensor, int]:
+        """fold centered decoder features into independent multitile bags."""
+        n, sub = self._mt_grid, self._mt_sub_feat
+        center = self._crop_center_feat(decoded, self._mt_center_feat)
+        B, C, D, _, _ = center.shape
+        bags = center.reshape(B, C, D, n, sub, n, sub).permute(
+            0, 3, 5, 1, 2, 4, 6
+        ).reshape(B * n * n, C, D, sub, sub)
+        return bags, B
+
+    def _multitile_feature_attn_aggregate(self, decoded: torch.Tensor) -> torch.Tensor:
+        """attention-MIL over decoder feature vectors rather than scalar voxel logits."""
+        bags, batch = self._multitile_feature_bags(decoded)
+        score, entropy_loss = self.feature_attn_mil(
+            bags,
+            entropy_weight=self._attn_entropy_weight,
+        )
+        self.last_attn_entropy_loss = entropy_loss
+        per_bag = self.feature_attn_mil.last_entropy_loss_per_bag
+        self.last_attn_entropy_per_target = (
+            per_bag.view(batch, self._mt_grid * self._mt_grid) if per_bag is not None else None
+        )
+        return score.view(batch, self._mt_grid * self._mt_grid)
+
+    def _multitile_embeddings(self, decoded: torch.Tensor) -> torch.Tensor:
+        """one decoder embedding per multitile target for target-aligned SupCon."""
+        bags, batch = self._multitile_feature_bags(decoded)
+        pooled = bags.mean(dim=(2, 3, 4))
+        return pooled.view(batch, self._mt_grid * self._mt_grid, -1)
+
+    def _surface_guided_aggregate(
+        self,
+        center_voxels: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[None, None]:
+        """pool a soft surface band and return an entropy-derived blend weight."""
+        if self.last_new_surface_probs is None:
+            return None, None
+
+        n, sub = self._mt_grid, self._mt_sub_feat
+        surface = self._crop_center_feat(self.last_new_surface_probs, self._mt_center_feat)
+        depth_axis = torch.arange(
+            surface.shape[2],
+            device=surface.device,
+            dtype=surface.dtype,
+        ).view(1, 1, -1, 1, 1)
+        expected_depth = (surface * depth_axis).sum(dim=2, keepdim=True)
+        sigma = max(self._surface_band_sigma, 0.25)
+        band = torch.exp(-0.5 * ((depth_axis - expected_depth) / sigma) ** 2)
+        band = band / band.sum(dim=2, keepdim=True).clamp(min=1e-8)
+
+        surface_map = (center_voxels * band).sum(dim=2).squeeze(1)
+        B, cf, _ = surface_map.shape
+        cells = surface_map.reshape(B, n, sub, n, sub).permute(
+            0, 1, 3, 2, 4
+        ).reshape(B, n * n, sub * sub)
+        r = self.lse_r.clamp(min=0.5, max=10.0)
+        count = cells.new_tensor(float(cells.shape[-1]))
+        guided = (torch.logsumexp(r * cells, dim=2) - torch.log(count)) / r
+
+        entropy = -(surface * surface.clamp(min=1e-8).log()).sum(dim=2).squeeze(1)
+        confidence = 1.0 - entropy / math.log(float(surface.shape[2]))
+        confidence = confidence.reshape(B, n, sub, n, sub).permute(
+            0, 1, 3, 2, 4
+        ).reshape(B, n * n, sub * sub).mean(dim=2)
+        alpha = (self._surface_guided_mix * confidence).clamp(min=0.0, max=1.0)
+        return guided, alpha
+
     def _bag_score(self, voxel_map: torch.Tensor) -> torch.Tensor:
         self.last_attn_entropy_per_target = None
         if self.attn_mil is not None:
@@ -474,10 +609,27 @@ class NnUnet3dLcndz(nn.Module):
         embedding = self._embedding(bottleneck)
         self.last_embedding_detached = embedding.detach().clone()
         domain_logits = self.domain_head(embedding, grl_scale=grl_scale) if self.domain_head is not None else None
-        supcon_z = self.supcon_head(embedding) if self.supcon_head is not None else None
+        if self.supcon_head is not None:
+            supcon_input = self._multitile_embeddings(decoded) if self._multitile else embedding
+            supcon_z = self.supcon_head(supcon_input)
+        else:
+            supcon_z = None
         if self._multitile:
-            score = self._multitile_attn_aggregate(center_voxels) if self.attn_mil is not None \
-                else self._multitile_aggregate(center_voxels)     # (B, grid*grid)
+            if self.feature_attn_mil is not None:
+                score = self._multitile_feature_attn_aggregate(decoded)
+            elif self.attn_mil is not None:
+                score = self._multitile_attn_aggregate(center_voxels)
+            else:
+                score = self._multitile_aggregate(center_voxels)
+            if self._surface_guided_mil:
+                guided, alpha = self._surface_guided_aggregate(center_voxels)
+                if guided is not None and alpha is not None:
+                    score = (1.0 - alpha) * score + alpha * guided
+                    self.last_surface_guided_alpha = alpha.detach()
+                else:
+                    self.last_surface_guided_alpha = None
+            else:
+                self.last_surface_guided_alpha = None
         elif self.depth_profile_head is not None:
             score = self.depth_profile_head(center_voxels)
         elif self.prototype_head is not None:
@@ -519,6 +671,9 @@ def create_model(config: Config):
             _init_norm(module)
 
     model.apply(init_weights)
+    if model.new_surface_input is not None:
+        # begin as the pretrained baseline while the auxiliary loss trains the new head
+        nn.init.zeros_(model.new_surface_input.weight)
     for module in model.modules():
         if isinstance(module, DepthSurfaceAttn):
             module.reset_output_layer()

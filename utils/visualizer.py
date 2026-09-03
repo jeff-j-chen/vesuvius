@@ -1328,6 +1328,10 @@ class TensorboardVisualizer:
             self.writer.add_scalar("G_M/Loss/Train_DANN", train_metrics['dann_loss'], epoch)
         if 'spill_loss' in train_metrics:
             self.writer.add_scalar("G_M/Loss/Train_Spill", train_metrics['spill_loss'], epoch)
+        if 'surface_loss' in train_metrics:
+            self.writer.add_scalar("G_M/Loss/Train_Surface", train_metrics['surface_loss'], epoch)
+        if 'surface_alpha' in train_metrics:
+            self.writer.add_scalar("G_M/Surface/MeanBlend", train_metrics['surface_alpha'], epoch)
         self.writer.add_scalar("G_M/Loss/Valid", val_metrics['loss'], epoch)
 
         self.writer.add_scalar("G_M/Acc/Train", train_metrics['accuracy'], epoch)
@@ -1715,6 +1719,7 @@ class TensorboardVisualizer:
             # split the tile-grid maps into train/valid along the split axis so readability is
             # reported PER SPLIT (the combined region was ~75% train, masking the valid signal).
             # each depth's TTA map (all_tta_data, from the same read) yields the *_tta groups.
+            manual_train_grid = None
             if self.manual_split:
                 aligned = DataManager._align_manual_mask(self.manual_train_mask, _out_tile)
                 y0, _ = full_y_range
@@ -1726,6 +1731,7 @@ class TensorboardVisualizer:
                 ].reshape(
                     h_grid, _out_tile, w_grid, _out_tile
                 ).all(axis=(1, 3))
+                manual_train_grid = assignment
                 lb_t = lb_v = label_binary
                 lf_t = lf_v = label_fraction
                 vt_t = valid_tiles & assignment
@@ -1819,8 +1825,16 @@ class TensorboardVisualizer:
                     return resized
                 raw_1_1 = _raw_ink("1_1um"); raw_2_4 = _raw_ink("2_4um")
 
-                fig = self._create_eval_figure_2x3(reg_pred, tta_pred, label_binary,
-                                                   raw_1_1, raw_2_4, train_split_n, split_axis)
+                fig = self._create_eval_figure_2x3(
+                    reg_pred,
+                    tta_pred,
+                    label_binary,
+                    raw_1_1,
+                    raw_2_4,
+                    train_split_n,
+                    split_axis,
+                    manual_train_grid,
+                )
                 if fig is not None:
                     # ALWAYS save the full-size eval figure to <log>/eval_figs/ (highest res)
                     try:
@@ -2271,7 +2285,7 @@ class TensorboardVisualizer:
         ax_pred.set_title(f'Predictions (Depth {d_start}-{d_end})', fontsize=9)
 
         split_pos = train_pred.shape[1] - 0.5
-        ax_pred.axvline(x=split_pos, color='red', linestyle='--', linewidth=1.2)
+        ax_pred.axvline(x=split_pos, color='white', linestyle=':', linewidth=2.0)
         ax_pred.axis('off')
 
         ax_overlay = axes[1]
@@ -2285,7 +2299,7 @@ class TensorboardVisualizer:
             overlay[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
             ax_overlay.imshow(overlay)
 
-        ax_overlay.axvline(x=split_pos, color='red', linestyle='--', linewidth=1.2)
+        ax_overlay.axvline(x=split_pos, color='white', linestyle=':', linewidth=2.0)
         ax_overlay.axis('off')
 
         plt.subplots_adjust(wspace=0.05, hspace=0.05, left=0.05, right=0.95, top=0.95, bottom=0.05)
@@ -2314,7 +2328,8 @@ class TensorboardVisualizer:
         return out
 
     def _create_eval_figure_2x3(self, reg_pred, tta_pred, label_binary,
-                                raw_1_1, raw_2_4, train_split_n, split_axis="x"):
+                                raw_1_1, raw_2_4, train_split_n, split_axis="x",
+                                manual_train_grid=None):
         """2-column x 3-row eval figure:
             row 0: regular inference        | inference + inklabel overlay
             row 1: TTA inference            | TTA + inklabel overlay
@@ -2334,12 +2349,25 @@ class TensorboardVisualizer:
         split_pos = train_split_n - 0.5 if train_split_n is not None else None
 
         def _draw_split(ax):
+            if manual_train_grid is not None:
+                h = min(manual_train_grid.shape[0], h_tiles)
+                w = min(manual_train_grid.shape[1], w_tiles)
+                boundary_mask = manual_train_grid[:h, :w].astype(np.float32)
+                if boundary_mask.any() and not boundary_mask.all():
+                    ax.contour(
+                        boundary_mask,
+                        levels=[0.5],
+                        colors="white",
+                        linewidths=2.0,
+                        linestyles=":",
+                    )
+                return
             if split_pos is None:
                 return
             if split_axis == "y":
-                ax.axhline(y=split_pos, color='red', linestyle='--', linewidth=0.8)
+                ax.axhline(y=split_pos, color='white', linestyle=':', linewidth=2.0)
             else:
-                ax.axvline(x=split_pos, color='red', linestyle='--', linewidth=0.8)
+                ax.axvline(x=split_pos, color='white', linestyle=':', linewidth=2.0)
 
         def _overlay(ax, pred):
             if label_binary is not None:
@@ -2373,6 +2401,7 @@ class TensorboardVisualizer:
                              (axes[2, 1], raw_2_4, "2.4um inklabel_raw")):
             if raw is not None:
                 ax.imshow(raw, cmap="gray", vmin=0, vmax=255, aspect='equal')
+            _draw_split(ax)
             ax.set_title(ttl, fontsize=8); ax.axis('off')
 
         plt.subplots_adjust(wspace=0.04, hspace=0.12, left=0.01, right=0.99, top=0.98, bottom=0.01)
@@ -2412,9 +2441,9 @@ class TensorboardVisualizer:
 
         def _draw_split(ax):
             if split_axis == "y":
-                ax.axhline(y=split_pos, color='red', linestyle='--', linewidth=0.8)
+                ax.axhline(y=split_pos, color='white', linestyle=':', linewidth=2.0)
             else:
-                ax.axvline(x=split_pos, color='red', linestyle='--', linewidth=0.8)
+                ax.axvline(x=split_pos, color='white', linestyle=':', linewidth=2.0)
 
         def _overlay(ax, pred):
             """black barely darkens non-ink; white at half opacity augments ink signal."""

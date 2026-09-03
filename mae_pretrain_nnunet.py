@@ -22,8 +22,7 @@ APPROACH: block-masked 3D inpainting.
 TRANSFER: set config.init_weights = "models/mae_nnunet.pth" in a campaign or pass
   --init-weights on the command line.
 
-    python mae_pretrain_nnunet.py --steps 6000 --ctx 96 --ds 2
-    python mae_pretrain_nnunet.py --steps 6000 --ctx 48 --ds 2
+    python mae_pretrain_nnunet.py --name mae_nnunet_192_ibn --steps 6000 --ctx 192 --ds 2
     python mae_pretrain_nnunet.py --dry-run
 """
 from __future__ import annotations
@@ -231,10 +230,12 @@ def main():
     ap.add_argument("-n", "--name", default="mae_nnunet")
     ap.add_argument("--scroll-ids", type=int, nargs="+", default=None,
                     help="scroll ids to sample from (default: all DEFAULT_SCROLLS)")
-    ap.add_argument("--ctx", type=int, default=96,
+    ap.add_argument("--ctx", type=int, default=192,
                     help="context window size in pixels (should match campaign ctx)")
     ap.add_argument("--ds", type=int, default=2,
                     help="context_downsample (must match campaign setting)")
+    ap.add_argument("--no-ibn", action="store_false", dest="ibn", default=True,
+                    help="disable IBN in the shallow encoder blocks")
     ap.add_argument("--depth", type=int, default=24)
     ap.add_argument("--d-start", type=int, default=4)
     ap.add_argument("--d-end", type=int, default=28)
@@ -261,6 +262,7 @@ def main():
     cfg.model.arch = "nnunet3d_lcndz"
     cfg.model.attn_mil = False         # no MIL during pretraining
     cfg.model.learned_surface = False
+    cfg.model.use_ibn = args.ibn
     cfg.tra.supcon = False
     cfg.data.tile_size = 16
     cfg.data.depth = args.depth
@@ -341,7 +343,8 @@ def main():
     os.makedirs("models", exist_ok=True)
     save_path = os.path.join("models", f"{args.name}.pth")
 
-    print(f"[mae] nnunet3d backbone  ctx={args.ctx} ds={args.ds} depth={args.depth} "
+        print(f"[mae] nnunet3d backbone  ctx={args.ctx} ds={args.ds} depth={args.depth} "
+            f"ibn={args.ibn} "
           f"mask_frac={args.mask_frac}  steps={args.steps}  log={run_dir}")
     print(f"[mae] save -> {save_path}   use as:  c.init_weights = '{save_path}'")
 

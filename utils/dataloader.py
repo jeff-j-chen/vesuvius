@@ -139,13 +139,23 @@ class Transform:
         self.elastic_prob     = float(getattr(config.dl, "elastic_prob", 0.0))
         self.elastic_alpha    = float(getattr(config.dl, "elastic_alpha", 15.0))
         self.elastic_sigma    = float(getattr(config.dl, "elastic_sigma", 5.0))
+        self.multitile        = bool(getattr(config.model, "multitile", False))
+        self.multitile_grid   = max(1, int(getattr(config.model, "multitile_grid", 1)))
+        self._warned_elastic_multitile = False
 
-    def __call__(self, block):
-        """applies a random sequence of transforms to a block"""
+    def __call__(self, block, label=None, mask=None):
+        """apply transforms, synchronizing discrete geometry with multitile targets."""
         if random.random() < self.rotation_prob:
-            block = self._apply_rotation(block)
+            k = random.choice([1, 2, 3])
+            block = np.rot90(block, k=k, axes=(1, 2)).copy()
+            label = self._rotate_target(label, k)
+            mask = self._rotate_target(mask, k)
         if random.random() < self.flip_prob:
-            block = self._apply_flip(block)
+            axis = random.choice([1, 2])
+            block = np.flip(block, axis=axis).copy()
+            target_axis = 0 if axis == 1 else 1
+            label = self._flip_target(label, target_axis)
+            mask = self._flip_target(mask, target_axis)
         if random.random() < self.noise_prob:
             block = self._apply_gaussian_noise(block)
         if random.random() < self.brightness_prob:
@@ -157,9 +167,32 @@ class Transform:
         if self.depth_mask_prob > 0:
             block = self._apply_depth_mask(block)
         if self.elastic_prob > 0 and random.random() < self.elastic_prob:
-            block = self._apply_elastic_deformation(block)
+            if self.multitile and label is not None:
+                if not self._warned_elastic_multitile:
+                    print("[augment] elastic disabled for multitile: dense target warp is not implemented")
+                    self._warned_elastic_multitile = True
+            else:
+                block = self._apply_elastic_deformation(block)
         # ensure the final result is contiguous to avoid negative strides
-        return np.ascontiguousarray(block)
+        block = np.ascontiguousarray(block)
+        if label is None and mask is None:
+            return block
+        return block, label.contiguous(), mask.contiguous()
+
+    def _target_grid(self, target):
+        if target is None or not self.multitile:
+            return None
+        if target.numel() != self.multitile_grid * self.multitile_grid:
+            return None
+        return target.view(self.multitile_grid, self.multitile_grid)
+
+    def _rotate_target(self, target, k):
+        grid = self._target_grid(target)
+        return torch.rot90(grid, k=k, dims=(0, 1)).reshape(-1) if grid is not None else target
+
+    def _flip_target(self, target, axis):
+        grid = self._target_grid(target)
+        return torch.flip(grid, dims=(axis,)).reshape(-1) if grid is not None else target
 
     def _apply_elastic_deformation(self, block):
         """smooth elastic deformation on the XY plane, shared across all depth slices.
@@ -604,7 +637,7 @@ class InkVolumeDataset(IterableDataset):
         try:
             if use_ctx:
                 pad = (ctx - tile) // 2
-                max_j = int(getattr(self.c.data, "ctx_jitter", 0))
+                max_j = 0 if self._mt else int(getattr(self.c.data, "ctx_jitter", 0))
                 if max_j > 0 and self.shuffle:
                     # shift the context window; labeled tile moves to (pad+jy, pad+jx) in the block
                     # while center crop still fires at (pad, pad) -> intentional ~50% label overlap
@@ -719,12 +752,11 @@ class InkVolumeDataset(IterableDataset):
                         if np.any(parent > 0.5):
                             continue
                     out[idx] = 1.0
-        # pos-only: inside a window that HAS ink, drop the non-ink sub-tiles so we never train
-        # them as (possibly false) negatives. ink-free windows keep all in-scroll sub-tiles as
-        # negatives, so the batch still has both classes.
-        if self._mt_pos_only:
-            if (lbl * out).sum() > 0:
-                out = out * lbl
+        # a mixed window contributes positive targets only. even true ring negatives are
+        # discarded here because adjacency to uncertain ink boundaries is empirically harmful.
+        # ink-free ring windows still provide negative supervision.
+        if self._mt_pos_only and (lbl * out).sum() > 0:
+            out = out * lbl
         return torch.from_numpy(out)
 
     def _fetch_mask(self, y_off, x_off):
@@ -777,7 +809,10 @@ class InkVolumeDataset(IterableDataset):
         
         # apply transforms if enabled
         if self.apply_transforms:
-            block = self.transform(block)
+            if self._mt:
+                block, label, mask = self.transform(block, label, mask)
+            else:
+                block = self.transform(block)
         
         # enforce contiguity and dtype before converting to torch to avoid negative strides
         block = np.ascontiguousarray(block, dtype=np.float32)
