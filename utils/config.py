@@ -180,6 +180,12 @@ class DataloaderConfig:
     correlated_noise_max: float = 0.015
     correlated_noise_sigma: float = 6.0
     cutout_protect_center: bool = False
+    context_replace_prob: float = 0.0
+    context_replace_keep_size: int = 0  # 0 = prediction center + 2*margin
+    context_replace_margin: int = 16
+    context_replace_feather: int = 16
+    context_replace_min_mask_frac: float = 0.8
+    context_replace_surface_align: bool = True
 
 
 @dataclass

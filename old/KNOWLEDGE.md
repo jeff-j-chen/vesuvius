@@ -1574,6 +1574,12 @@ Tests:
 - surface_weak: surface auxiliary lambda 0.03 instead of 0.10
 - context_cutout: center-protected cutout
 - context_jitter: target-aware +/-32px context displacement
+- context_replace: preserve prediction center plus a 16px margin per side (64px for c32, 96px
+  for c64), surface-align a same-split donor containing no known ink anywhere in its context,
+  and feather the donor over 16px
+- bce_soft: BCE with positive target 0.90 and negative target 0.05
+- gce_q03/q07: low/high-q hard-label GCE sweep
+- gce_q03_soft: one GCE and soft-label interaction
 
 The c64_t8 versus c64_t16 comparison holds center size and optimizer steps fixed while changing
 target resolution/density. Baseline versus c64_t16 keeps 16 targets but changes covered center and

@@ -8,12 +8,17 @@ Every arm is capped at 20,000 training windows per epoch so larger centers do
 not receive extra optimizer steps merely because they overlap more ring cells.
 
 Tests:
-  baseline         c32 center, 4x4 8px targets
-  c64_t8           c64 center, 8x8 8px targets
-  c64_t16          c64 center, 4x4 16px targets
-  surface_weak     baseline with surface loss 0.10 -> 0.03
-  context_cutout   baseline with center-protected context cutout
-  context_jitter   baseline with target-aware +/-32px context jitter
+- baseline: c32 center, 4x4 8px targets
+- mae192_ibn: baseline with matched 192px/ds2 + IBN MAE checkpoint
+- c64_t8: c64 center, 8x8 8px targets
+- c64_t16: c64 center, 4x4 16px targets
+- surface_strong: baseline with surface loss 0.10 -> 0.20
+- context_cutout: baseline with center-protected context cutout
+- context_jitter: baseline with target-aware +/-32px context jitter
+- context_replace: feathered, surface-aligned real-papyrus context replacement
+- bce_soft: BCE with mild positive/negative target smoothing
+- gce_q03/q07/q09: hard-label GCE sweep
+- gce_q03_soft: one GCE x soft-label interaction
 
   python campaign_archs_19.py --dry-run
   python campaign_archs_19.py --only baseline
@@ -192,6 +197,12 @@ def base_config(exp_name: str) -> Config:
     config.dl.surface_atten_prob = 0.0
     config.dl.acquisition_blur_prob = 0.0
     config.dl.correlated_noise_prob = 0.0
+    config.dl.context_replace_prob = 0.0
+    config.dl.context_replace_keep_size = 0
+    config.dl.context_replace_margin = 16
+    config.dl.context_replace_feather = 16
+    config.dl.context_replace_min_mask_frac = 0.8
+    config.dl.context_replace_surface_align = True
 
     config.hm.enabled = False
     return config
@@ -199,9 +210,14 @@ def base_config(exp_name: str) -> Config:
 
 TESTS = [
     {"tid": "baseline", "tag": "19_baseline"},
+    {
+        "tid": "mae192_ibn",
+        "tag": "19_mae192_ibn",
+        "init_weights": "models/mae_nnunet_192_ibn.pth",
+    },
     {"tid": "c64_t8", "tag": "19_c64_t8", "multitile_subtile": 8, "multitile_grid": 8},
     {"tid": "c64_t16", "tag": "19_c64_t16", "multitile_subtile": 16, "multitile_grid": 4},
-    {"tid": "surface_weak", "tag": "19_surface_weak", "new_surface_lambda": 0.03},
+    {"tid": "surface_strong", "tag": "19_surface_strong", "new_surface_lambda": 0.2},
     {
         "tid": "context_cutout",
         "tag": "19_context_cutout",
@@ -216,6 +232,33 @@ TESTS = [
         "target_aware_ctx_jitter": True,
         "ctx_jitter": 32,
     },
+    {
+        "tid": "context_replace",
+        "tag": "19_context_replace",
+        "context_replace_prob": 0.5,
+        "context_replace_keep_size": 0,
+        "context_replace_margin": 16,
+        "context_replace_feather": 16,
+        "context_replace_min_mask_frac": 0.8,
+    },
+    {
+        "tid": "bce_soft",
+        "tag": "19_bce_soft",
+        "loss_type": "bce",
+        "label_smooth_pos": 0.10,
+        "label_smooth_neg": 0.05,
+    },
+    {"tid": "gce_q03", "tag": "19_gce_q03", "loss_type": "gce", "gce_q": 0.3},
+    {"tid": "gce_q07", "tag": "19_gce_q07", "loss_type": "gce", "gce_q": 0.7},
+    {"tid": "gce_q09", "tag": "19_gce_q09", "loss_type": "gce", "gce_q": 0.9},
+    {
+        "tid": "gce_q03_soft",
+        "tag": "19_gce_q03_soft",
+        "loss_type": "gce",
+        "gce_q": 0.3,
+        "label_smooth_pos": 0.10,
+        "label_smooth_neg": 0.05,
+    },
 ]
 
 _OVERRIDES = {
@@ -228,6 +271,15 @@ _OVERRIDES = {
     "cutout_protect_center": ("dl", "cutout_protect_center"),
     "target_aware_ctx_jitter": ("data", "target_aware_ctx_jitter"),
     "ctx_jitter": ("data", "ctx_jitter"),
+    "context_replace_prob": ("dl", "context_replace_prob"),
+    "context_replace_keep_size": ("dl", "context_replace_keep_size"),
+    "context_replace_margin": ("dl", "context_replace_margin"),
+    "context_replace_feather": ("dl", "context_replace_feather"),
+    "context_replace_min_mask_frac": ("dl", "context_replace_min_mask_frac"),
+    "loss_type": ("tra", "loss_type"),
+    "gce_q": ("tra", "gce_q"),
+    "label_smooth_pos": ("tra", "label_smooth_pos"),
+    "label_smooth_neg": ("tra", "label_smooth_neg"),
 }
 
 
@@ -236,6 +288,10 @@ def build_config(test: dict) -> Config:
     for key, (section, attr) in _OVERRIDES.items():
         if key in test:
             setattr(getattr(config, section), attr, test[key])
+    if "init_weights" in test:
+        config.init_weights = str(test["init_weights"])
+        if not os.path.exists(config.init_weights):
+            print(f"[archs19] WARNING checkpoint not found yet: {config.init_weights}")
     os.makedirs("models/archs19", exist_ok=True)
     setattr(config, "save_final", f"models/archs19/{test['tid']}_final.pth")
     return config
@@ -258,12 +314,14 @@ def run_test(config: Config, dry_run: bool) -> bool:
         f"  feature_attn={config.model.feature_attn_mil} surface={config.model.new_learned_surface}"
         f"  surface_lambda={config.tra.new_surface_lambda}"
         f"  ctx_jitter={config.data.ctx_jitter if config.data.target_aware_ctx_jitter else 0}"
-        f"  cutout={config.dl.cutout_prob}"
+        f"  cutout={config.dl.cutout_prob} context_replace={config.dl.context_replace_prob}"
     )
     print(
         f"  epochs={config.tra.n_epochs} batch={config.dl.batch_size} lr={config.tra.lr:.2e}"
         f"  samples/epoch={config.data.max_samples_per_epoch}"
-        f"  loss={config.tra.loss_type} init={config.init_weights}"
+        f"  loss={config.tra.loss_type} q={config.tra.gce_q}"
+        f"  smooth=({config.tra.label_smooth_pos},{config.tra.label_smooth_neg})"
+        f"  init={config.init_weights}"
     )
     if dry_run:
         print("  [DRY RUN] skipping")

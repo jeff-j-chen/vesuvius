@@ -22,7 +22,8 @@ APPROACH: block-masked 3D inpainting.
 TRANSFER: set config.init_weights = "models/mae_nnunet.pth" in a campaign or pass
   --init-weights on the command line.
 
-    python mae_pretrain_nnunet.py --name mae_nnunet_192_ibn --steps 6000 --ctx 192 --ds 2
+        python mae_pretrain_nnunet.py --name mae_nnunet_192_ibn --steps 6000 --ctx 192 --ds 2 \
+            --batch-size 4 --accum-steps 8 --require-all-scrolls
     python mae_pretrain_nnunet.py --dry-run
 """
 from __future__ import annotations
@@ -70,6 +71,7 @@ class CropSampler:
     def __init__(self, scroll_id, zarr_path, cfg, y0, y1, x0, x1,
                  role="train", holdout_frac=0.1, block_px=512):
         import zarr
+        self.scroll_id = int(scroll_id)
         self.vol = zarr.open(os.path.join(zarr_path, f"{scroll_id}.zarr"), mode="r")
         self.T = cfg.data.tile_size       # center tile size (for coord grid)
         self.ctx = int(getattr(cfg.data, "context_size", 48) or 48)
@@ -140,14 +142,27 @@ class MultiSampler:
 
     def __init__(self, samplers):
         self.samplers = [s for s in samplers if s is not None]
+        self.cursor = 0
 
     def sample(self, n, rng):
         if not self.samplers:
             return None
-        per = max(1, n // len(self.samplers))
-        parts = [s.sample(per, rng) for s in self.samplers]
-        parts = [p for p in parts if p is not None]
-        return torch.cat(parts, dim=0) if parts else None
+        counts = [0] * len(self.samplers)
+        for index in range(n):
+            counts[(self.cursor + index) % len(self.samplers)] += 1
+        self.cursor = (self.cursor + n) % len(self.samplers)
+        parts = []
+        for sampler, count in zip(self.samplers, counts):
+            if count == 0:
+                continue
+            part = sampler.sample(count, rng)
+            got = 0 if part is None else int(part.shape[0])
+            if got != count:
+                raise RuntimeError(
+                    f"scroll {sampler.scroll_id} supplied {got}/{count} requested crops"
+                )
+            parts.append(part)
+        return torch.cat(parts, dim=0)
 
 
 # ── spatial block mask ────────────────────────────────────────────────────────
@@ -173,8 +188,9 @@ def _make_spatial_mask(B, ctx, ds, patch, frac, dev, rng):
 
 def _apply_mask(x, mask):
     """replace masked positions with the visible-mean per sample."""
-    vis = x * (1.0 - mask)
-    denom = (1.0 - mask).sum(dim=(1, 2, 3, 4), keepdim=True).clamp(min=1.0)
+    visible = (1.0 - mask).expand_as(x)
+    vis = x * visible
+    denom = visible.sum(dim=(1, 2, 3, 4), keepdim=True).clamp(min=1.0)
     fill = vis.sum(dim=(1, 2, 3, 4), keepdim=True) / denom
     return vis + fill * mask
 
@@ -230,6 +246,8 @@ def main():
     ap.add_argument("-n", "--name", default="mae_nnunet")
     ap.add_argument("--scroll-ids", type=int, nargs="+", default=None,
                     help="scroll ids to sample from (default: all DEFAULT_SCROLLS)")
+    ap.add_argument("--require-all-scrolls", action="store_true",
+                    help="abort rather than silently skipping any requested scroll")
     ap.add_argument("--ctx", type=int, default=192,
                     help="context window size in pixels (should match campaign ctx)")
     ap.add_argument("--ds", type=int, default=2,
@@ -245,6 +263,8 @@ def main():
                     help="patch size for block masking in ds-space (4 = 4x4 blocks)")
     ap.add_argument("--steps", type=int, default=6000)
     ap.add_argument("--batch-size", type=int, default=32)
+    ap.add_argument("--accum-steps", type=int, default=1,
+                    help="gradient accumulation steps (effective batch = batch-size * accum-steps)")
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--warmup-frac", type=float, default=0.05)
     ap.add_argument("--min-lr-frac", type=float, default=0.02)
@@ -256,6 +276,13 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    if args.ctx <= 0 or args.ds <= 0 or args.mask_patch <= 0:
+        ap.error("--ctx, --ds, and --mask-patch must be positive")
+    if args.ctx % args.ds or (args.ctx // args.ds) % args.mask_patch:
+        ap.error("ctx/ds must be an integer divisible by mask-patch")
+    if args.batch_size <= 0 or args.accum_steps <= 0:
+        ap.error("--batch-size and --accum-steps must be positive")
 
     # build a minimal config matching the campaign settings
     cfg = Config()
@@ -281,12 +308,14 @@ def main():
 
     import zarr
     zarr_path = cfg.data.zarr_path
-    train_samplers, mon_samplers = [], []
+    train_samplers, mon_samplers, missing_scrolls = [], [], []
     for sid in scroll_ids:
         try:
             vol = zarr.open(os.path.join(zarr_path, f"{sid}.zarr"), mode="r")
         except Exception as e:
-            print(f"[mae] skip {sid}: {e}"); continue
+            print(f"[mae] skip {sid}: {e}")
+            missing_scrolls.append(sid)
+            continue
         H, W = int(vol.shape[1]), int(vol.shape[2])
         axis, frac = split_by_id.get(sid, ("x", 0.75))
         ctx = args.ctx
@@ -297,7 +326,9 @@ def main():
             y0, y1 = 0, (H // ctx) * ctx
             x0, x1 = 0, (int(W * frac) // ctx) * ctx
         if (y1 - y0) < ctx or (x1 - x0) < ctx:
-            print(f"[mae] skip {sid}: train region too small"); continue
+            print(f"[mae] skip {sid}: train region too small")
+            missing_scrolls.append(sid)
+            continue
         print(f"[mae] {sid} ({H}x{W}) axis={axis} frac={frac} -> "
               f"y[{y0},{y1}] x[{x0},{x1}]")
         sc = CropSampler(sid, zarr_path, cfg, y0, y1, x0, x1, "train",
@@ -307,8 +338,15 @@ def main():
         train_samplers.append(sc)
         mon_samplers.append(mc)
 
+    if args.require_all_scrolls and missing_scrolls:
+        raise RuntimeError(
+            f"required all {len(scroll_ids)} scrolls, but {len(missing_scrolls)} are unavailable: "
+            f"{missing_scrolls}"
+        )
     if not train_samplers:
         raise RuntimeError("no usable scrolls")
+
+    print(f"[mae] balanced round-robin across {len(train_samplers)}/{len(scroll_ids)} scrolls")
 
     train_s = MultiSampler(train_samplers)
     mon_s = MultiSampler(mon_samplers)
@@ -343,47 +381,59 @@ def main():
     os.makedirs("models", exist_ok=True)
     save_path = os.path.join("models", f"{args.name}.pth")
 
+    if args.steps > 0:
         print(f"[mae] nnunet3d backbone  ctx={args.ctx} ds={args.ds} depth={args.depth} "
-            f"ibn={args.ibn} "
-          f"mask_frac={args.mask_frac}  steps={args.steps}  log={run_dir}")
+            f"ibn={args.ibn} effective_batch={args.batch_size * args.accum_steps} "
+            f"mask_frac={args.mask_frac}  steps={args.steps}  log={run_dir}")
     print(f"[mae] save -> {save_path}   use as:  c.init_weights = '{save_path}'")
 
     t0 = time.time()
     for step in range(1, args.steps + 1):
-        xb = train_s.sample(args.batch_size, rng)
-        if xb is None:
-            continue
-        xb = xb.to(dev)
-
-        # target: ds-downsampled raw crop (what the backbone's decoder sees)
-        if args.ds > 1:
-            target_ds = F.avg_pool3d(
-                xb,
-                kernel_size=(1, args.ds, args.ds),
-                stride=(1, args.ds, args.ds),
-            )
-        else:
-            target_ds = xb
-
-        mask = _make_spatial_mask(xb.shape[0], args.ctx, args.ds,
-                                  args.mask_patch, args.mask_frac, dev, rng)
-        xb_masked = _apply_mask(xb, F.interpolate(
-            mask.squeeze(2), scale_factor=args.ds, mode="nearest").unsqueeze(2))
-
         opt.zero_grad(set_to_none=True)
-        with _autocast(dev):
-            pred = model(xb_masked)              # (B, 1, D, H/ds, W/ds)
-            diff = (pred - target_ds) ** 2
-            # MSE on masked positions only
-            loss = (diff * mask).sum() / (mask.sum() * target_ds.shape[2] + 1e-8)
+        loss_value = 0.0
+        completed_microbatches = 0
+        for _ in range(max(1, args.accum_steps)):
+            xb = train_s.sample(args.batch_size, rng)
+            if xb is None:
+                continue
+            xb = xb.to(dev)
 
-        scaler.scale(loss).backward()
+            # target: ds-downsampled raw crop (what the backbone's decoder sees)
+            if args.ds > 1:
+                target_ds = F.avg_pool3d(
+                    xb,
+                    kernel_size=(1, args.ds, args.ds),
+                    stride=(1, args.ds, args.ds),
+                )
+            else:
+                target_ds = xb
+
+            mask = _make_spatial_mask(xb.shape[0], args.ctx, args.ds,
+                                      args.mask_patch, args.mask_frac, dev, rng)
+            xb_masked = _apply_mask(xb, F.interpolate(
+                mask.squeeze(2), scale_factor=args.ds, mode="nearest").unsqueeze(2))
+
+            with _autocast(dev):
+                pred = model(xb_masked)              # (B, 1, D, H/ds, W/ds)
+                diff = (pred - target_ds) ** 2
+                # MSE on masked positions only
+                micro_loss = (diff * mask).sum() / (
+                    mask.sum() * target_ds.shape[2] + 1e-8
+                )
+                scaled_loss = micro_loss / max(1, args.accum_steps)
+            scaler.scale(scaled_loss).backward()
+            loss_value += float(micro_loss.detach().item())
+            completed_microbatches += 1
+
+        if completed_microbatches == 0:
+            continue
         scaler.step(opt)
         scaler.update()
         sched.step()
+        loss_value /= completed_microbatches
 
         if step % args.log_int == 0:
-            writer.add_scalar("MAE/recon_mse_train", float(loss.item()), step)
+            writer.add_scalar("MAE/recon_mse_train", loss_value, step)
             writer.add_scalar("MAE/lr", float(opt.param_groups[0]["lr"]), step)
             model.eval()
             with torch.no_grad():
@@ -407,7 +457,7 @@ def main():
             model.train()
             elapsed = time.time() - t0
             print(f"[mae] step {step}/{args.steps}  "
-                  f"mse={loss.item():.5f}  ({elapsed:.0f}s)", flush=True)
+                f"mse={loss_value:.5f}  ({elapsed:.0f}s)", flush=True)
 
         if step % args.fig_int == 0 or step == args.steps:
             model.eval()

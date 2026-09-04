@@ -4,6 +4,7 @@ from torch.utils.data import Dataset, DataLoader, IterableDataset, get_worker_in
 from collections import Counter
 import zarr
 import cv2
+import math
 import random
 import os
 import uuid
@@ -154,6 +155,12 @@ class Transform:
         self.correlated_noise_min = float(getattr(config.dl, "correlated_noise_min", 0.003))
         self.correlated_noise_max = float(getattr(config.dl, "correlated_noise_max", 0.015))
         self.correlated_noise_sigma = float(getattr(config.dl, "correlated_noise_sigma", 6.0))
+        self.context_replace_keep_size = int(getattr(config.dl, "context_replace_keep_size", 0))
+        self.context_replace_margin = int(getattr(config.dl, "context_replace_margin", 16))
+        self.context_replace_feather = int(getattr(config.dl, "context_replace_feather", 16))
+        self.context_replace_surface_align = bool(
+            getattr(config.dl, "context_replace_surface_align", True)
+        )
         self.tile_size = int(getattr(config.data, "tile_size", 16))
         self.multitile        = bool(getattr(config.model, "multitile", False))
         self.multitile_grid   = max(1, int(getattr(config.model, "multitile_grid", 1)))
@@ -362,6 +369,57 @@ class Transform:
         strength = random.uniform(self.correlated_noise_min, self.correlated_noise_max)
         return np.clip(block + strength * noise, 0.0, 1.0)
 
+    def apply_context_replacement(self, block, donor, target_offset=None):
+        """replace outer context with surface-aligned real papyrus from another window."""
+        if block.shape != donor.shape:
+            return block
+        donor_aligned = self._surface_align_context(donor, block) \
+            if self.context_replace_surface_align else donor
+        _, height, width = block.shape
+        if target_offset is None:
+            dy = dx = 0
+        else:
+            dy, dx = (int(value) for value in target_offset.tolist())
+        center_y = (height - 1) / 2.0 + dy
+        center_x = (width - 1) / 2.0 + dx
+        prediction_center = (
+            self.multitile_grid * self.multitile_subtile
+            if self.multitile else self.tile_size
+        )
+        protected = self.context_replace_keep_size
+        if protected <= 0:
+            protected = prediction_center + 2 * max(0, self.context_replace_margin)
+        protected = min(max(protected, prediction_center), height, width)
+        half = protected / 2.0
+        feather = max(float(self.context_replace_feather), 1.0)
+        yy, xx = np.mgrid[0:height, 0:width]
+        outside_y = np.maximum(np.abs(yy - center_y) - half, 0.0)
+        outside_x = np.maximum(np.abs(xx - center_x) - half, 0.0)
+        distance = np.maximum(outside_y, outside_x)
+        keep = np.clip(1.0 - distance / feather, 0.0, 1.0).astype(np.float32)
+        mixed = keep[None] * block + (1.0 - keep[None]) * donor_aligned
+        return np.ascontiguousarray(np.clip(mixed, 0.0, 1.0).astype(np.float32))
+
+    def _surface_align_context(self, donor, recipient):
+        """warp donor depth columns so their estimated surfaces match the recipient."""
+        from scipy.ndimage import map_coordinates
+
+        donor_surface = self._estimate_surface_depth(donor).astype(np.float32)
+        recipient_surface = self._estimate_surface_depth(recipient).astype(np.float32)
+        depth, height, width = donor.shape
+        yy, xx = np.mgrid[0:height, 0:width]
+        shift = donor_surface - recipient_surface
+        out = np.empty_like(donor)
+        for depth_index in range(depth):
+            zz = np.clip(depth_index + shift, 0, depth - 1)
+            out[depth_index] = map_coordinates(
+                donor,
+                [zz, yy, xx],
+                order=1,
+                mode="nearest",
+            )
+        return out
+
     def _apply_depth_mask(self, block):
         """independently zero out depth slices with depth_mask_prob each.
         forces robustness to missing depth planes."""
@@ -540,6 +598,8 @@ class InkVolumeDataset(IterableDataset):
         self._character_nearest = None
         self._character_pos_coords = {}
         self._character_neg_coords = {}
+        self._context_replace_prob = float(getattr(config.dl, "context_replace_prob", 0.0))
+        self._context_donor_coords = []
 
         self.z_start = getattr(self.c.data, "train_d_start", self.c.data.d_start)
         self.z_end   = getattr(self.c.data, "train_d_end",   self.c.data.d_end)
@@ -565,6 +625,8 @@ class InkVolumeDataset(IterableDataset):
             if not self._mt or self._character_grid is None:
                 raise ValueError("character-aware mode requires multitile labels and a character grid")
             self._prepare_character_targets()
+        if self._context_replace_prob > 0 and self.shuffle:
+            self._prepare_context_donors()
 
     def _mt_center_bounds(self, y_off, x_off):
         """absolute y/x bounds of the multitile center window for this sample.
@@ -692,6 +754,73 @@ class InkVolumeDataset(IterableDataset):
                 if len(coords) >= target:
                     break
         return coords
+
+    def _prepare_context_donors(self):
+        """collect same-split contexts with valid papyrus and no known ink anywhere."""
+        ctx = int(getattr(self.c.data, "context_size", 0) or self.tile_size)
+        pad = max(0, (ctx - self.tile_size) // 2)
+        scroll = np.asarray(self.scroll_mask, dtype=np.uint8)
+        labels = np.asarray(self.labels, dtype=np.uint8)
+        stride = math.gcd(max(1, ctx), math.gcd(max(1, pad), max(1, self._mt_sub)))
+        stride = max(1, stride)
+        height_full = (scroll.shape[0] // stride) * stride
+        width_full = (scroll.shape[1] // stride) * stride
+        coarse_mask = scroll[:height_full, :width_full].reshape(
+            height_full // stride,
+            stride,
+            width_full // stride,
+            stride,
+        ).mean(axis=(1, 3)).astype(np.float32)
+        coarse_ink = labels[:height_full, :width_full].reshape(
+            height_full // stride,
+            stride,
+            width_full // stride,
+            stride,
+        ).max(axis=(1, 3)).astype(np.uint8)
+        mask_integral = cv2.integral(coarse_mask)
+        ink_integral = cv2.integral(coarse_ink)
+        min_fraction = float(getattr(self.c.dl, "context_replace_min_mask_frac", 0.8))
+        height, width = scroll.shape
+        donors = []
+        step = max(1, int(getattr(self.c.data, "multitile_train_step", self.tile_size)))
+        y_span = max(0, self.y_end - self.y_start - self.tile_size + 1)
+        x_span = max(0, self.x_end - self.x_start - self.tile_size + 1)
+        for y_off in range(0, y_span, step):
+            for x_off in range(0, x_span, step):
+                y = self.y_start + y_off
+                x = self.x_start + x_off
+                if self._has_split_mask and not np.all(
+                    self.split_mask[y:y + self.tile_size, x:x + self.tile_size] > 0
+                ):
+                    continue
+                y0 = y - pad
+                x0 = x - pad
+                if y0 < 0 or x0 < 0 or y0 + ctx > height or x0 + ctx > width:
+                    continue
+                cy0, cx0 = y0 // stride, x0 // stride
+                cy1, cx1 = (y0 + ctx) // stride, (x0 + ctx) // stride
+                total = (cy1 - cy0) * (cx1 - cx0)
+                valid_count = (
+                    mask_integral[cy1, cx1] - mask_integral[cy0, cx1]
+                    - mask_integral[cy1, cx0] + mask_integral[cy0, cx0]
+                )
+                ink_count = (
+                    ink_integral[cy1, cx1] - ink_integral[cy0, cx1]
+                    - ink_integral[cy1, cx0] + ink_integral[cy0, cx0]
+                )
+                if (
+                    total > 0
+                    and float(valid_count) / total >= min_fraction
+                    and int(ink_count) == 0
+                ):
+                    donors.append((y_off, x_off))
+        self._context_donor_coords = donors
+        if not donors:
+            raise ValueError(f"no valid context-replacement donors for scroll {self.scroll_id}")
+        print(
+            f"[context-replace] scroll {self.scroll_id}: {len(donors)} "
+            f"fully ink-free donors with mask>={min_fraction:.2f}"
+        )
 
     @property
     def mask(self):
@@ -865,7 +994,7 @@ class InkVolumeDataset(IterableDataset):
         # ensure dtype and contiguity
         return np.ascontiguousarray(np.clip(norm_block, 0, 1).astype(np.float32, copy=False))
 
-    def _fetch_block(self, z_off, y_off, x_off):
+    def _fetch_block(self, z_off, y_off, x_off, allow_jitter=True):
         """fetches and normalizes a block from zarr volume"""
         z = self.z_start + z_off
         y = self.y_start + y_off
@@ -890,7 +1019,7 @@ class InkVolumeDataset(IterableDataset):
                 if self._mt and target_aware:
                     center = self._mt_grid * self._mt_sub
                     max_j = min(max_j, max(0, (ctx - center) // 2))
-                if max_j > 0 and self.shuffle:
+                if max_j > 0 and self.shuffle and allow_jitter:
                     # shift the context window; labeled tile moves to (pad+jy, pad+jx) in the block
                     # target-aware mode passes this offset to every model-side prediction crop
                     step = max(1, int(getattr(self.c.data, "context_downsample", 1)))
@@ -902,7 +1031,8 @@ class InkVolumeDataset(IterableDataset):
                     jy = jx = 0
                 # depth window jitter: shift which slices we read to attack depth-profile position memorization
                 max_dj = int(getattr(self.c.data, "depth_jitter", 0))
-                dj = random.randint(-max_dj, max_dj) if max_dj > 0 and self.shuffle else 0
+                dj = random.randint(-max_dj, max_dj) \
+                    if max_dj > 0 and self.shuffle and allow_jitter else 0
                 block = self._read_ctx_block(z + dj, self.depth, y - pad - jy, x - pad - jx, ctx)
             else:
                 block = np.array(self.vol[z:z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
@@ -1077,6 +1207,25 @@ class InkVolumeDataset(IterableDataset):
             torch.tensor(target_offset, dtype=torch.long)
             if bool(getattr(self.c.data, "target_aware_ctx_jitter", False)) else None
         )
+        if (
+            self.apply_transforms
+            and self._context_donor_coords
+            and random.random() < self._context_replace_prob
+        ):
+            donor_y, donor_x = self._context_donor_coords[
+                random.randrange(len(self._context_donor_coords))
+            ]
+            donor, _ = self._fetch_block(
+                z_off,
+                donor_y,
+                donor_x,
+                allow_jitter=False,
+            )
+            block = self.transform.apply_context_replacement(
+                block,
+                donor,
+                target_offset_tensor,
+            )
         
         # apply transforms if enabled
         if self.apply_transforms:

@@ -106,8 +106,19 @@ windows for c16, 20.9k for c32, and 27.8k for c64). Earlier center comparisons t
 both geometry and optimizer-step count.
 
 Tests are baseline, c64_t8, c64_t16, a weaker surface loss (0.03), center-protected context cutout,
-and target-aware context jitter. `character_ap_macro` is the best-character checkpoint criterion;
-the fixed-threshold success fraction remains logged but is calibration-sensitive.
+target-aware context jitter, real-context replacement, and a BCE/GCE/soft-label matrix.
+`character_ap_macro` is the best-character checkpoint criterion; the fixed-threshold success
+fraction remains logged but is calibration-sensitive.
+
+Real-context replacement automatically preserves the prediction center plus a 16px margin on each
+side (64px for c32, 96px for c64), replaces the outer context with a
+same-scroll training-split donor, aligns donor depth columns to the recipient surface, and feathers
+the transition over 16px. The complete 192px donor must contain no known ink and at least 80% valid
+papyrus. This changes nuisance fibers while preserving all c32 target evidence.
+
+The reduced loss matrix isolates mild soft ink targets (positive 0.90, negative 0.05), low-q GCE
+at q=0.3, high-q GCE at q=0.7, and one q=0.3 plus soft-label interaction. The historically
+destructive q=0.9 and the redundant q=0.7-plus-soft arm are omitted because each run costs hours.
 
 Multi-scroll character balancing is now available through `character_balance_scrolls=True`.
 Training draws scrolls round-robin while drawing characters uniformly inside each scroll, cycles
