@@ -9,10 +9,10 @@ Current production path: **nnunet3d_lcndz** — a 3D nnU-Net-style encoder/decod
 
 ```bash
 # inspect the active campaign without training
-python campaign_archs_17.py --dry-run
+python campaign_archs_18.py --dry-run
 
-# run the active surface experiment
-python campaign_archs_17.py
+# run the active character/augmentation experiments
+python campaign_archs_18.py
 
 # compute/cache normalisation stats (needed once per new zarr)
 python precompute_norm.py --scroll-id 20260206000001
@@ -25,7 +25,7 @@ The active environment is a Docker image using system Python; no project venv is
 
 ---
 
-## Current operating point — campaign 17
+## Architecture operating point — campaign 17
 
 Campaign 17 is a fast-iteration experiment on **w013 only** (`20240304141531`). It inherits
 campaign 16's hand-authored train/validation mask rather than using an axis split. Its six arms
@@ -60,6 +60,33 @@ Important corrections:
   brightness 0.6, contrast 0.6, and FDA 0.5. Flip and rotation now transform the multitile
   labels and masks identically. Elastic and context jitter are disabled until dense target
   warping is implemented.
+
+### Campaign 18
+
+Campaign 18 copies the corrected campaign-17 baseline and enables connected-component character
+metrics in every arm. Its training A/B is ordinary window sampling versus uniform character
+sampling. Six additional arms independently add depth warp, surface-local attenuation,
+acquisition blur, correlated reconstruction noise, center-protected cutout, or target-aware
+context jitter.
+
+Character-balanced sampling repeatedly shuffles the training characters, selects one positive
+target and emits its containing window plus one associated ink-free closed-ring window. The association is the
+nearest connected character in target-grid space. A character crossing the fixed manual split is
+excluded from character-aware sampling and metrics, preserving the baseline split without leakage.
+
+The primary character metric is the fraction of held-out characters satisfying both:
+
+- positive-cell recall >= 0.5
+- associated-ring false-positive rate <= 0.1
+
+This `Character/SuccessFraction/Valid` value controls a separate best-character checkpoint.
+Macro recall, ring FPR, F1, AP, and character count are also logged for train and validation.
+
+The `context_jitter` arm reads the same global target at random even offsets up to +/-32px within
+the 192px context and passes that offset to every model-side target crop. Prediction, spill,
+feature attention, SupCon, and surface-guided aggregation therefore remain aligned. Flips,
+rotations, and TTA consistency transform the offset with the image. Validation and inference use
+zero offset. This costs one normal forward pass rather than adding a paired consistency forward.
 
 ---
 
@@ -247,6 +274,7 @@ artifacts; campaign 17 currently generates its soft targets online from each sam
 | `roi.py` | Interactive probe ROI picker that writes `probe_rois.json`, now the single source for probe windows. |
 | `assemble_training_zarrs.sh` | Downloads and assembles the three training zarrs from S3. See [Assembling zarrs](#assembling-training-zarrs). |
 | `campaign_archs_17.py` | Current w013 hand-mask experiment for the supervised depth-softmax surface feature. |
+| `campaign_archs_18.py` | Character-balanced sampling, character-macro metrics, and isolated hard-augmentation tests. |
 | `generate_surface_supervision.py` | Builds full-resolution papyrus-air pseudo-labels and review figures. |
 | `utils/surface.py` | Online soft surface targets and robust smoothness loss. |
 | `old/` | Archived experiments, older campaigns, and retired architecture families. |

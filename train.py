@@ -17,6 +17,7 @@ from utils.hard_mining import HardMiningInjector, HardMiningManager
 from utils.model import create_model, supcon_loss
 from utils.surface import surface_supervision_loss
 from utils.training_utils import (
+    calculate_character_metrics,
     calculate_metrics,
     create_loss_function,
     create_optimizer_and_scheduler,
@@ -73,6 +74,7 @@ class Trainer:
         self.hard_samples: list[dict] = []
         self.best_val_loss = float("inf")
         self.best_val_f1 = 0.0
+        self.best_val_character = -1.0
 
     def _print_config(self) -> None:
         print("--- Configuration ---")
@@ -256,7 +258,8 @@ class Trainer:
         out = torch.fft.irfft2(torch.polar(blended, phase), s=(H, W))
         return out.clamp(0.0, 1.0)
 
-    def _train_batch(self, images, labels, mask, domain_ids=None, epoch: int = 0, unlabeled_images=None):
+    def _train_batch(self, images, labels, mask, domain_ids=None, character_ids=None,
+                     target_offsets=None, epoch: int = 0, unlabeled_images=None):
         images = images.to(self.c.device)
         surface_source = images
         images = self._apply_fda(images)
@@ -272,6 +275,8 @@ class Trainer:
         sample_pos = ((labels * mask).amax(dim=1) > 0.5).float()
         if domain_ids is not None:
             domain_ids = domain_ids.to(self.c.device, non_blocking=True).view(-1)
+        if target_offsets is not None:
+            target_offsets = target_offsets.to(self.c.device, non_blocking=True).view(B, 2)
 
         self.optimizer.zero_grad()
         with autocast(self.c.device, enabled=self.c.device == "cuda"):
@@ -292,9 +297,10 @@ class Trainer:
                 outputs, _, domain_logits, supcon_z = self.model.forward_with_extras(
                     images,
                     grl_scale=grl_scale,
+                    target_offsets=target_offsets,
                 )
             else:
-                outputs = self.model(images)
+                outputs = self.model(images, target_offsets=target_offsets)
                 domain_logits = None
                 supcon_z = None
 
@@ -320,7 +326,7 @@ class Trainer:
             denom = mask.sum()
             if denom <= 0:
                 print("[ERROR] Mask sum is zero, skipping loss calculation.")
-                return np.empty([]), np.empty([]), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+                return np.empty([]), np.empty([]), np.empty([]), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
             raw_loss_value = (raw_loss.sum() / denom).item()
             l1_loss = sum(param.abs().sum() for param in self.model.parameters())
@@ -341,25 +347,34 @@ class Trainer:
                 # is compared cell-for-cell. single-tile output is a scalar -> inverse never runs.
                 if mode == "dihedral":
                     choices = (
-                        (lambda t: torch.flip(t, dims=[-1]),          lambda g: torch.flip(g, dims=[-1])),
-                        (lambda t: torch.flip(t, dims=[-2]),          lambda g: torch.flip(g, dims=[-2])),
-                        (lambda t: torch.flip(t, dims=[-1, -2]),      lambda g: torch.flip(g, dims=[-1, -2])),
-                        (lambda t: torch.rot90(t, 1, dims=[-2, -1]),  lambda g: torch.rot90(g, -1, dims=[-2, -1])),
-                        (lambda t: torch.rot90(t, -1, dims=[-2, -1]), lambda g: torch.rot90(g, 1, dims=[-2, -1])),
+                        (lambda t: torch.flip(t, dims=[-1]),          lambda g: torch.flip(g, dims=[-1]),
+                         lambda o: torch.stack((o[:, 0], -o[:, 1]), dim=1)),
+                        (lambda t: torch.flip(t, dims=[-2]),          lambda g: torch.flip(g, dims=[-2]),
+                         lambda o: torch.stack((-o[:, 0], o[:, 1]), dim=1)),
+                        (lambda t: torch.flip(t, dims=[-1, -2]),      lambda g: torch.flip(g, dims=[-1, -2]),
+                         lambda o: -o),
+                        (lambda t: torch.rot90(t, 1, dims=[-2, -1]),  lambda g: torch.rot90(g, -1, dims=[-2, -1]),
+                         lambda o: torch.stack((-o[:, 1], o[:, 0]), dim=1)),
+                        (lambda t: torch.rot90(t, -1, dims=[-2, -1]), lambda g: torch.rot90(g, 1, dims=[-2, -1]),
+                         lambda o: torch.stack((o[:, 1], -o[:, 0]), dim=1)),
                     )
-                    tf_in, tf_grid_inv = choices[int(torch.randint(0, len(choices), (1,)).item())]
+                    tf_in, tf_grid_inv, tf_offset = choices[int(torch.randint(0, len(choices), (1,)).item())]
                 else:
                     choices = (
-                        (lambda t: torch.flip(t, dims=[-1]),     lambda g: torch.flip(g, dims=[-1])),
-                        (lambda t: torch.flip(t, dims=[-2]),     lambda g: torch.flip(g, dims=[-2])),
-                        (lambda t: torch.flip(t, dims=[-1, -2]), lambda g: torch.flip(g, dims=[-1, -2])),
+                        (lambda t: torch.flip(t, dims=[-1]),     lambda g: torch.flip(g, dims=[-1]),
+                         lambda o: torch.stack((o[:, 0], -o[:, 1]), dim=1)),
+                        (lambda t: torch.flip(t, dims=[-2]),     lambda g: torch.flip(g, dims=[-2]),
+                         lambda o: torch.stack((-o[:, 0], o[:, 1]), dim=1)),
+                        (lambda t: torch.flip(t, dims=[-1, -2]), lambda g: torch.flip(g, dims=[-1, -2]),
+                         lambda o: -o),
                     )
-                    tf_in, tf_grid_inv = choices[int(torch.randint(0, 3, (1,)).item())]
+                    tf_in, tf_grid_inv, tf_offset = choices[int(torch.randint(0, 3, (1,)).item())]
                 view = tf_in(images)
+                other_offsets = tf_offset(target_offsets) if target_offsets is not None else None
                 # eval mode for TTA second pass: BN uses running stats (no in-place updates)
                 # which prevents the autograd version conflict with the compiled first-pass graph
                 self.model.eval()
-                other = self.model(view.contiguous())
+                other = self.model(view.contiguous(), target_offsets=other_offsets)
                 self.model.train()
                 if other.dim() == 4:
                     other = other.flatten(1).max(dim=1, keepdim=True).values
@@ -535,13 +550,19 @@ class Trainer:
 
         scores = torch.sigmoid(outputs).detach().cpu().numpy().flatten()
         label_values = labels.detach().cpu().numpy().flatten().astype(int)
+        if character_ids is not None:
+            character_values = character_ids.view(B, -1).cpu().numpy().flatten().astype(np.int64)
+        else:
+            character_values = np.zeros_like(label_values, dtype=np.int64)
         if labels.shape[1] > 1:  # multitile: drop out-of-mask sub-tiles from the metric arrays
             keep = (mask > 0).detach().cpu().numpy().flatten()
             scores = scores[keep]
             label_values = label_values[keep]
+            character_values = character_values[keep]
         return (
             scores,
             label_values,
+            character_values,
             loss.item(),
             raw_loss_value,
             float(dann_loss_value.detach().item()),
@@ -586,6 +607,7 @@ class Trainer:
         labels = []
         preds = []
         scores = []
+        character_ids_all = []
         total_injected = 0
 
         entropy_lambda = float(getattr(self.c.tra, "entropy_min_lambda", 0.0))
@@ -595,7 +617,25 @@ class Trainer:
             tqdm(self.train_loader, desc="Training", mininterval=5, miniters=1, file=sys.stderr)
         ):
             images, batch_labels, mask = batch[:3]
-            domain_ids = batch[3] if len(batch) > 3 else None
+            with_domain = bool(getattr(self.c.tra, "dann", False)) or bool(
+                getattr(self.c.tra, "supcon_cross_frag", False)
+            )
+            optional_index = 3
+            domain_ids = batch[optional_index] if with_domain and len(batch) > optional_index else None
+            optional_index += int(with_domain)
+            batch_character_ids = (
+                batch[optional_index]
+                if bool(getattr(self.c.tra, "character_macro_metrics", False))
+                and len(batch) > optional_index
+                else None
+            )
+            optional_index += int(bool(getattr(self.c.tra, "character_macro_metrics", False)))
+            batch_target_offsets = (
+                batch[optional_index]
+                if bool(getattr(self.c.data, "target_aware_ctx_jitter", False))
+                and len(batch) > optional_index
+                else None
+            )
 
             u_imgs = None
             if u_iter is not None:
@@ -615,6 +655,7 @@ class Trainer:
             (
                 batch_scores,
                 batch_labels_out,
+                batch_character_ids_out,
                 batch_loss,
                 batch_raw_loss,
                 batch_dann_loss,
@@ -626,6 +667,8 @@ class Trainer:
                 batch_labels,
                 mask,
                 domain_ids=domain_ids,
+                character_ids=batch_character_ids,
+                target_offsets=batch_target_offsets,
                 epoch=epoch,
                 unlabeled_images=u_imgs,
             )
@@ -640,8 +683,18 @@ class Trainer:
             labels.extend(batch_labels_out)
             preds.extend((batch_scores > 0.5).astype(int))
             scores.extend(batch_scores)
+            character_ids_all.extend(batch_character_ids_out)
 
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
+        if bool(getattr(self.c.tra, "character_macro_metrics", False)):
+            metrics.update(calculate_character_metrics(
+                labels,
+                scores,
+                character_ids_all,
+                score_threshold=float(getattr(self.c.tra, "character_score_threshold", 0.5)),
+                recall_target=float(getattr(self.c.tra, "character_recall_target", 0.5)),
+                max_ring_fpr=float(getattr(self.c.tra, "character_max_ring_fpr", 0.1)),
+            ))
         metrics["loss"] = loss_total / len(self.train_loader)
         metrics["raw_loss"] = raw_loss_total / len(self.train_loader)
         metrics["dann_loss"] = dann_loss_total / len(self.train_loader)
@@ -670,6 +723,7 @@ class Trainer:
         labels = []
         preds = []
         scores = []
+        character_ids_all = []
 
         with torch.no_grad(), autocast(self.c.device, enabled=self.c.device == "cuda"):
             for batch in tqdm(
@@ -680,6 +734,23 @@ class Trainer:
                 file=sys.stderr,
             ):
                 images, batch_labels, mask = batch[:3]
+                with_domain = bool(getattr(self.c.tra, "dann", False)) or bool(
+                    getattr(self.c.tra, "supcon_cross_frag", False)
+                )
+                optional_index = 3 + int(with_domain)
+                batch_character_ids = (
+                    batch[optional_index]
+                    if bool(getattr(self.c.tra, "character_macro_metrics", False))
+                    and len(batch) > optional_index
+                    else None
+                )
+                optional_index += int(bool(getattr(self.c.tra, "character_macro_metrics", False)))
+                batch_target_offsets = (
+                    batch[optional_index]
+                    if bool(getattr(self.c.data, "target_aware_ctx_jitter", False))
+                    and len(batch) > optional_index
+                    else None
+                )
                 if mask.view(mask.size(0), -1).sum() <= 0:
                     print("[ERROR] Encountered batch with mask sum == 0 in validation. This block should not be loaded!")
                     continue
@@ -693,7 +764,7 @@ class Trainer:
                 else:
                     mask = (mask.sum(dim=1) > 0).float().unsqueeze(1)  # single-tile window gate
 
-                outputs = self.model(images)
+                outputs = self.model(images, target_offsets=batch_target_offsets)
                 if outputs.dim() == 4:
                     outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
 
@@ -702,20 +773,52 @@ class Trainer:
 
                 batch_scores = torch.sigmoid(outputs).cpu().numpy().flatten()
                 batch_lab = batch_labels.cpu().numpy().flatten().astype(int)
+                if batch_character_ids is not None:
+                    batch_chars = batch_character_ids.view(B, -1).numpy().flatten().astype(np.int64)
+                else:
+                    batch_chars = np.zeros_like(batch_lab, dtype=np.int64)
                 if batch_labels.shape[1] > 1:  # multitile: exclude out-of-mask sub-tiles
                     keep = (mask > 0).cpu().numpy().flatten()
                     batch_scores = batch_scores[keep]
                     batch_lab = batch_lab[keep]
+                    batch_chars = batch_chars[keep]
                 labels.extend(batch_lab)
                 preds.extend((batch_scores > 0.5).astype(int))
                 scores.extend(batch_scores)
+                character_ids_all.extend(batch_chars)
 
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
+        if bool(getattr(self.c.tra, "character_macro_metrics", False)):
+            metrics.update(calculate_character_metrics(
+                labels,
+                scores,
+                character_ids_all,
+                score_threshold=float(getattr(self.c.tra, "character_score_threshold", 0.5)),
+                recall_target=float(getattr(self.c.tra, "character_recall_target", 0.5)),
+                max_ring_fpr=float(getattr(self.c.tra, "character_max_ring_fpr", 0.1)),
+            ))
         metrics["loss"] = loss_total / len(self.valid_loader)
         metrics["scores"] = scores
         return metrics
 
     def _periodic_model_save(self, epoch: int, val_metrics: dict) -> None:
+        character_score = val_metrics.get("character_success_fraction")
+        if character_score is not None and character_score > self.best_val_character:
+            self.best_val_character = float(character_score)
+            final_path = getattr(self.c, "save_final", None)
+            if final_path:
+                root, ext = os.path.splitext(final_path)
+                if root.endswith("_final"):
+                    root = root[:-len("_final")]
+                character_path = f"{root}_best_character{ext or '.pth'}"
+            else:
+                character_path = f"{self.c.model_dir}/best_model_character.pth"
+            save_model(self.model, character_path)
+            print(
+                f"New best character model saved! "
+                f"Val success fraction: {self.best_val_character:.4f}"
+            )
+
         if val_metrics["f1"] > self.best_val_f1:
             self.best_val_f1 = val_metrics["f1"]
             save_model(self.model, f"{self.c.model_dir}/best_model_f1.pth")
@@ -752,6 +855,10 @@ class Trainer:
         print(
             f"[METRICS] epoch={epoch + 1} train_loss={train_metrics['loss']:.4f} "
             f"val_loss={val_metrics['loss']:.4f} train_f1={train_metrics['f1']:.4f}"
+            + (
+                f" val_character_success={val_metrics['character_success_fraction']:.4f}"
+                if "character_success_fraction" in val_metrics else ""
+            )
         )
 
         self.vis.log_epoch_metrics(

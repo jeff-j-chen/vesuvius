@@ -144,6 +144,63 @@ def calculate_metrics(y_true, y_pred, y_scores):
     
     return metrics
 
+
+def calculate_character_metrics(
+    y_true,
+    y_scores,
+    character_ids,
+    score_threshold=0.5,
+    recall_target=0.5,
+    max_ring_fpr=0.1,
+):
+    """macro metrics over connected ink characters and their associated ring negatives."""
+    y_true = np.asarray(y_true).reshape(-1).astype(int)
+    y_scores = np.asarray(y_scores).reshape(-1)
+    character_ids = np.asarray(character_ids).reshape(-1).astype(np.int64)
+    keep = (character_ids > 0) & np.isfinite(y_scores)
+    y_true, y_scores, character_ids = y_true[keep], y_scores[keep], character_ids[keep]
+
+    recalls, fprs, f1s, aps, successes = [], [], [], [], []
+    for component_id in np.unique(character_ids):
+        selected = character_ids == component_id
+        labels = y_true[selected]
+        scores = y_scores[selected]
+        positive = labels == 1
+        negative = labels == 0
+        if not positive.any() or not negative.any():
+            continue
+        predicted = scores >= float(score_threshold)
+        recall = float(predicted[positive].mean())
+        fpr = float(predicted[negative].mean())
+        tp = int((predicted & positive).sum())
+        fp = int((predicted & negative).sum())
+        fn = int((~predicted & positive).sum())
+        f1 = 2.0 * tp / max(2 * tp + fp + fn, 1)
+        ap = float(average_precision_score(labels, scores))
+        recalls.append(recall)
+        fprs.append(fpr)
+        f1s.append(f1)
+        aps.append(ap)
+        successes.append(recall >= float(recall_target) and fpr <= float(max_ring_fpr))
+
+    if not recalls:
+        return {
+            "character_count": 0,
+            "character_recall_macro": 0.0,
+            "character_ring_fpr_macro": 0.0,
+            "character_f1_macro": 0.0,
+            "character_ap_macro": 0.0,
+            "character_success_fraction": 0.0,
+        }
+    return {
+        "character_count": len(recalls),
+        "character_recall_macro": float(np.mean(recalls)),
+        "character_ring_fpr_macro": float(np.mean(fprs)),
+        "character_f1_macro": float(np.mean(f1s)),
+        "character_ap_macro": float(np.mean(aps)),
+        "character_success_fraction": float(np.mean(successes)),
+    }
+
 def save_model(model, path):
     """saves the model state dictionary to a file"""
     # create directory if it doesn't exist

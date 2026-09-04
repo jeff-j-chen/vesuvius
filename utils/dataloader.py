@@ -135,27 +135,48 @@ class Transform:
         self.cutout_prob      = float(getattr(config.dl, "cutout_prob", 0.0))
         self.cutout_max_frac  = float(getattr(config.dl, "cutout_max_frac", 0.35))
         self.cutout_n_patches = int(getattr(config.dl, "cutout_n_patches", 1))
+        self.cutout_protect_center = bool(getattr(config.dl, "cutout_protect_center", False))
         self.depth_mask_prob  = float(getattr(config.dl, "depth_mask_prob", 0.0))
         self.elastic_prob     = float(getattr(config.dl, "elastic_prob", 0.0))
         self.elastic_alpha    = float(getattr(config.dl, "elastic_alpha", 15.0))
         self.elastic_sigma    = float(getattr(config.dl, "elastic_sigma", 5.0))
+        self.depth_warp_prob = float(getattr(config.dl, "depth_warp_prob", 0.0))
+        self.depth_warp_max = float(getattr(config.dl, "depth_warp_max", 2.0))
+        self.depth_warp_sigma = float(getattr(config.dl, "depth_warp_sigma", 24.0))
+        self.surface_atten_prob = float(getattr(config.dl, "surface_atten_prob", 0.0))
+        self.surface_atten_min = float(getattr(config.dl, "surface_atten_min", 0.1))
+        self.surface_atten_max = float(getattr(config.dl, "surface_atten_max", 0.35))
+        self.surface_atten_sigma = float(getattr(config.dl, "surface_atten_sigma", 2.0))
+        self.acquisition_blur_prob = float(getattr(config.dl, "acquisition_blur_prob", 0.0))
+        self.acquisition_blur_min = float(getattr(config.dl, "acquisition_blur_min", 0.4))
+        self.acquisition_blur_max = float(getattr(config.dl, "acquisition_blur_max", 0.9))
+        self.correlated_noise_prob = float(getattr(config.dl, "correlated_noise_prob", 0.0))
+        self.correlated_noise_min = float(getattr(config.dl, "correlated_noise_min", 0.003))
+        self.correlated_noise_max = float(getattr(config.dl, "correlated_noise_max", 0.015))
+        self.correlated_noise_sigma = float(getattr(config.dl, "correlated_noise_sigma", 6.0))
+        self.tile_size = int(getattr(config.data, "tile_size", 16))
         self.multitile        = bool(getattr(config.model, "multitile", False))
         self.multitile_grid   = max(1, int(getattr(config.model, "multitile_grid", 1)))
+        self.multitile_subtile = max(1, int(getattr(config.model, "multitile_subtile", 1)))
         self._warned_elastic_multitile = False
 
-    def __call__(self, block, label=None, mask=None):
+    def __call__(self, block, label=None, mask=None, component_ids=None, target_offset=None):
         """apply transforms, synchronizing discrete geometry with multitile targets."""
         if random.random() < self.rotation_prob:
             k = random.choice([1, 2, 3])
             block = np.rot90(block, k=k, axes=(1, 2)).copy()
             label = self._rotate_target(label, k)
             mask = self._rotate_target(mask, k)
+            component_ids = self._rotate_target(component_ids, k)
+            target_offset = self._rotate_offset(target_offset, k)
         if random.random() < self.flip_prob:
             axis = random.choice([1, 2])
             block = np.flip(block, axis=axis).copy()
             target_axis = 0 if axis == 1 else 1
             label = self._flip_target(label, target_axis)
             mask = self._flip_target(mask, target_axis)
+            component_ids = self._flip_target(component_ids, target_axis)
+            target_offset = self._flip_offset(target_offset, axis)
         if random.random() < self.noise_prob:
             block = self._apply_gaussian_noise(block)
         if random.random() < self.brightness_prob:
@@ -166,6 +187,14 @@ class Transform:
             block = self._apply_cutout(block)
         if self.depth_mask_prob > 0:
             block = self._apply_depth_mask(block)
+        if self.depth_warp_prob > 0 and random.random() < self.depth_warp_prob:
+            block = self._apply_smooth_depth_warp(block)
+        if self.surface_atten_prob > 0 and random.random() < self.surface_atten_prob:
+            block = self._apply_surface_attenuation(block)
+        if self.acquisition_blur_prob > 0 and random.random() < self.acquisition_blur_prob:
+            block = self._apply_acquisition_blur(block)
+        if self.correlated_noise_prob > 0 and random.random() < self.correlated_noise_prob:
+            block = self._apply_correlated_noise(block)
         if self.elastic_prob > 0 and random.random() < self.elastic_prob:
             if self.multitile and label is not None:
                 if not self._warned_elastic_multitile:
@@ -175,9 +204,21 @@ class Transform:
                 block = self._apply_elastic_deformation(block)
         # ensure the final result is contiguous to avoid negative strides
         block = np.ascontiguousarray(block)
-        if label is None and mask is None:
+        if label is None and mask is None and component_ids is None and target_offset is None:
             return block
-        return block, label.contiguous(), mask.contiguous()
+        if component_ids is None:
+            if target_offset is None:
+                return block, label.contiguous(), mask.contiguous()
+            return block, label.contiguous(), mask.contiguous(), target_offset.contiguous()
+        if target_offset is None:
+            return block, label.contiguous(), mask.contiguous(), component_ids.contiguous()
+        return (
+            block,
+            label.contiguous(),
+            mask.contiguous(),
+            component_ids.contiguous(),
+            target_offset.contiguous(),
+        )
 
     def _target_grid(self, target):
         if target is None or not self.multitile:
@@ -193,6 +234,23 @@ class Transform:
     def _flip_target(self, target, axis):
         grid = self._target_grid(target)
         return torch.flip(grid, dims=(axis,)).reshape(-1) if grid is not None else target
+
+    @staticmethod
+    def _rotate_offset(target_offset, k):
+        if target_offset is None:
+            return None
+        dy, dx = target_offset.unbind()
+        for _ in range(k % 4):
+            dy, dx = -dx, dy
+        return torch.stack((dy, dx))
+
+    @staticmethod
+    def _flip_offset(target_offset, block_axis):
+        if target_offset is None:
+            return None
+        out = target_offset.clone()
+        out[0 if block_axis == 1 else 1] *= -1
+        return out
 
     def _apply_elastic_deformation(self, block):
         """smooth elastic deformation on the XY plane, shared across all depth slices.
@@ -221,10 +279,88 @@ class Transform:
         for _ in range(self.cutout_n_patches):
             ph = random.randint(1, max(1, int(H * self.cutout_max_frac)))
             pw = random.randint(1, max(1, int(W * self.cutout_max_frac)))
-            y0 = random.randint(0, H - ph)
-            x0 = random.randint(0, W - pw)
+            y0 = x0 = 0
+            for _attempt in range(20):
+                y0 = random.randint(0, H - ph)
+                x0 = random.randint(0, W - pw)
+                if not self.cutout_protect_center:
+                    break
+                protected = (
+                    self.multitile_grid * self.multitile_subtile
+                    if self.multitile else self.tile_size
+                )
+                cy0 = (H - protected) // 2
+                cx0 = (W - protected) // 2
+                if y0 + ph <= cy0 or y0 >= cy0 + protected \
+                    or x0 + pw <= cx0 or x0 >= cx0 + protected:
+                    break
+            else:
+                continue
             out[:, y0:y0 + ph, x0:x0 + pw] = 0.0
         return out
+
+    def _apply_smooth_depth_warp(self, block):
+        """spatially vary depth position to simulate residual sheet undulation."""
+        from scipy.ndimage import gaussian_filter, map_coordinates
+
+        depth, height, width = block.shape
+        field = gaussian_filter(
+            np.random.standard_normal((height, width)).astype(np.float32),
+            sigma=max(self.depth_warp_sigma, 1.0),
+        )
+        field = field / max(float(field.std()), 1e-6)
+        amplitude = random.uniform(0.5 * self.depth_warp_max, self.depth_warp_max)
+        field = np.clip(field * amplitude, -self.depth_warp_max, self.depth_warp_max)
+        yy, xx = np.mgrid[0:height, 0:width]
+        out = np.empty_like(block)
+        for depth_index in range(depth):
+            zz = np.clip(depth_index + field, 0, depth - 1)
+            out[depth_index] = map_coordinates(
+                block,
+                [zz, yy, xx],
+                order=1,
+                mode="nearest",
+            )
+        return np.clip(out, 0.0, 1.0)
+
+    @staticmethod
+    def _estimate_surface_depth(block):
+        """estimate the strongest smoothed papyrus-to-air transition per column."""
+        from scipy.ndimage import gaussian_filter
+
+        smooth = gaussian_filter(block, sigma=(0.75, 2.0, 2.0))
+        return np.maximum(smooth[:-1] - smooth[1:], 0.0).argmax(axis=0)
+
+    def _apply_surface_attenuation(self, block):
+        """reduce local spatial contrast only near the estimated surface band."""
+        from scipy.ndimage import gaussian_filter
+
+        surface = self._estimate_surface_depth(block)
+        depth_axis = np.arange(block.shape[0], dtype=np.float32)[:, None, None]
+        sigma = max(self.surface_atten_sigma, 0.25)
+        band = np.exp(-0.5 * ((depth_axis - surface[None]) / sigma) ** 2)
+        local_mean = gaussian_filter(block, sigma=(0.0, 3.0, 3.0))
+        strength = random.uniform(self.surface_atten_min, self.surface_atten_max)
+        return np.clip(block - strength * band * (block - local_mean), 0.0, 1.0)
+
+    def _apply_acquisition_blur(self, block):
+        """apply a mild in-plane point-spread blur while preserving depth resolution."""
+        from scipy.ndimage import gaussian_filter
+
+        sigma = random.uniform(self.acquisition_blur_min, self.acquisition_blur_max)
+        return gaussian_filter(block, sigma=(0.0, sigma, sigma)).astype(block.dtype, copy=False)
+
+    def _apply_correlated_noise(self, block):
+        """add low-frequency reconstruction-like noise correlated across space and depth."""
+        from scipy.ndimage import gaussian_filter
+
+        noise = gaussian_filter(
+            np.random.standard_normal(block.shape).astype(np.float32),
+            sigma=(1.0, self.correlated_noise_sigma, self.correlated_noise_sigma),
+        )
+        noise = noise / max(float(noise.std()), 1e-6)
+        strength = random.uniform(self.correlated_noise_min, self.correlated_noise_max)
+        return np.clip(block + strength * noise, 0.0, 1.0)
 
     def _apply_depth_mask(self, block):
         """independently zero out depth slices with depth_mask_prob each.
@@ -272,12 +408,13 @@ class Transform:
 
 class InkVolumeDataset(IterableDataset):
     """iterable dataset for ink volume data"""
-    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, scroll_mask=None, split_mask=None):
+    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, scroll_mask=None, split_mask=None, character_grid=None):
         """initializes the dataset.
         scroll_mask: optional papyrus mask distinct from `mask` (which may be ring-restricted);
         multitile uses it to drop sub-tiles straddling the scroll boundary. defaults to `mask`.
         split_mask: optional manual train/validation assignment for multitile targets. `mask`
         still gates the same ring windows as the legacy path; this mask partitions their targets.
+        character_grid: optional subtile-resolution connected-component ids for character metrics.
         soft_labels: optional full-res float [0,1] ink-probability map (expanded+blurred
         eroded labels). when given AND config.data.dense_soft_labels is set, the dense
         per-pixel target uses these CONTINUOUS values instead of the hard binary label —
@@ -395,6 +532,14 @@ class InkVolumeDataset(IterableDataset):
         # pos-only: in ink windows, supervise only ink sub-tiles (mask out non-ink ones)
         self._mt_pos_only = bool(getattr(config.data, "multitile_pos_only", False))
         self._manual_split = not bool(getattr(config.data, "simple_split", True))
+        self._character_metrics = bool(getattr(config.tra, "character_macro_metrics", False))
+        self._character_balanced = bool(
+            getattr(config.data, "character_balanced_sampling", False)
+        ) and self.shuffle
+        self._character_grid = character_grid
+        self._character_nearest = None
+        self._character_pos_coords = {}
+        self._character_neg_coords = {}
 
         self.z_start = getattr(self.c.data, "train_d_start", self.c.data.d_start)
         self.z_end   = getattr(self.c.data, "train_d_end",   self.c.data.d_end)
@@ -416,6 +561,10 @@ class InkVolumeDataset(IterableDataset):
             self.samples_per_epoch = min(len(self.block_coords), int(self._max_samples))
         else:
             self.samples_per_epoch = len(self.block_coords)
+        if self._character_metrics or self._character_balanced:
+            if not self._mt or self._character_grid is None:
+                raise ValueError("character-aware mode requires multitile labels and a character grid")
+            self._prepare_character_targets()
 
     def _mt_center_bounds(self, y_off, x_off):
         """absolute y/x bounds of the multitile center window for this sample.
@@ -447,6 +596,100 @@ class InkVolumeDataset(IterableDataset):
         ys, ye = max(0, y0), min(h, y1)
         xs, xe = max(0, x0), min(w, x1)
         return ys < ye and xs < xe and bool(np.any(split[ys:ye, xs:xe] > 0))
+
+    def _prepare_character_targets(self):
+        """associate each valid target cell and ring negative with one character."""
+        from scipy.ndimage import distance_transform_edt
+
+        chars = np.asarray(self._character_grid, dtype=np.int32).copy()
+        if self._has_split_mask:
+            split = self.split_mask
+            sub = self._mt_sub
+            gh, gw = chars.shape
+            split_cells = split[:gh * sub, :gw * sub].reshape(
+                gh, sub, gw, sub
+            ).all(axis=(1, 3))
+            chars[~split_cells] = 0
+        if not np.any(chars > 0):
+            raise ValueError(f"character-aware split has no positive characters for {self.scroll_id}")
+
+        _, nearest_indices = distance_transform_edt(chars == 0, return_indices=True)
+        self._character_nearest = chars[nearest_indices[0], nearest_indices[1]]
+
+        if not self._character_balanced:
+            return
+        for coord in self.block_coords:
+            _, y_off, x_off = coord
+            labels = self._fetch_label_mt(y_off, x_off).numpy()
+            valid = self._fetch_mask_mt(y_off, x_off).numpy() > 0
+            component_ids = self._fetch_character_ids(y_off, x_off, labels, valid)
+            positive_ids = np.unique(component_ids[(labels > 0) & valid])
+            if positive_ids.size:
+                positive_ids = positive_ids[positive_ids > 0]
+                if positive_ids.size == 1:
+                    component_id = int(positive_ids[0])
+                    positive_count = int((
+                        (component_ids == component_id) & (labels > 0) & valid
+                    ).sum())
+                    self._character_pos_coords.setdefault(component_id, []).extend(
+                        [coord] * positive_count
+                    )
+                continue
+            negative_ids = np.unique(component_ids[(labels <= 0) & valid])
+            negative_ids = negative_ids[negative_ids > 0]
+            if negative_ids.size == 1:
+                self._character_neg_coords.setdefault(int(negative_ids[0]), []).append(coord)
+
+        valid_chars = sorted(set(self._character_pos_coords) & set(self._character_neg_coords))
+        self._character_ids = valid_chars
+        if not valid_chars:
+            raise ValueError(f"no characters have both positive and ring-negative windows for {self.scroll_id}")
+        print(
+            f"[character-sampling] scroll {self.scroll_id}: {len(valid_chars)} characters "
+            f"with positive and ring-negative windows"
+        )
+
+    def _fetch_character_ids(self, y_off, x_off, labels, valid):
+        """return one associated component id per multitile target."""
+        out = np.zeros(self._mt_grid * self._mt_grid, dtype=np.int64)
+        if self._character_grid is None or self._character_nearest is None:
+            return out
+        y0, _, x0, _ = self._mt_center_bounds(y_off, x_off)
+        gh, gw = self._character_grid.shape
+        for iy in range(self._mt_grid):
+            gy = (y0 + iy * self._mt_sub) // self._mt_sub
+            if gy < 0 or gy >= gh:
+                continue
+            for ix in range(self._mt_grid):
+                index = iy * self._mt_grid + ix
+                if not valid[index]:
+                    continue
+                gx = (x0 + ix * self._mt_sub) // self._mt_sub
+                if gx < 0 or gx >= gw:
+                    continue
+                if labels[index] > 0:
+                    out[index] = int(self._character_grid[gy, gx])
+                else:
+                    out[index] = int(self._character_nearest[gy, gx])
+        return out
+
+    def _character_balanced_coords(self):
+        """pair one positive and one local-ring window per uniformly sampled character."""
+        target = self.samples_per_epoch
+        coords = []
+        while len(coords) < target:
+            character_ids = list(self._character_ids)
+            np.random.shuffle(character_ids)
+            for component_id in character_ids:
+                positive = self._character_pos_coords[component_id]
+                negative = self._character_neg_coords[component_id]
+                coords.append(positive[np.random.randint(len(positive))])
+                if len(coords) >= target:
+                    break
+                coords.append(negative[np.random.randint(len(negative))])
+                if len(coords) >= target:
+                    break
+        return coords
 
     @property
     def mask(self):
@@ -633,16 +876,26 @@ class InkVolumeDataset(IterableDataset):
         ctx = int(getattr(self.c.data, "context_size", 0) or 0)
         use_ctx = ctx > tile
         sp = ctx if use_ctx else tile
+        target_offset = (0, 0)
 
         try:
             if use_ctx:
                 pad = (ctx - tile) // 2
-                max_j = 0 if self._mt else int(getattr(self.c.data, "ctx_jitter", 0))
+                target_aware = bool(getattr(self.c.data, "target_aware_ctx_jitter", False))
+                max_j = int(getattr(self.c.data, "ctx_jitter", 0))
+                if self._mt and not target_aware:
+                    max_j = 0
+                if self._mt and target_aware:
+                    center = self._mt_grid * self._mt_sub
+                    max_j = min(max_j, max(0, (ctx - center) // 2))
                 if max_j > 0 and self.shuffle:
                     # shift the context window; labeled tile moves to (pad+jy, pad+jx) in the block
-                    # while center crop still fires at (pad, pad) -> intentional ~50% label overlap
-                    jy = random.randint(-max_j, max_j)
-                    jx = random.randint(-max_j, max_j)
+                    # target-aware mode passes this offset to every model-side prediction crop
+                    step = max(1, int(getattr(self.c.data, "context_downsample", 1)))
+                    max_step = max_j // step
+                    jy = random.randint(-max_step, max_step) * step
+                    jx = random.randint(-max_step, max_step) * step
+                    target_offset = (jy, jx)
                 else:
                     jy = jx = 0
                 # depth window jitter: shift which slices we read to attack depth-profile position memorization
@@ -659,7 +912,7 @@ class InkVolumeDataset(IterableDataset):
         if block.shape != (self.depth, sp, sp):
             block = np.zeros((self.depth, sp, sp), dtype=np.float32)
 
-        return self._normalize_block(block)
+        return self._normalize_block(block), target_offset
 
     def _read_ctx_block(self, z, ndepth, y0, x0, ctx):
         """read a ctx x ctx spatial crop starting at absolute (y0,x0), zero-padding any region
@@ -772,9 +1025,13 @@ class InkVolumeDataset(IterableDataset):
 
     def __iter__(self) -> Iterator:
         """sets up the iterator for an epoch"""
-        shuffled_coords = self.block_coords.copy()
+        if self._character_balanced:
+            shuffled_coords = self._character_balanced_coords()
+        else:
+            shuffled_coords = self.block_coords.copy()
         if self.shuffle:
-            np.random.shuffle(shuffled_coords)
+            if not self._character_balanced:
+                np.random.shuffle(shuffled_coords)
             # cap tiles per epoch (fresh random subset each epoch) to bound wall-time
             if self._max_samples is not None and len(shuffled_coords) > int(self._max_samples):
                 shuffled_coords = shuffled_coords[:int(self._max_samples)]
@@ -804,13 +1061,39 @@ class InkVolumeDataset(IterableDataset):
         
         # fetch data components
         mask = self._fetch_mask(y_off, x_off)
-        block = self._fetch_block(z_off, y_off, x_off)
+        block, target_offset = self._fetch_block(z_off, y_off, x_off)
         label = self._fetch_label(y_off, x_off)
+        component_ids = None
+        if self._character_metrics or self._character_balanced:
+            component_ids = torch.from_numpy(self._fetch_character_ids(
+                y_off,
+                x_off,
+                label.numpy(),
+                mask.numpy() > 0,
+            ))
+        target_offset_tensor = (
+            torch.tensor(target_offset, dtype=torch.long)
+            if bool(getattr(self.c.data, "target_aware_ctx_jitter", False)) else None
+        )
         
         # apply transforms if enabled
         if self.apply_transforms:
             if self._mt:
-                block, label, mask = self.transform(block, label, mask)
+                transformed = self.transform(
+                    block,
+                    label,
+                    mask,
+                    component_ids,
+                    target_offset_tensor,
+                )
+                if component_ids is None and target_offset_tensor is None:
+                    block, label, mask = transformed
+                elif component_ids is None:
+                    block, label, mask, target_offset_tensor = transformed
+                elif target_offset_tensor is None:
+                    block, label, mask, component_ids = transformed
+                else:
+                    block, label, mask, component_ids, target_offset_tensor = transformed
             else:
                 block = self.transform(block)
         
@@ -821,8 +1104,30 @@ class InkVolumeDataset(IterableDataset):
         block_tensor = torch.from_numpy(block).unsqueeze(0)
         
         self.current_idx += 1
-        if bool(getattr(self.c.tra, "dann", False)) or bool(getattr(self.c.tra, "supcon_cross_frag", False)):
+        with_domain = bool(getattr(self.c.tra, "dann", False)) or bool(
+            getattr(self.c.tra, "supcon_cross_frag", False)
+        )
+        if with_domain and component_ids is not None and target_offset_tensor is not None:
+            return (
+                block_tensor,
+                label,
+                mask,
+                torch.tensor(self.domain_id, dtype=torch.long),
+                component_ids,
+                target_offset_tensor,
+            )
+        if with_domain and component_ids is not None:
+            return block_tensor, label, mask, torch.tensor(self.domain_id, dtype=torch.long), component_ids
+        if with_domain and target_offset_tensor is not None:
+            return block_tensor, label, mask, torch.tensor(self.domain_id, dtype=torch.long), target_offset_tensor
+        if with_domain:
             return block_tensor, label, mask, torch.tensor(self.domain_id, dtype=torch.long)
+        if component_ids is not None and target_offset_tensor is not None:
+            return block_tensor, label, mask, component_ids, target_offset_tensor
+        if component_ids is not None:
+            return block_tensor, label, mask, component_ids
+        if target_offset_tensor is not None:
+            return block_tensor, label, mask, target_offset_tensor
         return block_tensor, label, mask
 
 
@@ -956,10 +1261,16 @@ class DotPositiveDataset(IterableDataset):
                 mask_tile = mask_arr[y0:y0 + T, x0:x0 + T].astype(np.float32)
                 label_t = torch.tensor([1.0])
                 mask_t  = torch.from_numpy(mask_tile)
+            with_characters = bool(getattr(c.tra, "character_macro_metrics", False))
+            with_offset = bool(getattr(c.data, "target_aware_ctx_jitter", False))
+            extras = []
             if with_dann:
-                yield block_t, label_t, mask_t, torch.tensor(domain_id, dtype=torch.long)
-            else:
-                yield block_t, label_t, mask_t
+                extras.append(torch.tensor(domain_id, dtype=torch.long))
+            if with_characters:
+                extras.append(torch.zeros_like(label_t, dtype=torch.long))
+            if with_offset:
+                extras.append(torch.zeros(2, dtype=torch.long))
+            yield (block_t, label_t, mask_t, *extras)
 
 
 class DataManager:
@@ -1121,6 +1432,24 @@ class DataManager:
         the shared range on the other axis."""
         supervision_mask = self._make_ring_mask() if getattr(self.c.data, 'ring_negatives', False) else self.mask
         manual_split = not bool(getattr(self.c.data, "simple_split", True))
+        character_aware = (
+            bool(getattr(self.c.tra, "character_macro_metrics", False))
+            or bool(getattr(self.c.data, "character_balanced_sampling", False))
+        )
+        split_unit = (
+            int(getattr(self.c.model, "multitile_subtile", self.c.data.tile_size))
+            if getattr(self.c.model, "multitile", False)
+            else int(self.c.data.tile_size)
+        )
+        character_grid = None
+        if character_aware:
+            if not bool(getattr(self.c.model, "multitile", False)):
+                raise ValueError("character-aware mode currently requires multitile=True")
+            character_grid = self._build_character_grid(
+                self.labels,
+                split_unit,
+                int(getattr(self.c.data, "character_min_pixels", 8)),
+            )
         if manual_split:
             if self.manual_train_mask is None:
                 raise RuntimeError(f"manual split mask was not loaded for scroll {self.scroll_id}")
@@ -1128,12 +1457,13 @@ class DataManager:
             # align the hand mask to the model's actual target grid. a target unit is assigned
             # to train if any hand-mask pixel touches it; the expanded unit is then wholly train
             # or wholly valid, so no multitile target can leak into both datasets.
-            split_unit = (
-                int(getattr(self.c.model, "multitile_subtile", self.c.data.tile_size))
-                if getattr(self.c.model, "multitile", False)
-                else int(self.c.data.tile_size)
-            )
             assignment = self._align_manual_mask(self.manual_train_mask, split_unit)
+            if character_grid is not None:
+                character_grid = self._exclude_characters_crossing_split(
+                    character_grid,
+                    assignment,
+                    split_unit,
+                )
             eligible = np.asarray(supervision_mask) > 0.5
             if getattr(self.c.model, "multitile", False):
                 # preserve the legacy ring-window gate and partition only the emitted targets
@@ -1186,6 +1516,7 @@ class DataManager:
             domain_id=self.domain_id,
             scroll_mask=scroll_mask_arg,
             split_mask=train_split_mask,
+            character_grid=character_grid,
         )
         valid_set = InkVolumeDataset(
             self.vol,
@@ -1200,6 +1531,7 @@ class DataManager:
             domain_id=self.domain_id,
             scroll_mask=scroll_mask_arg,
             split_mask=valid_split_mask,
+            character_grid=character_grid,
         )
         # the datasets have already copied what they need as uint8. the manager's own
         # float64 mask/labels (mask/255.0) are not used on the training side afterward
@@ -1211,6 +1543,66 @@ class DataManager:
         self.mask = (np.asarray(self.mask) > 0.5).astype(np.uint8)
         self.labels = (np.asarray(self.labels) > 0.5).astype(np.uint8)
         return train_set, valid_set
+
+    @staticmethod
+    def _build_character_grid(labels, unit, min_pixels=8):
+        """map full-resolution connected ink components onto the multitile target grid."""
+        binary = (np.asarray(labels) > 0.5).astype(np.uint8)
+        count, components, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+        keep = stats[:, cv2.CC_STAT_AREA] >= max(1, int(min_pixels))
+        keep[0] = False
+        remap = np.zeros(count, dtype=np.int32)
+        kept_ids = np.flatnonzero(keep)
+        remap[kept_ids] = np.arange(1, len(kept_ids) + 1, dtype=np.int32)
+        components = remap[components]
+
+        unit = max(1, int(unit))
+        height = (components.shape[0] // unit) * unit
+        width = (components.shape[1] // unit) * unit
+        grid_h, grid_w = height // unit, width // unit
+        character_grid = np.zeros((grid_h, grid_w), dtype=np.int32)
+        ys, xs = np.nonzero(components[:height, :width])
+        if ys.size:
+            component_ids = components[ys, xs].astype(np.int64)
+            cell_ids = (ys // unit).astype(np.int64) * grid_w + (xs // unit)
+            keys = cell_ids * (len(kept_ids) + 1) + component_ids
+            unique_keys, pixel_counts = np.unique(keys, return_counts=True)
+            unique_cells = unique_keys // (len(kept_ids) + 1)
+            unique_components = unique_keys % (len(kept_ids) + 1)
+            order = np.lexsort((-pixel_counts, unique_cells))
+            sorted_cells = unique_cells[order]
+            first = np.concatenate(([True], sorted_cells[1:] != sorted_cells[:-1]))
+            chosen_cells = sorted_cells[first]
+            chosen_components = unique_components[order][first]
+            character_grid.flat[chosen_cells] = chosen_components.astype(np.int32)
+        print(
+            f"[character-components] {len(kept_ids)} components at {unit}px target resolution"
+        )
+        return character_grid
+
+    @staticmethod
+    def _exclude_characters_crossing_split(character_grid, assignment, unit):
+        """exclude components crossing the fixed manual split from character-aware analysis."""
+        unit = max(1, int(unit))
+        grid_h, grid_w = character_grid.shape
+        cells = assignment[:grid_h * unit, :grid_w * unit].reshape(
+            grid_h, unit, grid_w, unit
+        ).all(axis=(1, 3))
+        crossing = []
+        for component_id in np.unique(character_grid):
+            if component_id <= 0:
+                continue
+            member = character_grid == component_id
+            values = cells[member]
+            if values.any() and not values.all():
+                crossing.append(int(component_id))
+        out = character_grid.copy()
+        if crossing:
+            out[np.isin(out, crossing)] = 0
+            print(
+                f"[character-split] excluded {len(crossing)} character(s) crossing the fixed split"
+            )
+        return out
 
     @staticmethod
     def _align_manual_mask(mask, unit):

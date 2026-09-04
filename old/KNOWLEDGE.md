@@ -1483,3 +1483,49 @@ ceases to coincide with its target. Photometric/FDA/noise transforms remain spat
 9. Once the w013 methodology transfers between held-out letters, add fragments back gradually.
   Test weak delayed DANN only after domain-balanced batches exist; it cannot be evaluated on one
   scroll and should not be bundled with the data-scale change.
+
+---
+
+## 18) Character-Aware Sampling and Metrics (2026-09-03)
+
+Campaign 18 copies the corrected campaign-17 baseline. Character metrics are instrumentation and
+therefore enabled in every arm; only `character_balanced_sampling` changes the training stream in
+the principal A/B.
+
+Character construction:
+
+- connected components are computed from the full-resolution eroded ink label
+- components smaller than 8 pixels are discarded as noise
+- each 8px target cell receives its dominant positive component id
+- each valid ring-negative cell is assigned to its nearest character
+- components crossing the fixed manual split are excluded from character sampling and metrics
+
+Balanced training cycles uniformly over characters. For each character it samples one positive
+target's containing window and then one associated ink-free closed-ring window. The epoch length remains equal to the
+ordinary dataset length, so the comparison changes representation rather than update count.
+
+Character metrics are computed independently per component against its associated ring:
+
+- macro positive recall
+- macro local-ring FPR
+- macro F1
+- macro average precision
+- success fraction: recall >= 0.5 and ring FPR <= 0.1
+
+`Character/SuccessFraction/Valid` is the primary new selection metric and writes a separate
+`*_best_character.pth` checkpoint. It does not replace target-level PR-AUC in the logs.
+
+Campaign-18 tests:
+
+- `baseline`: ordinary windows, character metrics only
+- `character_balanced`: uniform character positive/ring pairs
+- `depth_warp`: smooth +/-2-slice spatial depth displacement
+- `surface_attenuation`: local contrast attenuation near the estimated surface
+- `acquisition_blur`: mild in-plane Gaussian point-spread blur
+- `correlated_noise`: low-frequency 3D reconstruction-like noise
+- `context_cutout`: two small cutouts restricted to the context outside the 16px target center
+- `context_jitter`: same global target displaced up to +/-32px inside the 192px context; all
+  prediction-local crops consume the transformed offset
+
+All new augmentations default off. Surface attenuation, blur, and correlated noise are explicitly
+exploratory: they are implemented as isolated tests, not asserted to match an observed w013 defect.

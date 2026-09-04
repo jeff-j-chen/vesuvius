@@ -128,9 +128,12 @@ class DataConfig:
     dot_inklabel_dir: str = ""  # optional dir of binary dot labels; only positives are added to train
     dot_scroll_whitelist: List[int] = field(default_factory=list)  # if non-empty, load dots ONLY for these scroll ids
     ctx_jitter: int = 0  # max pixel jitter for context window; varies surrounding context during training
+    target_aware_ctx_jitter: bool = False
     depth_jitter: int = 0  # max slice jitter for depth window start; attacks depth-profile position memorization
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
     multitile_pos_only: bool = False  # in ink-containing windows, supervise ONLY ink sub-tiles (mask out non-ink ones to avoid labelling unlabelled-ink neighbours as negatives); ink-free ring windows still give negatives
+    character_balanced_sampling: bool = False
+    character_min_pixels: int = 8
 
     @property
     def test_scroll_id(self) -> Optional[int]:
@@ -160,6 +163,21 @@ class DataloaderConfig:
     elastic_prob: float = 0.0
     elastic_alpha: float = 15.0  # displacement magnitude in pixels
     elastic_sigma: float = 5.0   # gaussian smoothing sigma for displacement field
+    depth_warp_prob: float = 0.0
+    depth_warp_max: float = 2.0
+    depth_warp_sigma: float = 24.0
+    surface_atten_prob: float = 0.0
+    surface_atten_min: float = 0.1
+    surface_atten_max: float = 0.35
+    surface_atten_sigma: float = 2.0
+    acquisition_blur_prob: float = 0.0
+    acquisition_blur_min: float = 0.4
+    acquisition_blur_max: float = 0.9
+    correlated_noise_prob: float = 0.0
+    correlated_noise_min: float = 0.003
+    correlated_noise_max: float = 0.015
+    correlated_noise_sigma: float = 6.0
+    cutout_protect_center: bool = False
 
 
 @dataclass
@@ -225,6 +243,10 @@ class TrainingConfig:
     supcon_cross_frag: bool = False  # restrict supcon positives to cross-fragment pairs only
     entropy_min_lambda: float = 0.0  # weight for entropy reward on unlabeled (validation) tiles
     entropy_min_batch_size: int = 8  # unlabeled samples per step; kept small to avoid OOM
+    character_macro_metrics: bool = False
+    character_score_threshold: float = 0.5
+    character_recall_target: float = 0.5
+    character_max_ring_fpr: float = 0.1
 
 @dataclass
 class ModelConfig:

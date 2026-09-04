@@ -476,12 +476,33 @@ class NnUnet3dLcndz(nn.Module):
         cs = (H - t) // 2                        # top-left of center crop
         return voxel_map[:, :, :, cs:cs + t, cs:cs + t]
 
-    def _crop_center_feat(self, voxel_map: torch.Tensor, feat: int) -> torch.Tensor:
-        """crop the voxel map to a centered feat x feat region (feature-map pixels)."""
+    def _crop_center_feat(
+        self,
+        voxel_map: torch.Tensor,
+        feat: int,
+        target_offsets: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """crop a target-aligned feat x feat region, optionally displaced from center."""
         H, W = voxel_map.shape[3], voxel_map.shape[4]
         cy = max(0, (H - feat) // 2)
         cx = max(0, (W - feat) // 2)
-        return voxel_map[:, :, :, cy:cy + feat, cx:cx + feat]
+        if target_offsets is None:
+            return voxel_map[:, :, :, cy:cy + feat, cx:cx + feat]
+
+        offsets = torch.div(
+            target_offsets.to(device=voxel_map.device, dtype=torch.long),
+            self._downsample,
+            rounding_mode="trunc",
+        )
+        rows = cy + offsets[:, 0:1] + torch.arange(feat, device=voxel_map.device)
+        cols = cx + offsets[:, 1:2] + torch.arange(feat, device=voxel_map.device)
+        rows = rows.clamp(0, H - 1)
+        cols = cols.clamp(0, W - 1)
+        B, C, D = voxel_map.shape[:3]
+        row_index = rows[:, None, None, :, None].expand(B, C, D, feat, W)
+        cropped_rows = torch.gather(voxel_map, dim=3, index=row_index)
+        col_index = cols[:, None, None, None, :].expand(B, C, D, feat, feat)
+        return torch.gather(cropped_rows, dim=4, index=col_index)
 
     def _multitile_aggregate(self, center: torch.Tensor) -> torch.Tensor:
         """aggregate the (B,1,D,cf,cf) center crop into a (B, grid*grid) map of per-sub-tile
@@ -511,19 +532,27 @@ class NnUnet3dLcndz(nn.Module):
         )
         return score.view(B, n * n)
 
-    def _multitile_feature_bags(self, decoded: torch.Tensor) -> tuple[torch.Tensor, int]:
+    def _multitile_feature_bags(
+        self,
+        decoded: torch.Tensor,
+        target_offsets: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, int]:
         """fold centered decoder features into independent multitile bags."""
         n, sub = self._mt_grid, self._mt_sub_feat
-        center = self._crop_center_feat(decoded, self._mt_center_feat)
+        center = self._crop_center_feat(decoded, self._mt_center_feat, target_offsets)
         B, C, D, _, _ = center.shape
         bags = center.reshape(B, C, D, n, sub, n, sub).permute(
             0, 3, 5, 1, 2, 4, 6
         ).reshape(B * n * n, C, D, sub, sub)
         return bags, B
 
-    def _multitile_feature_attn_aggregate(self, decoded: torch.Tensor) -> torch.Tensor:
+    def _multitile_feature_attn_aggregate(
+        self,
+        decoded: torch.Tensor,
+        target_offsets: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """attention-MIL over decoder feature vectors rather than scalar voxel logits."""
-        bags, batch = self._multitile_feature_bags(decoded)
+        bags, batch = self._multitile_feature_bags(decoded, target_offsets)
         score, entropy_loss = self.feature_attn_mil(
             bags,
             entropy_weight=self._attn_entropy_weight,
@@ -535,22 +564,31 @@ class NnUnet3dLcndz(nn.Module):
         )
         return score.view(batch, self._mt_grid * self._mt_grid)
 
-    def _multitile_embeddings(self, decoded: torch.Tensor) -> torch.Tensor:
+    def _multitile_embeddings(
+        self,
+        decoded: torch.Tensor,
+        target_offsets: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """one decoder embedding per multitile target for target-aligned SupCon."""
-        bags, batch = self._multitile_feature_bags(decoded)
+        bags, batch = self._multitile_feature_bags(decoded, target_offsets)
         pooled = bags.mean(dim=(2, 3, 4))
         return pooled.view(batch, self._mt_grid * self._mt_grid, -1)
 
     def _surface_guided_aggregate(
         self,
         center_voxels: torch.Tensor,
+        target_offsets: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor] | tuple[None, None]:
         """pool a soft surface band and return an entropy-derived blend weight."""
         if self.last_new_surface_probs is None:
             return None, None
 
         n, sub = self._mt_grid, self._mt_sub_feat
-        surface = self._crop_center_feat(self.last_new_surface_probs, self._mt_center_feat)
+        surface = self._crop_center_feat(
+            self.last_new_surface_probs,
+            self._mt_center_feat,
+            target_offsets,
+        )
         depth_axis = torch.arange(
             surface.shape[2],
             device=surface.device,
@@ -591,6 +629,7 @@ class NnUnet3dLcndz(nn.Module):
         self,
         x: torch.Tensor,
         grl_scale: float = 1.0,
+        target_offsets: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         bottleneck, decoded = self._encode_decode(x)
         voxel_map = self.out_head(decoded)
@@ -602,7 +641,11 @@ class NnUnet3dLcndz(nn.Module):
         # clone (grad-preserving) so the center crop owns its storage: it is stored for the spill
         # loss (needs grad) and must not alias voxel_map / last_voxel_map_full
         if self._multitile:
-            center_voxels = self._crop_center_feat(voxel_map, self._mt_center_feat).clone()
+            center_voxels = self._crop_center_feat(
+                voxel_map,
+                self._mt_center_feat,
+                target_offsets,
+            ).clone()
         else:
             center_voxels = self._crop_to_center_tile(voxel_map).clone()
         self.last_center_voxel_map = center_voxels
@@ -610,19 +653,22 @@ class NnUnet3dLcndz(nn.Module):
         self.last_embedding_detached = embedding.detach().clone()
         domain_logits = self.domain_head(embedding, grl_scale=grl_scale) if self.domain_head is not None else None
         if self.supcon_head is not None:
-            supcon_input = self._multitile_embeddings(decoded) if self._multitile else embedding
+            supcon_input = (
+                self._multitile_embeddings(decoded, target_offsets)
+                if self._multitile else embedding
+            )
             supcon_z = self.supcon_head(supcon_input)
         else:
             supcon_z = None
         if self._multitile:
             if self.feature_attn_mil is not None:
-                score = self._multitile_feature_attn_aggregate(decoded)
+                score = self._multitile_feature_attn_aggregate(decoded, target_offsets)
             elif self.attn_mil is not None:
                 score = self._multitile_attn_aggregate(center_voxels)
             else:
                 score = self._multitile_aggregate(center_voxels)
             if self._surface_guided_mil:
-                guided, alpha = self._surface_guided_aggregate(center_voxels)
+                guided, alpha = self._surface_guided_aggregate(center_voxels, target_offsets)
                 if guided is not None and alpha is not None:
                     score = (1.0 - alpha) * score + alpha * guided
                     self.last_surface_guided_alpha = alpha.detach()
@@ -638,8 +684,12 @@ class NnUnet3dLcndz(nn.Module):
             score = self._bag_score(center_voxels)
         return score, embedding, domain_logits, supcon_z
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        score, _, _, _ = self.forward_with_extras(x)
+    def forward(
+        self,
+        x: torch.Tensor,
+        target_offsets: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        score, _, _, _ = self.forward_with_extras(x, target_offsets=target_offsets)
         return score
 
 

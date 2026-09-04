@@ -1355,6 +1355,28 @@ class TensorboardVisualizer:
         self.writer.add_scalar("AUC/PR_AUC/Train", train_metrics['pr_auc'], epoch)
         self.writer.add_scalar("AUC/PR_AUC/Valid", val_metrics['pr_auc'], epoch)
 
+        character_tags = {
+            "RecallMacro": "character_recall_macro",
+            "RingFPRMacro": "character_ring_fpr_macro",
+            "F1Macro": "character_f1_macro",
+            "APMacro": "character_ap_macro",
+            "SuccessFraction": "character_success_fraction",
+            "Count": "character_count",
+        }
+        for display_name, metric_name in character_tags.items():
+            if metric_name in train_metrics:
+                self.writer.add_scalar(
+                    f"Character/{display_name}/Train",
+                    train_metrics[metric_name],
+                    epoch,
+                )
+            if metric_name in val_metrics:
+                self.writer.add_scalar(
+                    f"Character/{display_name}/Valid",
+                    val_metrics[metric_name],
+                    epoch,
+                )
+
         self.writer.add_scalar('Learning_Rate', learning_rate, epoch)
         self.writer.add_scalar('Time_Elapsed', time_elapsed, epoch)
 
@@ -1825,7 +1847,7 @@ class TensorboardVisualizer:
                     return resized
                 raw_1_1 = _raw_ink("1_1um"); raw_2_4 = _raw_ink("2_4um")
 
-                fig = self._create_eval_figure_2x3(
+                fig = self._create_eval_figure_2x2(
                     reg_pred,
                     tta_pred,
                     label_binary,
@@ -2285,7 +2307,6 @@ class TensorboardVisualizer:
         ax_pred.set_title(f'Predictions (Depth {d_start}-{d_end})', fontsize=9)
 
         split_pos = train_pred.shape[1] - 0.5
-        ax_pred.axvline(x=split_pos, color='white', linestyle=':', linewidth=2.0)
         ax_pred.axis('off')
 
         ax_overlay = axes[1]
@@ -2327,15 +2348,15 @@ class TensorboardVisualizer:
             out[m] = ranks / max(len(vals) - 1, 1)
         return out
 
-    def _create_eval_figure_2x3(self, reg_pred, tta_pred, label_binary,
+    def _create_eval_figure_2x2(self, reg_pred, tta_pred, label_binary,
                                 raw_1_1, raw_2_4, train_split_n, split_axis="x",
                                 manual_train_grid=None):
-        """2-column x 3-row eval figure:
-            row 0: regular inference        | inference + inklabel overlay
-            row 1: TTA inference            | TTA + inklabel overlay
-            row 2: 1.1um inklabel_raw       | 2.4um inklabel_raw
+        """2-column x 2-row eval figure:
+            row 0: TTA inference            | TTA + inklabel overlay
+            row 1: 1.1um inklabel_raw       | 2.4um inklabel_raw
         every panel occupies the same cell footprint; predictions use SCROLL_CMAP (0-1),
-        the raw inklabel references are grayscale. split line = train/valid divider.
+        the raw inklabel references are grayscale. the split boundary is drawn only on
+        the prediction-plus-inklabel overlay.
         """
         h_tiles, w_tiles = reg_pred.shape
         aspect = w_tiles / max(h_tiles, 1)
@@ -2343,9 +2364,9 @@ class TensorboardVisualizer:
         panel_h = max(2.0, min(12.0, panel_w / aspect))
         panel_w = panel_h * aspect
         fig_w = panel_w * 2 + 0.3
-        fig_h = panel_h * 3 + 0.5
+        fig_h = panel_h * 2 + 0.4
 
-        fig, axes = plt.subplots(3, 2, figsize=(fig_w, fig_h), squeeze=False)
+        fig, axes = plt.subplots(2, 2, figsize=(fig_w, fig_h), squeeze=False)
         split_pos = train_split_n - 0.5 if train_split_n is not None else None
 
         def _draw_split(ax):
@@ -2386,22 +2407,18 @@ class TensorboardVisualizer:
             ax.imshow(pmap, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
             if overlay:
                 _overlay(ax, pmap)
-            _draw_split(ax)
+                _draw_split(ax)
             ax.set_title(title, fontsize=8); ax.axis('off')
 
         tp = tta_pred if tta_pred is not None else reg_pred
-        reg_disp = self._display_norm(reg_pred)
         tp_disp = self._display_norm(tp)
-        _pred_panel(axes[0, 0], reg_disp, "inference")
-        _pred_panel(axes[0, 1], reg_disp, "inference + inklabel", overlay=True)
-        _pred_panel(axes[1, 0], tp_disp, "TTA inference")
-        _pred_panel(axes[1, 1], tp_disp, "TTA + inklabel", overlay=True)
+        _pred_panel(axes[0, 0], tp_disp, "TTA inference")
+        _pred_panel(axes[0, 1], tp_disp, "TTA + inklabel", overlay=True)
 
-        for ax, raw, ttl in ((axes[2, 0], raw_1_1, "1.1um inklabel_raw"),
-                             (axes[2, 1], raw_2_4, "2.4um inklabel_raw")):
+        for ax, raw, ttl in ((axes[1, 0], raw_1_1, "1.1um inklabel_raw"),
+                             (axes[1, 1], raw_2_4, "2.4um inklabel_raw")):
             if raw is not None:
                 ax.imshow(raw, cmap="gray", vmin=0, vmax=255, aspect='equal')
-            _draw_split(ax)
             ax.set_title(ttl, fontsize=8); ax.axis('off')
 
         plt.subplots_adjust(wspace=0.04, hspace=0.12, left=0.01, right=0.99, top=0.98, bottom=0.01)
@@ -2462,7 +2479,6 @@ class TensorboardVisualizer:
             ax_pred = axes[row, 0]
             ax_pred.imshow(full_pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
             ax_pred.set_title(f'Depth {d_start}-{d_end}', fontsize=8)
-            _draw_split(ax_pred)
             ax_pred.axis('off')
 
             # right: same prediction + inklabel overlay
