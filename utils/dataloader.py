@@ -671,6 +671,8 @@ class InkVolumeDataset(IterableDataset):
                     out[index] = int(self._character_grid[gy, gx])
                 else:
                     out[index] = int(self._character_nearest[gy, gx])
+                if out[index] > 0:
+                    out[index] += int(self.domain_id) * 1_000_000
         return out
 
     def _character_balanced_coords(self):
@@ -1136,9 +1138,10 @@ class MultiScrollIterableDataset(IterableDataset):
     tiles from every scroll fragment interleaved (batches are integrated, not
     alternated). each child handles its own per-worker sharding, so worker N
     receives shard N of every scroll."""
-    def __init__(self, datasets):
+    def __init__(self, datasets, balance_scrolls=False):
         super().__init__()
         self.datasets = list(datasets)
+        self.balance_scrolls = bool(balance_scrolls)
         self._apply_transforms = False
 
     @property
@@ -1156,6 +1159,26 @@ class MultiScrollIterableDataset(IterableDataset):
         return sum(len(d) for d in self.datasets)
 
     def __iter__(self) -> Iterator:
+        if self.balance_scrolls and len(self.datasets) > 1:
+            worker_info = get_worker_info()
+            total = len(self)
+            if worker_info is not None:
+                total = int(np.ceil(total / float(worker_info.num_workers)))
+            yielded = 0
+            iterators = [iter(dataset) for dataset in self.datasets]
+            while yielded < total:
+                order = np.random.permutation(len(iterators))
+                for index in order:
+                    if yielded >= total:
+                        break
+                    try:
+                        sample = next(iterators[index])
+                    except StopIteration:
+                        iterators[index] = iter(self.datasets[index])
+                        sample = next(iterators[index])
+                    yielded += 1
+                    yield sample
+            return
         # build child iterators (each shards itself by worker), then randomly
         # interleave samples until every child is exhausted
         iters = [iter(d) for d in self.datasets]
@@ -1503,6 +1526,15 @@ class DataManager:
         else:
             train_x, train_y = self.train_range, self.shared_range
             valid_x, valid_y = self.valid_range, self.shared_range
+        if character_grid is not None and not manual_split:
+            character_grid = self._exclude_characters_crossing_ranges(
+                character_grid,
+                split_unit,
+                train_x,
+                train_y,
+                valid_x,
+                valid_y,
+            )
         train_set = InkVolumeDataset(
             self.vol,
             train_mask,
@@ -1601,6 +1633,35 @@ class DataManager:
             out[np.isin(out, crossing)] = 0
             print(
                 f"[character-split] excluded {len(crossing)} character(s) crossing the fixed split"
+            )
+        return out
+
+    @staticmethod
+    def _exclude_characters_crossing_ranges(
+        character_grid,
+        unit,
+        train_x,
+        train_y,
+        valid_x,
+        valid_y,
+    ):
+        """exclude connected characters spanning both axis-based dataset ranges."""
+        unit = max(1, int(unit))
+        height, width = character_grid.shape
+
+        def ids_in(x_range, y_range):
+            y0 = max(0, int(y_range[0]) // unit)
+            y1 = min(height, int(y_range[1]) // unit)
+            x0 = max(0, int(x_range[0]) // unit)
+            x1 = min(width, int(x_range[1]) // unit)
+            return set(np.unique(character_grid[y0:y1, x0:x1])) - {0}
+
+        crossing = ids_in(train_x, train_y) & ids_in(valid_x, valid_y)
+        out = character_grid.copy()
+        if crossing:
+            out[np.isin(out, list(crossing))] = 0
+            print(
+                f"[character-split] excluded {len(crossing)} character(s) crossing axis split"
             )
         return out
 

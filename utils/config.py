@@ -133,7 +133,9 @@ class DataConfig:
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
     multitile_pos_only: bool = False  # in ink-containing windows, supervise ONLY ink sub-tiles (mask out non-ink ones to avoid labelling unlabelled-ink neighbours as negatives); ink-free ring windows still give negatives
     character_balanced_sampling: bool = False
+    character_balance_scrolls: bool = False
     character_min_pixels: int = 8
+    max_samples_per_epoch: Optional[int] = None
 
     @property
     def test_scroll_id(self) -> Optional[int]:
@@ -247,6 +249,7 @@ class TrainingConfig:
     character_score_threshold: float = 0.5
     character_recall_target: float = 0.5
     character_max_ring_fpr: float = 0.1
+    character_checkpoint_metric: str = "character_ap_macro"
 
 @dataclass
 class ModelConfig:

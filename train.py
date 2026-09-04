@@ -93,6 +93,7 @@ class Trainer:
         self._scroll_train_sets = None
 
         if len(scroll_ids) > 1:
+            balance_scrolls = bool(getattr(self.c.data, "character_balance_scrolls", False))
             train_sets = []
             valid_sets = []
             self._scroll_dms = {}
@@ -113,7 +114,9 @@ class Trainer:
             # when a whitelist is set, only these scrolls have processed dots; the rest
             # of dots/*.png are unprocessed placeholders and must be skipped
             dot_whitelist = {int(s) for s in (getattr(self.c.data, "dot_scroll_whitelist", []) or [])}
-            if dot_dir:
+            if dot_dir and balance_scrolls:
+                print("[multi-scroll] dot-positive extras disabled for balanced character sampling")
+            elif dot_dir:
                 for scroll_id, dm in self._scroll_dms.items():
                     if dot_whitelist and int(scroll_id) not in dot_whitelist:
                         continue
@@ -127,7 +130,10 @@ class Trainer:
                     if len(dot_ds) > 0:
                         train_sets.append(dot_ds)
 
-            merged_train = MultiScrollIterableDataset(train_sets)
+            merged_train = MultiScrollIterableDataset(
+                train_sets,
+                balance_scrolls=balance_scrolls,
+            )
             merged_valid = MultiScrollIterableDataset(valid_sets)
             train_loader, valid_loader = get_dataloaders(merged_train, merged_valid, self.c)
             # per-scroll InkVolumeDatasets (excludes DotPositiveDataset) for pos_weight sampling
@@ -802,7 +808,12 @@ class Trainer:
         return metrics
 
     def _periodic_model_save(self, epoch: int, val_metrics: dict) -> None:
-        character_score = val_metrics.get("character_success_fraction")
+        character_metric = str(getattr(
+            self.c.tra,
+            "character_checkpoint_metric",
+            "character_ap_macro",
+        ))
+        character_score = val_metrics.get(character_metric)
         if character_score is not None and character_score > self.best_val_character:
             self.best_val_character = float(character_score)
             final_path = getattr(self.c, "save_final", None)
@@ -816,7 +827,7 @@ class Trainer:
             save_model(self.model, character_path)
             print(
                 f"New best character model saved! "
-                f"Val success fraction: {self.best_val_character:.4f}"
+                f"Val {character_metric}: {self.best_val_character:.4f}"
             )
 
         if val_metrics["f1"] > self.best_val_f1:

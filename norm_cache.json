@@ -1335,12 +1335,12 @@
             "sig": "mt_s8_g4_pos0_eroded_inklabels"
         },
         "class_weight_multitile_s8_g4_pos1": {
-            "pos_weight": 4.4989013829649735,
+            "pos_weight": 2.1448825276802594,
             "counts": {
-                "0": 34808,
-                "1": 7737
+                "0": 15885,
+                "1": 7406
             },
-            "sig": "mt_s8_g4_pos1_eroded_inklabels"
+            "sig": "mt_ringtargets_v2_s8_g4_pos1_eroded_inklabels_manual_split"
         },
         "class_weight_multitile_s8_g2_pos1": {
             "pos_weight": 1.9715206878022569,
@@ -1351,12 +1351,12 @@
             "sig": "mt_ringtargets_v2_s8_g2_pos1_eroded_inklabels_manual_split"
         },
         "class_weight_multitile_s4_g4_pos1": {
-            "pos_weight": 2.2664438705757255,
+            "pos_weight": 2.2094081942336876,
             "counts": {
-                "0": 29840,
-                "1": 13166
+                "0": 29120,
+                "1": 13180
             },
-            "sig": "mt_s4_g4_pos1_eroded_inklabels"
+            "sig": "mt_ringtargets_v2_s4_g4_pos1_eroded_inklabels_manual_split"
         },
         "class_weight_multitile_s4_g8_pos1": {
             "pos_weight": 4.627985648385444,

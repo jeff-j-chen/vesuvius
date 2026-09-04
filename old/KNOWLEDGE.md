@@ -1529,3 +1529,59 @@ Campaign-18 tests:
 
 All new augmentations default off. Surface attenuation, blur, and correlated noise are explicitly
 exploratory: they are implemented as isolated tests, not asserted to match an observed w013 defect.
+
+---
+
+## 19) Standalone Improved Baseline (2026-09-04)
+
+Campaign-17 results:
+
+- feature attention was a marginal positive and is promoted
+- surface-guided aggregation was marginal; surface feature injection alone looked qualitatively
+  stronger and is promoted
+- c32_t8 was materially stronger than c16_t8; c16_t4 was worse
+
+The outer context remained 192px in these runs. `c16`/`c32` refers to prediction-center size, not
+input context. A later audit found a sample-count confound: ring-overlap gating yields approximately
+11k c16, 20.9k c32, and 27.8k c64 training windows at the same 16px stride. Campaign 19 caps every
+arm at 20,000 windows/epoch so c64 does not receive more optimizer steps.
+
+Campaign-18 results through correlated noise:
+
+- character balancing changed the representation dramatically: train macro AP 0.690 -> 0.802 and
+  validation macro F1 0.534 -> 0.595
+- validation macro AP was approximately flat (0.647 -> 0.643), so ranking separability did not
+  improve equivalently
+- the fixed-threshold character success fraction fell, demonstrating calibration sensitivity
+- depth warp and correlated noise had small favorable final scalar differences, but no augmentation
+  separated decisively enough to promote based on one seed
+
+Best-character checkpointing now defaults to threshold-free character macro AP. Success fraction
+remains a useful operating-point diagnostic.
+
+Campaign 19 is fully standalone and hardcodes its complete operating point. Baseline:
+
+- w013 manual split, c32_t8, 192/ds2, 20,000 windows/epoch
+- feature attention, surface softmax injection, character-balanced sampling
+- weak conv/head dropout, IBN, spill, attention entropy, cell SupCon, TTA consistency
+- BCE with automatic positive weight, MAE96 warm start
+- synchronized flip/rotation only; noise, photometric, FDA, and elastic disabled
+
+Tests:
+
+- c64_t8: same 8px target resolution, 64 targets
+- c64_t16: same c64 center but 16 coarser targets
+- surface_weak: surface auxiliary lambda 0.03 instead of 0.10
+- context_cutout: center-protected cutout
+- context_jitter: target-aware +/-32px context displacement
+
+The c64_t8 versus c64_t16 comparison holds center size and optimizer steps fixed while changing
+target resolution/density. Baseline versus c64_t16 keeps 16 targets but changes covered center and
+target size. It is not a perfect factorial decomposition, but it is substantially cleaner than the
+earlier unequal-epoch comparisons.
+
+Multi-scroll character balancing is implemented for future use. It round-robins scroll datasets so
+each contributes equally to batches, samples characters uniformly within each scroll, cycles small
+scrolls, and retains the original total epoch length. Character IDs are namespaced by domain. This
+mode requires compatible per-scroll split configuration; campaign 19 remains w013-only to isolate
+the architecture and geometry questions.

@@ -9,10 +9,10 @@ Current production path: **nnunet3d_lcndz** — a 3D nnU-Net-style encoder/decod
 
 ```bash
 # inspect the active campaign without training
-python campaign_archs_18.py --dry-run
+python campaign_archs_19.py --dry-run
 
-# run the active character/augmentation experiments
-python campaign_archs_18.py
+# run the active standalone geometry experiments
+python campaign_archs_19.py
 
 # compute/cache normalisation stats (needed once per new zarr)
 python precompute_norm.py --scroll-id 20260206000001
@@ -79,14 +79,41 @@ The primary character metric is the fraction of held-out characters satisfying b
 - positive-cell recall >= 0.5
 - associated-ring false-positive rate <= 0.1
 
-This `Character/SuccessFraction/Valid` value controls a separate best-character checkpoint.
-Macro recall, ring FPR, F1, AP, and character count are also logged for train and validation.
+`Character/APMacro/Valid` controls a separate best-character checkpoint. Macro recall, ring FPR,
+F1, success fraction, and character count are also logged for train and validation.
 
 The `context_jitter` arm reads the same global target at random even offsets up to +/-32px within
 the 192px context and passes that offset to every model-side target crop. Prediction, spill,
 feature attention, SupCon, and surface-guided aggregation therefore remain aligned. Flips,
 rotations, and TTA consistency transform the offset with the image. Validation and inference use
 zero offset. This costs one normal forward pass rather than adding a paired consistency forward.
+
+### Campaign 19
+
+Campaign 19 is standalone: it imports no earlier campaign and assigns every effective setting in
+`base_config()`. Its baseline combines the strongest current ingredients:
+
+- c32 center with sixteen 8px targets
+- feature-level attention-MIL
+- depth-softmax surface feature without guided aggregation
+- character-balanced sampling and character metrics
+- corrected flip/rotation targets
+- no noise, brightness/contrast, or FDA after campaign 18 found no clear benefit
+
+Every arm is capped at 20,000 training windows per epoch. This corrects a newly identified geometry
+confound: at step 16, larger centers touch the ring from more origins (approximately 11k natural
+windows for c16, 20.9k for c32, and 27.8k for c64). Earlier center comparisons therefore changed
+both geometry and optimizer-step count.
+
+Tests are baseline, c64_t8, c64_t16, a weaker surface loss (0.03), center-protected context cutout,
+and target-aware context jitter. `character_ap_macro` is the best-character checkpoint criterion;
+the fixed-threshold success fraction remains logged but is calibration-sensitive.
+
+Multi-scroll character balancing is now available through `character_balance_scrolls=True`.
+Training draws scrolls round-robin while drawing characters uniformly inside each scroll, cycles
+smaller scrolls as needed, and preserves the original total epoch length. Component IDs are domain-
+namespaced so character metrics cannot merge letters from different fragments. Dot-positive extras
+are disabled in this mode because they have no connected-character identity.
 
 ---
 
@@ -275,6 +302,7 @@ artifacts; campaign 17 currently generates its soft targets online from each sam
 | `assemble_training_zarrs.sh` | Downloads and assembles the three training zarrs from S3. See [Assembling zarrs](#assembling-training-zarrs). |
 | `campaign_archs_17.py` | Current w013 hand-mask experiment for the supervised depth-softmax surface feature. |
 | `campaign_archs_18.py` | Character-balanced sampling, character-macro metrics, and isolated hard-augmentation tests. |
+| `campaign_archs_19.py` | Standalone c32 feature-attention + surface + character-balanced baseline and c64 follow-ups. |
 | `generate_surface_supervision.py` | Builds full-resolution papyrus-air pseudo-labels and review figures. |
 | `utils/surface.py` | Online soft surface targets and robust smoothness loss. |
 | `old/` | Archived experiments, older campaigns, and retired architecture families. |
