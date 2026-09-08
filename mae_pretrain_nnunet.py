@@ -92,6 +92,7 @@ class CropSampler:
         if mask_img.shape != (H, W):
             mask_img = cv2.resize(mask_img, (W, H), interpolation=cv2.INTER_NEAREST)
         self.mask = (mask_img > 0).astype(np.uint8)
+        self.mask_integral = cv2.integral(self.mask)
 
         norm = load_cached_norm(str(scroll_id), UNIFIED_CACHE_PATH)
         if norm is None:
@@ -113,15 +114,26 @@ class CropSampler:
         z_range = max(0, self.z1 - self.z0 - D)
         want_hold = (self.role == "monitor")
         out, tries = [], 0
-        while len(out) < n and tries < n * 40:
+        # Sparse fragments can have <1% monitor acceptance after the scattered
+        # holdout and papyrus-coverage gates. Integral-mask checks make a generous
+        # retry budget cheap while avoiding probabilistic monitor failures.
+        max_tries = max(10_000, n * 2_000)
+        min_valid = 0.30 * ctx * ctx
+        while len(out) < n and tries < max_tries:
             tries += 1
             yy = int(rng.integers(self.y0, max(self.y0 + 1, self.y1 - ctx)))
             xx = int(rng.integers(self.x0, max(self.x0 + 1, self.x1 - ctx)))
             if self._is_holdout(yy, xx) != want_hold:
                 continue
             # require at least 30% mask coverage inside the crop
-            mc = self.mask[yy:yy + ctx, xx:xx + ctx]
-            if mc.size == 0 or mc.mean() < 0.30:
+            integral = self.mask_integral
+            valid_pixels = (
+                integral[yy + ctx, xx + ctx]
+                - integral[yy, xx + ctx]
+                - integral[yy + ctx, xx]
+                + integral[yy, xx]
+            )
+            if valid_pixels < min_valid:
                 continue
             z = self.z0 if z_range == 0 else int(rng.integers(self.z0, self.z0 + z_range + 1))
             try:
@@ -352,8 +364,12 @@ def main():
     mon_s = MultiSampler(mon_samplers)
 
     if args.dry_run:
-        xb = train_s.sample(4, rng)
-        print(f"[mae] dry-run OK: sampled batch {xb.shape if xb is not None else None}")
+        xb = train_s.sample(args.batch_size, rng)
+        mb = mon_s.sample(args.batch_size, rng)
+        print(
+            f"[mae] dry-run OK: train={xb.shape if xb is not None else None} "
+            f"monitor={mb.shape if mb is not None else None}"
+        )
         return
 
     from utils.model import create_model

@@ -966,7 +966,8 @@ class InkVolumeDataset(IterableDataset):
                     # ring-negative cells while leaving the exclusion gap unsupervised.
                     if self._mt and (self.shuffle or self._manual_split):
                         if (self._mt_window_touches_ring(y, x)
-                                and self._mt_window_touches_split(y, x)):
+                                and self._mt_window_touches_split(y, x)
+                                and self._fetch_mask_mt(y, x).sum().item() > 0):
                             coords.append((d, y, x))
                         continue
                     # check if the corresponding mask area has any valid pixels

@@ -121,6 +121,7 @@ class DataConfig:
     context_downsample: int = 1
     eval_infer_bs: int = 128
     eval_prefetch: int = 0   # >0 reads eval rows in N background threads to overlap disk i/o with gpu inference (0=serial)
+    eval_chunk_gb: float = 4.0  # host-RAM target for buffered evaluation tiles
     tta_mode: str = "flips"  # eval TTA view set: "light"=id+hflip (2x), "flips"=id+h+v+180 (4x), "dihedral"=+/-90 too (6x)
     probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
     vis_scroll_ids: Optional[List[int]] = None
@@ -260,6 +261,7 @@ class TrainingConfig:
 @dataclass
 class ModelConfig:
     arch: str = "nnunet3d_lcndz"
+    compile_model: bool = True
     conv1_drop: float = 0.05
     conv2_drop: float = 0.075
     head_drop: float = 0.0

@@ -312,7 +312,8 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     # 5000 * (24,192,192) f32 ~= 17.7GB, which is what OOMs the eval figures at ctx192/ds2.
     # keep the floor small so ctx192 honors the target (~1.1k tiles ~= 4GB) while small tiles
     # still get a big throughput-friendly chunk (target dominates there).
-    chunk_tiles = max(512, int(tiles_per_gb * 4))      # target ~4GB per chunk
+    chunk_gb = max(0.05, float(getattr(config.data, "eval_chunk_gb", 4.0)))
+    chunk_tiles = max(64, int(tiles_per_gb * chunk_gb))
 
     # TTA transforms — defined HERE (before the read loop) so _process_chunk can use them.
     # the FIRST transform is always identity, so the reg (non-TTA) map is transform[0] and

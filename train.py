@@ -726,6 +726,7 @@ class Trainer:
     def validate_epoch(self):
         self.model.eval()
         loss_total = 0.0
+        processed_batches = 0
         labels = []
         preds = []
         scores = []
@@ -776,6 +777,7 @@ class Trainer:
 
                 raw_loss = self.criterion(outputs, batch_labels)
                 loss_total += ((raw_loss * mask).sum() / mask.sum()).item()
+                processed_batches += 1
 
                 batch_scores = torch.sigmoid(outputs).cpu().numpy().flatten()
                 batch_lab = batch_labels.cpu().numpy().flatten().astype(int)
@@ -803,7 +805,7 @@ class Trainer:
                 recall_target=float(getattr(self.c.tra, "character_recall_target", 0.5)),
                 max_ring_fpr=float(getattr(self.c.tra, "character_max_ring_fpr", 0.1)),
             ))
-        metrics["loss"] = loss_total / len(self.valid_loader)
+        metrics["loss"] = loss_total / max(1, processed_batches)
         metrics["scores"] = scores
         return metrics
 
@@ -860,6 +862,17 @@ class Trainer:
             self.vis.writer.add_scalar("HardMining/TotalSamplesInPool", len(self.hard_samples), epoch)
         else:
             print(f"[HARD][Epoch {epoch}] Mining file processed but no new samples were added.")
+
+    def _shutdown_data_workers(self) -> None:
+        """release persistent loader workers before full-scroll figure inference."""
+        for loader in (self.train_loader, self.valid_loader):
+            iterator = getattr(loader, "_iterator", None)
+            if iterator is None:
+                continue
+            shutdown = getattr(iterator, "_shutdown_workers", None)
+            if shutdown is not None:
+                shutdown()
+            loader._iterator = None
 
     def _log_epoch(self, epoch: int, train_metrics: dict, val_metrics: dict, time_elapsed: float) -> None:
         current_lr = self.optimizer.param_groups[0]["lr"]
@@ -950,6 +963,15 @@ class Trainer:
             val_metrics = self.validate_epoch()
             self.scheduler.step(val_metrics["loss"])
             self._periodic_model_save(epoch, val_metrics)
+            figure_due = any([
+                (epoch + 1) % self.c.tra.eval_int == 0,
+                (epoch + 1) % self.c.tra.test_int == 0,
+                (epoch + 1) % self.c.tra.probe_int == 0,
+                bool(getattr(self.c.tra, "test_on_final", False))
+                and (epoch + 1) == self.c.tra.n_epochs,
+            ])
+            if figure_due:
+                self._shutdown_data_workers()
             self._log_epoch(epoch, train_metrics, val_metrics, time.time() - start_time)
 
             eval_cooldown = int(getattr(self.c.tra, "eval_cooldown_secs", 0))

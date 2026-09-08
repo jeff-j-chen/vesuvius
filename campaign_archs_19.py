@@ -9,7 +9,9 @@ not receive extra optimizer steps merely because they overlap more ring cells.
 
 Tests:
 - baseline: c32 center, 4x4 8px targets
-- mae192_ibn: baseline with matched 192px/ds2 + IBN MAE checkpoint
+- ctx160: baseline with 160px context
+- ctx224: baseline with 224px context
+- c48_t8: c48 center, 6x6 8px targets
 - c64_t8: c64 center, 8x8 8px targets
 - c64_t16: c64 center, 4x4 16px targets
 - surface_strong: baseline with surface loss 0.10 -> 0.20
@@ -54,7 +56,7 @@ def base_config(exp_name: str) -> Config:
     config.exp_name = exp_name
     config.device = "cuda" if torch.cuda.is_available() else "cpu"
     config.model_dir = "models"
-    config.init_weights = "models/mae_nnunet_96.pth"
+    config.init_weights = "models/mae_nnunet_192_ibn.pth"
 
     config.data.zarr_path = get_zarr_dir()
     config.data.scrolls = list(_W013)
@@ -208,60 +210,76 @@ def base_config(exp_name: str) -> Config:
     return config
 
 
+_SAFE_RERUN = {
+    "batch_size": 16,
+    "lr": 5e-5,
+    "eval_infer_bs": 16,
+    "eval_prefetch": 1,
+    "eval_chunk_gb": 0.25,
+    "compile_model": False,
+}
+
+
+def _safe_test(tid: str, tag: str, **overrides: object) -> dict:
+    test = {"tid": tid, "tag": tag, **_SAFE_RERUN}
+    test.update(overrides)
+    return test
+
+
 TESTS = [
-    {"tid": "baseline", "tag": "19_baseline"},
-    {
-        "tid": "mae192_ibn",
-        "tag": "19_mae192_ibn",
-        "init_weights": "models/mae_nnunet_192_ibn.pth",
-    },
-    {"tid": "c64_t8", "tag": "19_c64_t8", "multitile_subtile": 8, "multitile_grid": 8},
-    {"tid": "c64_t16", "tag": "19_c64_t16", "multitile_subtile": 16, "multitile_grid": 4},
-    {"tid": "surface_strong", "tag": "19_surface_strong", "new_surface_lambda": 0.2},
-    {
-        "tid": "context_cutout",
-        "tag": "19_context_cutout",
-        "cutout_prob": 0.5,
-        "cutout_max_frac": 0.12,
-        "cutout_n_patches": 2,
-        "cutout_protect_center": True,
-    },
-    {
-        "tid": "context_jitter",
-        "tag": "19_context_jitter",
-        "target_aware_ctx_jitter": True,
-        "ctx_jitter": 32,
-    },
-    {
-        "tid": "context_replace",
-        "tag": "19_context_replace",
-        "context_replace_prob": 0.5,
-        "context_replace_keep_size": 0,
-        "context_replace_margin": 16,
-        "context_replace_feather": 16,
-        "context_replace_min_mask_frac": 0.8,
-    },
-    {
-        "tid": "bce_soft",
-        "tag": "19_bce_soft",
-        "loss_type": "bce",
-        "label_smooth_pos": 0.10,
-        "label_smooth_neg": 0.05,
-    },
-    {"tid": "gce_q03", "tag": "19_gce_q03", "loss_type": "gce", "gce_q": 0.3},
-    {"tid": "gce_q07", "tag": "19_gce_q07", "loss_type": "gce", "gce_q": 0.7},
-    {"tid": "gce_q09", "tag": "19_gce_q09", "loss_type": "gce", "gce_q": 0.9},
-    {
-        "tid": "gce_q03_soft",
-        "tag": "19_gce_q03_soft",
-        "loss_type": "gce",
-        "gce_q": 0.3,
-        "label_smooth_pos": 0.10,
-        "label_smooth_neg": 0.05,
-    },
+    {"tid": "baseline_newpretrain", "tag": "19_baseline_newpretrain"},
+    {"tid": "ctx128", "tag": "19_ctx128", "context_size": 128},
+    _safe_test("ctx224", "19_ctx224", context_size=224),
+    _safe_test("c48_t8", "19_c48_t8", multitile_subtile=8, multitile_grid=6),
+    _safe_test("c64_t8", "19_c64_t8", multitile_subtile=8, multitile_grid=8),
+    _safe_test("c64_t16", "19_c64_t16", multitile_subtile=16, multitile_grid=4),
+    _safe_test("surface_strong", "19_surface_strong", new_surface_lambda=0.2),
+    _safe_test(
+        "context_cutout",
+        "19_context_cutout",
+        cutout_prob=0.5,
+        cutout_max_frac=0.12,
+        cutout_n_patches=2,
+        cutout_protect_center=True,
+    ),
+    _safe_test("context_jitter", "19_context_jitter", target_aware_ctx_jitter=True, ctx_jitter=32),
+    _safe_test(
+        "context_replace",
+        "19_context_replace",
+        context_replace_prob=0.5,
+        context_replace_keep_size=0,
+        context_replace_margin=16,
+        context_replace_feather=16,
+        context_replace_min_mask_frac=0.8,
+    ),
+    _safe_test(
+        "bce_soft",
+        "19_bce_soft",
+        loss_type="bce",
+        label_smooth_pos=0.10,
+        label_smooth_neg=0.05,
+    ),
+    _safe_test("gce_q03", "19_gce_q03", loss_type="gce", gce_q=0.3),
+    _safe_test("gce_q07", "19_gce_q07", loss_type="gce", gce_q=0.7),
+    _safe_test("gce_q09", "19_gce_q09", loss_type="gce", gce_q=0.9),
+    _safe_test(
+        "gce_q03_soft",
+        "19_gce_q03_soft",
+        loss_type="gce",
+        gce_q=0.3,
+        label_smooth_pos=0.10,
+        label_smooth_neg=0.05,
+    ),
 ]
 
 _OVERRIDES = {
+    "batch_size": ("dl", "batch_size"),
+    "lr": ("tra", "lr"),
+    "eval_infer_bs": ("data", "eval_infer_bs"),
+    "eval_prefetch": ("data", "eval_prefetch"),
+    "eval_chunk_gb": ("data", "eval_chunk_gb"),
+    "compile_model": ("model", "compile_model"),
+    "context_size": ("data", "context_size"),
     "multitile_subtile": ("model", "multitile_subtile"),
     "multitile_grid": ("model", "multitile_grid"),
     "new_surface_lambda": ("tra", "new_surface_lambda"),
@@ -290,8 +308,8 @@ def build_config(test: dict) -> Config:
             setattr(getattr(config, section), attr, test[key])
     if "init_weights" in test:
         config.init_weights = str(test["init_weights"])
-        if not os.path.exists(config.init_weights):
-            print(f"[archs19] WARNING checkpoint not found yet: {config.init_weights}")
+    if not os.path.exists(config.init_weights):
+        print(f"[archs19] WARNING checkpoint not found yet: {config.init_weights}")
     os.makedirs("models/archs19", exist_ok=True)
     setattr(config, "save_final", f"models/archs19/{test['tid']}_final.pth")
     return config
@@ -322,6 +340,11 @@ def run_test(config: Config, dry_run: bool) -> bool:
         f"  loss={config.tra.loss_type} q={config.tra.gce_q}"
         f"  smooth=({config.tra.label_smooth_pos},{config.tra.label_smooth_neg})"
         f"  init={config.init_weights}"
+    )
+    print(
+        f"  compile={config.model.compile_model} eval_bs={config.data.eval_infer_bs}"
+        f"  eval_prefetch={config.data.eval_prefetch}"
+        f"  eval_chunk_gb={config.data.eval_chunk_gb}"
     )
     if dry_run:
         print("  [DRY RUN] skipping")

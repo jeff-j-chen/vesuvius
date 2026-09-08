@@ -735,6 +735,6 @@ def create_model(config: Config):
     # GPU idles ~0%). training uses one fixed shape, so it keeps the compiled hot path below.
     # torch.compile requires pytorch >= 2.0; skip silently on older installs.
     model._eager_forward_with_extras = model.forward_with_extras
-    if hasattr(torch, "compile"):
+    if bool(getattr(config.model, "compile_model", True)) and hasattr(torch, "compile"):
         model.forward_with_extras = torch.compile(model.forward_with_extras)
     return model, params
