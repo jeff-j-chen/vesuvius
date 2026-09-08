@@ -227,6 +227,23 @@ class Transform:
             target_offset.contiguous(),
         )
 
+    def paired(self, block, paired_block, label, mask, component_ids=None, target_offset=None):
+        """apply identical random transforms to an original/context-intervened pair."""
+        py_state = random.getstate()
+        np_state = np.random.get_state()
+        primary = self(block, label, mask, component_ids, target_offset)
+        random.setstate(py_state)
+        np.random.set_state(np_state)
+        paired = self(
+            paired_block,
+            label.clone(),
+            mask.clone(),
+            component_ids.clone() if component_ids is not None else None,
+            target_offset.clone() if target_offset is not None else None,
+        )
+        paired_image = paired[0] if isinstance(paired, tuple) else paired
+        return primary, paired_image
+
     def _target_grid(self, target):
         if target is None or not self.multitile:
             return None
@@ -599,6 +616,12 @@ class InkVolumeDataset(IterableDataset):
         self._character_pos_coords = {}
         self._character_neg_coords = {}
         self._context_replace_prob = float(getattr(config.dl, "context_replace_prob", 0.0))
+        self._context_consistency = bool(
+            getattr(config.tra, "context_consistency", False)
+        ) and self.shuffle
+        self._context_consistency_prob = float(
+            getattr(config.tra, "context_consistency_prob", 0.25)
+        )
         self._context_donor_coords = []
 
         self.z_start = getattr(self.c.data, "train_d_start", self.c.data.d_start)
@@ -625,7 +648,7 @@ class InkVolumeDataset(IterableDataset):
             if not self._mt or self._character_grid is None:
                 raise ValueError("character-aware mode requires multitile labels and a character grid")
             self._prepare_character_targets()
-        if self._context_replace_prob > 0 and self.shuffle:
+        if (self._context_replace_prob > 0 or self._context_consistency) and self.shuffle:
             self._prepare_context_donors()
 
     def _mt_center_bounds(self, y_off, x_off):
@@ -1208,6 +1231,28 @@ class InkVolumeDataset(IterableDataset):
             torch.tensor(target_offset, dtype=torch.long)
             if bool(getattr(self.c.data, "target_aware_ctx_jitter", False)) else None
         )
+        paired_block = block
+        paired_active = 0.0
+        if (
+            self._context_consistency
+            and self._context_donor_coords
+            and random.random() < self._context_consistency_prob
+        ):
+            donor_y, donor_x = self._context_donor_coords[
+                random.randrange(len(self._context_donor_coords))
+            ]
+            donor, _ = self._fetch_block(
+                z_off,
+                donor_y,
+                donor_x,
+                allow_jitter=False,
+            )
+            paired_block = self.transform.apply_context_replacement(
+                block,
+                donor,
+                target_offset_tensor,
+            )
+            paired_active = 1.0
         if (
             self.apply_transforms
             and self._context_donor_coords
@@ -1231,13 +1276,23 @@ class InkVolumeDataset(IterableDataset):
         # apply transforms if enabled
         if self.apply_transforms:
             if self._mt:
-                transformed = self.transform(
-                    block,
-                    label,
-                    mask,
-                    component_ids,
-                    target_offset_tensor,
-                )
+                if self._context_consistency:
+                    transformed, paired_block = self.transform.paired(
+                        block,
+                        paired_block,
+                        label,
+                        mask,
+                        component_ids,
+                        target_offset_tensor,
+                    )
+                else:
+                    transformed = self.transform(
+                        block,
+                        label,
+                        mask,
+                        component_ids,
+                        target_offset_tensor,
+                    )
                 if component_ids is None and target_offset_tensor is None:
                     block, label, mask = transformed
                 elif component_ids is None:
@@ -1251,36 +1306,29 @@ class InkVolumeDataset(IterableDataset):
         
         # enforce contiguity and dtype before converting to torch to avoid negative strides
         block = np.ascontiguousarray(block, dtype=np.float32)
+        paired_block = np.ascontiguousarray(paired_block, dtype=np.float32)
             
         # convert to tensor for the model
         block_tensor = torch.from_numpy(block).unsqueeze(0)
+        paired_block_tensor = torch.from_numpy(paired_block).unsqueeze(0)
         
         self.current_idx += 1
         with_domain = bool(getattr(self.c.tra, "dann", False)) or bool(
             getattr(self.c.tra, "supcon_cross_frag", False)
         )
-        if with_domain and component_ids is not None and target_offset_tensor is not None:
-            return (
-                block_tensor,
-                label,
-                mask,
-                torch.tensor(self.domain_id, dtype=torch.long),
-                component_ids,
-                target_offset_tensor,
-            )
-        if with_domain and component_ids is not None:
-            return block_tensor, label, mask, torch.tensor(self.domain_id, dtype=torch.long), component_ids
-        if with_domain and target_offset_tensor is not None:
-            return block_tensor, label, mask, torch.tensor(self.domain_id, dtype=torch.long), target_offset_tensor
+        result = [block_tensor, label, mask]
         if with_domain:
-            return block_tensor, label, mask, torch.tensor(self.domain_id, dtype=torch.long)
-        if component_ids is not None and target_offset_tensor is not None:
-            return block_tensor, label, mask, component_ids, target_offset_tensor
+            result.append(torch.tensor(self.domain_id, dtype=torch.long))
         if component_ids is not None:
-            return block_tensor, label, mask, component_ids
+            result.append(component_ids)
         if target_offset_tensor is not None:
-            return block_tensor, label, mask, target_offset_tensor
-        return block_tensor, label, mask
+            result.append(target_offset_tensor)
+        if self._context_consistency:
+            result.extend([
+                paired_block_tensor,
+                torch.tensor(paired_active, dtype=torch.float32),
+            ])
+        return tuple(result)
 
 
 class MultiScrollIterableDataset(IterableDataset):

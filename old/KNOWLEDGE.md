@@ -1591,3 +1591,25 @@ each contributes equally to batches, samples characters uniformly within each sc
 scrolls, and retains the original total epoch length. Character IDs are namespaced by domain. This
 mode requires compatible per-scroll split configuration; campaign 19 remains w013-only to isolate
 the architecture and geometry questions.
+
+## 20) Character-Robust, Surface-Relative, and JEPA Tests (2026-09-08)
+
+Campaign 20 promotes the campaign-19 operating point: matched MAE, c64_t16, protected cutout,
+target-aware jitter, weakened real-context replacement, hard-label GCE q=0.9, and surface loss
+0.2. In addition to baseline and ctx128, future independent arms test:
+
+- context consistency on 25% paired samples; only c64 target logits are matched after replacing
+  distant context, while the 112px protected region preserves nearby fibers
+- character-bag ranking: top-k positive logits for one component must exceed top-k logits from
+  that component's assigned local ring
+- capped GroupDRO: persistent exponentiated weights optimize difficult training characters
+- character CVaR: each batch optimizes its worst-loss character quartile
+- online surface canonicalization: the physical papyrus-air target recenters every depth column
+  before the ink backbone
+- surface_slice8: the surface locator sees all 24 slices, while the ink backbone sees only eight
+  surface-relative slices
+- 3D JEPA: masked student volumes predict EMA-teacher decoder features at masked 3D blocks;
+  variance/covariance penalties prevent collapse and the exported state dict is directly loadable
+
+Surface geometry remains online rather than precomputed per scroll, preserving exact alignment
+under depth jitter and avoiding stale patch-level surface maps.

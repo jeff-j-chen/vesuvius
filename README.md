@@ -9,10 +9,10 @@ Current production path: **nnunet3d_lcndz** — a 3D nnU-Net-style encoder/decod
 
 ```bash
 # inspect the active campaign without training
-python campaign_archs_19.py --dry-run
+python campaign_archs_20.py --dry-run
 
-# run the active standalone geometry experiments
-python campaign_archs_19.py
+# run the active combined baseline and matched-context test
+python campaign_archs_20.py
 
 # compute/cache normalisation stats (needed once per new zarr)
 python precompute_norm.py --scroll-id 20260206000001
@@ -105,8 +105,9 @@ confound: at step 16, larger centers touch the ring from more origins (approxima
 windows for c16, 20.9k for c32, and 27.8k for c64). Earlier center comparisons therefore changed
 both geometry and optimizer-step count.
 
-Tests are baseline, c64_t8, c64_t16, a weaker surface loss (0.03), center-protected context cutout,
-target-aware context jitter, real-context replacement, and a BCE/GCE/soft-label matrix.
+Tests are baseline, context-size and center/target geometry variants, stronger surface supervision,
+center-protected context cutout, target-aware context jitter, real-context replacement, and a
+BCE/GCE/soft-label matrix.
 `character_ap_macro` is the best-character checkpoint criterion; the fixed-threshold success
 fraction remains logged but is calibration-sensitive.
 
@@ -116,9 +117,59 @@ same-scroll training-split donor, aligns donor depth columns to the recipient su
 the transition over 16px. The complete 192px donor must contain no known ink and at least 80% valid
 papyrus. This changes nuisance fibers while preserving all c32 target evidence.
 
-The reduced loss matrix isolates mild soft ink targets (positive 0.90, negative 0.05), low-q GCE
-at q=0.3, high-q GCE at q=0.7, and one q=0.3 plus soft-label interaction. The historically
-destructive q=0.9 and the redundant q=0.7-plus-soft arm are omitted because each run costs hours.
+Campaign-19 findings establish the campaign-20 hypothesis: matched 192px MAE improves the baseline;
+c64_t16 is the best compromise between dense clean supervision and uncertain-label overfit;
+ctx128 is cleaner while ctx224 adds noise; jitter and especially real-context replacement improve
+visual generalization; hard-label GCE q=0.9 is the strongest GCE arm; and surface loss 0.2 improves
+the result. Cutout is retained as a weak visual positive despite no AP improvement by itself.
+
+### Campaign 20
+
+Campaign 20 combines the selected findings rather than testing them independently. All arms use
+c64_t16, protected cutout, target-aware context jitter, hard-label GCE q=0.9, and surface loss 0.2.
+Real-context replacement is deliberately weakened from campaign 19: probability 0.25, a 24px
+margin per side around the c64 prediction center, and a 24px feather. This reduces expected donor
+weight by approximately 70% while preserving surface alignment.
+
+The baseline uses 192px/ds2 with `models/mae_nnunet_192_ibn.pth`; `ctx128` tests transfer of that
+same fully convolutional checkpoint to a smaller crop. Future single-scroll arms independently
+test:
+
+- paired target-logit consistency under distant real-context intervention
+- top-k character-bag versus assigned-ring ranking
+- persistent capped character GroupDRO
+- worst-quartile character CVaR
+- physical surface-relative canonicalization retaining 24 slices
+- an eight-slice surface-relative ink backbone whose locator still examines all 24 slices
+- 3D JEPA feature-predictive initialization
+
+Surface canonicalization is computed online per crop from the physical papyrus-air transition.
+No per-scroll surface files are needed; online geometry remains aligned under depth and context
+jitter.
+
+The optional matched-128 MAE command remains available for a separate pretraining-scale study:
+
+```bash
+python mae_pretrain_nnunet.py --name mae_nnunet_128_ibn --ctx 128 --ds 2 \
+  --depth 24 --d-start 4 --d-end 28 --steps 6000 --batch-size 32 \
+  --require-all-scrolls
+```
+
+Campaign 20 restores batch 32, LR 1e-4, and eight workers. Figure inference uses batch 32, two
+prefetch workers, and a 1GB tile-buffer target: faster than the emergency campaign-19 reruns while
+retaining bounded buffering and worker shutdown before full-scroll figures.
+
+Pretrain the feature-predictive 3D JEPA checkpoint across all 18 fragments with:
+
+```bash
+python jepa_pretrain_nnunet.py --name jepa_nnunet_192_ibn --ctx 192 --ds 2 \
+  --depth 24 --d-start 4 --d-end 28 --steps 6000 --batch-size 8 \
+  --accum-steps 4 --require-all-scrolls
+```
+
+The fine-tune artifact is a plain nnU-Net state dict at
+`models/jepa_nnunet_192_ibn.pth`; a separate `_resume.pth` stores the student, EMA teacher,
+predictor, optimizer, scheduler, and scaler.
 
 Multi-scroll character balancing is now available through `character_balance_scrolls=True`.
 Training draws scrolls round-robin while drawing characters uniformly inside each scroll, cycles
@@ -314,6 +365,8 @@ artifacts; campaign 17 currently generates its soft targets online from each sam
 | `campaign_archs_17.py` | Current w013 hand-mask experiment for the supervised depth-softmax surface feature. |
 | `campaign_archs_18.py` | Character-balanced sampling, character-macro metrics, and isolated hard-augmentation tests. |
 | `campaign_archs_19.py` | Standalone c32 feature-attention + surface + character-balanced baseline and c64 follow-ups. |
+| `campaign_archs_20.py` | Combined c64_t16/GCE/context/surface baseline with matched 192px vs 128px MAE. |
+| `jepa_pretrain_nnunet.py` | 3D masked-block feature prediction with an EMA teacher and collapse guards. |
 | `generate_surface_supervision.py` | Builds full-resolution papyrus-air pseudo-labels and review figures. |
 | `utils/surface.py` | Online soft surface targets and robust smoothness loss. |
 | `old/` | Archived experiments, older campaigns, and retired architecture families. |

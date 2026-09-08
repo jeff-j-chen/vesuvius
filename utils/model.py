@@ -300,6 +300,8 @@ class NnUnet3dLcndz(nn.Module):
         self.last_new_surface_logits: torch.Tensor | None = None
         self.last_new_surface_probs: torch.Tensor | None = None
         self.last_surface_guided_alpha: torch.Tensor | None = None
+        self.last_surface_target: torch.Tensor | None = None
+        self.last_surface_valid: torch.Tensor | None = None
 
         self.lse_r = nn.Parameter(torch.tensor(2.0, dtype=torch.float32))
         self.pool = nn.MaxPool3d(2)
@@ -358,6 +360,14 @@ class NnUnet3dLcndz(nn.Module):
         self._surface_guided_mil = bool(getattr(config.model, "surface_guided_mil", False))
         self._surface_guided_mix = float(getattr(config.model, "surface_guided_mix", 0.5))
         self._surface_band_sigma = float(getattr(config.model, "surface_band_sigma", 1.5))
+        self._surface_canonicalize = bool(
+            getattr(config.model, "surface_canonicalize", False)
+        )
+        self._surface_canonical_depth = int(
+            getattr(config.model, "surface_canonical_depth", 24)
+        )
+        if self._surface_canonicalize and self._surface_canonical_depth < 8:
+            raise ValueError("surface_canonical_depth must be at least 8 for three pooling levels")
 
         self.supcon_head: SupConHead | None = None
         if bool(getattr(config.tra, "supcon", False)):
@@ -426,21 +436,85 @@ class NnUnet3dLcndz(nn.Module):
         self.last_surface_attn = attn.detach()
         return features * (1.0 + attn)
 
+    @staticmethod
+    def _surface_relative_resample(
+        volume: torch.Tensor,
+        center_depth: torch.Tensor,
+        output_depth: int,
+    ) -> torch.Tensor:
+        """sample a per-column depth window centered on the estimated surface."""
+        batch, _, source_depth, height, width = volume.shape
+        output_depth = int(output_depth)
+        relative = torch.linspace(
+            -(output_depth - 1) / 2.0,
+            (output_depth - 1) / 2.0,
+            output_depth,
+            device=volume.device,
+            dtype=volume.dtype,
+        ).view(1, output_depth, 1, 1)
+        source_z = center_depth.squeeze(1).to(volume.dtype).unsqueeze(1) + relative
+        z_grid = 2.0 * source_z / max(source_depth - 1, 1) - 1.0
+        y_grid = torch.linspace(-1.0, 1.0, height, device=volume.device, dtype=volume.dtype)
+        x_grid = torch.linspace(-1.0, 1.0, width, device=volume.device, dtype=volume.dtype)
+        yy, xx = torch.meshgrid(y_grid, x_grid, indexing="ij")
+        xx = xx.view(1, 1, height, width).expand(batch, output_depth, -1, -1)
+        yy = yy.view(1, 1, height, width).expand(batch, output_depth, -1, -1)
+        grid = torch.stack((xx, yy, z_grid), dim=-1)
+        return F.grid_sample(
+            volume,
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        )
+
     def _encode_decode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         raw_x = self._prepare_input(x)
-        stem_x = self._stem_in(raw_x)
-
-        enc1 = self.enc1(stem_x)
         if self.new_surface_head is not None and self.new_surface_input is not None:
             surface_logits = self.new_surface_head(raw_x)
             surface_probs = F.softmax(surface_logits, dim=2)
             self.last_new_surface_logits = surface_logits
-            self.last_new_surface_probs = surface_probs.detach()
-            enc1 = enc1 + self.new_surface_input(surface_probs)
+            if self._surface_canonicalize:
+                from .surface import make_surface_targets
+
+                surface_target, surface_valid, surface_index = make_surface_targets(raw_x)
+                self.last_surface_target = surface_target
+                self.last_surface_valid = surface_valid
+                fallback = raw_x.new_full(surface_index.shape, (raw_x.shape[2] - 1) / 2.0)
+                center_depth = torch.where(
+                    surface_valid > 0,
+                    surface_index.to(raw_x.dtype),
+                    fallback,
+                )
+                raw_for_backbone = self._surface_relative_resample(
+                    raw_x,
+                    center_depth,
+                    self._surface_canonical_depth,
+                )
+                surface_for_backbone = self._surface_relative_resample(
+                    surface_probs.detach(),
+                    center_depth,
+                    self._surface_canonical_depth,
+                )
+            else:
+                self.last_surface_target = None
+                self.last_surface_valid = None
+                raw_for_backbone = raw_x
+                surface_for_backbone = surface_probs
+            self.last_new_surface_probs = surface_for_backbone.detach()
         else:
             self.last_new_surface_logits = None
             self.last_new_surface_probs = None
-        enc1 = self._apply_learned_surface(raw_x, enc1)
+            self.last_surface_target = None
+            self.last_surface_valid = None
+            raw_for_backbone = raw_x
+            surface_for_backbone = None
+
+        stem_x = self._stem_in(raw_for_backbone)
+        enc1 = self.enc1(stem_x)
+        if surface_for_backbone is not None:
+            enc1 = enc1 + self.new_surface_input(surface_for_backbone)
+        enc1 = self._apply_learned_surface(raw_for_backbone, enc1)
         if self._enc1_drop is not None:
             enc1 = self._enc1_drop(enc1)
         enc2 = self.enc2(self.pool(enc1))

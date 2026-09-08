@@ -30,6 +30,102 @@ os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 
+def _character_group_losses(
+    per_target_loss: torch.Tensor,
+    mask: torch.Tensor,
+    character_ids: torch.Tensor,
+) -> tuple[list[int], list[torch.Tensor]]:
+    """mean supervised loss for each character represented in a batch."""
+    flat_loss = per_target_loss.reshape(-1)
+    flat_mask = mask.reshape(-1) > 0
+    flat_ids = character_ids.reshape(-1).to(device=flat_loss.device, dtype=torch.long)
+    ids: list[int] = []
+    losses: list[torch.Tensor] = []
+    for value in torch.unique(flat_ids[flat_mask]):
+        group_id = int(value.item())
+        if group_id <= 0:
+            continue
+        selected = flat_mask & (flat_ids == value)
+        if selected.any():
+            ids.append(group_id)
+            losses.append(flat_loss[selected].mean())
+    return ids, losses
+
+
+def character_bag_ranking_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    mask: torch.Tensor,
+    character_ids: torch.Tensor,
+    margin: float = 0.5,
+    topk_frac: float = 0.5,
+) -> tuple[torch.Tensor, int]:
+    """rank each character's positive bag above its assigned local-ring bag."""
+    flat_logits = logits.reshape(-1)
+    flat_labels = labels.reshape(-1)
+    flat_mask = mask.reshape(-1) > 0
+    flat_ids = character_ids.reshape(-1).to(device=logits.device, dtype=torch.long)
+    losses = []
+    fraction = min(max(float(topk_frac), 1e-6), 1.0)
+    for value in torch.unique(flat_ids[flat_mask]):
+        if int(value.item()) <= 0:
+            continue
+        selected = flat_mask & (flat_ids == value)
+        positives = flat_logits[selected & (flat_labels > 0.5)]
+        negatives = flat_logits[selected & (flat_labels <= 0.5)]
+        if positives.numel() == 0 or negatives.numel() == 0:
+            continue
+        pos_k = max(1, int(math.ceil(positives.numel() * fraction)))
+        neg_k = max(1, int(math.ceil(negatives.numel() * fraction)))
+        positive_score = torch.topk(positives, pos_k).values.mean()
+        negative_score = torch.topk(negatives, neg_k).values.mean()
+        losses.append(F.softplus(float(margin) + negative_score - positive_score))
+    if not losses:
+        return logits.new_zeros(()), 0
+    return torch.stack(losses).mean(), len(losses)
+
+
+def character_cvar_loss(
+    group_losses: list[torch.Tensor],
+    alpha: float,
+) -> tuple[torch.Tensor | None, int]:
+    """mean loss over the worst alpha fraction of characters in the batch."""
+    if not group_losses:
+        return None, 0
+    stacked = torch.stack(group_losses)
+    tail_count = max(1, int(math.ceil(stacked.numel() * min(max(float(alpha), 1e-6), 1.0))))
+    return torch.topk(stacked, tail_count).values.mean(), tail_count
+
+
+def character_groupdro_loss(
+    group_ids: list[int],
+    group_losses: list[torch.Tensor],
+    log_weights: dict[int, float],
+    eta: float,
+    max_ratio: float,
+) -> tuple[torch.Tensor | None, float]:
+    """exponentially upweight persistently difficult characters."""
+    if not group_losses:
+        return None, 1.0
+    for group_id, group_loss in zip(group_ids, group_losses):
+        log_weights[group_id] = log_weights.get(group_id, 0.0) + float(eta) * float(
+            group_loss.detach().item()
+        )
+    maximum = max(log_weights.values())
+    minimum = maximum - math.log(max(float(max_ratio), 1.0))
+    for group_id in log_weights:
+        log_weights[group_id] = max(log_weights[group_id], minimum) - maximum
+    weights = torch.tensor(
+        [math.exp(log_weights[group_id]) for group_id in group_ids],
+        device=group_losses[0].device,
+        dtype=group_losses[0].dtype,
+    )
+    weights = weights / weights.sum().clamp(min=1e-8)
+    objective = sum(weight * value for weight, value in zip(weights, group_losses))
+    ratio = float(weights.max().item() / weights.min().clamp(min=1e-8).item())
+    return objective, ratio
+
+
 def set_seed(seed: int = 42, deterministic: bool = False) -> None:
     """set the global RNG state for reproducible training."""
     torch.cuda.manual_seed_all(seed)
@@ -56,6 +152,10 @@ class Trainer:
 
     def __init__(self, config: Config):
         self.c = config
+        if bool(getattr(config.tra, "character_groupdro", False)) and bool(
+            getattr(config.tra, "character_cvar", False)
+        ):
+            raise ValueError("character_groupdro and character_cvar are independent objectives")
         set_seed(
             int(getattr(config.tra, "seed", 41)),
             deterministic=bool(getattr(config.tra, "deterministic", False)),
@@ -75,6 +175,8 @@ class Trainer:
         self.best_val_loss = float("inf")
         self.best_val_f1 = 0.0
         self.best_val_character = -1.0
+        self._character_groupdro_log_weights: dict[int, float] = {}
+        self._last_character_objectives = (0.0, 0.0, 0.0, 0.0)
 
     def _print_config(self) -> None:
         print("--- Configuration ---")
@@ -265,7 +367,8 @@ class Trainer:
         return out.clamp(0.0, 1.0)
 
     def _train_batch(self, images, labels, mask, domain_ids=None, character_ids=None,
-                     target_offsets=None, epoch: int = 0, unlabeled_images=None):
+                     target_offsets=None, epoch: int = 0, unlabeled_images=None,
+                     context_pair=None, context_pair_active=None):
         images = images.to(self.c.device)
         surface_source = images
         images = self._apply_fda(images)
@@ -283,6 +386,18 @@ class Trainer:
             domain_ids = domain_ids.to(self.c.device, non_blocking=True).view(-1)
         if target_offsets is not None:
             target_offsets = target_offsets.to(self.c.device, non_blocking=True).view(B, 2)
+        character_ids_device = (
+            character_ids.to(self.c.device, non_blocking=True).view(B, -1)
+            if character_ids is not None else None
+        )
+        context_active_mask = (
+            context_pair_active.to(self.c.device, non_blocking=True).view(-1) > 0
+            if context_pair_active is not None else None
+        )
+        context_loss_value = images.new_zeros(())
+        bag_rank_loss_value = images.new_zeros(())
+        groupdro_loss_value = images.new_zeros(())
+        cvar_loss_value = images.new_zeros(())
 
         self.optimizer.zero_grad()
         with autocast(self.c.device, enabled=self.c.device == "cuda"):
@@ -328,7 +443,8 @@ class Trainer:
                     torch.full_like(targets, neg_smooth),
                 )
 
-            raw_loss = self.criterion(outputs, targets) * mask
+            per_target_loss = self.criterion(outputs, targets)
+            raw_loss = per_target_loss * mask
             denom = mask.sum()
             if denom <= 0:
                 print("[ERROR] Mask sum is zero, skipping loss calculation.")
@@ -336,7 +452,52 @@ class Trainer:
 
             raw_loss_value = (raw_loss.sum() / denom).item()
             l1_loss = sum(param.abs().sum() for param in self.model.parameters())
-            loss = (raw_loss.sum() / denom) + self.c.tra.l1_lambda * l1_loss
+            primary_loss = raw_loss.sum() / denom
+            group_ids: list[int] = []
+            group_losses: list[torch.Tensor] = []
+            if character_ids_device is not None and any([
+                bool(getattr(self.c.tra, "character_groupdro", False)),
+                bool(getattr(self.c.tra, "character_cvar", False)),
+            ]):
+                group_ids, group_losses = _character_group_losses(
+                    per_target_loss,
+                    mask,
+                    character_ids_device,
+                )
+            if bool(getattr(self.c.tra, "character_groupdro", False)):
+                robust_loss, _ = character_groupdro_loss(
+                    group_ids,
+                    group_losses,
+                    self._character_groupdro_log_weights,
+                    eta=float(getattr(self.c.tra, "character_groupdro_eta", 0.05)),
+                    max_ratio=float(getattr(self.c.tra, "character_groupdro_max_ratio", 3.0)),
+                )
+                if robust_loss is not None:
+                    primary_loss = robust_loss
+                    groupdro_loss_value = robust_loss
+            elif bool(getattr(self.c.tra, "character_cvar", False)):
+                robust_loss, _ = character_cvar_loss(
+                    group_losses,
+                    alpha=float(getattr(self.c.tra, "character_cvar_alpha", 0.25)),
+                )
+                if robust_loss is not None:
+                    primary_loss = robust_loss
+                    cvar_loss_value = robust_loss
+            loss = primary_loss + self.c.tra.l1_lambda * l1_loss
+
+            if (
+                bool(getattr(self.c.tra, "character_bag_ranking", False))
+                and character_ids_device is not None
+            ):
+                bag_rank_loss_value, _ = character_bag_ranking_loss(
+                    outputs,
+                    labels,
+                    mask,
+                    character_ids_device,
+                    margin=float(getattr(self.c.tra, "character_bag_margin", 0.5)),
+                    topk_frac=float(getattr(self.c.tra, "character_bag_topk_frac", 0.5)),
+                )
+                loss = loss + float(getattr(self.c.tra, "character_bag_lambda", 0.2)) * bag_rank_loss_value
 
             tta_lambda = float(getattr(self.c.tra, "tta_consistency_lambda", 0.0))
             _tta_on = getattr(self.c.tra, "tta_consistency", False) and tta_lambda > 0
@@ -486,6 +647,8 @@ class Trainer:
                     new_surface_logits,
                     surface_volume,
                     smooth_weight=float(getattr(self.c.tra, "new_surface_smooth_lambda", 0.02)),
+                    target=getattr(self.model, "last_surface_target", None),
+                    valid=getattr(self.model, "last_surface_valid", None),
                 )
                 surface_loss_value = surface_total
                 loss = loss + float(getattr(self.c.tra, "new_surface_lambda", 0.1)) * surface_total
@@ -545,9 +708,37 @@ class Trainer:
                 loss = loss - entropy_lambda * h  # subtract to maximize H on unlabeled
 
         self.scaler.scale(loss).backward()
+        if (
+            bool(getattr(self.c.tra, "context_consistency", False))
+            and context_pair is not None
+            and context_active_mask is not None
+            and context_active_mask.any()
+        ):
+            active = context_active_mask
+            pair_images = context_pair[active].to(self.c.device, non_blocking=True)
+            pair_offsets = target_offsets[active] if target_offsets is not None else None
+            pair_target = torch.sigmoid(outputs[active]).detach()
+            with autocast(self.c.device, enabled=self.c.device == "cuda"):
+                self.model.eval()
+                pair_outputs = self.model(pair_images, target_offsets=pair_offsets)
+                self.model.train()
+                pair_mask = mask[active]
+                context_loss_value = (
+                    (torch.sigmoid(pair_outputs) - pair_target).square() * pair_mask
+                ).sum() / pair_mask.sum().clamp(min=1.0)
+                weighted_context_loss = float(
+                    getattr(self.c.tra, "context_consistency_lambda", 0.1)
+                ) * context_loss_value
+            self.scaler.scale(weighted_context_loss).backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()
+        self._last_character_objectives = (
+            float(context_loss_value.detach().item()),
+            float(bag_rank_loss_value.detach().item()),
+            float(groupdro_loss_value.detach().item()),
+            float(cvar_loss_value.detach().item()),
+        )
 
         if hasattr(self.model, "prototype_head") and self.model.prototype_head is not None:
             emb = getattr(self.model, "last_embedding_detached", None)
@@ -615,6 +806,10 @@ class Trainer:
         scores = []
         character_ids_all = []
         total_injected = 0
+        context_loss_total = 0.0
+        bag_rank_loss_total = 0.0
+        groupdro_loss_total = 0.0
+        cvar_loss_total = 0.0
 
         entropy_lambda = float(getattr(self.c.tra, "entropy_min_lambda", 0.0))
         u_iter = iter(self.valid_loader) if entropy_lambda > 0 else None
@@ -642,6 +837,13 @@ class Trainer:
                 and len(batch) > optional_index
                 else None
             )
+            optional_index += int(bool(getattr(self.c.data, "target_aware_ctx_jitter", False)))
+            if bool(getattr(self.c.tra, "context_consistency", False)):
+                batch_context_pair = batch[optional_index]
+                batch_context_pair_active = batch[optional_index + 1]
+            else:
+                batch_context_pair = None
+                batch_context_pair_active = None
 
             u_imgs = None
             if u_iter is not None:
@@ -677,6 +879,8 @@ class Trainer:
                 target_offsets=batch_target_offsets,
                 epoch=epoch,
                 unlabeled_images=u_imgs,
+                context_pair=batch_context_pair,
+                context_pair_active=batch_context_pair_active,
             )
             if batch_scores.size == 0:
                 continue
@@ -690,6 +894,11 @@ class Trainer:
             preds.extend((batch_scores > 0.5).astype(int))
             scores.extend(batch_scores)
             character_ids_all.extend(batch_character_ids_out)
+            context_value, bag_value, groupdro_value, cvar_value = self._last_character_objectives
+            context_loss_total += context_value
+            bag_rank_loss_total += bag_value
+            groupdro_loss_total += groupdro_value
+            cvar_loss_total += cvar_value
 
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
         if bool(getattr(self.c.tra, "character_macro_metrics", False)):
@@ -707,6 +916,10 @@ class Trainer:
         metrics["spill_loss"] = spill_loss_total / len(self.train_loader)
         metrics["surface_loss"] = surface_loss_total / len(self.train_loader)
         metrics["surface_alpha"] = surface_alpha_total / len(self.train_loader)
+        metrics["context_consistency_loss"] = context_loss_total / len(self.train_loader)
+        metrics["character_bag_ranking_loss"] = bag_rank_loss_total / len(self.train_loader)
+        metrics["character_groupdro_loss"] = groupdro_loss_total / len(self.train_loader)
+        metrics["character_cvar_loss"] = cvar_loss_total / len(self.train_loader)
         metrics["scores"] = scores
         metrics["hard_injected"] = total_injected
 
@@ -895,6 +1108,14 @@ class Trainer:
             self.params,
             None,
         )
+        for key, tag in (
+            ("context_consistency_loss", "Aux/ContextConsistency"),
+            ("character_bag_ranking_loss", "Aux/CharacterBagRanking"),
+            ("character_groupdro_loss", "Aux/CharacterGroupDRO"),
+            ("character_cvar_loss", "Aux/CharacterCVaR"),
+        ):
+            if key in train_metrics:
+                self.vis.writer.add_scalar(tag, train_metrics[key], epoch)
         if self.c.hm.enabled:
             self.vis.writer.add_scalar("HardMining/Injected", train_metrics.get("hard_injected", 0), epoch)
 

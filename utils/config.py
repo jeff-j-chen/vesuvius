@@ -257,6 +257,18 @@ class TrainingConfig:
     character_recall_target: float = 0.5
     character_max_ring_fpr: float = 0.1
     character_checkpoint_metric: str = "character_ap_macro"
+    context_consistency: bool = False
+    context_consistency_prob: float = 0.25
+    context_consistency_lambda: float = 0.1
+    character_bag_ranking: bool = False
+    character_bag_margin: float = 0.5
+    character_bag_topk_frac: float = 0.5
+    character_bag_lambda: float = 0.2
+    character_groupdro: bool = False
+    character_groupdro_eta: float = 0.05
+    character_groupdro_max_ratio: float = 3.0
+    character_cvar: bool = False
+    character_cvar_alpha: float = 0.25
 
 @dataclass
 class ModelConfig:
@@ -270,6 +282,8 @@ class ModelConfig:
     feature_attn_mil: bool = False
     learned_surface: bool = False
     new_learned_surface: bool = False
+    surface_canonicalize: bool = False
+    surface_canonical_depth: int = 24
     surface_guided_mil: bool = False
     surface_guided_mix: float = 0.5
     surface_band_sigma: float = 1.5

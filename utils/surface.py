@@ -80,9 +80,12 @@ def surface_supervision_loss(
     logits: torch.Tensor,
     volume: torch.Tensor,
     smooth_weight: float = 0.02,
+    target: torch.Tensor | None = None,
+    valid: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """soft depth cross-entropy plus weak robust spatial smoothness."""
-    target, valid, _ = make_surface_targets(volume)
+    if target is None or valid is None:
+        target, valid, _ = make_surface_targets(volume)
     log_probs = F.log_softmax(logits.float(), dim=2)
     ce_map = -(target * log_probs).sum(dim=2)
     denom = valid.sum().clamp(min=1.0)
