@@ -1594,9 +1594,12 @@ the architecture and geometry questions.
 
 ## 20) Character-Robust, Surface-Relative, and JEPA Tests (2026-09-08)
 
-Campaign 20 promotes the campaign-19 operating point: matched MAE, c64_t16, protected cutout,
+Campaign 20 promotes the campaign-19 operating point: matched MAE, c64_t16, corrected protected cutout,
 target-aware jitter, weakened real-context replacement, hard-label GCE q=0.9, and surface loss
-0.2. In addition to baseline and ctx128, future independent arms test:
+0.2. `future_baseline` is the common control. Future arms use 192px/ds2 with replacement
+probability 0.25, margin 24px per side, and feather 24px. Immediately after the GCE q=0.9
+control, `bce_soft` tests matched ctx192 BCE with positive 0.90 / negative 0.05 targets. Later
+future arms test:
 
 - context consistency on 25% paired samples; only c64 target logits are matched after replacing
   distant context, while the 112px protected region preserves nearby fibers
@@ -1610,6 +1613,10 @@ target-aware jitter, weakened real-context replacement, hard-label GCE q=0.9, an
   surface-relative slices
 - 3D JEPA: masked student volumes predict EMA-teacher decoder features at masked 3D blocks;
   variance/covariance penalties prevent collapse and the exported state dict is directly loadable
+
+Campaign training uses batch 32 and LR 1e-4. Additional response tests sweep context-consistency
+lambda 0.1/0.3, bag-ranking lambda 0.2/0.4, GroupDRO eta 0.05/0.1, CVaR tail 25%/50%, and
+surface-relative depth 8/12/24. A missing JEPA checkpoint is pretrained before supervised arms.
 
 Surface geometry remains online rather than precomputed per scroll, preserving exact alignment
 under depth jitter and avoiding stale patch-level surface maps.

@@ -191,7 +191,7 @@ class Transform:
         if random.random() < self.contrast_prob:
             block = self._apply_contrast_adjustment(block)
         if random.random() < self.cutout_prob:
-            block = self._apply_cutout(block)
+            block = self._apply_cutout(block, target_offset)
         if self.depth_mask_prob > 0:
             block = self._apply_depth_mask(block)
         if self.depth_warp_prob > 0 and random.random() < self.depth_warp_prob:
@@ -294,7 +294,7 @@ class Transform:
             out[d] = map_coordinates(block[d], coords_flat, order=1, mode='reflect').reshape(H, W)
         return out
 
-    def _apply_cutout(self, block):
+    def _apply_cutout(self, block, target_offset=None):
         """zero out random XY patches across all depth slices (specaugment-style).
         forces the model to use distributed spatial evidence rather than
         memorizing specific locations."""
@@ -313,8 +313,12 @@ class Transform:
                     self.multitile_grid * self.multitile_subtile
                     if self.multitile else self.tile_size
                 )
-                cy0 = (H - protected) // 2
-                cx0 = (W - protected) // 2
+                if target_offset is None:
+                    dy = dx = 0
+                else:
+                    dy, dx = (int(value) for value in target_offset.tolist())
+                cy0 = (H - protected) // 2 + dy
+                cx0 = (W - protected) // 2 + dx
                 if y0 + ph <= cy0 or y0 >= cy0 + protected \
                     or x0 + pw <= cx0 or x0 >= cx0 + protected:
                     break

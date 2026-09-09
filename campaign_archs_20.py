@@ -1,6 +1,6 @@
 """campaign_archs_20.py -- combined campaign-19 findings.
 
-All arms use the campaign-19 operating point selected from metrics and figures:
+Future arms use the campaign-19/20 operating point selected from metrics and figures:
 - matched MAE initialization
 - 192px context at ds2
 - c64 center with 4x4 16px targets
@@ -10,8 +10,8 @@ All arms use the campaign-19 operating point selected from metrics and figures:
 - strong surface supervision
 
 Tests:
-- baseline: 192px context with matched 192px MAE
-- ctx128: 128px context with transferred 192px MAE
+- future_baseline: corrected ctx128 operating point for all future comparisons
+- bce_soft: matched ctx192 BCE with positive/negative label smoothing
 - context_consistency: explicit target-logit invariance to distant context replacement
 - character_bag_rank: rank each character bag above its assigned local ring
 - character_groupdro: persistent worst-character reweighting
@@ -19,10 +19,15 @@ Tests:
 - surface_canonical: align the 24-slice ink input to the physical surface
 - surface_slice8: classify from eight surface-relative slices after 24-slice localization
 - jepa192: initialize from 3D JEPA instead of voxel-reconstruction MAE
+- context_consistency_strong: context consistency lambda 0.3
+- character_bag_rank_strong: character ranking lambda 0.4
+- character_groupdro_fast: GroupDRO eta 0.1
+- character_cvar_half: optimize the worst half of represented characters
+- surface_slice12: classify from twelve surface-relative slices
 
   python campaign_archs_20.py --dry-run
-  python campaign_archs_20.py --only baseline
-    python campaign_archs_20.py --only ctx128
+    python campaign_archs_20.py --only future_baseline
+    python campaign_archs_20.py --only bce_soft
   python campaign_archs_20.py
 """
 from __future__ import annotations
@@ -30,6 +35,7 @@ from __future__ import annotations
 import argparse
 import gc
 import os
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -211,11 +217,16 @@ def base_config(exp_name: str) -> Config:
 
 
 TESTS = [
-    {"tid": "baseline", "tag": "20_baseline"},
     {
-        "tid": "ctx128",
-        "tag": "20_ctx128",
-        "context_size": 128,
+        "tid": "future_baseline",
+        "tag": "20_future_baseline",
+    },
+    {
+        "tid": "bce_soft",
+        "tag": "20_bce_soft",
+        "loss_type": "bce",
+        "label_smooth_pos": 0.10,
+        "label_smooth_neg": 0.05,
     },
     {
         "tid": "context_consistency",
@@ -251,8 +262,6 @@ TESTS = [
         "tag": "20_surface_canonical",
         "surface_canonicalize": True,
         "surface_canonical_depth": 24,
-        "batch_size": 16,
-        "lr": 5e-5,
         "compile_model": False,
     },
     {
@@ -260,14 +269,48 @@ TESTS = [
         "tag": "20_surface_slice8",
         "surface_canonicalize": True,
         "surface_canonical_depth": 8,
-        "batch_size": 16,
-        "lr": 5e-5,
         "compile_model": False,
     },
     {
         "tid": "jepa192",
         "tag": "20_jepa192",
         "init_weights": "models/jepa_nnunet_192_ibn.pth",
+    },
+    {
+        "tid": "context_consistency_strong",
+        "tag": "20_context_consistency_strong",
+        "context_replace_prob": 0.0,
+        "context_consistency": True,
+        "context_consistency_prob": 0.25,
+        "context_consistency_lambda": 0.3,
+    },
+    {
+        "tid": "character_bag_rank_strong",
+        "tag": "20_character_bag_rank_strong",
+        "character_bag_ranking": True,
+        "character_bag_margin": 0.5,
+        "character_bag_topk_frac": 0.5,
+        "character_bag_lambda": 0.4,
+    },
+    {
+        "tid": "character_groupdro_fast",
+        "tag": "20_character_groupdro_fast",
+        "character_groupdro": True,
+        "character_groupdro_eta": 0.1,
+        "character_groupdro_max_ratio": 3.0,
+    },
+    {
+        "tid": "character_cvar_half",
+        "tag": "20_character_cvar_half",
+        "character_cvar": True,
+        "character_cvar_alpha": 0.5,
+    },
+    {
+        "tid": "surface_slice12",
+        "tag": "20_surface_slice12",
+        "surface_canonicalize": True,
+        "surface_canonical_depth": 12,
+        "compile_model": False,
     },
 ]
 
@@ -277,6 +320,11 @@ _OVERRIDES = {
     "compile_model": ("model", "compile_model"),
     "context_size": ("data", "context_size"),
     "context_replace_prob": ("dl", "context_replace_prob"),
+    "context_replace_margin": ("dl", "context_replace_margin"),
+    "context_replace_feather": ("dl", "context_replace_feather"),
+    "loss_type": ("tra", "loss_type"),
+    "label_smooth_pos": ("tra", "label_smooth_pos"),
+    "label_smooth_neg": ("tra", "label_smooth_neg"),
     "context_consistency": ("tra", "context_consistency"),
     "context_consistency_prob": ("tra", "context_consistency_prob"),
     "context_consistency_lambda": ("tra", "context_consistency_lambda"),
@@ -359,6 +407,38 @@ def run_test(config: Config, dry_run: bool) -> bool:
         return False
 
 
+def ensure_pretraining(selected: list[dict], dry_run: bool) -> None:
+    """create prerequisite self-supervised checkpoints before campaign training."""
+    if not any(str(test["tid"]) == "jepa192" for test in selected):
+        return
+    root = Path(__file__).resolve().parent
+    checkpoint = root / "models/jepa_nnunet_192_ibn.pth"
+    if checkpoint.exists():
+        print(f"[archs20] JEPA checkpoint ready: {checkpoint}")
+        return
+    command = [
+        sys.executable,
+        str(root / "jepa_pretrain_nnunet.py"),
+        "--name", "jepa_nnunet_192_ibn",
+        "--ctx", "192",
+        "--ds", "2",
+        "--depth", "24",
+        "--d-start", "4",
+        "--d-end", "28",
+        "--steps", "1000",
+        "--batch-size", "8",
+        "--accum-steps", "4",
+        "--require-all-scrolls",
+    ]
+    if dry_run:
+        print(f"[archs20] PREFLIGHT would run: {' '.join(command)}")
+        return
+    print("[archs20] JEPA checkpoint missing; running pretraining before campaign", flush=True)
+    subprocess.run(command, cwd=root, check=True)
+    if not checkpoint.exists():
+        raise RuntimeError(f"JEPA pretraining completed without creating {checkpoint}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="campaign_archs_20: combined c19 findings")
     parser.add_argument("--only", type=str, default=None)
@@ -382,6 +462,7 @@ def main() -> None:
             return
         selected = TESTS[ids.index(args.from_id):]
 
+    ensure_pretraining(selected, args.dry_run)
     print(f"[archs20] {len(selected)} test(s) queued (log -> {LOG_DIR})")
     print("[archs20] c64_t16 + context augmentations + GCE q0.9 + strong surface")
 

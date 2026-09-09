@@ -125,16 +125,17 @@ the result. Cutout is retained as a weak visual positive despite no AP improveme
 
 ### Campaign 20
 
-Campaign 20 combines the selected findings rather than testing them independently. All arms use
+Campaign 20 combines the selected findings rather than testing them independently. `future_baseline`
+is the corrected ctx192 control for every new arm. Future arms use
 c64_t16, protected cutout, target-aware context jitter, hard-label GCE q=0.9, and surface loss 0.2.
-Real-context replacement is deliberately weakened from campaign 19: probability 0.25, a 24px
-margin per side around the c64 prediction center, and a 24px feather. This reduces expected donor
-weight by approximately 70% while preserving surface alignment.
+The future operating point is 192px/ds2. Real-context replacement uses probability 0.25, a 24px
+margin per side around the c64 prediction center, and a 24px feather, matching the completed c20
+geometry while retaining the corrected jitter-aware cutout.
 
-The baseline uses 192px/ds2 with `models/mae_nnunet_192_ibn.pth`; `ctx128` tests transfer of that
-same fully convolutional checkpoint to a smaller crop. Future single-scroll arms independently
-test:
+The baseline uses `models/mae_nnunet_192_ibn.pth`. Future single-scroll arms independently test:
 
+- BCE with positive 0.90 / negative 0.05 soft targets at ctx192, directly after the matched
+  GCE q=0.9 future baseline
 - paired target-logit consistency under distant real-context intervention
 - top-k character-bag versus assigned-ring ranking
 - persistent capped character GroupDRO
@@ -142,6 +143,11 @@ test:
 - physical surface-relative canonicalization retaining 24 slices
 - an eight-slice surface-relative ink backbone whose locator still examines all 24 slices
 - 3D JEPA feature-predictive initialization
+- stronger context consistency (lambda 0.3)
+- stronger character-bag ranking (lambda 0.4)
+- faster GroupDRO adaptation (eta 0.1)
+- worst-half character CVaR
+- a twelve-slice surface-relative backbone
 
 Surface canonicalization is computed online per crop from the physical papyrus-air transition.
 No per-scroll surface files are needed; online geometry remains aligned under depth and context
@@ -155,7 +161,7 @@ python mae_pretrain_nnunet.py --name mae_nnunet_128_ibn --ctx 128 --ds 2 \
   --require-all-scrolls
 ```
 
-Campaign 20 restores batch 32, LR 1e-4, and eight workers. Figure inference uses batch 32, two
+Campaign 20 uses batch 32, LR 1e-4, and eight workers. Figure inference uses batch 32, two
 prefetch workers, and a 1GB tile-buffer target: faster than the emergency campaign-19 reruns while
 retaining bounded buffering and worker shutdown before full-scroll figures.
 
@@ -170,6 +176,9 @@ python jepa_pretrain_nnunet.py --name jepa_nnunet_192_ibn --ctx 192 --ds 2 \
 The fine-tune artifact is a plain nnU-Net state dict at
 `models/jepa_nnunet_192_ibn.pth`; a separate `_resume.pth` stores the student, EMA teacher,
 predictor, optimizer, scheduler, and scaler.
+
+When a selected campaign includes `jepa192` and its checkpoint is absent, campaign 20 runs this
+JEPA pretraining command as a preflight before starting any supervised arm.
 
 Multi-scroll character balancing is now available through `character_balance_scrolls=True`.
 Training draws scrolls round-robin while drawing characters uniformly inside each scroll, cycles
