@@ -152,14 +152,14 @@ def supcon_loss(z: torch.Tensor, labels: torch.Tensor, temp: float = 0.07, domai
     if domain_ids is not None:
         d = domain_ids.view(-1)
         pos_mask = pos_mask & (d.unsqueeze(0) != d.unsqueeze(1))
-    if not pos_mask.any():
-        return z.new_zeros(())
 
     logits = sim - sim.max(dim=1, keepdim=True).values.detach()
     exp_logits = torch.exp(logits).masked_fill(eye, 0.0)
     log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True).clamp(min=1e-12))
-    pos_count = pos_mask.float().sum(dim=1).clamp(min=1.0)
-    return (-(log_prob * pos_mask.float()).sum(dim=1) / pos_count).mean()
+    pos_count = pos_mask.float().sum(dim=1)
+    valid = (pos_count > 0).float()
+    per_row = -(log_prob * pos_mask.float()).sum(dim=1) / pos_count.clamp(min=1.0)
+    return (per_row * valid).sum() / valid.sum().clamp(min=1.0)
 
 
 class GatedAttentionMIL(nn.Module):

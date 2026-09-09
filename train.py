@@ -160,6 +160,9 @@ class Trainer:
             int(getattr(config.tra, "seed", 41)),
             deterministic=bool(getattr(config.tra, "deterministic", False)),
         )
+        if bool(getattr(config.tra, "context_consistency", False)):
+            torch.backends.cudnn.benchmark = False
+            print("[seed] context consistency uses variable batch sizes -- cudnn benchmark off")
         self._print_config()
 
         self.train_dataset, self.train_loader, self.valid_loader = self._setup_data()
@@ -371,6 +374,9 @@ class Trainer:
     def _train_batch(self, images, labels, mask, domain_ids=None, character_ids=None,
                      target_offsets=None, epoch: int = 0, unlabeled_images=None,
                      context_pair=None, context_pair_active=None):
+        if mask.reshape(mask.size(0), -1).sum().item() <= 0:
+            print("[ERROR] Mask sum is zero, skipping loss calculation.")
+            return np.empty([]), np.empty([]), np.empty([]), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         images = images.to(self.c.device)
         surface_source = images
         images = self._apply_fda(images)
@@ -393,15 +399,17 @@ class Trainer:
             if character_ids is not None else None
         )
         context_active_mask = (
-            context_pair_active.to(self.c.device, non_blocking=True).view(-1) > 0
+            context_pair_active.view(-1) > 0
             if context_pair_active is not None else None
         )
         context_loss_value = images.new_zeros(())
         bag_rank_loss_value = images.new_zeros(())
         groupdro_loss_value = images.new_zeros(())
         cvar_loss_value = images.new_zeros(())
+        dann_accuracy_value = images.new_zeros(())
+        dann_grl_value = images.new_zeros(())
 
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
         with autocast(self.c.device, enabled=self.c.device == "cuda"):
             use_extras = hasattr(self.model, "forward_with_extras") and any([
                 bool(getattr(self.c.tra, "supcon", False)),
@@ -452,12 +460,7 @@ class Trainer:
             per_target_loss = self.criterion(outputs, targets)
             raw_loss = per_target_loss * mask
             denom = mask.sum()
-            if denom <= 0:
-                print("[ERROR] Mask sum is zero, skipping loss calculation.")
-                return np.empty([]), np.empty([]), np.empty([]), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-
-            raw_loss_value = (raw_loss.sum() / denom).item()
-            l1_loss = sum(param.abs().sum() for param in self.model.parameters())
+            raw_loss_value = raw_loss.sum() / denom
             primary_loss = raw_loss.sum() / denom
             group_ids: list[int] = []
             group_losses: list[torch.Tensor] = []
@@ -489,7 +492,10 @@ class Trainer:
                 if robust_loss is not None:
                     primary_loss = robust_loss
                     cvar_loss_value = robust_loss
-            loss = primary_loss + self.c.tra.l1_lambda * l1_loss
+            loss = primary_loss
+            if self.c.tra.l1_lambda > 0:
+                l1_loss = sum(param.abs().sum() for param in self.model.parameters())
+                loss = loss + self.c.tra.l1_lambda * l1_loss
 
             if (
                 bool(getattr(self.c.tra, "character_bag_ranking", False))
@@ -563,7 +569,7 @@ class Trainer:
             if (attn_entropy_per_target is not None
                     and attn_entropy_per_target.shape == mask.shape):
                 loss = loss + (attn_entropy_per_target * mask).sum() / denom.clamp(min=1)
-            elif attn_entropy_loss is not None and attn_entropy_loss.item() != 0.0:
+            elif attn_entropy_loss is not None:
                 loss = loss + attn_entropy_loss
 
             dann_loss_value = outputs.new_zeros(())
@@ -577,13 +583,10 @@ class Trainer:
                 # The domain head receives full CE gradients so weak lambdas still
                 # train a meaningful domain classifier.
                 loss = loss + dann_loss_value
-                self._last_dann_accuracy = float(
-                    (domain_logits.detach().argmax(dim=1) == domain_ids).float().mean().item()
-                )
-                self._last_grl_scale = float(grl_scale)
-            else:
-                self._last_dann_accuracy = 0.0
-                self._last_grl_scale = 0.0
+                dann_accuracy_value = (
+                    domain_logits.detach().argmax(dim=1) == domain_ids
+                ).float().mean()
+                dann_grl_value = outputs.new_tensor(grl_scale)
 
             spill_loss_value = outputs.new_zeros(())
             center_voxel_map = getattr(self.model, "last_center_voxel_map", None)
@@ -605,14 +608,16 @@ class Trainer:
 
             if bool(getattr(self.c.tra, "spill_reduction", False)) and center_voxel_map is not None:
                 pos_mask = sample_pos
-                if pos_mask.sum() > 0:
-                    # variance of mean logit per depth slice: high var = depth-selective (good)
-                    # low var = uniform across all layers (spill); no cap on prediction confidence
-                    depth_logits = _positive_depth_profile(center_voxel_map)     # [B, D]
-                    depth_var = depth_logits.var(dim=1, unbiased=False)           # [B]
-                    min_var = float(getattr(self.c.tra, "spill_min_depth_var", 0.5))
-                    spill_loss_value = (F.relu(min_var - depth_var) * pos_mask).sum() / pos_mask.sum().clamp(min=1.0)
-                    loss = loss + float(getattr(self.c.tra, "spill_lambda", 0.0)) * spill_loss_value
+                # variance of mean logit per depth slice: high var = depth-selective (good)
+                # low var = uniform across all layers (spill); no cap on prediction confidence
+                depth_logits = _positive_depth_profile(center_voxel_map)     # [B, D]
+                depth_var = depth_logits.var(dim=1, unbiased=False)           # [B]
+                min_var = float(getattr(self.c.tra, "spill_min_depth_var", 0.5))
+                spill_loss_value = (
+                    (F.relu(min_var - depth_var) * pos_mask).sum()
+                    / pos_mask.sum().clamp(min=1.0)
+                )
+                loss = loss + float(getattr(self.c.tra, "spill_lambda", 0.0)) * spill_loss_value
 
             if bool(getattr(self.c.tra, "spill_prob", False)) and center_voxel_map is not None:
                 pos_mask = sample_pos
@@ -668,11 +673,6 @@ class Trainer:
                 )
                 surface_loss_value = surface_total
                 loss = loss + float(getattr(self.c.tra, "new_surface_lambda", 0.1)) * surface_total
-                self._last_surface_parts = (
-                    float(surface_ce.item()),
-                    float(surface_smooth.item()),
-                    float(surface_valid.item()),
-                )
             surface_alpha = getattr(self.model, "last_surface_guided_alpha", None)
             if surface_alpha is not None:
                 surface_alpha_value = surface_alpha.float().mean()
@@ -730,15 +730,16 @@ class Trainer:
             and context_active_mask is not None
             and context_active_mask.any()
         ):
-            active = context_active_mask
-            pair_images = context_pair[active].to(self.c.device, non_blocking=True)
-            pair_offsets = target_offsets[active] if target_offsets is not None else None
-            pair_target = torch.sigmoid(outputs[active]).detach()
+            active_cpu = context_active_mask
+            active_device = active_cpu.to(self.c.device, non_blocking=True)
+            pair_images = context_pair[active_cpu].to(self.c.device, non_blocking=True)
+            pair_offsets = target_offsets[active_device] if target_offsets is not None else None
+            pair_target = torch.sigmoid(outputs[active_device]).detach()
             with autocast(self.c.device, enabled=self.c.device == "cuda"):
                 self.model.eval()
                 pair_outputs = self.model(pair_images, target_offsets=pair_offsets)
                 self.model.train()
-                pair_mask = mask[active]
+                pair_mask = mask[active_device]
                 context_loss_value = (
                     (torch.sigmoid(pair_outputs) - pair_target).square() * pair_mask
                 ).sum() / pair_mask.sum().clamp(min=1.0)
@@ -749,12 +750,23 @@ class Trainer:
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()
-        self._last_character_objectives = (
-            float(context_loss_value.detach().item()),
-            float(bag_rank_loss_value.detach().item()),
-            float(groupdro_loss_value.detach().item()),
-            float(cvar_loss_value.detach().item()),
-        )
+        diagnostic_values = torch.stack((
+            loss.detach().float(),
+            raw_loss_value.detach().float(),
+            dann_loss_value.detach().float(),
+            spill_loss_value.detach().float(),
+            surface_loss_value.detach().float(),
+            surface_alpha_value.detach().float(),
+            context_loss_value.detach().float(),
+            bag_rank_loss_value.detach().float(),
+            groupdro_loss_value.detach().float(),
+            cvar_loss_value.detach().float(),
+            dann_accuracy_value.detach().float(),
+            dann_grl_value.detach().float(),
+        )).cpu().tolist()
+        self._last_character_objectives = tuple(diagnostic_values[6:10])
+        self._last_dann_accuracy = diagnostic_values[10]
+        self._last_grl_scale = diagnostic_values[11]
 
         if hasattr(self.model, "prototype_head") and self.model.prototype_head is not None:
             emb = getattr(self.model, "last_embedding_detached", None)
@@ -776,12 +788,7 @@ class Trainer:
             scores,
             label_values,
             character_values,
-            loss.item(),
-            raw_loss_value,
-            float(dann_loss_value.detach().item()),
-            float(spill_loss_value.detach().item()),
-            float(surface_loss_value.detach().item()),
-            float(surface_alpha_value.detach().item()),
+            *diagnostic_values[:6],
         )
 
     def _ins_hard_samples(self, images, labels, mask, hard_injector, remaining_batches: int) -> int:
@@ -1207,6 +1214,21 @@ class Trainer:
                 time.sleep(val_cooldown)
 
             val_metrics = self.validate_epoch()
+            guard_epoch = int(getattr(self.c.tra, "sanity_guard_epoch", 0))
+            if guard_epoch > 0 and (epoch + 1) == guard_epoch:
+                character_ap = float(val_metrics.get("character_ap_macro", 0.0))
+                specificity = float(val_metrics.get("specificity", 0.0))
+                min_ap = float(getattr(self.c.tra, "sanity_min_character_ap", 0.0))
+                min_specificity = float(getattr(self.c.tra, "sanity_min_specificity", 0.0))
+                print(
+                    f"[sanity] epoch={epoch + 1} character_ap={character_ap:.4f}"
+                    f" specificity={specificity:.4f}"
+                    f" required=({min_ap:.4f},{min_specificity:.4f})"
+                )
+                if character_ap < min_ap or specificity < min_specificity:
+                    raise RuntimeError(
+                        "sanity guard failed: early validation is below historical tolerance"
+                    )
             self.scheduler.step(val_metrics["loss"])
             self._periodic_model_save(epoch, val_metrics)
             figure_due = any([

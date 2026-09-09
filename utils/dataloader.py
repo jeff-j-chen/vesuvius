@@ -1521,6 +1521,25 @@ class DataManager:
         # open the zarr volume in read-only mode
         zarr_dir = os.path.join(self.c.data.zarr_path, f"{self.scroll_id}.zarr")
         vol = zarr.open(zarr_dir, mode='r')
+        if bool(getattr(self.c.data, "preload_volumes", False)):
+            source_shape = tuple(vol.shape)
+            source_dtype = np.dtype(vol.dtype)
+            print(
+                f"[preload] scroll {self.scroll_id}: loading "
+                f"{vol.nbytes / 1024**3:.2f} GiB into RAM"
+            )
+            vol = np.ascontiguousarray(vol[:])
+            if tuple(vol.shape) != source_shape or vol.dtype != source_dtype:
+                raise RuntimeError(
+                    f"preloaded volume integrity check failed for scroll {self.scroll_id}: "
+                    f"expected shape={source_shape} dtype={source_dtype}, "
+                    f"got shape={vol.shape} dtype={vol.dtype}"
+                )
+            vol.setflags(write=False)
+            print(
+                f"[preload] scroll {self.scroll_id}: ready "
+                f"shape={vol.shape} dtype={vol.dtype} contiguous={vol.flags.c_contiguous}"
+            )
 
         # load labels and mask, and normalize to [0, 1]
         lbl_dir = getattr(self.c.data, 'inklabel_dir', './eroded_inklabels')

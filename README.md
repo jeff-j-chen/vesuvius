@@ -193,6 +193,12 @@ scroll's manual train mask; scrolls without one retain the previous probe/corner
 The domain head always receives full cross-entropy gradients; lambda scales only the reversed
 gradient entering the shared backbone. Domain accuracy and effective GRL scale are logged.
 
+The A100 loop reduces synchronization overhead by bundling scalar diagnostics into one transfer,
+removing unused surface scalar reads, making active spill reduction branchless, skipping zero-weight
+L1 work, using `zero_grad(set_to_none=True)`, branchless SupCon, and fused CUDA AdamW. The guarded
+future baseline is checked after epoch 3; the complete campaign aborts if character AP is below
+0.55 or specificity below 0.25, preventing clearly divergent settings from consuming later runs.
+
 Pretrain the feature-predictive 3D JEPA checkpoint across all 18 fragments with:
 
 ```bash

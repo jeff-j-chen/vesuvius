@@ -1627,6 +1627,11 @@ bounding boxes for fast evaluation. DANN lambda scales only the reversed backbon
 the domain classifier receives full cross-entropy gradients, with domain accuracy and GRL scale
 logged each epoch.
 
+The A100 train loop bundles scalar diagnostics into one host transfer, removes unused surface
+`.item()` calls and zero-weight L1 reductions, uses branchless SupCon/spill paths, clears gradients
+with `set_to_none=True`, and enables fused CUDA AdamW. `future_baseline_a100` has an epoch-3 sanity
+gate requiring character AP >=0.55 and specificity >=0.25; failure aborts the remaining campaign.
+
 Assemble only these three fragments with:
 
 ```bash

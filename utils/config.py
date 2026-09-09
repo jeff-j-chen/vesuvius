@@ -110,6 +110,7 @@ class DataConfig:
 
     mask_memmap: bool = True
     mask_bitpack: bool = True
+    preload_volumes: bool = False
     ring_negatives: bool = True
     ring_label_source: str = "eroded"
     ring_close_r: int = 3
@@ -257,6 +258,9 @@ class TrainingConfig:
     character_recall_target: float = 0.5
     character_max_ring_fpr: float = 0.1
     character_checkpoint_metric: str = "character_ap_macro"
+    sanity_guard_epoch: int = 0
+    sanity_min_character_ap: float = 0.0
+    sanity_min_specificity: float = 0.0
     context_consistency: bool = False
     context_consistency_prob: float = 0.25
     context_consistency_lambda: float = 0.1

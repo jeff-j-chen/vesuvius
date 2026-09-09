@@ -6,7 +6,7 @@ Future arms use the campaign-19/20 operating point selected from metrics and fig
 - c64 center with 4x4 16px targets
 - protected context cutout and target-aware context jitter
 - weakened surface-aligned real-context replacement
-- hard-label GCE q=0.9
+- BCE with positive/negative label smoothing
 - strong surface supervision
 
 Tests:
@@ -88,6 +88,7 @@ def base_config(exp_name: str) -> Config:
     config.data.train_mask_dir = "./train_masks"
     config.data.mask_memmap = True
     config.data.mask_bitpack = True
+    config.data.preload_volumes = True
     config.data.ring_negatives = True
     config.data.ring_label_source = "closed"
     config.data.ring_close_r = 3
@@ -144,11 +145,11 @@ def base_config(exp_name: str) -> Config:
     config.tra.probe_int = 999
     config.tra.fast_eval_figure = False
     config.tra.test_on_final = False
-    config.tra.loss_type = "gce"
+    config.tra.loss_type = "bce"
     config.tra.gce_q = 0.9
-    config.tra.label_smooth_pos = 0.0
-    config.tra.label_smooth_neg = 0.0
-    config.tra.tile_pos_weight = 1.5
+    config.tra.label_smooth_pos = 0.10
+    config.tra.label_smooth_neg = 0.05
+    config.tra.tile_pos_weight = 1
     config.tra.tile_pos_weight_auto = False
     config.tra.tta_consistency = True
     config.tra.tta_consistency_lambda = 0.3
@@ -226,20 +227,24 @@ def base_config(exp_name: str) -> Config:
 
 
 TESTS = [
-    {
-        "tid": "future_baseline",
-        "tag": "20_future_baseline",
-    },
-    {
-        "tid": "bce_soft",
-        "tag": "20_bce_soft",
-        "loss_type": "bce",
-        "label_smooth_pos": 0.10,
-        "label_smooth_neg": 0.05,
-    },
+    # {
+    #     "tid": "future_baseline",
+    #     "tag": "20_future_baseline",
+    #     "sanity_guard_epoch": 3,
+    #     "sanity_min_character_ap": 0.55,
+    #     "sanity_min_specificity": 0.25,
+    # },
+    # {
+    #     "tid": "bce_soft",
+    #     "tag": "20_bce_soft",
+    #     "loss_type": "bce",
+    #     "label_smooth_pos": 0.10,
+    #     "label_smooth_neg": 0.05,
+    # },
     {
         "tid": "context_consistency",
-        "tag": "20_context_consistency",
+        "tag": "20_context_consistency_soft",
+        "compile_model": False,
         "context_replace_prob": 0.0,
         "context_consistency": True,
         "context_consistency_prob": 0.25,
@@ -247,7 +252,7 @@ TESTS = [
     },
     {
         "tid": "character_bag_rank",
-        "tag": "20_character_bag_rank",
+        "tag": "20_character_bag_rank_soft",
         "character_bag_ranking": True,
         "character_bag_margin": 0.5,
         "character_bag_topk_frac": 0.5,
@@ -255,39 +260,41 @@ TESTS = [
     },
     {
         "tid": "character_groupdro",
-        "tag": "20_character_groupdro",
+        "tag": "20_character_groupdro_soft",
         "character_groupdro": True,
         "character_groupdro_eta": 0.05,
         "character_groupdro_max_ratio": 3.0,
     },
     {
         "tid": "character_cvar",
-        "tag": "20_character_cvar",
+        "tag": "20_character_cvar_soft",
+        "n_epochs": 25,
+        "eval_int": 25,
         "character_cvar": True,
         "character_cvar_alpha": 0.25,
     },
     {
         "tid": "surface_canonical",
-        "tag": "20_surface_canonical",
+        "tag": "20_surface_canonical_soft",
         "surface_canonicalize": True,
         "surface_canonical_depth": 24,
         "compile_model": False,
     },
     {
         "tid": "surface_slice8",
-        "tag": "20_surface_slice8",
+        "tag": "20_surface_slice8_soft",
         "surface_canonicalize": True,
         "surface_canonical_depth": 8,
         "compile_model": False,
     },
     {
         "tid": "jepa192",
-        "tag": "20_jepa192",
+        "tag": "20_jepa192_soft",
         "init_weights": "models/jepa_nnunet_192_ibn.pth",
     },
     {
         "tid": "multi3_control",
-        "tag": "20_multi3_control",
+        "tag": "20_multi3_control_soft",
         "scrolls": list(_THREE_SCROLLS),
         "max_samples_per_epoch": 6667,
         "vis_scroll_ids": sorted(_THREE_MASK_IDS),
@@ -298,7 +305,7 @@ TESTS = [
     },
     {
         "tid": "dann_0025",
-        "tag": "20_dann_0025",
+        "tag": "20_dann_0025_soft",
         "scrolls": list(_THREE_SCROLLS),
         "max_samples_per_epoch": 6667,
         "vis_scroll_ids": sorted(_THREE_MASK_IDS),
@@ -311,7 +318,7 @@ TESTS = [
     },
     {
         "tid": "dann_005",
-        "tag": "20_dann_005",
+        "tag": "20_dann_005_soft",
         "scrolls": list(_THREE_SCROLLS),
         "max_samples_per_epoch": 6667,
         "vis_scroll_ids": sorted(_THREE_MASK_IDS),
@@ -324,7 +331,7 @@ TESTS = [
     },
     {
         "tid": "dann_01",
-        "tag": "20_dann_01",
+        "tag": "20_dann_01_soft",
         "scrolls": list(_THREE_SCROLLS),
         "max_samples_per_epoch": 6667,
         "vis_scroll_ids": sorted(_THREE_MASK_IDS),
@@ -337,7 +344,7 @@ TESTS = [
     },
     {
         "tid": "dann_02",
-        "tag": "20_dann_02",
+        "tag": "20_dann_02_soft",
         "scrolls": list(_THREE_SCROLLS),
         "max_samples_per_epoch": 6667,
         "vis_scroll_ids": sorted(_THREE_MASK_IDS),
@@ -350,7 +357,8 @@ TESTS = [
     },
     {
         "tid": "context_consistency_strong",
-        "tag": "20_context_consistency_strong",
+        "tag": "20_context_consistency_strong_soft",
+        "compile_model": False,
         "context_replace_prob": 0.0,
         "context_consistency": True,
         "context_consistency_prob": 0.25,
@@ -358,7 +366,7 @@ TESTS = [
     },
     {
         "tid": "character_bag_rank_strong",
-        "tag": "20_character_bag_rank_strong",
+        "tag": "20_character_bag_rank_strong_soft",
         "character_bag_ranking": True,
         "character_bag_margin": 0.5,
         "character_bag_topk_frac": 0.5,
@@ -366,20 +374,22 @@ TESTS = [
     },
     {
         "tid": "character_groupdro_fast",
-        "tag": "20_character_groupdro_fast",
+        "tag": "20_character_groupdro_fast_soft",
         "character_groupdro": True,
         "character_groupdro_eta": 0.1,
         "character_groupdro_max_ratio": 3.0,
     },
     {
         "tid": "character_cvar_half",
-        "tag": "20_character_cvar_half",
+        "tag": "20_character_cvar_half_soft",
+        "n_epochs": 25,
+        "eval_int": 25,
         "character_cvar": True,
         "character_cvar_alpha": 0.5,
     },
     {
         "tid": "surface_slice12",
-        "tag": "20_surface_slice12",
+        "tag": "20_surface_slice12_soft",
         "surface_canonicalize": True,
         "surface_canonical_depth": 12,
         "compile_model": False,
@@ -393,6 +403,8 @@ for _test in TESTS:
 _OVERRIDES = {
     "batch_size": ("dl", "batch_size"),
     "lr": ("tra", "lr"),
+    "n_epochs": ("tra", "n_epochs"),
+    "eval_int": ("tra", "eval_int"),
     "compile_model": ("model", "compile_model"),
     "context_size": ("data", "context_size"),
     "scrolls": ("data", "scrolls"),
@@ -406,6 +418,9 @@ _OVERRIDES = {
     "loss_type": ("tra", "loss_type"),
     "label_smooth_pos": ("tra", "label_smooth_pos"),
     "label_smooth_neg": ("tra", "label_smooth_neg"),
+    "sanity_guard_epoch": ("tra", "sanity_guard_epoch"),
+    "sanity_min_character_ap": ("tra", "sanity_min_character_ap"),
+    "sanity_min_specificity": ("tra", "sanity_min_specificity"),
     "dann": ("tra", "dann"),
     "dann_lambda": ("tra", "dann_lambda"),
     "dann_n_domains": ("tra", "dann_n_domains"),
@@ -560,7 +575,7 @@ def main() -> None:
 
     ensure_pretraining(selected, args.dry_run)
     print(f"[archs20] {len(selected)} test(s) queued (log -> {LOG_DIR})")
-    print("[archs20] c64_t16 + context augmentations + GCE q0.9 + strong surface")
+    print("[archs20] c64_t16 + context augmentations + soft BCE + strong surface")
 
     results = {}
     for test in selected:
@@ -573,6 +588,9 @@ def main() -> None:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
+        if tid == "future_baseline_a100" and results[tid] == "FAIL":
+            print("[archs20] guarded baseline failed; aborting remaining tests")
+            break
 
     print(f"\n{'=' * 70}\n[archs20] SUMMARY\n{'=' * 70}")
     for tid, status in results.items():

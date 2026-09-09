@@ -38,7 +38,8 @@ def create_optimizer_and_scheduler(model, config: Config):
     optimizer = optim.AdamW(
         model.parameters(),
         lr=config.tra.lr,
-        weight_decay=config.tra.weight_decay
+        weight_decay=config.tra.weight_decay,
+        fused=bool(str(config.device).startswith("cuda") and torch.cuda.is_available()),
     )
     
     # create the combined warmup and plateau scheduler
