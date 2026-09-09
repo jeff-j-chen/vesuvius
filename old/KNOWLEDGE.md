@@ -1618,5 +1618,30 @@ Campaign training uses batch 32 and LR 1e-4. Additional response tests sweep con
 lambda 0.1/0.3, bag-ranking lambda 0.2/0.4, GroupDRO eta 0.05/0.1, CVaR tail 25%/50%, and
 surface-relative depth 8/12/24. A missing JEPA checkpoint is pretrained before supervised arms.
 
+The A100 continuation suffixes every run id/tag with `_a100`, uses batch 96, LR 1.5e-4, and eval
+batch 192. Its stronger baseline uses cutout 0.65 with three <=16% patches, jitter 32px,
+replacement 0.35 with margin/feather 20px, and fixed positive weight 1.5. A three-scroll block
+adds w013, w044, and 500P2_front with 6,667 windows per scroll: no-DANN control followed by
+annealed DANN lambdas 0.0025, 0.005, 0.01, and 0.02. All three scroll figures use manual-mask
+bounding boxes for fast evaluation. DANN lambda scales only the reversed backbone gradient;
+the domain classifier receives full cross-entropy gradients, with domain accuracy and GRL scale
+logged each epoch.
+
+Assemble only these three fragments with:
+
+```bash
+python assemble_training_segments.py --only w044,500P2_front,w013
+```
+
 Surface geometry remains online rather than precomputed per scroll, preserving exact alignment
 under depth jitter and avoiding stale patch-level surface maps.
+
+Subsequent completed runs overturned the initial visual preference for ctx128. Relative to ctx192,
+ctx128 produced lower specificity and more full-map components; strengthening replacement increased
+this recall-heavy behavior without meaningful AP gain. A concrete interaction bug was found:
+cutout protected the geometric center while context jitter moved the supervised c64 target, so
+about 7.8% of windows lost some target evidence. That accidental target dropout reduced local-fiber
+reliance but was semantically wrong; cutout now follows the target offset. With intact local evidence,
+q0.9 GCE may preserve confident fiber false positives because its corrective negative gradients are
+bounded. The A100 continuation therefore returns to ctx192 and orders matched GCE/BCE-soft controls
+before later objective tests.

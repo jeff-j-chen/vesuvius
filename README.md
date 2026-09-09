@@ -119,9 +119,17 @@ papyrus. This changes nuisance fibers while preserving all c32 target evidence.
 
 Campaign-19 findings establish the campaign-20 hypothesis: matched 192px MAE improves the baseline;
 c64_t16 is the best compromise between dense clean supervision and uncertain-label overfit;
-ctx128 is cleaner while ctx224 adds noise; jitter and especially real-context replacement improve
-visual generalization; hard-label GCE q=0.9 is the strongest GCE arm; and surface loss 0.2 improves
-the result. Cutout is retained as a weak visual positive despite no AP improvement by itself.
+ctx224 adds noise; jitter and especially real-context replacement can improve visual generalization;
+hard-label GCE q=0.9 is the strongest isolated GCE arm; and surface loss 0.2 improves the result.
+Cutout is retained as a weak visual positive despite no AP improvement by itself.
+
+Later combined runs invalidated the initial visual impression that ctx128 was cleaner. Completed
+ctx128 and strengthened-replacement runs produced lower specificity, more connected components,
+and lower full-map precision than ctx192. The original cutout implementation also protected the
+geometric rather than jittered target center, accidentally acting as target dropout; this is fixed.
+With intact local c64 evidence, q0.9 can weakly correct confident fiber false positives, so isolated
+denoising effects must not be assumed additive. Future baselines therefore return to ctx192 and
+compare matched GCE q0.9 against BCE-soft before later objectives.
 
 ### Campaign 20
 
@@ -161,9 +169,29 @@ python mae_pretrain_nnunet.py --name mae_nnunet_128_ibn --ctx 128 --ds 2 \
   --require-all-scrolls
 ```
 
-Campaign 20 uses batch 32, LR 1e-4, and eight workers. Figure inference uses batch 32, two
+The A100 campaign profile uses batch 96, LR 1.5e-4, and eight workers. Figure inference uses batch
+192 with two
 prefetch workers, and a 1GB tile-buffer target: faster than the emergency campaign-19 reruns while
 retaining bounded buffering and worker shutdown before full-scroll figures.
+
+All A100 run ids and tags end in `_a100`. The baseline strengthens context regularization with
+cutout probability 0.65 (three patches, max 16%), target-aware jitter 32px, and replacement
+probability 0.35 with a 20px protected margin/feather. Positive weighting is fixed at 1.5 instead
+of the previous automatic ~2.1 to counter the tendency to predict ink everywhere.
+
+Five three-scroll tests occur between the main arms and stronger hyperparameter variants. They use
+w013, w044, and 500P2_front—the three fragments with manual train masks. Scroll round-robin plus
+uniform character sampling supplies 6,667 windows per scroll, keeping the total near 20,000.
+
+```bash
+python assemble_training_segments.py --only w044,500P2_front,w013
+```
+
+Tests are a no-DANN multiscroll control and annealed DANN lambdas 0.0025, 0.005, 0.01, and 0.02.
+Every DANN run renders all three scrolls. Fast evaluation uses the tile-aligned bounding box of a
+scroll's manual train mask; scrolls without one retain the previous probe/corner behavior.
+The domain head always receives full cross-entropy gradients; lambda scales only the reversed
+gradient entering the shared backbone. Domain accuracy and effective GRL scale are logged.
 
 Pretrain the feature-predictive 3D JEPA checkpoint across all 18 fragments with:
 

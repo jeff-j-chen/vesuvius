@@ -1589,13 +1589,30 @@ class TensorboardVisualizer:
                     v += tile - rem
                 return max(lo, min(v, hi - tile))
 
-            easy_roi = next(
-                (s for s in self.probe_specs
-                 if s["segment_id"] == self.scroll1_id
-                 and str(s.get("label", "")).lower() == "easy"),
-                None,
-            )
-            if easy_roi is not None:
+            mask_bbox = None
+            if self.manual_train_mask is not None and np.any(self.manual_train_mask > 0):
+                ys, xs = np.nonzero(self.manual_train_mask > 0)
+                x_start = max(full_x[0], (int(xs.min()) // tile) * tile)
+                y_start = max(full_y[0], (int(ys.min()) // tile) * tile)
+                x_end = min(full_x[1], ((int(xs.max()) + 1 + tile - 1) // tile) * tile)
+                y_end = min(full_y[1], ((int(ys.max()) + 1 + tile - 1) // tile) * tile)
+                if x_end > x_start and y_end > y_start:
+                    mask_bbox = (x_start, x_end, y_start, y_end)
+            if mask_bbox is not None:
+                full_x = mask_bbox[:2]
+                full_y = mask_bbox[2:]
+                print(
+                    f"[fast-eval] scroll {self.scroll1_id}: manual-mask bbox "
+                    f"x={full_x} y={full_y}"
+                )
+            else:
+                easy_roi = next(
+                    (s for s in self.probe_specs
+                     if s["segment_id"] == self.scroll1_id
+                     and str(s.get("label", "")).lower() == "easy"),
+                    None,
+                )
+            if mask_bbox is None and easy_roi is not None:
                 x_start = _snap(int(easy_roi["x"]), full_x[0], full_x[1])
                 y_start = _snap(int(easy_roi["y"]), full_y[0], full_y[1])
                 x_end = min(full_x[1], x_start + int(full_width_x * 0.4))
@@ -1606,7 +1623,7 @@ class TensorboardVisualizer:
                 else:
                     full_x = (full_x[0], full_x[0] + int(full_width_x * 0.4))
                     full_y = (full_y[0], full_y[0] + int(full_height_y * 0.4))
-            else:
+            elif mask_bbox is None:
                 full_x = (full_x[0], full_x[0] + int(full_width_x * 0.4))
                 full_y = (full_y[0], full_y[0] + int(full_height_y * 0.4))
 

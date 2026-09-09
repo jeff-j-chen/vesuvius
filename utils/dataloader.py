@@ -1536,6 +1536,19 @@ class DataManager:
         labels = (labels.astype(np.float32) / 255.0)  # force float32 to avoid float64 OOM
         mask = mask / 255.0
 
+        volume_h, volume_w = int(vol.shape[1]), int(vol.shape[2])
+        common_h = min(volume_h, int(mask.shape[0]), int(labels.shape[0]))
+        common_w = min(volume_w, int(mask.shape[1]), int(labels.shape[1]))
+        if (volume_h, volume_w) != (common_h, common_w) \
+                or mask.shape != (common_h, common_w) \
+                or labels.shape != (common_h, common_w):
+            print(
+                f"[align] scroll {self.scroll_id}: volume={(volume_h, volume_w)} "
+                f"mask={mask.shape} labels={labels.shape} -> common={(common_h, common_w)}"
+            )
+        mask = np.ascontiguousarray(mask[:common_h, :common_w])
+        labels = np.ascontiguousarray(labels[:common_h, :common_w])
+
         # define the working area and split for train/validation.
         # optional region crop (fractions of the full frame) trims the usable area so a run
         # can train on only a sub-region. then the train/valid split is applied along the
@@ -1543,7 +1556,7 @@ class DataManager:
         # (top train / bottom valid). all boundaries are tile-aligned so the eval pred-map and
         # label-map shapes stay consistent.
         T = int(self.c.data.tile_size)
-        H, W = int(vol.shape[1]), int(vol.shape[2])
+        H, W = common_h, common_w
 
         # per-scroll crop and split: first look up this scroll's ScrollConfig if it exists,
         # then fall back to global config fields for backward compatibility.

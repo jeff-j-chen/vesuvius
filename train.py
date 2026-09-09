@@ -177,6 +177,8 @@ class Trainer:
         self.best_val_character = -1.0
         self._character_groupdro_log_weights: dict[int, float] = {}
         self._last_character_objectives = (0.0, 0.0, 0.0, 0.0)
+        self._last_dann_accuracy = 0.0
+        self._last_grl_scale = 0.0
 
     def _print_config(self) -> None:
         print("--- Configuration ---")
@@ -411,9 +413,13 @@ class Trainer:
             if bool(getattr(self.c.tra, "dann_grl_anneal", False)):
                 n_ep = float(getattr(self.c.tra, "n_epochs", 12))
                 p = float(epoch) / max(1.0, n_ep)
-                grl_scale = 2.0 / (1.0 + math.exp(-10.0 * p)) - 1.0
+                anneal = 2.0 / (1.0 + math.exp(-10.0 * p)) - 1.0
             else:
-                grl_scale = 1.0
+                anneal = 1.0
+            grl_scale = (
+                float(getattr(self.c.tra, "dann_lambda", 0.0)) * anneal
+                if bool(getattr(self.c.tra, "dann", False)) else 1.0
+            )
             if use_extras:
                 outputs, _, domain_logits, supcon_z = self.model.forward_with_extras(
                     images,
@@ -567,7 +573,17 @@ class Trainer:
                 and domain_logits is not None
             ):
                 dann_loss_value = F.cross_entropy(domain_logits, domain_ids)
-                loss = loss + float(getattr(self.c.tra, "dann_lambda", 0.0)) * dann_loss_value
+                # GRL scales only the adversarial gradient entering the backbone.
+                # The domain head receives full CE gradients so weak lambdas still
+                # train a meaningful domain classifier.
+                loss = loss + dann_loss_value
+                self._last_dann_accuracy = float(
+                    (domain_logits.detach().argmax(dim=1) == domain_ids).float().mean().item()
+                )
+                self._last_grl_scale = float(grl_scale)
+            else:
+                self._last_dann_accuracy = 0.0
+                self._last_grl_scale = 0.0
 
             spill_loss_value = outputs.new_zeros(())
             center_voxel_map = getattr(self.model, "last_center_voxel_map", None)
@@ -806,6 +822,8 @@ class Trainer:
         scores = []
         character_ids_all = []
         total_injected = 0
+        dann_accuracy_total = 0.0
+        grl_scale_total = 0.0
         context_loss_total = 0.0
         bag_rank_loss_total = 0.0
         groupdro_loss_total = 0.0
@@ -887,6 +905,8 @@ class Trainer:
             loss_total += batch_loss
             raw_loss_total += batch_raw_loss
             dann_loss_total += batch_dann_loss
+            dann_accuracy_total += self._last_dann_accuracy
+            grl_scale_total += self._last_grl_scale
             spill_loss_total += batch_spill_loss
             surface_loss_total += batch_surface_loss
             surface_alpha_total += batch_surface_alpha
@@ -913,6 +933,8 @@ class Trainer:
         metrics["loss"] = loss_total / len(self.train_loader)
         metrics["raw_loss"] = raw_loss_total / len(self.train_loader)
         metrics["dann_loss"] = dann_loss_total / len(self.train_loader)
+        metrics["dann_accuracy"] = dann_accuracy_total / len(self.train_loader)
+        metrics["dann_grl_scale"] = grl_scale_total / len(self.train_loader)
         metrics["spill_loss"] = spill_loss_total / len(self.train_loader)
         metrics["surface_loss"] = surface_loss_total / len(self.train_loader)
         metrics["surface_alpha"] = surface_alpha_total / len(self.train_loader)
@@ -1116,6 +1138,9 @@ class Trainer:
         ):
             if key in train_metrics:
                 self.vis.writer.add_scalar(tag, train_metrics[key], epoch)
+        if bool(getattr(self.c.tra, "dann", False)):
+            self.vis.writer.add_scalar("DANN/DomainAccuracy", train_metrics["dann_accuracy"], epoch)
+            self.vis.writer.add_scalar("DANN/GRLScale", train_metrics["dann_grl_scale"], epoch)
         if self.c.hm.enabled:
             self.vis.writer.add_scalar("HardMining/Injected", train_metrics.get("hard_injected", 0), epoch)
 
