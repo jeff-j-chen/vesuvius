@@ -103,9 +103,9 @@ def base_config(exp_name: str) -> Config:
     config.data.character_balance_scrolls = True
     config.data.character_min_pixels = 8
     config.data.max_samples_per_epoch = 20_000
-    config.data.eval_infer_bs = 192
-    config.data.eval_prefetch = 2
-    config.data.eval_chunk_gb = 1.0
+    config.data.eval_infer_bs = 96
+    config.data.eval_prefetch = 3
+    config.data.eval_chunk_gb = 3.0
     config.data.tta_mode = "light"
     config.data.vis_scroll_ids = [_W013_ID]
 
@@ -131,7 +131,7 @@ def base_config(exp_name: str) -> Config:
     config.model.channels_mult = 1.0
 
     config.tra.n_epochs = 15
-    config.tra.lr = 1.5e-4
+    config.tra.lr = 1.2e-4
     config.tra.weight_decay = 0.3
     config.tra.l1_lambda = 0.0
     config.tra.grad_norm = 0.5
@@ -191,7 +191,7 @@ def base_config(exp_name: str) -> Config:
     config.tra.eval_cooldown_secs = 0
     config.tra.fig_chunk_cooldown_ms = 0
 
-    config.dl.batch_size = 96
+    config.dl.batch_size = 48
     config.dl.num_workers = 8
     config.dl.data_aug = True
     config.dl.flip_prob = 0.6
@@ -234,13 +234,13 @@ TESTS = [
     #     "sanity_min_character_ap": 0.55,
     #     "sanity_min_specificity": 0.25,
     # },
-    # {
-    #     "tid": "bce_soft",
-    #     "tag": "20_bce_soft",
-    #     "loss_type": "bce",
-    #     "label_smooth_pos": 0.10,
-    #     "label_smooth_neg": 0.05,
-    # },
+    {
+        "tid": "bce_soft_noweight",
+        "tag": "20_bce_soft_noweight",
+        "loss_type": "bce",
+        "label_smooth_pos": 0.10,
+        "label_smooth_neg": 0.05,
+    },
     {
         "tid": "context_consistency",
         "tag": "20_context_consistency_soft",
