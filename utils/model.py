@@ -108,6 +108,88 @@ class NewDepthSurfaceHead(nn.Module):
         return self.net(x)
 
 
+class BetterDepthSurfaceHead(nn.Module):
+    """predict a coherent surface from physical edge evidence and broad context."""
+
+    def __init__(self, hidden: int = 8):
+        super().__init__()
+        self.input = nn.Sequential(
+            nn.Conv3d(2, hidden, kernel_size=(5, 3, 3), padding=(2, 1, 1), bias=True),
+            nn.LeakyReLU(0.01, inplace=False),
+        )
+        self.local = nn.Sequential(
+            nn.Conv3d(
+                hidden,
+                hidden,
+                kernel_size=3,
+                padding=(1, 2, 2),
+                dilation=(1, 2, 2),
+                bias=True,
+            ),
+            nn.LeakyReLU(0.01, inplace=False),
+            nn.Conv3d(
+                hidden,
+                hidden,
+                kernel_size=3,
+                padding=(1, 4, 4),
+                dilation=(1, 4, 4),
+                bias=True,
+            ),
+            nn.LeakyReLU(0.01, inplace=False),
+        )
+        self.coarse = nn.Sequential(
+            nn.Conv3d(
+                hidden,
+                hidden,
+                kernel_size=3,
+                padding=(1, 2, 2),
+                dilation=(1, 2, 2),
+                bias=True,
+            ),
+            nn.LeakyReLU(0.01, inplace=False),
+            nn.Conv3d(hidden, hidden, kernel_size=3, padding=1, bias=True),
+            nn.LeakyReLU(0.01, inplace=False),
+        )
+        self.output = nn.Conv3d(2 * hidden, 1, kernel_size=1, bias=True)
+        self.prior_gain = nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
+
+    @staticmethod
+    def _transition_evidence(x: torch.Tensor) -> torch.Tensor:
+        smooth = F.pad(x, (0, 0, 0, 0, 1, 1), mode="replicate")
+        smooth = (smooth[:, :, :-2] + 2.0 * smooth[:, :, 1:-1] + smooth[:, :, 2:]) * 0.25
+        low = torch.quantile(smooth.float(), 0.10, dim=2, keepdim=True).to(smooth.dtype)
+        high = torch.quantile(smooth.float(), 0.90, dim=2, keepdim=True).to(smooth.dtype)
+        contrast = high - low
+        threshold = low + 0.35 * contrast
+        occupancy = torch.sigmoid((smooth - threshold) / (0.08 * contrast).clamp(min=0.01))
+        transition = F.relu(occupancy[:, :, :-1] - occupancy[:, :, 1:])
+        fine = F.avg_pool3d(transition, kernel_size=(1, 5, 5), stride=1, padding=(0, 2, 2))
+        coarse = F.avg_pool3d(
+            transition,
+            kernel_size=(1, 17, 17),
+            stride=1,
+            padding=(0, 8, 8),
+        )
+        evidence = 0.35 * fine + 0.65 * coarse
+        return F.pad(evidence, (0, 0, 0, 0, 0, 1))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        evidence = self._transition_evidence(x)
+        features = self.input(torch.cat((x, evidence), dim=1))
+        local = self.local(features) + features
+        coarse = F.avg_pool3d(local, kernel_size=(1, 4, 4), stride=(1, 4, 4))
+        coarse = self.coarse(coarse)
+        coarse = F.interpolate(
+            coarse,
+            size=local.shape[2:],
+            mode="trilinear",
+            align_corners=False,
+        )
+        residual = self.output(torch.cat((local, coarse), dim=1))
+        prior = torch.log(evidence.clamp(min=1e-4))
+        return residual + F.softplus(self.prior_gain) * prior
+
+
 class SupConHead(nn.Module):
     """projection head for supervised contrastive learning."""
 
@@ -331,12 +413,24 @@ class NnUnet3dLcndz(nn.Module):
         self.dec1 = ConvBlock3d(c1 * 2, c1)
         self.out_head = nn.Conv3d(c1, 1, kernel_size=1, bias=True)
 
-        if bool(getattr(config.model, "new_learned_surface", False)):
-            self.new_surface_head: NewDepthSurfaceHead | None = NewDepthSurfaceHead(hidden=8)
+        use_better_surface = bool(getattr(config.model, "better_surface", False))
+        use_new_surface = bool(getattr(config.model, "new_learned_surface", False))
+        self._surface_teacher_input = bool(getattr(config.model, "surface_teacher_input", False))
+        if use_better_surface and use_new_surface:
+            raise ValueError("better_surface and new_learned_surface are mutually exclusive")
+        if use_better_surface:
+            self.new_surface_head: nn.Module | None = BetterDepthSurfaceHead(hidden=8)
+        elif use_new_surface:
+            self.new_surface_head = NewDepthSurfaceHead(hidden=8)
+        else:
+            self.new_surface_head = None
+        if self._surface_teacher_input:
+            # literal local depth, confidence, and signed offset from each z slice
+            self.new_surface_input = nn.Conv3d(3, c1, kernel_size=1, bias=False)
+        elif self.new_surface_head is not None:
             # keep the pretrained three-channel stem intact and inject the new map residually
             self.new_surface_input = nn.Conv3d(1, c1, kernel_size=1, bias=False)
         else:
-            self.new_surface_head = None
             self.new_surface_input = None
 
         if bool(getattr(config.model, "learned_surface", False)):
@@ -468,9 +562,80 @@ class NnUnet3dLcndz(nn.Module):
             align_corners=True,
         )
 
-    def _encode_decode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    @staticmethod
+    def _teacher_surface_features(
+        depth: torch.Tensor,
+        confidence: torch.Tensor,
+        reference: torch.Tensor,
+    ) -> torch.Tensor:
+        """broadcast literal local depth and confidence into auxiliary 3D features."""
+        if depth.ndim == 3:
+            depth = depth.unsqueeze(1)
+        if confidence.ndim == 3:
+            confidence = confidence.unsqueeze(1)
+        if depth.shape[-2:] != reference.shape[-2:]:
+            depth = F.interpolate(depth.float(), size=reference.shape[-2:], mode="nearest")
+            confidence = F.interpolate(
+                confidence.float(),
+                size=reference.shape[-2:],
+                mode="nearest",
+            )
+        depth = depth.to(device=reference.device, dtype=reference.dtype)
+        confidence = confidence.to(device=reference.device, dtype=reference.dtype).clamp(0.0, 1.0)
+        valid = ((depth >= 0) & (depth <= reference.shape[2] - 1)).to(reference.dtype)
+        confidence = confidence * valid
+        depth_scale = float(max(reference.shape[2] - 1, 1))
+        depth_value = torch.where(valid > 0, depth / depth_scale, torch.zeros_like(depth))
+        depth_axis = torch.arange(
+            reference.shape[2],
+            device=reference.device,
+            dtype=reference.dtype,
+        ).view(1, 1, -1, 1, 1)
+        depth_value = depth_value.unsqueeze(2).expand(-1, -1, reference.shape[2], -1, -1)
+        confidence_volume = confidence.unsqueeze(2).expand_as(depth_value)
+        signed_offset = (depth_axis - depth.unsqueeze(2)) / depth_scale
+        signed_offset = signed_offset * valid.unsqueeze(2)
+        return torch.cat((depth_value, confidence_volume, signed_offset), dim=1)
+
+    def _encode_decode(
+        self,
+        x: torch.Tensor,
+        teacher_surface_depth: torch.Tensor | None = None,
+        teacher_surface_confidence: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         raw_x = self._prepare_input(x)
-        if self.new_surface_head is not None and self.new_surface_input is not None:
+        if self._surface_teacher_input:
+            if teacher_surface_depth is None or teacher_surface_confidence is None:
+                raise RuntimeError("surface_teacher_input requires depth and confidence maps")
+            surface_for_backbone = self._teacher_surface_features(
+                teacher_surface_depth,
+                teacher_surface_confidence,
+                raw_x,
+            )
+            if self._surface_canonicalize:
+                center_depth = surface_for_backbone[:, 0:1, 0] * float(
+                    max(raw_x.shape[2] - 1, 1)
+                )
+                valid = surface_for_backbone[:, 1:2, 0] > 0
+                fallback = torch.full_like(center_depth, (raw_x.shape[2] - 1) / 2.0)
+                center_depth = torch.where(valid, center_depth, fallback)
+                raw_for_backbone = self._surface_relative_resample(
+                    raw_x,
+                    center_depth,
+                    self._surface_canonical_depth,
+                )
+                surface_for_backbone = self._surface_relative_resample(
+                    surface_for_backbone,
+                    center_depth,
+                    self._surface_canonical_depth,
+                )
+            else:
+                raw_for_backbone = raw_x
+            self.last_new_surface_logits = None
+            self.last_new_surface_probs = None
+            self.last_surface_target = None
+            self.last_surface_valid = None
+        elif self.new_surface_head is not None and self.new_surface_input is not None:
             surface_logits = self.new_surface_head(raw_x)
             surface_probs = F.softmax(surface_logits, dim=2)
             self.last_new_surface_logits = surface_logits
@@ -701,8 +866,14 @@ class NnUnet3dLcndz(nn.Module):
         x: torch.Tensor,
         grl_scale: float = 1.0,
         target_offsets: torch.Tensor | None = None,
+        teacher_surface_depth: torch.Tensor | None = None,
+        teacher_surface_confidence: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
-        bottleneck, decoded = self._encode_decode(x)
+        bottleneck, decoded = self._encode_decode(
+            x,
+            teacher_surface_depth=teacher_surface_depth,
+            teacher_surface_confidence=teacher_surface_confidence,
+        )
         voxel_map = self.out_head(decoded)
         # break output aliasing so torch.compile's AOTAutograd doesn't hit its alias-regen bug
         # ('TensorAlias' has no attribute 'is_complex'). last_voxel_map is vis-only (read at eval),
@@ -759,8 +930,15 @@ class NnUnet3dLcndz(nn.Module):
         self,
         x: torch.Tensor,
         target_offsets: torch.Tensor | None = None,
+        teacher_surface_depth: torch.Tensor | None = None,
+        teacher_surface_confidence: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        score, _, _, _ = self.forward_with_extras(x, target_offsets=target_offsets)
+        score, _, _, _ = self.forward_with_extras(
+            x,
+            target_offsets=target_offsets,
+            teacher_surface_depth=teacher_surface_depth,
+            teacher_surface_confidence=teacher_surface_confidence,
+        )
         return score
 
 

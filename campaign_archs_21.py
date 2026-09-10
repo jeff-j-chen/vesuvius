@@ -1,10 +1,10 @@
-"""campaign_archs_21.py -- isolate SupCon and surface mechanisms on 500P2
+"""campaign_archs_21.py -- follow-up SupCon and surface experiments on 500P2
 
-Runs four matched 500P2 experiments:
-- baseline without SupCon, either surface branch, or spill reduction
-- baseline plus SupCon
-- baseline plus the old unsupervised surface-attention branch
-- baseline plus the new teacher-supervised surface branch
+Prior tests are retained in PRIOR_TESTS for reference. TESTS queues:
+- SupCon + plain LSE + the original supervised surface head
+- SupCon + plain LSE + a physical, broad-context surface head
+- SupCon + plain LSE + literal pre-generated depth-map features
+- a fixed-weight SupCon sweep on plain LSE
 
   python campaign_archs_21.py --dry-run
     python campaign_archs_21.py --only baseline
@@ -44,7 +44,7 @@ def _scrolls(*names: str):
     return [_SCROLLS_BY_ID[_SCROLL_IDS[name]] for name in names]
 
 
-TESTS = [
+PRIOR_TESTS = [
     {
         "tid": "baseline",
         "tag": "21_baseline",
@@ -81,6 +81,105 @@ TESTS = [
         "learned_surface": False,
         "new_learned_surface": True,
     },
+    {
+        "tid": "plain_lse",
+        "tag": "21_plain_lse",
+        "scrolls": _scrolls("500p2"),
+        "max_samples_per_epoch": 20_000,
+        "supcon": False,
+        "learned_surface": False,
+        "new_learned_surface": False,
+        "feature_attn_mil": False,
+        "attn_mil": False,
+    },
+    {
+        "tid": "feature_attn_no_entropy",
+        "tag": "21_feature_attn_no_entropy",
+        "scrolls": _scrolls("500p2"),
+        "max_samples_per_epoch": 20_000,
+        "supcon": False,
+        "learned_surface": False,
+        "new_learned_surface": False,
+        "feature_attn_mil": True,
+        "attn_mil": False,
+        "attn_entropy_weight": 0.0,
+    },
+    {
+        "tid": "depth20_jitter4",
+        "tag": "21_depth20_jitter4",
+        "scrolls": _scrolls("500p2"),
+        "max_samples_per_epoch": 20_000,
+        "supcon": False,
+        "learned_surface": False,
+        "new_learned_surface": False,
+        "depth": 20,
+        "depth_jitter": 4,
+        "require_symmetric_depth_jitter": True,
+    },
+]
+
+
+def _next_test(tid: str, **overrides):
+    test = {
+        "tid": tid,
+        "tag": f"21_{tid}",
+        "scrolls": _scrolls("500p2"),
+        "max_samples_per_epoch": 20_000,
+        "supcon": True,
+        "learned_surface": False,
+        "new_learned_surface": False,
+        "better_surface": False,
+        "surface_teacher_input": False,
+        "feature_attn_mil": False,
+        "attn_mil": False,
+    }
+    test.update(overrides)
+    return test
+
+
+TESTS = [
+    _next_test(
+        "supcon_lse_new_surface",
+        new_learned_surface=True,
+    ),
+    _next_test(
+        "supcon_lse_better_surface",
+        better_surface=True,
+        compile_model=False,
+    ),
+    _next_test(
+        "supcon_lse_literal_surface",
+        surface_teacher_input=True,
+        compile_model=False,
+    ),
+    _next_test(
+        "supcon_lse_fixed_depth8_16",
+        depth=8,
+        depth_jitter=0,
+        train_d_start=8,
+        train_d_end=16,
+        d_start=8,
+        d_end=16,
+    ),
+    _next_test(
+        "supcon_lse_literal_surface_slice8",
+        surface_teacher_input=True,
+        surface_relative_depth_window=True,
+        depth=8,
+        depth_jitter=0,
+        compile_model=False,
+    ),
+    _next_test(
+        "supcon_lse_literal_surface_slice8_jitter2",
+        surface_teacher_input=True,
+        surface_relative_depth_window=True,
+        depth=8,
+        depth_jitter=2,
+        compile_model=False,
+    ),
+    _next_test("supcon_lse_fixed_010", supcon_curriculum=False, supcon_lambda=0.10),
+    _next_test("supcon_lse_fixed_020", supcon_curriculum=False, supcon_lambda=0.20),
+    _next_test("supcon_lse_fixed_050", supcon_curriculum=False, supcon_lambda=0.50),
 ]
 
 
@@ -97,8 +196,52 @@ def build_config(test: dict):
     config.tra.spill_reduction = False
     config.tra.spill_lambda = 0.0
     config.tra.supcon = bool(test["supcon"])
+    config.tra.supcon_curriculum = bool(
+        test.get("supcon_curriculum", config.tra.supcon_curriculum)
+    )
+    if "supcon_lambda" in test:
+        config.tra.supcon_lambda = float(test["supcon_lambda"])
     config.model.learned_surface = bool(test["learned_surface"])
     config.model.new_learned_surface = bool(test["new_learned_surface"])
+    config.model.better_surface = bool(test.get("better_surface", False))
+    config.model.surface_teacher_input = bool(test.get("surface_teacher_input", False))
+    if "compile_model" in test:
+        config.model.compile_model = bool(test["compile_model"])
+    if "surface_canonicalize" in test:
+        config.model.surface_canonicalize = bool(test["surface_canonicalize"])
+    if "surface_canonical_depth" in test:
+        config.model.surface_canonical_depth = int(test["surface_canonical_depth"])
+    if "feature_attn_mil" in test:
+        config.model.feature_attn_mil = bool(test["feature_attn_mil"])
+    if "attn_mil" in test:
+        config.model.attn_mil = bool(test["attn_mil"])
+    if "attn_entropy_weight" in test:
+        config.model.attn_entropy_weight = float(test["attn_entropy_weight"])
+    if "depth" in test:
+        config.data.depth = int(test["depth"])
+    if "depth_jitter" in test:
+        config.data.depth_jitter = int(test["depth_jitter"])
+    for attr in ("train_d_start", "train_d_end", "d_start", "d_end"):
+        if attr in test:
+            setattr(config.data, attr, int(test[attr]))
+    if "surface_relative_depth_window" in test:
+        config.data.surface_relative_depth_window = bool(
+            test["surface_relative_depth_window"]
+        )
+    if "eval_int" in test:
+        config.tra.eval_int = int(test["eval_int"])
+
+    if bool(test.get("require_symmetric_depth_jitter", False)):
+        nominal_start = int(config.data.train_d_start)
+        source_end = int(config.data.train_d_end)
+        min_start = nominal_start - int(config.data.depth_jitter)
+        max_end = nominal_start + int(config.data.depth_jitter) + int(config.data.depth)
+        if min_start < 0 or max_end > source_end:
+            raise ValueError(
+                f"depth jitter would leave [0, {source_end}): "
+                f"depth={config.data.depth}, start={nominal_start}, "
+                f"jitter=+/-{config.data.depth_jitter}"
+            )
 
     os.makedirs("models/archs21", exist_ok=True)
     config.save_final = f"models/archs21/{test['tid']}_final.pth"
@@ -107,6 +250,13 @@ def build_config(test: dict):
 
 def run_test(config, dry_run: bool) -> bool:
     scroll_ids = [int(scroll.scroll_id) for scroll in config.data.scrolls]
+    nominal_start = int(config.data.train_d_start)
+    jitter = int(config.data.depth_jitter)
+    jitter_low = max(-jitter, -nominal_start)
+    jitter_high = min(
+        jitter,
+        int(config.data.train_d_end) - nominal_start - int(config.data.depth),
+    )
     print(f"\n{'=' * 70}\n[archs21] {config.exp_name}\n{'=' * 70}", flush=True)
     print(
         f"  scrolls={scroll_ids} samples/scroll={config.data.max_samples_per_epoch}"
@@ -116,12 +266,28 @@ def run_test(config, dry_run: bool) -> bool:
         f"  batch={config.dl.batch_size} lr={config.tra.lr:.2e}"
         f" context={config.data.context_size}/ds{config.data.context_downsample}"
         f" center={config.model.multitile_subtile * config.model.multitile_grid}"
+        f" depth={config.data.depth} jitter=[{jitter_low:+d},{jitter_high:+d}]"
         f" loss={config.tra.loss_type}"
     )
     print(
         f"  supcon={config.tra.supcon} old_surface={config.model.learned_surface}"
         f" new_surface={config.model.new_learned_surface}"
+        f" better_surface={config.model.better_surface}"
+        f" teacher_surface={config.model.surface_teacher_input}"
         f" spill={config.tra.spill_reduction}"
+    )
+    print(
+        f"  feature_attn={config.model.feature_attn_mil}"
+        f" voxel_attn={config.model.attn_mil}"
+        f" attn_entropy={config.model.attn_entropy_weight}"
+    )
+    print(
+        f"  canonicalize={config.model.surface_canonicalize}"
+        f" canonical_depth={config.model.surface_canonical_depth}"
+    )
+    print(
+        f"  supcon_curriculum={config.tra.supcon_curriculum}"
+        f" supcon_lambda={config.tra.supcon_lambda}"
     )
     if dry_run:
         print("  [DRY RUN] skipping")

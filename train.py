@@ -377,9 +377,16 @@ class Trainer:
                      context_pair=None, context_pair_active=None):
         if mask.reshape(mask.size(0), -1).sum().item() <= 0:
             print("[ERROR] Mask sum is zero, skipping loss calculation.")
-            return np.empty([]), np.empty([]), np.empty([]), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+            return (np.empty([]), np.empty([]), np.empty([]), *([0.0] * 11))
         images = images.to(self.c.device)
         surface_source = images
+        if surface_depth is not None:
+            surface_depth = surface_depth.to(self.c.device, non_blocking=True).float()
+        if surface_confidence is not None:
+            surface_confidence = surface_confidence.to(
+                self.c.device,
+                non_blocking=True,
+            ).float()
         images = self._apply_fda(images)
         B = images.size(0)
         labels = labels.to(self.c.device).view(B, -1)          # (B,1) single or (B,K) multitile
@@ -434,9 +441,16 @@ class Trainer:
                     images,
                     grl_scale=grl_scale,
                     target_offsets=target_offsets,
+                    teacher_surface_depth=surface_depth,
+                    teacher_surface_confidence=surface_confidence,
                 )
             else:
-                outputs = self.model(images, target_offsets=target_offsets)
+                outputs = self.model(
+                    images,
+                    target_offsets=target_offsets,
+                    teacher_surface_depth=surface_depth,
+                    teacher_surface_confidence=surface_confidence,
+                )
                 domain_logits = None
                 supcon_z = None
 
@@ -554,10 +568,19 @@ class Trainer:
                     tf_in, tf_grid_inv, tf_offset = choices[int(torch.randint(0, 3, (1,)).item())]
                 view = tf_in(images)
                 other_offsets = tf_offset(target_offsets) if target_offsets is not None else None
+                other_surface_depth = tf_in(surface_depth) if surface_depth is not None else None
+                other_surface_confidence = (
+                    tf_in(surface_confidence) if surface_confidence is not None else None
+                )
                 # eval mode for TTA second pass: BN uses running stats (no in-place updates)
                 # which prevents the autograd version conflict with the compiled first-pass graph
                 self.model.eval()
-                other = self.model(view.contiguous(), target_offsets=other_offsets)
+                other = self.model(
+                    view.contiguous(),
+                    target_offsets=other_offsets,
+                    teacher_surface_depth=other_surface_depth,
+                    teacher_surface_confidence=other_surface_confidence,
+                )
                 self.model.train()
                 if other.dim() == 4:
                     other = other.flatten(1).max(dim=1, keepdim=True).values
@@ -658,9 +681,15 @@ class Trainer:
 
             surface_loss_value = outputs.new_zeros(())
             surface_alpha_value = outputs.new_zeros(())
+            surface_ce_value = outputs.new_zeros(())
+            surface_smooth_value = outputs.new_zeros(())
+            surface_mae_value = outputs.new_zeros(())
             supcon_loss_value = outputs.new_zeros(())
             weighted_supcon_loss_value = outputs.new_zeros(())
-            if bool(getattr(self.c.model, "new_learned_surface", False)) and new_surface_logits is not None:
+            supervised_surface = bool(getattr(self.c.model, "new_learned_surface", False)) or bool(
+                getattr(self.c.model, "better_surface", False)
+            )
+            if supervised_surface and new_surface_logits is not None:
                 if surface_depth is None or surface_confidence is None:
                     raise RuntimeError("offline surface teacher is required for surface training")
                 downsample = max(1, int(getattr(self.c.data, "context_downsample", 1)))
@@ -672,11 +701,8 @@ class Trainer:
                     )
                 else:
                     surface_volume = surface_source
-                teacher_depth = surface_depth.to(self.c.device, non_blocking=True).float()
-                teacher_confidence = surface_confidence.to(
-                    self.c.device,
-                    non_blocking=True,
-                ).float()
+                teacher_depth = surface_depth
+                teacher_confidence = surface_confidence
                 if teacher_depth.shape[-2:] != new_surface_logits.shape[-2:]:
                     teacher_depth = F.interpolate(
                         teacher_depth,
@@ -694,7 +720,7 @@ class Trainer:
                     new_surface_logits.shape[2],
                     target_sigma=float(getattr(self.c.tra, "surface_target_sigma", 0.75)),
                 )
-                surface_total, surface_ce, surface_smooth, surface_valid = surface_supervision_loss(
+                surface_total, surface_ce, surface_smooth, _ = surface_supervision_loss(
                     new_surface_logits,
                     surface_volume,
                     smooth_weight=float(getattr(self.c.tra, "new_surface_smooth_lambda", 0.02)),
@@ -702,6 +728,18 @@ class Trainer:
                     valid=surface_valid,
                 )
                 surface_loss_value = surface_total
+                surface_ce_value = surface_ce
+                surface_smooth_value = surface_smooth
+                surface_probs = F.softmax(new_surface_logits.float(), dim=2)
+                depth_axis = torch.arange(
+                    new_surface_logits.shape[2],
+                    device=new_surface_logits.device,
+                    dtype=surface_probs.dtype,
+                ).view(1, 1, -1, 1, 1)
+                expected_depth = (surface_probs * depth_axis).sum(dim=2)
+                surface_mae_value = (
+                    (expected_depth - teacher_depth).abs() * surface_valid
+                ).sum() / surface_valid.sum().clamp(min=1.0)
                 loss = loss + float(getattr(self.c.tra, "new_surface_lambda", 0.1)) * surface_total
             surface_alpha = getattr(self.model, "last_surface_guided_alpha", None)
             if surface_alpha is not None:
@@ -769,7 +807,17 @@ class Trainer:
             pair_target = torch.sigmoid(outputs[active_device]).detach()
             with autocast(self.c.device, enabled=self.c.device == "cuda"):
                 self.model.eval()
-                pair_outputs = self.model(pair_images, target_offsets=pair_offsets)
+                pair_outputs = self.model(
+                    pair_images,
+                    target_offsets=pair_offsets,
+                    teacher_surface_depth=(
+                        surface_depth[active_device] if surface_depth is not None else None
+                    ),
+                    teacher_surface_confidence=(
+                        surface_confidence[active_device]
+                        if surface_confidence is not None else None
+                    ),
+                )
                 self.model.train()
                 pair_mask = mask[active_device]
                 context_loss_value = (
@@ -789,6 +837,9 @@ class Trainer:
             spill_loss_value.detach().float(),
             surface_loss_value.detach().float(),
             surface_alpha_value.detach().float(),
+            surface_ce_value.detach().float(),
+            surface_smooth_value.detach().float(),
+            surface_mae_value.detach().float(),
             supcon_loss_value.detach().float(),
             weighted_supcon_loss_value.detach().float(),
             context_loss_value.detach().float(),
@@ -798,9 +849,9 @@ class Trainer:
             dann_accuracy_value.detach().float(),
             dann_grl_value.detach().float(),
         )).cpu().tolist()
-        self._last_character_objectives = tuple(diagnostic_values[8:12])
-        self._last_dann_accuracy = diagnostic_values[12]
-        self._last_grl_scale = diagnostic_values[13]
+        self._last_character_objectives = tuple(diagnostic_values[11:15])
+        self._last_dann_accuracy = diagnostic_values[15]
+        self._last_grl_scale = diagnostic_values[16]
 
         if hasattr(self.model, "prototype_head") and self.model.prototype_head is not None:
             emb = getattr(self.model, "last_embedding_detached", None)
@@ -822,7 +873,7 @@ class Trainer:
             scores,
             label_values,
             character_values,
-            *diagnostic_values[:8],
+            *diagnostic_values[:11],
         )
 
     def _ins_hard_samples(
@@ -867,6 +918,9 @@ class Trainer:
         spill_loss_total = 0.0
         surface_loss_total = 0.0
         surface_alpha_total = 0.0
+        surface_ce_total = 0.0
+        surface_smooth_total = 0.0
+        surface_mae_total = 0.0
         supcon_loss_total = 0.0
         weighted_supcon_loss_total = 0.0
         labels = []
@@ -908,7 +962,12 @@ class Trainer:
                 else None
             )
             optional_index += int(bool(getattr(self.c.data, "target_aware_ctx_jitter", False)))
-            if bool(getattr(self.c.model, "new_learned_surface", False)):
+            surface_maps_enabled = any([
+                bool(getattr(self.c.model, "new_learned_surface", False)),
+                bool(getattr(self.c.model, "better_surface", False)),
+                bool(getattr(self.c.model, "surface_teacher_input", False)),
+            ])
+            if surface_maps_enabled:
                 batch_surface_depth = batch[optional_index]
                 batch_surface_confidence = batch[optional_index + 1]
                 optional_index += 2
@@ -950,6 +1009,9 @@ class Trainer:
                 batch_spill_loss,
                 batch_surface_loss,
                 batch_surface_alpha,
+                batch_surface_ce,
+                batch_surface_smooth,
+                batch_surface_mae,
                 batch_supcon_loss,
                 batch_weighted_supcon_loss,
             ) = self._train_batch(
@@ -976,6 +1038,9 @@ class Trainer:
             spill_loss_total += batch_spill_loss
             surface_loss_total += batch_surface_loss
             surface_alpha_total += batch_surface_alpha
+            surface_ce_total += batch_surface_ce
+            surface_smooth_total += batch_surface_smooth
+            surface_mae_total += batch_surface_mae
             supcon_loss_total += batch_supcon_loss
             weighted_supcon_loss_total += batch_weighted_supcon_loss
             labels.extend(batch_labels_out)
@@ -1006,6 +1071,9 @@ class Trainer:
         metrics["spill_loss"] = spill_loss_total / len(self.train_loader)
         metrics["surface_loss"] = surface_loss_total / len(self.train_loader)
         metrics["surface_alpha"] = surface_alpha_total / len(self.train_loader)
+        metrics["surface_ce"] = surface_ce_total / len(self.train_loader)
+        metrics["surface_smooth"] = surface_smooth_total / len(self.train_loader)
+        metrics["surface_mae"] = surface_mae_total / len(self.train_loader)
         metrics["supcon_loss"] = supcon_loss_total / len(self.train_loader)
         metrics["weighted_supcon_loss"] = weighted_supcon_loss_total / len(self.train_loader)
         metrics["context_consistency_loss"] = context_loss_total / len(self.train_loader)
@@ -1064,13 +1132,32 @@ class Trainer:
                     else None
                 )
                 optional_index += int(bool(getattr(self.c.data, "target_aware_ctx_jitter", False)))
-                if bool(getattr(self.c.model, "new_learned_surface", False)):
+                surface_maps_enabled = any([
+                    bool(getattr(self.c.model, "new_learned_surface", False)),
+                    bool(getattr(self.c.model, "better_surface", False)),
+                    bool(getattr(self.c.model, "surface_teacher_input", False)),
+                ])
+                if surface_maps_enabled:
+                    batch_surface_depth = batch[optional_index]
+                    batch_surface_confidence = batch[optional_index + 1]
                     optional_index += 2
+                else:
+                    batch_surface_depth = None
+                    batch_surface_confidence = None
                 if mask.view(mask.size(0), -1).sum() <= 0:
                     print("[ERROR] Encountered batch with mask sum == 0 in validation. This block should not be loaded!")
                     continue
 
                 images = images.to(self.c.device, non_blocking=True)
+                if batch_surface_depth is not None:
+                    batch_surface_depth = batch_surface_depth.to(
+                        self.c.device,
+                        non_blocking=True,
+                    ).float()
+                    batch_surface_confidence = batch_surface_confidence.to(
+                        self.c.device,
+                        non_blocking=True,
+                    ).float()
                 B = images.size(0)
                 batch_labels = batch_labels.to(self.c.device, non_blocking=True).view(B, -1)
                 mask = mask.to(self.c.device).view(B, -1)
@@ -1079,7 +1166,12 @@ class Trainer:
                 else:
                     mask = (mask.sum(dim=1) > 0).float().unsqueeze(1)  # single-tile window gate
 
-                outputs = self.model(images, target_offsets=batch_target_offsets)
+                outputs = self.model(
+                    images,
+                    target_offsets=batch_target_offsets,
+                    teacher_surface_depth=batch_surface_depth,
+                    teacher_surface_confidence=batch_surface_confidence,
+                )
                 if outputs.dim() == 4:
                     outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
 

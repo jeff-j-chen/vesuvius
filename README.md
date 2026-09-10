@@ -400,6 +400,13 @@ confidence maps are training teachers only, so inference still needs only the vo
 each training scroll before startup with `python generate_surface_supervision.py --scroll-id ID
 --z-start 4 --z-end 28`; `data.surface_label_dir` selects the map directory.
 
+`model.better_surface` replaces the original learned head with a broad-context residual head whose
+fixed input evidence follows the same relative-occupancy papyrus-to-air transition used by the
+offline generator. `model.surface_teacher_input` is a separate oracle experiment: it injects the
+cropped map's literal local depth, confidence, and signed distance from every input slice directly
+into the first encoder stage. Unlike either learned head, that mode requires generated maps during
+both training and validation.
+
 ---
 
 ## Files

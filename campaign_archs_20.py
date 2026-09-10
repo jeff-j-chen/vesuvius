@@ -133,7 +133,7 @@ def base_config(exp_name: str) -> Config:
     config.tra.n_epochs = 15
     config.tra.lr = 1.2e-4
     config.tra.warmup_epochs = 5
-    config.tra.weight_decay = 0.3
+    config.tra.weight_decay = 0
     config.tra.l1_lambda = 0.0
     config.tra.grad_norm = 0.5
     config.tra.patience = 5

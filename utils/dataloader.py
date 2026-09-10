@@ -561,7 +561,16 @@ class InkVolumeDataset(IterableDataset):
         self._surface_confidence_path = None
         self._surface_depth_arr = None
         self._surface_confidence_arr = None
-        self._use_surface_teacher = bool(getattr(config.model, "new_learned_surface", False))
+        self._use_surface_teacher = any([
+            bool(getattr(config.model, "new_learned_surface", False)),
+            bool(getattr(config.model, "better_surface", False)),
+            bool(getattr(config.model, "surface_teacher_input", False)),
+        ])
+        self._surface_relative_depth_window = bool(
+            getattr(config.data, "surface_relative_depth_window", False)
+        )
+        if self._surface_relative_depth_window and not self._use_surface_teacher:
+            raise ValueError("surface_relative_depth_window requires pre-generated surface maps")
         if self._use_surface_teacher:
             surface_dir = os.path.abspath(getattr(config.data, "surface_label_dir", "./surface_labels"))
             self._surface_depth_path = os.path.join(surface_dir, f"{self.scroll_id}_depth.npy")
@@ -1186,14 +1195,43 @@ class InkVolumeDataset(IterableDataset):
                     jy = jx = 0
                 # depth window jitter: shift which slices we read to attack depth-profile position memorization
                 max_dj = int(getattr(self.c.data, "depth_jitter", 0))
-                if max_dj > 0 and self.shuffle and allow_jitter:
-                    volume_depth = int(self.vol.shape[0])
+                volume_depth = int(self.vol.shape[0])
+                if self._surface_relative_depth_window:
+                    surface_start = self._surface_centered_start(
+                        y - pad - jy,
+                        x - pad - jx,
+                        ctx,
+                        volume_depth,
+                    )
+                    jitter = random.randint(-max_dj, max_dj) \
+                        if max_dj > 0 and self.shuffle and allow_jitter else 0
+                    selected_start = min(
+                        max(surface_start + jitter, 0),
+                        max(volume_depth - self.depth, 0),
+                    )
+                    dj = selected_start - z
+                elif max_dj > 0 and self.shuffle and allow_jitter:
                     min_dj = max(-max_dj, -z)
                     max_valid_dj = min(max_dj, volume_depth - (z + self.depth))
                     dj = random.randint(min_dj, max_valid_dj)
                 block = self._read_ctx_block(z + dj, self.depth, y - pad - jy, x - pad - jx, ctx)
             else:
-                block = np.array(self.vol[z:z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
+                if self._surface_relative_depth_window:
+                    selected_start = self._surface_centered_start(
+                        y,
+                        x,
+                        tile,
+                        int(self.vol.shape[0]),
+                    )
+                    max_dj = int(getattr(self.c.data, "depth_jitter", 0))
+                    jitter = random.randint(-max_dj, max_dj) \
+                        if max_dj > 0 and self.shuffle and allow_jitter else 0
+                    selected_start = min(
+                        max(selected_start + jitter, 0),
+                        max(int(self.vol.shape[0]) - self.depth, 0),
+                    )
+                    dj = selected_start - z
+                block = np.array(self.vol[z+dj:z+dj+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
         except Exception:
             # any read error (OSError, corrupt chunk, zarr internal error) — return zeros
             block = np.zeros((self.depth, sp, sp), dtype=np.float32)
@@ -1203,6 +1241,23 @@ class InkVolumeDataset(IterableDataset):
             block = np.zeros((self.depth, sp, sp), dtype=np.float32)
 
         return self._normalize_block(block), target_offset, dj
+
+    def _surface_centered_start(self, y0, x0, size, volume_depth):
+        """choose a contiguous source window centered on the patch's literal surface."""
+        height, width = self.surface_depth.shape
+        ys, ye = max(0, y0), min(height, y0 + size)
+        xs, xe = max(0, x0), min(width, x0 + size)
+        if ys < ye and xs < xe:
+            depth = np.asarray(self.surface_depth[ys:ye, xs:xe], dtype=np.uint8)
+            confidence = np.asarray(self.surface_confidence[ys:ye, xs:xe], dtype=np.uint8)
+            valid = (depth != 255) & (confidence > 0)
+            if valid.any():
+                center = int(np.rint(np.median(depth[valid].astype(np.float32))))
+                return min(
+                    max(center - (self.depth - 1) // 2, 0),
+                    max(int(volume_depth) - self.depth, 0),
+                )
+        return min(max(int(self.z_start), 0), max(int(volume_depth) - self.depth, 0))
 
     def _fetch_surface_teacher(self, z_off, y_off, x_off, target_offset, depth_shift):
         """crop the offline teacher and convert absolute depths to input-local depths."""

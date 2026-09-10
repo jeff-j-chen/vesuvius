@@ -133,6 +133,7 @@ class DataConfig:
     ctx_jitter: int = 0  # max pixel jitter for context window; varies surrounding context during training
     target_aware_ctx_jitter: bool = False
     depth_jitter: int = 0  # max slice jitter for depth window start; attacks depth-profile position memorization
+    surface_relative_depth_window: bool = False  # center the source window on the literal map
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
     multitile_pos_only: bool = False  # in ink-containing windows, supervise ONLY ink sub-tiles (mask out non-ink ones to avoid labelling unlabelled-ink neighbours as negatives); ink-free ring windows still give negatives
     character_balanced_sampling: bool = False
@@ -289,6 +290,8 @@ class ModelConfig:
     feature_attn_mil: bool = False
     learned_surface: bool = False
     new_learned_surface: bool = False
+    better_surface: bool = False
+    surface_teacher_input: bool = False
     surface_canonicalize: bool = False
     surface_canonical_depth: int = 24
     surface_guided_mil: bool = False

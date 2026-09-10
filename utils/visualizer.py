@@ -124,24 +124,38 @@ def _process_chunk(valid, pmap, pmap_tta, model, device, tile, h_small, w_small,
     # the CPU while the GPU sits at ~0% (the "predict chunk is crawling" symptom). training uses
     # one fixed shape, so it keeps the compiled hot path.
     _fwx = getattr(model, "_eager_forward_with_extras", None)
-    def _infer(t):
-        return _fwx(t)[0] if _fwx is not None else model(t)
+    def _infer(t, surface_depth=None, surface_confidence=None):
+        kwargs = {
+            "teacher_surface_depth": surface_depth,
+            "teacher_surface_confidence": surface_confidence,
+        }
+        return _fwx(t, **kwargs)[0] if _fwx is not None else model(t, **kwargs)
 
     # match training precision (train.py forwards under autocast): fp32 eval inference is
     # 2-4x slower on Ampere for no benefit and drifts from the fp16 the model trained under.
-    with torch.no_grad(), autocast(device, enabled=torch.cuda.is_available()):
+    with torch.no_grad(), autocast(device, enabled=device == "cuda"):
         for i in tqdm(range(0, len(valid), infer_bs), desc="Predict chunk", leave=False):
             chunk   = valid[i:i + infer_bs]
-            b_blocks = [b for b, _, _ in chunk]
-            b_idx    = [(yo, xo) for _, yo, xo in chunk]
+            b_blocks = [item[0] for item in chunk]
+            b_idx = [(item[1], item[2]) for item in chunk]
             bt = torch.from_numpy(np.stack(b_blocks)).float().unsqueeze(1).to(device)
+            has_teacher = len(chunk[0]) == 5
+            if has_teacher:
+                b_depth = torch.from_numpy(np.stack([item[3] for item in chunk])).float().unsqueeze(1).to(device)
+                b_confidence = torch.from_numpy(np.stack([item[4] for item in chunk])).float().unsqueeze(1).to(device)
+            else:
+                b_depth = b_confidence = None
 
             if also_tta:
                 # ONE read of the blocks -> BOTH the regular (identity) and TTA-averaged maps.
                 # TTA re-augments the already-loaded tiles in-memory; it does NOT re-read disk.
                 prob_sum = None; id_probs = None
                 for j, op in enumerate(transforms):
-                    p = torch.sigmoid(collapse_fn(_infer(op(bt).contiguous())))
+                    p = torch.sigmoid(collapse_fn(_infer(
+                        op(bt).contiguous(),
+                        op(b_depth).contiguous() if b_depth is not None else None,
+                        op(b_confidence).contiguous() if b_confidence is not None else None,
+                    )))
                     if j == 0:
                         id_probs = p
                     prob_sum = p if prob_sum is None else prob_sum + p
@@ -154,7 +168,11 @@ def _process_chunk(valid, pmap, pmap_tta, model, device, tile, h_small, w_small,
             elif tta:
                 prob_sum = None
                 for op in transforms:
-                    p = torch.sigmoid(collapse_fn(_infer(op(bt).contiguous())))
+                    p = torch.sigmoid(collapse_fn(_infer(
+                        op(bt).contiguous(),
+                        op(b_depth).contiguous() if b_depth is not None else None,
+                        op(b_confidence).contiguous() if b_confidence is not None else None,
+                    )))
                     prob_sum = p if prob_sum is None else prob_sum + p
                 preds = (prob_sum / len(transforms)).cpu().numpy().flatten()
                 for (y_off, x_off), pred in zip(b_idx, preds):
@@ -162,7 +180,7 @@ def _process_chunk(valid, pmap, pmap_tta, model, device, tile, h_small, w_small,
                     if 0 <= yi < h_small and 0 <= xi < w_small:
                         pmap[yi, xi] = float(pred)
             else:
-                preds = torch.sigmoid(collapse_fn(_infer(bt))).cpu().numpy().flatten()
+                preds = torch.sigmoid(collapse_fn(_infer(bt, b_depth, b_confidence))).cpu().numpy().flatten()
                 for (y_off, x_off), pred in zip(b_idx, preds):
                     yi = y_off // tile; xi = x_off // tile
                     if 0 <= yi < h_small and 0 <= xi < w_small:
@@ -181,8 +199,12 @@ def _process_chunk_mt(valid, pm_sum, pm_cnt, pm_sum_t, pm_cnt_t, model, device,
     from tqdm import tqdm
 
     _fwx = getattr(model, "_eager_forward_with_extras", None)
-    def _infer(t):
-        return _fwx(t)[0] if _fwx is not None else model(t)
+    def _infer(t, surface_depth=None, surface_confidence=None):
+        kwargs = {
+            "teacher_surface_depth": surface_depth,
+            "teacher_surface_confidence": surface_confidence,
+        }
+        return _fwx(t, **kwargs)[0] if _fwx is not None else model(t, **kwargs)
 
     # center of the mt_n*out_tile grid inside the tile-aligned window (off = -8 for tile16/32-grid)
     off = (tile - mt_n * out_tile) // 2
@@ -201,19 +223,29 @@ def _process_chunk_mt(valid, pm_sum, pm_cnt, pm_sum_t, pm_cnt_t, model, device,
                     s_sum[cy, cx] += row[ix]
                     s_cnt[cy, cx] += 1.0
 
-    with torch.no_grad(), autocast(device, enabled=torch.cuda.is_available()):
+    with torch.no_grad(), autocast(device, enabled=device == "cuda"):
         for i in tqdm(range(0, len(valid), infer_bs), desc="Predict chunk", leave=False):
             chunk = valid[i:i + infer_bs]
-            b_blocks = [b for b, _, _ in chunk]
-            b_idx = [(yo, xo) for _, yo, xo in chunk]
+            b_blocks = [item[0] for item in chunk]
+            b_idx = [(item[1], item[2]) for item in chunk]
             bt = torch.from_numpy(np.stack(b_blocks)).float().unsqueeze(1).to(device)
             B = bt.shape[0]
+            has_teacher = len(chunk[0]) == 5
+            if has_teacher:
+                b_depth = torch.from_numpy(np.stack([item[3] for item in chunk])).float().unsqueeze(1).to(device)
+                b_confidence = torch.from_numpy(np.stack([item[4] for item in chunk])).float().unsqueeze(1).to(device)
+            else:
+                b_depth = b_confidence = None
 
             if also_tta or tta:
                 # ONE read -> identity (reg) grid AND tta-averaged grid; tta re-augments in memory
                 sum_grid = None; id_grid = None
                 for j, (op, inv) in enumerate(zip(tf, tf_inv)):
-                    g = torch.sigmoid(_infer(op(bt).contiguous())).view(B, mt_n, mt_n)
+                    g = torch.sigmoid(_infer(
+                        op(bt).contiguous(),
+                        op(b_depth).contiguous() if b_depth is not None else None,
+                        op(b_confidence).contiguous() if b_confidence is not None else None,
+                    )).view(B, mt_n, mt_n)
                     g = inv(g)                       # undo the transform on the grid
                     if j == 0:
                         id_grid = g
@@ -227,13 +259,13 @@ def _process_chunk_mt(valid, pm_sum, pm_cnt, pm_sum_t, pm_cnt_t, model, device,
                     else:
                         _scatter(tta_np[k], y_off, x_off, pm_sum, pm_cnt)
             else:
-                g = torch.sigmoid(_infer(bt)).view(B, mt_n, mt_n).float().cpu().numpy()
+                g = torch.sigmoid(_infer(bt, b_depth, b_confidence)).view(B, mt_n, mt_n).float().cpu().numpy()
                 for k, (y_off, x_off) in enumerate(b_idx):
                     _scatter(g[k], y_off, x_off, pm_sum, pm_cnt)
             del bt
 
 
-def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False, also_tta=False):
+def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False, also_tta=False, surface_depth_map=None, surface_confidence_map=None):
     """run batched prediction over given coords returning downsampled map.
 
     reads tiles as y-row strips: one zarr call per row of tiles instead of one
@@ -265,6 +297,12 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     infer_bs = max(1, min(int(256 * tile_scale), 256))
     device = config.device if torch.cuda.is_available() else "cpu"
     mode = getattr(config.data, "input_mode", "single")
+    use_surface_teacher = bool(getattr(config.model, "surface_teacher_input", False))
+    surface_relative_window = bool(
+        getattr(config.data, "surface_relative_depth_window", False)
+    )
+    if use_surface_teacher and (surface_depth_map is None or surface_confidence_map is None):
+        raise RuntimeError(f"literal surface maps are required for {volume_name} evaluation")
 
     # context-window toggle: when context_size>tile (single mode only) each tile is read as a
     # larger crop centered on it; the model center-pools MIL over the tile region. shrink the
@@ -337,15 +375,15 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     # also_tta reuses it for free -> N transforms cost N forwards, not N+1.
     _flips = (
         lambda t: t,
-        lambda t: torch.flip(t, dims=[4]),        # h-flip
-        lambda t: torch.flip(t, dims=[3]),        # v-flip
-        lambda t: torch.flip(t, dims=[3, 4]),     # 180
+        lambda t: torch.flip(t, dims=[-1]),        # h-flip
+        lambda t: torch.flip(t, dims=[-2]),        # v-flip
+        lambda t: torch.flip(t, dims=[-2, -1]),    # 180
     )
     _mode = str(getattr(config.data, "tta_mode", "flips")).lower()
     if _mode == "dihedral":
         _tf = _flips + (
-            lambda t: torch.rot90(t, 1, dims=[3, 4]),   # +90
-            lambda t: torch.rot90(t, -1, dims=[3, 4]),  # -90
+            lambda t: torch.rot90(t, 1, dims=[-2, -1]),   # +90
+            lambda t: torch.rot90(t, -1, dims=[-2, -1]),  # -90
         )
     elif _mode in ("light", "hflip", "2"):
         _tf = _flips[:2]                          # id + h-flip only -> 2 forwards (~half the cost)
@@ -392,6 +430,55 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
         x_abs_min = x_range[0] + min(x_offs)
         x_abs_max = x_range[0] + max(x_offs) + tile
         width     = x_abs_max - x_abs_min
+
+        if surface_relative_window:
+            out = []
+            pad = (ctx - tile) // 2 if use_ctx else 0
+            sp = ctx if use_ctx else tile
+            map_h, map_w = surface_depth_map.shape
+            for x_off in x_offs:
+                x_abs = x_range[0] + x_off
+                sy0 = y_abs - pad
+                sx0 = x_abs - pad
+                ys, ye = max(0, sy0), min(map_h, sy0 + sp)
+                xs, xe = max(0, sx0), min(map_w, sx0 + sp)
+                selected_start = depth_start
+                if ys < ye and xs < xe:
+                    absolute = np.asarray(surface_depth_map[ys:ye, xs:xe], dtype=np.uint8)
+                    conf = np.asarray(surface_confidence_map[ys:ye, xs:xe], dtype=np.uint8)
+                    valid_surface = (absolute != 255) & (conf > 0)
+                    if valid_surface.any():
+                        center = int(np.rint(np.median(absolute[valid_surface].astype(np.float32))))
+                        selected_start = min(
+                            max(center - (depth - 1) // 2, 0),
+                            max(int(vol.shape[0]) - depth, 0),
+                        )
+                if use_ctx:
+                    block = _read_ctx_strip(selected_start, depth, sy0, sx0, sp, sp)
+                else:
+                    block = _read_strip(selected_start, depth, y_abs, x_abs, tile)
+                if block is None or block.shape != (depth, sp, sp):
+                    continue
+                teacher_depth = np.full((sp, sp), -1.0, dtype=np.float32)
+                teacher_confidence = np.zeros((sp, sp), dtype=np.float32)
+                if ys < ye and xs < xe:
+                    dst = (slice(ys - sy0, ye - sy0), slice(xs - sx0, xe - sx0))
+                    absolute = np.asarray(surface_depth_map[ys:ye, xs:xe], dtype=np.float32)
+                    local = absolute - float(selected_start)
+                    conf = np.asarray(surface_confidence_map[ys:ye, xs:xe], dtype=np.float32) / 255.0
+                    valid_surface = (
+                        (absolute != 255) & (local >= 0) & (local <= depth - 1)
+                    )
+                    teacher_depth[dst] = np.where(valid_surface, local, -1.0)
+                    teacher_confidence[dst] = np.where(valid_surface, conf, 0.0)
+                out.append((
+                    np.ascontiguousarray(block),
+                    y_off,
+                    x_off,
+                    teacher_depth,
+                    teacher_confidence,
+                ))
+            return out
 
         if mode == "diff":
             pre_z = getattr(config.data, "pre_band_start", 20)
@@ -441,7 +528,27 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
                 # copy each tile while the row is owned by a reader thread
                 # retaining a view keeps the full context strip alive until flush
                 # and can turn a 3 gb tile buffer into tens of gb of live row data
-                out.append((np.ascontiguousarray(blk), y_off, x_off))
+                if use_surface_teacher:
+                    sy0 = y_abs - pad if use_ctx else y_abs
+                    sx0 = x_range[0] + x_off - pad if use_ctx else x_range[0] + x_off
+                    teacher_depth = np.full((sp, sp), -1.0, dtype=np.float32)
+                    teacher_confidence = np.zeros((sp, sp), dtype=np.float32)
+                    map_h, map_w = surface_depth_map.shape
+                    ys, ye = max(0, sy0), min(map_h, sy0 + sp)
+                    xs, xe = max(0, sx0), min(map_w, sx0 + sp)
+                    if ys < ye and xs < xe:
+                        dst = (slice(ys - sy0, ye - sy0), slice(xs - sx0, xe - sx0))
+                        absolute = np.asarray(surface_depth_map[ys:ye, xs:xe], dtype=np.float32)
+                        local = absolute - float(depth_start)
+                        conf = np.asarray(surface_confidence_map[ys:ye, xs:xe], dtype=np.float32) / 255.0
+                        valid_surface = (
+                            (absolute != 255) & (local >= 0) & (local <= depth - 1)
+                        )
+                        teacher_depth[dst] = np.where(valid_surface, local, -1.0)
+                        teacher_confidence[dst] = np.where(valid_surface, conf, 0.0)
+                    out.append((np.ascontiguousarray(blk), y_off, x_off, teacher_depth, teacher_confidence))
+                else:
+                    out.append((np.ascontiguousarray(blk), y_off, x_off))
         return out
 
     import time
@@ -780,6 +887,18 @@ class TensorboardVisualizer:
         self.explicit_negative_mask = getattr(dm, "explicit_negative_mask", None)
         if self.explicit_negative_mask is not None:
             self.labels[self.explicit_negative_mask > 0] = 0
+        self.surface_depth_map = None
+        self.surface_confidence_map = None
+        if bool(getattr(self.c.model, "surface_teacher_input", False)):
+            surface_dir = str(getattr(self.c.data, "surface_label_dir", "./surface_labels"))
+            self.surface_depth_map = np.load(
+                os.path.join(surface_dir, f"{self.scroll1_id}_depth.npy"),
+                mmap_mode="r",
+            )
+            self.surface_confidence_map = np.load(
+                os.path.join(surface_dir, f"{self.scroll1_id}_confidence.npy"),
+                mmap_mode="r",
+            )
         self.full_x_range = getattr(dm, "full_x_range", (0, self.mask.shape[1]))
         self.full_y_range = getattr(dm, "full_y_range", (0, self.mask.shape[0]))
         self.global_mean, self.global_std, self.global_min, self.global_max = dm.norm_stats
@@ -1353,6 +1472,12 @@ class TensorboardVisualizer:
             self.writer.add_scalar("G_M/Loss/Train_Spill", train_metrics['spill_loss'], epoch)
         if 'surface_loss' in train_metrics:
             self.writer.add_scalar("G_M/Loss/Train_Surface", train_metrics['surface_loss'], epoch)
+        if 'surface_ce' in train_metrics:
+            self.writer.add_scalar("G_M/Surface/CrossEntropy", train_metrics['surface_ce'], epoch)
+        if 'surface_smooth' in train_metrics:
+            self.writer.add_scalar("G_M/Surface/Smoothness", train_metrics['surface_smooth'], epoch)
+        if 'surface_mae' in train_metrics:
+            self.writer.add_scalar("G_M/Surface/ExpectedDepthMAE", train_metrics['surface_mae'], epoch)
         if 'surface_alpha' in train_metrics:
             self.writer.add_scalar("G_M/Surface/MeanBlend", train_metrics['surface_alpha'], epoch)
         if 'supcon_loss' in train_metrics:
@@ -1701,7 +1826,9 @@ class TensorboardVisualizer:
             full_pred, full_tta = predict_tiles(
                 self.c, model, self.volume, eval_mask, full_grouped.get(d_off, []), full_y, full_x,
                 depth_start, "eval", self.global_mean, self.global_std, self.global_min, self.global_max,
-                also_tta=True
+                also_tta=True,
+                surface_depth_map=self.surface_depth_map,
+                surface_confidence_map=self.surface_confidence_map,
             )
 
             tile = self.c.data.tile_size
