@@ -49,12 +49,14 @@ TESTS = [
         "tag": "21_500p2",
         "scrolls": _scrolls("500p2"),
         "max_samples_per_epoch": 20_000,
+        "fast_eval_figure": True,
     },
     {
         "tid": "w044",
         "tag": "21_w044",
         "scrolls": _scrolls("w044"),
         "max_samples_per_epoch": 20_000,
+        "fast_eval_figure": True,
     },
     {
         "tid": "multi2",
@@ -62,6 +64,7 @@ TESTS = [
         "scrolls": _scrolls("500p2", "w044"),
         # the cap is per child, keeping the merged epoch near 20k samples
         "max_samples_per_epoch": 10_000,
+        "fast_eval_figure": True,
     },
 ]
 
