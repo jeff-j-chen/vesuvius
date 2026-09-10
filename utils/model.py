@@ -475,17 +475,14 @@ class NnUnet3dLcndz(nn.Module):
             surface_probs = F.softmax(surface_logits, dim=2)
             self.last_new_surface_logits = surface_logits
             if self._surface_canonicalize:
-                from .surface import make_surface_targets
-
-                surface_target, surface_valid, surface_index = make_surface_targets(raw_x)
-                self.last_surface_target = surface_target
-                self.last_surface_valid = surface_valid
-                fallback = raw_x.new_full(surface_index.shape, (raw_x.shape[2] - 1) / 2.0)
-                center_depth = torch.where(
-                    surface_valid > 0,
-                    surface_index.to(raw_x.dtype),
-                    fallback,
-                )
+                depth_axis = torch.arange(
+                    raw_x.shape[2],
+                    device=raw_x.device,
+                    dtype=surface_probs.dtype,
+                ).view(1, 1, -1, 1, 1)
+                center_depth = (surface_probs * depth_axis).sum(dim=2)
+                self.last_surface_target = None
+                self.last_surface_valid = None
                 raw_for_backbone = self._surface_relative_resample(
                     raw_x,
                     center_depth,

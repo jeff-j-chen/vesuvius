@@ -118,6 +118,7 @@ class DataConfig:
     ring_shell_r: int = 2
     simple_split: bool = True  # true: axis/fraction split; false: train_masks/<scroll_id>.png
     train_mask_dir: str = "./train_masks"
+    surface_label_dir: str = "./surface_labels"
     context_size: int = 0
     context_downsample: int = 1
     eval_infer_bs: int = 128
@@ -232,6 +233,7 @@ class TrainingConfig:
     spill_max_depth_entropy: float = 2.1
     new_surface_lambda: float = 0.1
     new_surface_smooth_lambda: float = 0.02
+    surface_target_sigma: float = 0.75
     seed: int = 41
     deterministic: bool = True
     epoch_cooldown_secs: int = 9

@@ -15,7 +15,7 @@ from utils.config import Config
 from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray, get_tile_pos_weight
 from utils.hard_mining import HardMiningInjector, HardMiningManager
 from utils.model import create_model, supcon_loss
-from utils.surface import surface_supervision_loss
+from utils.surface import make_surface_targets_from_depth, surface_supervision_loss
 from utils.training_utils import (
     calculate_character_metrics,
     calculate_metrics,
@@ -373,6 +373,7 @@ class Trainer:
 
     def _train_batch(self, images, labels, mask, domain_ids=None, character_ids=None,
                      target_offsets=None, epoch: int = 0, unlabeled_images=None,
+                     surface_depth=None, surface_confidence=None,
                      context_pair=None, context_pair_active=None):
         if mask.reshape(mask.size(0), -1).sum().item() <= 0:
             print("[ERROR] Mask sum is zero, skipping loss calculation.")
@@ -447,6 +448,8 @@ class Trainer:
                 outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
 
             targets = labels.float()
+            explicit_negative = labels < 0
+            targets = torch.where(explicit_negative, torch.zeros_like(targets), targets)
             pos_smooth = float(getattr(self.c.tra, "label_smooth_pos", 0.0))
             neg_smooth = float(getattr(self.c.tra, "label_smooth_neg", 0.0))
             if pos_smooth > 0 or neg_smooth > 0:
@@ -456,6 +459,7 @@ class Trainer:
                     torch.full_like(targets, 1.0 - pos_smooth),
                     torch.full_like(targets, neg_smooth),
                 )
+                targets = torch.where(explicit_negative, torch.zeros_like(targets), targets)
 
             per_target_loss = self.criterion(outputs, targets)
             raw_loss = per_target_loss * mask
@@ -654,7 +658,11 @@ class Trainer:
 
             surface_loss_value = outputs.new_zeros(())
             surface_alpha_value = outputs.new_zeros(())
+            supcon_loss_value = outputs.new_zeros(())
+            weighted_supcon_loss_value = outputs.new_zeros(())
             if bool(getattr(self.c.model, "new_learned_surface", False)) and new_surface_logits is not None:
+                if surface_depth is None or surface_confidence is None:
+                    raise RuntimeError("offline surface teacher is required for surface training")
                 downsample = max(1, int(getattr(self.c.data, "context_downsample", 1)))
                 if downsample > 1:
                     surface_volume = F.avg_pool3d(
@@ -664,12 +672,34 @@ class Trainer:
                     )
                 else:
                     surface_volume = surface_source
+                teacher_depth = surface_depth.to(self.c.device, non_blocking=True).float()
+                teacher_confidence = surface_confidence.to(
+                    self.c.device,
+                    non_blocking=True,
+                ).float()
+                if teacher_depth.shape[-2:] != new_surface_logits.shape[-2:]:
+                    teacher_depth = F.interpolate(
+                        teacher_depth,
+                        size=new_surface_logits.shape[-2:],
+                        mode="nearest",
+                    )
+                    teacher_confidence = F.interpolate(
+                        teacher_confidence,
+                        size=new_surface_logits.shape[-2:],
+                        mode="area",
+                    )
+                surface_target, surface_valid = make_surface_targets_from_depth(
+                    teacher_depth,
+                    teacher_confidence,
+                    new_surface_logits.shape[2],
+                    target_sigma=float(getattr(self.c.tra, "surface_target_sigma", 0.75)),
+                )
                 surface_total, surface_ce, surface_smooth, surface_valid = surface_supervision_loss(
                     new_surface_logits,
                     surface_volume,
                     smooth_weight=float(getattr(self.c.tra, "new_surface_smooth_lambda", 0.02)),
-                    target=getattr(self.model, "last_surface_target", None),
-                    valid=getattr(self.model, "last_surface_valid", None),
+                    target=surface_target,
+                    valid=surface_valid,
                 )
                 surface_loss_value = surface_total
                 loss = loss + float(getattr(self.c.tra, "new_surface_lambda", 0.1)) * surface_total
@@ -690,12 +720,12 @@ class Trainer:
                 if supcon_z.dim() == 3 and supcon_z.shape[:2] == labels.shape:
                     supervised = mask > 0
                     supcon_input = supcon_z[supervised]
-                    supcon_labels = labels[supervised].long()
+                    supcon_labels = labels.clamp(min=0)[supervised].long()
                     if domain_ids is not None and bool(getattr(self.c.tra, "supcon_cross_frag", False)):
                         cell_domains = domain_ids.unsqueeze(1).expand_as(labels)[supervised]
                     else:
                         cell_domains = None
-                    loss = loss + supcon_lambda * supcon_loss(
+                    supcon_loss_value = supcon_loss(
                         supcon_input,
                         supcon_labels,
                         temp=supcon_temp,
@@ -703,12 +733,14 @@ class Trainer:
                     )
                 else:
                     cross_frag_ids = domain_ids if bool(getattr(self.c.tra, "supcon_cross_frag", False)) else None
-                    loss = loss + supcon_lambda * supcon_loss(
+                    supcon_loss_value = supcon_loss(
                         supcon_z,
                         sample_pos.long(),
                         temp=supcon_temp,
                         domain_ids=cross_frag_ids,
                     )
+                weighted_supcon_loss_value = supcon_lambda * supcon_loss_value
+                loss = loss + weighted_supcon_loss_value
 
             # entropy maximization on unlabeled (validation) tiles: rewards uncertainty outside
             # the labeled region, attacking the "predict not-ink everywhere" fixed point
@@ -757,6 +789,8 @@ class Trainer:
             spill_loss_value.detach().float(),
             surface_loss_value.detach().float(),
             surface_alpha_value.detach().float(),
+            supcon_loss_value.detach().float(),
+            weighted_supcon_loss_value.detach().float(),
             context_loss_value.detach().float(),
             bag_rank_loss_value.detach().float(),
             groupdro_loss_value.detach().float(),
@@ -764,9 +798,9 @@ class Trainer:
             dann_accuracy_value.detach().float(),
             dann_grl_value.detach().float(),
         )).cpu().tolist()
-        self._last_character_objectives = tuple(diagnostic_values[6:10])
-        self._last_dann_accuracy = diagnostic_values[10]
-        self._last_grl_scale = diagnostic_values[11]
+        self._last_character_objectives = tuple(diagnostic_values[8:12])
+        self._last_dann_accuracy = diagnostic_values[12]
+        self._last_grl_scale = diagnostic_values[13]
 
         if hasattr(self.model, "prototype_head") and self.model.prototype_head is not None:
             emb = getattr(self.model, "last_embedding_detached", None)
@@ -774,7 +808,7 @@ class Trainer:
                 self.model.prototype_head.update(emb, sample_pos.view(-1, 1))
 
         scores = torch.sigmoid(outputs).detach().cpu().numpy().flatten()
-        label_values = labels.detach().cpu().numpy().flatten().astype(int)
+        label_values = labels.clamp(min=0).detach().cpu().numpy().flatten().astype(int)
         if character_ids is not None:
             character_values = character_ids.view(B, -1).cpu().numpy().flatten().astype(np.int64)
         else:
@@ -788,12 +822,19 @@ class Trainer:
             scores,
             label_values,
             character_values,
-            *diagnostic_values[:6],
+            *diagnostic_values[:8],
         )
 
-    def _ins_hard_samples(self, images, labels, mask, hard_injector, remaining_batches: int) -> int:
+    def _ins_hard_samples(
+        self,
+        images,
+        labels,
+        mask,
+        hard_injector,
+        remaining_batches: int,
+    ) -> tuple[int, list[int]]:
         if not hard_injector or not hard_injector.has_next():
-            return 0
+            return 0, []
 
         if remaining_batches <= 0:
             inject_n = 0
@@ -801,6 +842,7 @@ class Trainer:
             inject_n = min(images.size(0), (hard_injector.remaining() + remaining_batches - 1) // remaining_batches)
 
         injected = 0
+        injected_indices = []
         if inject_n > 0:
             replace_indices = np.random.choice(images.size(0), inject_n, replace=False)
             for replace_index in replace_indices:
@@ -814,7 +856,8 @@ class Trainer:
                 labels[replace_index] = hard_label.to(self.c.device)
                 mask[replace_index] = hard_mask.to(self.c.device)
                 injected += 1
-        return injected
+                injected_indices.append(int(replace_index))
+            return injected, injected_indices
 
     def train_epoch(self, hard_injector, epoch: int = 0):
         self.model.train()
@@ -824,6 +867,8 @@ class Trainer:
         spill_loss_total = 0.0
         surface_loss_total = 0.0
         surface_alpha_total = 0.0
+        supcon_loss_total = 0.0
+        weighted_supcon_loss_total = 0.0
         labels = []
         preds = []
         scores = []
@@ -863,6 +908,13 @@ class Trainer:
                 else None
             )
             optional_index += int(bool(getattr(self.c.data, "target_aware_ctx_jitter", False)))
+            if bool(getattr(self.c.model, "new_learned_surface", False)):
+                batch_surface_depth = batch[optional_index]
+                batch_surface_confidence = batch[optional_index + 1]
+                optional_index += 2
+            else:
+                batch_surface_depth = None
+                batch_surface_confidence = None
             if bool(getattr(self.c.tra, "context_consistency", False)):
                 batch_context_pair = batch[optional_index]
                 batch_context_pair_active = batch[optional_index + 1]
@@ -878,13 +930,16 @@ class Trainer:
                     u_iter = iter(self.valid_loader)
                     u_batch = next(u_iter)
                 u_imgs = u_batch[0]
-            total_injected += self._ins_hard_samples(
+            injected, injected_indices = self._ins_hard_samples(
                 images,
                 batch_labels,
                 mask,
                 hard_injector,
                 len(self.train_loader) - batch_index,
             )
+            total_injected += injected
+            if batch_surface_confidence is not None and injected_indices:
+                batch_surface_confidence[injected_indices] = 0
             (
                 batch_scores,
                 batch_labels_out,
@@ -895,6 +950,8 @@ class Trainer:
                 batch_spill_loss,
                 batch_surface_loss,
                 batch_surface_alpha,
+                batch_supcon_loss,
+                batch_weighted_supcon_loss,
             ) = self._train_batch(
                 images,
                 batch_labels,
@@ -904,6 +961,8 @@ class Trainer:
                 target_offsets=batch_target_offsets,
                 epoch=epoch,
                 unlabeled_images=u_imgs,
+                surface_depth=batch_surface_depth,
+                surface_confidence=batch_surface_confidence,
                 context_pair=batch_context_pair,
                 context_pair_active=batch_context_pair_active,
             )
@@ -917,6 +976,8 @@ class Trainer:
             spill_loss_total += batch_spill_loss
             surface_loss_total += batch_surface_loss
             surface_alpha_total += batch_surface_alpha
+            supcon_loss_total += batch_supcon_loss
+            weighted_supcon_loss_total += batch_weighted_supcon_loss
             labels.extend(batch_labels_out)
             preds.extend((batch_scores > 0.5).astype(int))
             scores.extend(batch_scores)
@@ -945,6 +1006,8 @@ class Trainer:
         metrics["spill_loss"] = spill_loss_total / len(self.train_loader)
         metrics["surface_loss"] = surface_loss_total / len(self.train_loader)
         metrics["surface_alpha"] = surface_alpha_total / len(self.train_loader)
+        metrics["supcon_loss"] = supcon_loss_total / len(self.train_loader)
+        metrics["weighted_supcon_loss"] = weighted_supcon_loss_total / len(self.train_loader)
         metrics["context_consistency_loss"] = context_loss_total / len(self.train_loader)
         metrics["character_bag_ranking_loss"] = bag_rank_loss_total / len(self.train_loader)
         metrics["character_groupdro_loss"] = groupdro_loss_total / len(self.train_loader)
@@ -1000,6 +1063,9 @@ class Trainer:
                     and len(batch) > optional_index
                     else None
                 )
+                optional_index += int(bool(getattr(self.c.data, "target_aware_ctx_jitter", False)))
+                if bool(getattr(self.c.model, "new_learned_surface", False)):
+                    optional_index += 2
                 if mask.view(mask.size(0), -1).sum() <= 0:
                     print("[ERROR] Encountered batch with mask sum == 0 in validation. This block should not be loaded!")
                     continue

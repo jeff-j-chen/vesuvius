@@ -62,6 +62,22 @@ def _detect_strip(
     peak = partitioned[-1]
     margin = partitioned[-1] - partitioned[-2]
     valid = (contrast >= min_contrast) & (peak >= min_peak) & (margin >= min_margin)
+
+    # rescue isolated weak detections without bridging broad low-evidence regions
+    neighbor_count = cv2.filter2D(
+        valid.astype(np.uint8),
+        ddepth=cv2.CV_16U,
+        kernel=np.ones((3, 3), dtype=np.uint8),
+        borderType=cv2.BORDER_CONSTANT,
+    )
+    isolated = (
+        ~valid
+        & (neighbor_count >= 7)
+        & (contrast >= 0.70 * min_contrast)
+        & (peak >= 0.70 * min_peak)
+        & (margin >= 0.50 * min_margin)
+    )
+    valid |= isolated
     confidence = np.clip(peak, 0.0, 1.0)
     return depth_index, confidence, valid
 
@@ -200,7 +216,7 @@ def _regularize_surface_map(
             if count <= 1:
                 continue
             small_lookup = np.zeros(count, dtype=bool)
-            small_lookup[1:] = stats[1:, cv2.CC_STAT_AREA] <= 4
+            small_lookup[1:] = stats[1:, cv2.CC_STAT_AREA] <= 16
             small = small_lookup[labels]
             if not small.any():
                 continue
@@ -273,6 +289,163 @@ def _regularize_surface_map(
         "small_components_filled": component_filled,
         "depth_outliers_replaced": outlier_total,
         "small_depth_islands_replaced": depth_islands_replaced,
+    }
+
+
+def _elastic_surface_map(
+    depth_map: np.ndarray,
+    confidence: np.ndarray,
+    mask: np.ndarray,
+    initial_depth: float = 12.0,
+    grid_step: int = 16,
+    iterations: int = 80,
+    smooth_sigma: float = 1.5,
+    data_strength: float = 0.28,
+    smooth_strength: float = 0.45,
+    confidence_floor: float = 0.08,
+    max_update: float = 0.25,
+    max_gradient: float = 0.55,
+    fill_radius: int = 8,
+) -> dict[str, float | int]:
+    """fit a confidence-weighted elastic sheet and preserve broad invalid holes."""
+    height, width = depth_map.shape
+    observed_valid = (confidence > 0) & mask & (depth_map != 255)
+    step = max(1, int(grid_step))
+    coarse_width = max(1, int(np.ceil(width / step)))
+    coarse_height = max(1, int(np.ceil(height / step)))
+
+    weights = np.where(observed_valid, confidence.astype(np.float32) / 255.0, 0.0)
+    weighted_depth = np.where(observed_valid, depth_map, 0).astype(np.float32) * weights
+    coarse_weight = cv2.resize(weights, (coarse_width, coarse_height), interpolation=cv2.INTER_AREA)
+    coarse_weighted_depth = cv2.resize(
+        weighted_depth,
+        (coarse_width, coarse_height),
+        interpolation=cv2.INTER_AREA,
+    )
+    observed = coarse_weighted_depth / np.maximum(coarse_weight, 1e-6)
+    data_weight = np.clip(coarse_weight, 0.0, 1.0)
+    data_weight[data_weight < float(confidence_floor)] = 0.0
+    coarse_mask = cv2.resize(
+        mask.astype(np.uint8),
+        (coarse_width, coarse_height),
+        interpolation=cv2.INTER_AREA,
+    ).astype(np.float32)
+
+    surface = np.full((coarse_height, coarse_width), float(initial_depth), dtype=np.float32)
+    if np.any(data_weight > 0):
+        seed = cv2.GaussianBlur(
+            observed * data_weight,
+            (0, 0),
+            max(float(smooth_sigma) * 2.0, 1.0),
+        )
+        seed_weight = cv2.GaussianBlur(
+            data_weight,
+            (0, 0),
+            max(float(smooth_sigma) * 2.0, 1.0),
+        )
+        seeded = seed / np.maximum(seed_weight, 1e-5)
+        surface = np.where(seed_weight > 1e-3, seeded, surface).astype(np.float32)
+
+    for _ in range(max(0, int(iterations))):
+        smooth = cv2.GaussianBlur(
+            surface,
+            (0, 0),
+            max(float(smooth_sigma), 0.1),
+            borderType=cv2.BORDER_REPLICATE,
+        )
+        update = (
+            float(data_strength) * data_weight * (observed - surface)
+            + float(smooth_strength) * (smooth - surface)
+        )
+        update *= np.clip(coarse_mask, 0.0, 1.0)
+        surface += np.clip(update, -float(max_update), float(max_update))
+
+        # alternate directional projections to cap local slope without flattening folds
+        limit = max(float(max_gradient), 0.0)
+        if limit > 0:
+            for _projection in range(2):
+                surface[:, 1:] = np.clip(
+                    surface[:, 1:], surface[:, :-1] - limit, surface[:, :-1] + limit
+                )
+                surface[:, :-1] = np.clip(
+                    surface[:, :-1], surface[:, 1:] - limit, surface[:, 1:] + limit
+                )
+                surface[1:, :] = np.clip(
+                    surface[1:, :], surface[:-1, :] - limit, surface[:-1, :] + limit
+                )
+                surface[:-1, :] = np.clip(
+                    surface[:-1, :], surface[1:, :] - limit, surface[1:, :] + limit
+                )
+
+    full_surface = cv2.resize(surface, (width, height), interpolation=cv2.INTER_LINEAR)
+    full_surface = np.clip(full_surface, 0.0, 254.0)
+
+    # iterative pinhole repair is intentionally stricter than the larger close below
+    patched_valid = observed_valid.copy()
+    pinholes = np.zeros_like(observed_valid)
+    for _ in range(3):
+        neighbor_count = cv2.filter2D(
+            patched_valid.astype(np.uint8),
+            ddepth=cv2.CV_16U,
+            kernel=np.ones((3, 3), dtype=np.uint8),
+            borderType=cv2.BORDER_CONSTANT,
+        )
+        new_pinhole = mask & ~patched_valid & (neighbor_count >= 7)
+        if not new_pinhole.any():
+            break
+        patched_valid |= new_pinhole
+        pinholes |= new_pinhole
+
+    fill_radius = max(0, int(fill_radius))
+    if fill_radius > 0:
+        kernel_size = 2 * fill_radius + 1
+        fill_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (kernel_size, kernel_size),
+        )
+        closed_valid = cv2.morphologyEx(
+            patched_valid.astype(np.uint8),
+            cv2.MORPH_CLOSE,
+            fill_kernel,
+        ) > 0
+        fill = closed_valid & ~observed_valid & mask
+    else:
+        fill = pinholes
+
+    output_valid = observed_valid | fill
+    fitted_depth = np.rint(full_surface).astype(np.uint8)
+    original_confidence = confidence.copy()
+    depth_map[output_valid] = fitted_depth[output_valid]
+    depth_map[~output_valid] = 255
+    confidence[observed_valid] = np.maximum(original_confidence[observed_valid], 1)
+    if fill.any():
+        nearby_confidence = cv2.GaussianBlur(
+            original_confidence.astype(np.float32),
+            (0, 0),
+            max(float(fill_radius) / 2.0, 1.0),
+        )
+        confidence[fill] = np.clip(nearby_confidence[fill] * 0.5, 1, 255).astype(np.uint8)
+    confidence[~output_valid] = 0
+
+    valid_depth = full_surface[output_valid]
+    grad_y, grad_x = np.gradient(full_surface)
+    gradient = np.hypot(grad_y, grad_x)[output_valid]
+    return {
+        "initial_depth": float(initial_depth),
+        "grid_step": int(step),
+        "iterations": int(iterations),
+        "smooth_sigma": float(smooth_sigma),
+        "data_strength": float(data_strength),
+        "smooth_strength": float(smooth_strength),
+        "confidence_floor": float(confidence_floor),
+        "max_update": float(max_update),
+        "max_gradient": float(max_gradient),
+        "fill_radius": int(fill_radius),
+        "isolated_pinholes_filled": int(pinholes.sum()),
+        "confidence_gaps_filled": int(fill.sum()),
+        "valid_depth_mean": float(valid_depth.mean()) if valid_depth.size else 0.0,
+        "mean_gradient": float(gradient.mean()) if gradient.size else 0.0,
+        "p99_gradient": float(np.quantile(gradient, 0.99)) if gradient.size else 0.0,
     }
 
 
@@ -353,6 +526,16 @@ def main() -> None:
     parser.add_argument("--spatial-sigma", type=float, default=1.25)
     parser.add_argument("--coarse-sigma", type=float, default=8.0)
     parser.add_argument("--coarse-weight", type=float, default=0.65)
+    parser.add_argument("--elastic-initial-depth", type=float, default=12.0)
+    parser.add_argument("--elastic-grid-step", type=int, default=16)
+    parser.add_argument("--elastic-iterations", type=int, default=80)
+    parser.add_argument("--elastic-sigma", type=float, default=1.5)
+    parser.add_argument("--elastic-data-strength", type=float, default=0.28)
+    parser.add_argument("--elastic-smooth-strength", type=float, default=0.45)
+    parser.add_argument("--elastic-confidence-floor", type=float, default=0.08)
+    parser.add_argument("--elastic-max-update", type=float, default=0.25)
+    parser.add_argument("--elastic-max-gradient", type=float, default=0.55)
+    parser.add_argument("--elastic-fill-radius", type=int, default=8)
     parser.add_argument("--max-review-side", type=int, default=2200)
     args = parser.parse_args()
 
@@ -408,6 +591,21 @@ def main() -> None:
     depth_map.flush()
     confidence.flush()
     regularization = _regularize_surface_map(depth_map, confidence, mask)
+    elastic = _elastic_surface_map(
+        depth_map,
+        confidence,
+        mask,
+        initial_depth=args.elastic_initial_depth,
+        grid_step=args.elastic_grid_step,
+        iterations=args.elastic_iterations,
+        smooth_sigma=args.elastic_sigma,
+        data_strength=args.elastic_data_strength,
+        smooth_strength=args.elastic_smooth_strength,
+        confidence_floor=args.elastic_confidence_floor,
+        max_update=args.elastic_max_update,
+        max_gradient=args.elastic_max_gradient,
+        fill_radius=args.elastic_fill_radius,
+    )
     depth_map.flush()
     confidence.flush()
     valid_count = int((confidence > 0).sum())
@@ -434,6 +632,7 @@ def main() -> None:
         "coarse_sigma": args.coarse_sigma,
         "coarse_weight": args.coarse_weight,
         "regularization": regularization,
+        "elastic": elastic,
         "histogram": histogram,
     }
     with open(output_dir / f"{scroll_id}_metadata.json", "w", encoding="utf-8") as handle:

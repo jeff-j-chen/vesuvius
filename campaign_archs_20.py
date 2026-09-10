@@ -144,7 +144,7 @@ def base_config(exp_name: str) -> Config:
     config.tra.eval_int_scrolls = 1
     config.tra.test_int = 999
     config.tra.probe_int = 999
-    config.tra.fast_eval_figure = False
+    config.tra.fast_eval_figure = True
     config.tra.test_on_final = False
     config.tra.loss_type = "bce"
     config.tra.gce_q = 0.9
@@ -152,12 +152,12 @@ def base_config(exp_name: str) -> Config:
     config.tra.label_smooth_neg = 0.05
     config.tra.tile_pos_weight = 1
     config.tra.tile_pos_weight_auto = False
-    config.tra.tta_consistency = True
+    config.tra.tta_consistency = False
     config.tra.tta_consistency_lambda = 0.3
     config.tra.tta_consistency_mode = "flips"
     config.tra.tta_consistency_prob = 1.0
-    config.tra.spill_reduction = True
-    config.tra.spill_lambda = 0.5
+    config.tra.spill_reduction = False
+    config.tra.spill_lambda = 0.0
     config.tra.spill_min_depth_var = 0.8
     config.tra.spill_depth_threshold = 0.35
     config.tra.spill_active_depth_tau = 0.08

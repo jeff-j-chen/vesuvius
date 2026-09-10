@@ -1,13 +1,14 @@
-"""campaign_archs_21.py -- isolate non-w013 data effects with the campaign-20 baseline
+"""campaign_archs_21.py -- isolate SupCon and surface mechanisms on 500P2
 
-Runs the soft-BCE campaign-20 operating point on:
-- 500P2_front only
-- w044 only
-- 500P2_front + w044 with equal scroll sampling
+Runs four matched 500P2 experiments:
+- baseline without SupCon, either surface branch, or spill reduction
+- baseline plus SupCon
+- baseline plus the old unsupervised surface-attention branch
+- baseline plus the new teacher-supervised surface branch
 
   python campaign_archs_21.py --dry-run
-  python campaign_archs_21.py --only 500p2
-  python campaign_archs_21.py --from w044
+    python campaign_archs_21.py --only baseline
+    python campaign_archs_21.py --from old_surface
 """
 from __future__ import annotations
 
@@ -45,26 +46,40 @@ def _scrolls(*names: str):
 
 TESTS = [
     {
-        "tid": "500p2",
-        "tag": "21_500p2",
+        "tid": "baseline",
+        "tag": "21_baseline",
         "scrolls": _scrolls("500p2"),
         "max_samples_per_epoch": 20_000,
-        "fast_eval_figure": True,
+        "supcon": False,
+        "learned_surface": False,
+        "new_learned_surface": False,
     },
     {
-        "tid": "w044",
-        "tag": "21_w044",
-        "scrolls": _scrolls("w044"),
+        "tid": "supcon",
+        "tag": "21_supcon",
+        "scrolls": _scrolls("500p2"),
         "max_samples_per_epoch": 20_000,
-        "fast_eval_figure": True,
+        "supcon": True,
+        "learned_surface": False,
+        "new_learned_surface": False,
     },
     {
-        "tid": "multi2",
-        "tag": "21_multi2",
-        "scrolls": _scrolls("500p2", "w044"),
-        # the cap is per child, keeping the merged epoch near 20k samples
-        "max_samples_per_epoch": 10_000,
-        "fast_eval_figure": True,
+        "tid": "old_surface",
+        "tag": "21_old_surface",
+        "scrolls": _scrolls("500p2"),
+        "max_samples_per_epoch": 20_000,
+        "supcon": False,
+        "learned_surface": True,
+        "new_learned_surface": False,
+    },
+    {
+        "tid": "new_surface",
+        "tag": "21_new_surface",
+        "scrolls": _scrolls("500p2"),
+        "max_samples_per_epoch": 20_000,
+        "supcon": False,
+        "learned_surface": False,
+        "new_learned_surface": True,
     },
 ]
 
@@ -79,6 +94,11 @@ def build_config(test: dict):
     config.data.max_samples_per_epoch = int(test["max_samples_per_epoch"])
     config.data.vis_scroll_ids = [int(scroll.scroll_id) for scroll in config.data.scrolls]
     config.tra.eval_int_scrolls = len(config.data.scrolls)
+    config.tra.spill_reduction = False
+    config.tra.spill_lambda = 0.0
+    config.tra.supcon = bool(test["supcon"])
+    config.model.learned_surface = bool(test["learned_surface"])
+    config.model.new_learned_surface = bool(test["new_learned_surface"])
 
     os.makedirs("models/archs21", exist_ok=True)
     config.save_final = f"models/archs21/{test['tid']}_final.pth"
@@ -97,6 +117,11 @@ def run_test(config, dry_run: bool) -> bool:
         f" context={config.data.context_size}/ds{config.data.context_downsample}"
         f" center={config.model.multitile_subtile * config.model.multitile_grid}"
         f" loss={config.tra.loss_type}"
+    )
+    print(
+        f"  supcon={config.tra.supcon} old_surface={config.model.learned_surface}"
+        f" new_surface={config.model.new_learned_surface}"
+        f" spill={config.tra.spill_reduction}"
     )
     if dry_run:
         print("  [DRY RUN] skipping")

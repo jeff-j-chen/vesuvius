@@ -169,9 +169,11 @@ class Transform:
 
     def __call__(self, block, label=None, mask=None, component_ids=None, target_offset=None):
         """apply transforms, synchronizing discrete geometry with multitile targets."""
+        self._last_geometry = []
         if random.random() < self.rotation_prob:
             k = random.choice([1, 2, 3])
             block = np.rot90(block, k=k, axes=(1, 2)).copy()
+            self._last_geometry.append(("rotate", k))
             label = self._rotate_target(label, k)
             mask = self._rotate_target(mask, k)
             component_ids = self._rotate_target(component_ids, k)
@@ -179,6 +181,7 @@ class Transform:
         if random.random() < self.flip_prob:
             axis = random.choice([1, 2])
             block = np.flip(block, axis=axis).copy()
+            self._last_geometry.append(("flip", axis))
             target_axis = 0 if axis == 1 else 1
             label = self._flip_target(label, target_axis)
             mask = self._flip_target(mask, target_axis)
@@ -196,6 +199,7 @@ class Transform:
             block = self._apply_depth_mask(block)
         if self.depth_warp_prob > 0 and random.random() < self.depth_warp_prob:
             block = self._apply_smooth_depth_warp(block)
+            self._last_geometry.append(("depth_warp", self._last_depth_warp_field))
         if self.surface_atten_prob > 0 and random.random() < self.surface_atten_prob:
             block = self._apply_surface_attenuation(block)
         if self.acquisition_blur_prob > 0 and random.random() < self.acquisition_blur_prob:
@@ -209,6 +213,7 @@ class Transform:
                     self._warned_elastic_multitile = True
             else:
                 block = self._apply_elastic_deformation(block)
+                self._last_geometry.append(("elastic", self._last_elastic_coords))
         # ensure the final result is contiguous to avoid negative strides
         block = np.ascontiguousarray(block)
         if label is None and mask is None and component_ids is None and target_offset is None:
@@ -226,6 +231,40 @@ class Transform:
             component_ids.contiguous(),
             target_offset.contiguous(),
         )
+
+    def transform_surface_teacher(self, depth, confidence):
+        """apply the most recent discrete image geometry to dense teacher maps."""
+        for operation, value in getattr(self, "_last_geometry", []):
+            if operation == "rotate":
+                depth = np.rot90(depth, k=value, axes=(0, 1)).copy()
+                confidence = np.rot90(confidence, k=value, axes=(0, 1)).copy()
+            elif operation == "flip":
+                axis = 0 if value == 1 else 1
+                depth = np.flip(depth, axis=axis).copy()
+                confidence = np.flip(confidence, axis=axis).copy()
+            elif operation == "depth_warp":
+                valid = confidence > 0
+                depth = np.where(valid, depth - value, depth)
+            elif operation == "elastic":
+                from scipy.ndimage import map_coordinates
+
+                shape = depth.shape
+                depth = map_coordinates(
+                    depth,
+                    value,
+                    order=1,
+                    mode="constant",
+                    cval=-1.0,
+                ).reshape(shape)
+                confidence = map_coordinates(
+                    confidence,
+                    value,
+                    order=1,
+                    mode="constant",
+                    cval=0.0,
+                ).reshape(shape)
+                confidence[depth < 0] = 0.0
+        return depth, confidence
 
     def paired(self, block, paired_block, label, mask, component_ids=None, target_offset=None):
         """apply identical random transforms to an original/context-intervened pair."""
@@ -289,6 +328,7 @@ class Transform:
         coords_y = (y_grid + dy).clip(0, H - 1)
         coords_x = (x_grid + dx).clip(0, W - 1)
         coords_flat = [coords_y.ravel(), coords_x.ravel()]
+        self._last_elastic_coords = coords_flat
         out = np.empty_like(block)
         for d in range(block.shape[0]):
             out[d] = map_coordinates(block[d], coords_flat, order=1, mode='reflect').reshape(H, W)
@@ -339,6 +379,7 @@ class Transform:
         field = field / max(float(field.std()), 1e-6)
         amplitude = random.uniform(0.5 * self.depth_warp_max, self.depth_warp_max)
         field = np.clip(field * amplitude, -self.depth_warp_max, self.depth_warp_max)
+        self._last_depth_warp_field = field
         yy, xx = np.mgrid[0:height, 0:width]
         out = np.empty_like(block)
         for depth_index in range(depth):
@@ -487,7 +528,7 @@ class Transform:
 
 class InkVolumeDataset(IterableDataset):
     """iterable dataset for ink volume data"""
-    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, scroll_mask=None, split_mask=None, character_grid=None):
+    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, scroll_mask=None, split_mask=None, character_grid=None, explicit_negative_mask=None):
         """initializes the dataset.
         scroll_mask: optional papyrus mask distinct from `mask` (which may be ring-restricted);
         multitile uses it to drop sub-tiles straddling the scroll boundary. defaults to `mask`.
@@ -515,6 +556,37 @@ class InkVolumeDataset(IterableDataset):
             self._zarr_path = None
             self._vol_obj = volume
         self._worker_vol = None         # populated lazily inside worker process
+
+        self._surface_depth_path = None
+        self._surface_confidence_path = None
+        self._surface_depth_arr = None
+        self._surface_confidence_arr = None
+        self._use_surface_teacher = bool(getattr(config.model, "new_learned_surface", False))
+        if self._use_surface_teacher:
+            surface_dir = os.path.abspath(getattr(config.data, "surface_label_dir", "./surface_labels"))
+            self._surface_depth_path = os.path.join(surface_dir, f"{self.scroll_id}_depth.npy")
+            self._surface_confidence_path = os.path.join(
+                surface_dir,
+                f"{self.scroll_id}_confidence.npy",
+            )
+            missing = [
+                path for path in (self._surface_depth_path, self._surface_confidence_path)
+                if not os.path.isfile(path)
+            ]
+            if missing:
+                raise FileNotFoundError(
+                    f"pre-generated surface supervision is required for scroll {self.scroll_id}; "
+                    f"missing: {', '.join(missing)}"
+                )
+            expected_shape = tuple(int(value) for value in volume.shape[-2:])
+            depth_shape = np.load(self._surface_depth_path, mmap_mode="r").shape
+            confidence_shape = np.load(self._surface_confidence_path, mmap_mode="r").shape
+            if depth_shape != expected_shape or confidence_shape != expected_shape:
+                raise ValueError(
+                    f"surface supervision shape mismatch for {self.scroll_id}: "
+                    f"expected {expected_shape}, got depth={depth_shape}, "
+                    f"confidence={confidence_shape}"
+                )
 
         # store mask/labels as uint8 (binary), not float64. the source arrays are
         # mask/255.0 and labels/255.0 (float64): for the big scroll (13513x17381)
@@ -584,6 +656,25 @@ class InkVolumeDataset(IterableDataset):
             self._split_mask_path = None
             self._split_mask_arr = None
             self._split_mask_shape = None
+        self._has_explicit_negative_mask = explicit_negative_mask is not None
+        if self._has_explicit_negative_mask:
+            explicit_u8 = (np.asarray(explicit_negative_mask) > 0.5).astype(np.uint8)
+            if getattr(config.data, "mask_memmap", False):
+                self._explicit_negative_path = _write_memmap(
+                    explicit_u8,
+                    pack_bits=use_bitpack,
+                    original_shape=explicit_u8.shape,
+                )
+                self._explicit_negative_arr = None
+                self._explicit_negative_shape = explicit_u8.shape
+            else:
+                self._explicit_negative_path = None
+                self._explicit_negative_arr = explicit_u8
+                self._explicit_negative_shape = None
+        else:
+            self._explicit_negative_path = None
+            self._explicit_negative_arr = None
+            self._explicit_negative_shape = None
         # optional soft labels (continuous ink probability, 0-255 uint8). stored parallel
         # to the hard labels; used only by the dense target path when dense_soft_labels is on.
         self._soft_path = None
@@ -920,6 +1011,23 @@ class InkVolumeDataset(IterableDataset):
                 self._split_mask_arr = packed
         return self._split_mask_arr
 
+    @property
+    def explicit_negative_mask(self):
+        """binary guaranteed-negative mask, lazily reopened in each worker."""
+        if not self._has_explicit_negative_mask:
+            return None
+        if self._explicit_negative_arr is None and self._explicit_negative_path is not None:
+            packed = np.load(self._explicit_negative_path, mmap_mode="r")
+            if self._use_bitpack:
+                unpacked = np.unpackbits(packed)
+                total_pixels = int(np.prod(self._explicit_negative_shape))
+                self._explicit_negative_arr = unpacked[:total_pixels].reshape(
+                    self._explicit_negative_shape
+                )
+            else:
+                self._explicit_negative_arr = packed
+        return self._explicit_negative_arr
+
     def __getstate__(self):
         """pickle only the memmap PATHS, never the open memmap. pickling a numpy
         memmap would copy its full contents into the pickle stream — exactly the
@@ -937,6 +1045,10 @@ class InkVolumeDataset(IterableDataset):
             state["_scroll_mask_arr"] = None
         if state.get("_split_mask_path") is not None:
             state["_split_mask_arr"] = None
+        if state.get("_explicit_negative_path") is not None:
+            state["_explicit_negative_arr"] = None
+        state["_surface_depth_arr"] = None
+        state["_surface_confidence_arr"] = None
         # never pickle an open zarr handle to a spawned worker (unpicklable on Windows,
         # OSError [Errno 22]). the main process may now hold one (vol opens lazily in the
         # main process too, for num_workers=0 validation); drop it so workers reopen via
@@ -944,6 +1056,20 @@ class InkVolumeDataset(IterableDataset):
         if state.get("_zarr_path") is not None:
             state["_worker_vol"] = None
         return state
+
+    @property
+    def surface_depth(self):
+        """memory-mapped absolute surface depth teacher."""
+        if self._surface_depth_arr is None and self._surface_depth_path is not None:
+            self._surface_depth_arr = np.load(self._surface_depth_path, mmap_mode="r")
+        return self._surface_depth_arr
+
+    @property
+    def surface_confidence(self):
+        """memory-mapped surface confidence teacher."""
+        if self._surface_confidence_arr is None and self._surface_confidence_path is not None:
+            self._surface_confidence_arr = np.load(self._surface_confidence_path, mmap_mode="r")
+        return self._surface_confidence_arr
 
 
     @property
@@ -1036,6 +1162,7 @@ class InkVolumeDataset(IterableDataset):
         use_ctx = ctx > tile
         sp = ctx if use_ctx else tile
         target_offset = (0, 0)
+        dj = 0
 
         try:
             if use_ctx:
@@ -1059,8 +1186,11 @@ class InkVolumeDataset(IterableDataset):
                     jy = jx = 0
                 # depth window jitter: shift which slices we read to attack depth-profile position memorization
                 max_dj = int(getattr(self.c.data, "depth_jitter", 0))
-                dj = random.randint(-max_dj, max_dj) \
-                    if max_dj > 0 and self.shuffle and allow_jitter else 0
+                if max_dj > 0 and self.shuffle and allow_jitter:
+                    volume_depth = int(self.vol.shape[0])
+                    min_dj = max(-max_dj, -z)
+                    max_valid_dj = min(max_dj, volume_depth - (z + self.depth))
+                    dj = random.randint(min_dj, max_valid_dj)
                 block = self._read_ctx_block(z + dj, self.depth, y - pad - jy, x - pad - jx, ctx)
             else:
                 block = np.array(self.vol[z:z+self.depth, y:y+tile, x:x+tile]).astype(np.float32)
@@ -1072,7 +1202,41 @@ class InkVolumeDataset(IterableDataset):
         if block.shape != (self.depth, sp, sp):
             block = np.zeros((self.depth, sp, sp), dtype=np.float32)
 
-        return self._normalize_block(block), target_offset
+        return self._normalize_block(block), target_offset, dj
+
+    def _fetch_surface_teacher(self, z_off, y_off, x_off, target_offset, depth_shift):
+        """crop the offline teacher and convert absolute depths to input-local depths."""
+        z = self.z_start + z_off + depth_shift
+        y = self.y_start + y_off
+        x = self.x_start + x_off
+        tile = self.tile_size
+        ctx = int(getattr(self.c.data, "context_size", 0) or 0)
+        use_ctx = ctx > tile
+        size = ctx if use_ctx else tile
+        if use_ctx:
+            pad = (ctx - tile) // 2
+            jy, jx = target_offset
+            y -= pad + jy
+            x -= pad + jx
+
+        depth = np.full((size, size), -1.0, dtype=np.float32)
+        confidence = np.zeros((size, size), dtype=np.float32)
+        height, width = self.surface_depth.shape
+        ys, ye = max(0, y), min(height, y + size)
+        xs, xe = max(0, x), min(width, x + size)
+        if ys < ye and xs < xe:
+            dst_y = slice(ys - y, ye - y)
+            dst_x = slice(xs - x, xe - x)
+            absolute = np.asarray(self.surface_depth[ys:ye, xs:xe], dtype=np.float32)
+            local = absolute - float(z)
+            local_confidence = np.asarray(
+                self.surface_confidence[ys:ye, xs:xe],
+                dtype=np.float32,
+            ) / 255.0
+            valid = (absolute != 255) & (local >= 0) & (local <= self.depth - 1)
+            depth[dst_y, dst_x] = np.where(valid, local, -1.0)
+            confidence[dst_y, dst_x] = np.where(valid, local_confidence, 0.0)
+        return depth, confidence
 
     def _read_ctx_block(self, z, ndepth, y0, x0, ctx):
         """read a ctx x ctx spatial crop starting at absolute (y0,x0), zero-padding any region
@@ -1099,6 +1263,10 @@ class InkVolumeDataset(IterableDataset):
         y = self.y_start + y_off
         x = self.x_start + x_off
         label_tile = self.labels[y:y+self.tile_size, x:x+self.tile_size]
+        if self._has_explicit_negative_mask and np.any(
+            self.explicit_negative_mask[y:y+self.tile_size, x:x+self.tile_size] > 0
+        ):
+            return torch.tensor([-1.0], dtype=torch.float32)
         has_ink = bool(np.any(label_tile > 0.5))
         return torch.tensor([float(has_ink)], dtype=torch.float32)
 
@@ -1120,8 +1288,13 @@ class InkVolumeDataset(IterableDataset):
                 if xe <= 0 or xs >= Wl:
                     continue
                 xsc, xec = max(0, xs), min(Wl, xe)
-                if np.any(lbl[ysc:yec, xsc:xec] > 0.5):
-                    out[iy * n + ix] = 1.0
+                index = iy * n + ix
+                if self._has_explicit_negative_mask and np.any(
+                    self.explicit_negative_mask[ysc:yec, xsc:xec] > 0
+                ):
+                    out[index] = -1.0
+                elif np.any(lbl[ysc:yec, xsc:xec] > 0.5):
+                    out[index] = 1.0
         return torch.from_numpy(out)
 
     def _fetch_mask_mt(self, y_off, x_off):
@@ -1136,6 +1309,7 @@ class InkVolumeDataset(IterableDataset):
         m = self.scroll_mask
         target_mask = self.split_mask
         supervision_mask = self.mask if self._mt_pos_only else None
+        explicit_mask = self.explicit_negative_mask
         lbl = self._fetch_label_mt(y_off, x_off).numpy()
         Hm, Wm = int(m.shape[0]), int(m.shape[1])
         out = np.zeros(n * n, dtype=np.float32)
@@ -1147,12 +1321,16 @@ class InkVolumeDataset(IterableDataset):
                 xs, xe = x0 + ix * sub, x0 + (ix + 1) * sub
                 if xs < 0 or xe > Wm:
                     continue
+                explicit = explicit_mask is not None and np.all(
+                    explicit_mask[ys:ye, xs:xe] > 0
+                )
                 if (np.all(m[ys:ye, xs:xe] > 0)
                         and (target_mask is None or np.all(target_mask[ys:ye, xs:xe] > 0))
                         and (supervision_mask is None
-                             or np.all(supervision_mask[ys:ye, xs:xe] > 0))):
+                             or np.all(supervision_mask[ys:ye, xs:xe] > 0)
+                             or explicit)):
                     idx = iy * n + ix
-                    if self._mt_pos_only and lbl[idx] <= 0:
+                    if self._mt_pos_only and lbl[idx] == 0:
                         # the combined supervision mask also covers the full positive 16px
                         # base tile. reject its non-ink 8px cells; only true ring tiles may
                         # provide negatives.
@@ -1168,8 +1346,8 @@ class InkVolumeDataset(IterableDataset):
         # a mixed window contributes positive targets only. even true ring negatives are
         # discarded here because adjacency to uncertain ink boundaries is empirically harmful.
         # ink-free ring windows still provide negative supervision.
-        if self._mt_pos_only and (lbl * out).sum() > 0:
-            out = out * lbl
+        if self._mt_pos_only and np.any((lbl > 0) & (out > 0)):
+            out = out * (lbl != 0)
         return torch.from_numpy(out)
 
     def _fetch_mask(self, y_off, x_off):
@@ -1221,7 +1399,15 @@ class InkVolumeDataset(IterableDataset):
         
         # fetch data components
         mask = self._fetch_mask(y_off, x_off)
-        block, target_offset = self._fetch_block(z_off, y_off, x_off)
+        block, target_offset, depth_shift = self._fetch_block(z_off, y_off, x_off)
+        if self._use_surface_teacher:
+            surface_depth, surface_confidence = self._fetch_surface_teacher(
+                z_off,
+                y_off,
+                x_off,
+                target_offset,
+                depth_shift,
+            )
         label = self._fetch_label(y_off, x_off)
         component_ids = None
         if self._character_metrics or self._character_balanced:
@@ -1245,7 +1431,7 @@ class InkVolumeDataset(IterableDataset):
             donor_y, donor_x = self._context_donor_coords[
                 random.randrange(len(self._context_donor_coords))
             ]
-            donor, _ = self._fetch_block(
+            donor, _, _ = self._fetch_block(
                 z_off,
                 donor_y,
                 donor_x,
@@ -1265,7 +1451,7 @@ class InkVolumeDataset(IterableDataset):
             donor_y, donor_x = self._context_donor_coords[
                 random.randrange(len(self._context_donor_coords))
             ]
-            donor, _ = self._fetch_block(
+            donor, _, _ = self._fetch_block(
                 z_off,
                 donor_y,
                 donor_x,
@@ -1307,6 +1493,11 @@ class InkVolumeDataset(IterableDataset):
                     block, label, mask, component_ids, target_offset_tensor = transformed
             else:
                 block = self.transform(block)
+            if self._use_surface_teacher:
+                surface_depth, surface_confidence = self.transform.transform_surface_teacher(
+                    surface_depth,
+                    surface_confidence,
+                )
         
         # enforce contiguity and dtype before converting to torch to avoid negative strides
         block = np.ascontiguousarray(block, dtype=np.float32)
@@ -1327,6 +1518,11 @@ class InkVolumeDataset(IterableDataset):
             result.append(component_ids)
         if target_offset_tensor is not None:
             result.append(target_offset_tensor)
+        if self._use_surface_teacher:
+            result.extend([
+                torch.from_numpy(np.ascontiguousarray(surface_depth, dtype=np.float32)).unsqueeze(0),
+                torch.from_numpy(np.ascontiguousarray(surface_confidence, dtype=np.float32)).unsqueeze(0),
+            ])
         if self._context_consistency:
             result.extend([
                 paired_block_tensor,
@@ -1599,6 +1795,7 @@ class DataManager:
         # per-scroll binary image. fail loudly rather than silently reverting to the old
         # axis split: a missing mask would invalidate the experiment's train/valid meaning.
         self.manual_train_mask = None
+        self.explicit_negative_mask = None
         if not bool(getattr(self.c.data, "simple_split", True)):
             train_mask_dir = str(getattr(self.c.data, "train_mask_dir", "./train_masks"))
             train_mask_path = os.path.join(train_mask_dir, f"{self.scroll_id}.png")
@@ -1612,11 +1809,32 @@ class DataManager:
                     f"manual train mask shape {manual_mask.shape} does not match scroll mask "
                     f"{mask.shape} and labels {labels.shape} for scroll {self.scroll_id}"
                 )
-            self.manual_train_mask = (manual_mask > 0).astype(np.uint8)
+            normal_train = manual_mask >= 192
+            # tolerate paint-tool rounding around half intensity; current masks use 119
+            explicit_negative = (manual_mask >= 112) & (manual_mask <= 143)
+            explicit_unit = (
+                int(getattr(self.c.model, "multitile_subtile", T))
+                if getattr(self.c.model, "multitile", False)
+                else T
+            )
+            explicit_negative = self._align_manual_mask(
+                explicit_negative.astype(np.uint8),
+                explicit_unit,
+            ) > 0
+            explicit_negative &= mask > 0
+            overlap = explicit_negative & (labels > 0.5)
+            if overlap.any():
+                print(
+                    f"[explicit-negative] scroll {self.scroll_id}: overriding "
+                    f"{int(overlap.sum()):,} ink-label pixels"
+                )
+            self.manual_train_mask = (normal_train | explicit_negative).astype(np.uint8)
+            self.explicit_negative_mask = explicit_negative.astype(np.uint8)
             frac_train = float(self.manual_train_mask.mean())
             print(
                 f"[split] scroll {self.scroll_id}: manual mask={train_mask_path} "
-                f"train_pixels={100.0 * frac_train:.1f}%"
+                f"train_pixels={100.0 * frac_train:.1f}% "
+                f"explicit_negative_pixels={int(explicit_negative.sum()):,}"
             )
 
         # resolve split axis and fraction: ScrollConfig takes priority, then split_overrides
@@ -1715,6 +1933,13 @@ class DataManager:
             # to train if any hand-mask pixel touches it; the expanded unit is then wholly train
             # or wholly valid, so no multitile target can leak into both datasets.
             assignment = self._align_manual_mask(self.manual_train_mask, split_unit)
+            explicit_negative = self._align_manual_mask(
+                self.explicit_negative_mask,
+                split_unit,
+            )
+            explicit_negative = (
+                (explicit_negative > 0) & (np.asarray(self.mask) > 0.5)
+            ).astype(np.uint8)
             if character_grid is not None:
                 character_grid = self._exclude_characters_crossing_split(
                     character_grid,
@@ -1724,11 +1949,12 @@ class DataManager:
             eligible = np.asarray(supervision_mask) > 0.5
             if getattr(self.c.model, "multitile", False):
                 # preserve the legacy ring-window gate and partition only the emitted targets
-                train_mask = valid_mask = supervision_mask
+                train_mask = np.maximum(supervision_mask, explicit_negative)
+                valid_mask = supervision_mask
                 train_split_mask = assignment
                 valid_split_mask = (assignment == 0).astype(np.uint8)
             else:
-                train_mask = (eligible & (assignment > 0)).astype(np.uint8)
+                train_mask = ((eligible & (assignment > 0)) | (explicit_negative > 0)).astype(np.uint8)
                 valid_mask = (eligible & (assignment == 0)).astype(np.uint8)
                 train_split_mask = valid_split_mask = None
             print(
@@ -1738,6 +1964,7 @@ class DataManager:
             )
         else:
             train_mask = supervision_mask
+            explicit_negative = None
         # when ring_negatives is on, restrict validation to ring tiles too so validation
         # throughput and signal quality match the training distribution. without this,
         # the full valid region (tens of thousands of easy tiles) swamps the validation
@@ -1783,6 +2010,7 @@ class DataManager:
             scroll_mask=scroll_mask_arg,
             split_mask=train_split_mask,
             character_grid=character_grid,
+            explicit_negative_mask=explicit_negative,
         )
         valid_set = InkVolumeDataset(
             self.vol,

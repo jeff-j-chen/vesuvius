@@ -39,6 +39,8 @@ Effective configuration:
 - prediction center: 16x16, divided into a 2x2 grid of four 8x8 targets
 - labels: binary `eroded_inklabels`, closed-ring negatives, `multitile_pos_only=True`
 - split: `train_masks/20240304141531.png`; train and validation target cells are disjoint
+- manual train-mask pixels near half intensity are cell-aligned guaranteed negatives; full-value
+  pixels retain their normal training-assignment meaning
 - model: 32/64/128/256-channel 3D nnU-Net, IBN in the shallow blocks
 - aggregation: per-subtile gated attention-MIL with entropy weight 0.03
 - regularization: conv dropout 0.05/0.05, head dropout 0.10, skip-drop 0.20
@@ -157,9 +159,11 @@ The baseline uses `models/mae_nnunet_192_ibn.pth`. Future single-scroll arms ind
 - worst-half character CVaR
 - a twelve-slice surface-relative backbone
 
-Surface canonicalization is computed online per crop from the physical papyrus-air transition.
-No per-scroll surface files are needed; online geometry remains aligned under depth and context
-jitter.
+Surface supervision comes from pre-generated full-scroll depth and confidence maps in
+`surface_labels`. Training fails immediately when either map is missing. The loader crops and
+transforms the maps with each sample, converts absolute depth to crop-local depth, and uses
+confidence to weight the soft depth loss. Canonicalization, when enabled, uses the learned
+surface distribution rather than rerunning the transition heuristic.
 
 The optional matched-128 MAE command remains available for a separate pretraining-scale study:
 
@@ -391,9 +395,10 @@ All five are rendered from their VC3D tifxyz mesh against their respective raw C
   filters it with that cell's label/mask. DANN still uses the global bottleneck embedding.
 
 The surface feature is generated internally. The model receives `(B,1,24,192,192)`, downsamples
-to `(B,1,24,96,96)`, and predicts `(B,1,24,96,96)` surface probabilities. It is not handed a
-precomputed 192x192 scalar surface map at inference time. The full-scroll surface files are review
-artifacts; campaign 17 currently generates its soft targets online from each sampled input crop.
+to `(B,1,24,96,96)`, and predicts `(B,1,24,96,96)` surface probabilities. Pre-generated depth and
+confidence maps are training teachers only, so inference still needs only the volume. Generate
+each training scroll before startup with `python generate_surface_supervision.py --scroll-id ID
+--z-start 4 --z-end 28`; `data.surface_label_dir` selects the map directory.
 
 ---
 
@@ -417,7 +422,7 @@ artifacts; campaign 17 currently generates its soft targets online from each sam
 | `campaign_archs_20.py` | Combined c64_t16/GCE/context/surface baseline with matched 192px vs 128px MAE. |
 | `jepa_pretrain_nnunet.py` | 3D masked-block feature prediction with an EMA teacher and collapse guards. |
 | `generate_surface_supervision.py` | Builds full-resolution papyrus-air pseudo-labels and review figures. |
-| `utils/surface.py` | Online soft surface targets and robust smoothness loss. |
+| `utils/surface.py` | Offline-map soft surface targets and robust smoothness loss. |
 | `old/` | Archived experiments, older campaigns, and retired architecture families. |
 | `old/download_surface_zarr.py` | Downloads a pre-rendered OME-Zarr surface volume from S3 (volume or midslice mode). |
 | `old/render_9um_surface.py` | Renders a tifxyz mesh against the raw zarr via surface-normal sampling. Used for w047 and test segment. |

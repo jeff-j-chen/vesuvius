@@ -5,6 +5,36 @@ import torch
 import torch.nn.functional as F
 
 
+def make_surface_targets_from_depth(
+    depth: torch.Tensor,
+    confidence: torch.Tensor,
+    num_depths: int,
+    target_sigma: float = 0.75,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """convert local teacher depths and confidence into soft depth targets."""
+    if depth.ndim == 3:
+        depth = depth.unsqueeze(1)
+    if confidence.ndim == 3:
+        confidence = confidence.unsqueeze(1)
+    if depth.ndim != 4 or confidence.shape != depth.shape:
+        raise ValueError("surface depth and confidence must have shape (B, 1, H, W)")
+
+    depth = depth.float()
+    valid = confidence.float().clamp(0.0, 1.0)
+    valid = valid * ((depth >= 0) & (depth <= num_depths - 1)).float()
+    depth_axis = torch.arange(
+        num_depths,
+        device=depth.device,
+        dtype=depth.dtype,
+    ).view(1, 1, num_depths, 1, 1)
+    target = torch.exp(
+        -0.5
+        * ((depth_axis - depth.unsqueeze(2)) / max(float(target_sigma), 1e-3)).square()
+    )
+    target = target / target.sum(dim=2, keepdim=True).clamp(min=1e-8)
+    return target, valid
+
+
 def make_surface_targets(
     volume: torch.Tensor,
     threshold_frac: float = 0.35,

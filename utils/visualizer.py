@@ -777,6 +777,9 @@ class TensorboardVisualizer:
         self.shared_range = getattr(dm, "shared_range", dm.y_range)
         self.manual_split = not bool(getattr(self.c.data, "simple_split", True))
         self.manual_train_mask = getattr(dm, "manual_train_mask", None)
+        self.explicit_negative_mask = getattr(dm, "explicit_negative_mask", None)
+        if self.explicit_negative_mask is not None:
+            self.labels[self.explicit_negative_mask > 0] = 0
         self.full_x_range = getattr(dm, "full_x_range", (0, self.mask.shape[1]))
         self.full_y_range = getattr(dm, "full_y_range", (0, self.mask.shape[0]))
         self.global_mean, self.global_std, self.global_min, self.global_max = dm.norm_stats
@@ -1352,6 +1355,14 @@ class TensorboardVisualizer:
             self.writer.add_scalar("G_M/Loss/Train_Surface", train_metrics['surface_loss'], epoch)
         if 'surface_alpha' in train_metrics:
             self.writer.add_scalar("G_M/Surface/MeanBlend", train_metrics['surface_alpha'], epoch)
+        if 'supcon_loss' in train_metrics:
+            self.writer.add_scalar("G_M/Loss/Train_SupCon", train_metrics['supcon_loss'], epoch)
+        if 'weighted_supcon_loss' in train_metrics:
+            self.writer.add_scalar(
+                "G_M/Loss/Train_SupConWeighted",
+                train_metrics['weighted_supcon_loss'],
+                epoch,
+            )
         self.writer.add_scalar("G_M/Loss/Valid", val_metrics['loss'], epoch)
 
         self.writer.add_scalar("G_M/Acc/Train", train_metrics['accuracy'], epoch)
