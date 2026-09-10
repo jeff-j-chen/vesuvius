@@ -245,6 +245,10 @@ TESTS = [
     {
         "tid": "context_consistency",
         "tag": "20_context_consistency_soft",
+        # paired forwards need extra activation headroom
+        # sqrt scaling from b48 gives 1.2e-4 * sqrt(32/48) ~= 9.8e-5
+        "batch_size": 32,
+        "lr": 1.0e-4,
         "compile_model": False,
         "context_replace_prob": 0.0,
         "context_consistency": True,
@@ -307,6 +311,8 @@ TESTS = [
     {
         "tid": "dann_0025",
         "tag": "20_dann_0025_soft",
+        "batch_size": 32,
+        "lr": 1.0e-4,
         "scrolls": list(_THREE_SCROLLS),
         "max_samples_per_epoch": 6667,
         "vis_scroll_ids": sorted(_THREE_MASK_IDS),
@@ -320,6 +326,8 @@ TESTS = [
     {
         "tid": "dann_005",
         "tag": "20_dann_005_soft",
+        "batch_size": 32,
+        "lr": 1.0e-4,
         "scrolls": list(_THREE_SCROLLS),
         "max_samples_per_epoch": 6667,
         "vis_scroll_ids": sorted(_THREE_MASK_IDS),
@@ -333,6 +341,8 @@ TESTS = [
     {
         "tid": "dann_01",
         "tag": "20_dann_01_soft",
+        "batch_size": 32,
+        "lr": 1.0e-4,
         "scrolls": list(_THREE_SCROLLS),
         "max_samples_per_epoch": 6667,
         "vis_scroll_ids": sorted(_THREE_MASK_IDS),
@@ -346,6 +356,8 @@ TESTS = [
     {
         "tid": "dann_02",
         "tag": "20_dann_02_soft",
+        "batch_size": 32,
+        "lr": 1.0e-4,
         "scrolls": list(_THREE_SCROLLS),
         "max_samples_per_epoch": 6667,
         "vis_scroll_ids": sorted(_THREE_MASK_IDS),
@@ -359,6 +371,8 @@ TESTS = [
     {
         "tid": "context_consistency_strong",
         "tag": "20_context_consistency_strong_soft",
+        "batch_size": 32,
+        "lr": 1.0e-4,
         "compile_model": False,
         "context_replace_prob": 0.0,
         "context_consistency": True,
