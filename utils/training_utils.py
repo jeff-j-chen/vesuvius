@@ -13,23 +13,27 @@ class WarmupThenPlateau:
     def __init__(self, optimizer, warmup_epochs, plateau_scheduler, base_lr):
         """initializes the scheduler"""
         self.optimizer = optimizer
-        self.warmup_epochs = warmup_epochs
+        self.warmup_epochs = int(warmup_epochs)
+        if self.warmup_epochs < 0:
+            raise ValueError("warmup_epochs must be non-negative")
         self.plateau_scheduler = plateau_scheduler
         self.base_lr = base_lr
-        self.current_epoch = 0
+        self.completed_epochs = 0
+        if self.warmup_epochs > 0:
+            self._set_lr(self.base_lr / self.warmup_epochs)
+
+    def _set_lr(self, lr):
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
 
     def step(self, val_loss=None):
-        """updates the learning rate based on the current epoch"""
-        if self.current_epoch < self.warmup_epochs:
-            # linear warmup
-            lr = self.base_lr * (self.current_epoch + 1) / self.warmup_epochs
-            for param_group in self.optimizer.param_groups:
-                param_group['lr'] = lr
+        """sets the learning rate for the next epoch"""
+        self.completed_epochs += 1
+        if self.completed_epochs < self.warmup_epochs:
+            next_epoch = self.completed_epochs + 1
+            self._set_lr(self.base_lr * next_epoch / self.warmup_epochs)
         else:
-            # switch to plateau scheduler after warmup
             self.plateau_scheduler.step(val_loss)
-            
-        self.current_epoch += 1
 
 
 def create_optimizer_and_scheduler(model, config: Config):
@@ -45,7 +49,7 @@ def create_optimizer_and_scheduler(model, config: Config):
     # create the combined warmup and plateau scheduler
     scheduler = WarmupThenPlateau(
         optimizer,
-        warmup_epochs=config.tra.patience,
+        warmup_epochs=config.tra.warmup_epochs,
         plateau_scheduler=optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode='min',

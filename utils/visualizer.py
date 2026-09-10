@@ -70,6 +70,23 @@ def group_by_depth(coords):
     return grouped
 
 
+def load_or_create_midslice_mask(vol, mask_path, refresh=False):
+    """load a volume mask or derive it from the zarr center layer."""
+    _, height, width = map(int, vol.shape)
+    existing = imread_gray(mask_path)
+    if not refresh and existing is not None and existing.shape == (height, width):
+        return (existing > 0).astype(np.uint8)
+
+    mid = int(vol.shape[0]) // 2
+    mask = (np.asarray(vol[mid, :height, :width]) > 0).astype(np.uint8)
+    os.makedirs(os.path.dirname(mask_path) or ".", exist_ok=True)
+    if existing is None or existing.shape != mask.shape or not np.array_equal(existing > 0, mask > 0):
+        if not cv2.imwrite(mask_path, mask * 255):
+            raise RuntimeError(f"could not write midslice mask to {mask_path}")
+        print(f"[mask] wrote {mask_path} from zarr layer {mid}")
+    return mask
+
+
 class _RegionCache:
     """serves a preloaded [:, ry0:ry1, rx0:rx1] crop of a (zarr or ndarray) volume from RAM.
     lets probe inference read its small fixed region ONCE and reuse it every epoch instead of
@@ -421,6 +438,9 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
             xl = (x_range[0] + x_off) - x_abs_min
             blk = strip[:, :, xl:xl + sp]
             if blk.shape == (expected_d, sp, sp):
+                # copy each tile while the row is owned by a reader thread
+                # retaining a view keeps the full context strip alive until flush
+                # and can turn a 3 gb tile buffer into tens of gb of live row data
                 out.append((np.ascontiguousarray(blk), y_off, x_off))
         return out
 
@@ -786,10 +806,9 @@ class TensorboardVisualizer:
             try:
                 import zarr as _zarr
                 _tv = _zarr.open(os.path.join(self.c.data.zarr_path, f'{_tf}.zarr'), mode='r')
-                _tm = imread_gray(f'./masks/{_tf}.png')
-                if _tm is None:
-                    raise FileNotFoundError(f'./masks/{_tf}.png missing')
-                _tm = _tm / 255.0
+                _tm = load_or_create_midslice_mask(
+                    _tv, f'./masks/{_tf}.png', refresh=True
+                ).astype(np.float32)
                 _D, _H, _W = map(int, _tv.shape)
                 _norm = self._get_or_compute_norm(_tv, _tm, str(_tf))
                 self.testfrags.append({
@@ -1422,7 +1441,7 @@ class TensorboardVisualizer:
         # dense per-pixel probes: fire every probe_int epochs for all named probe specs.
         if (self.mode == 'train'
                 and getattr(self.c.data, "dense_labels", False)
-                and self._dense_probe_specs
+                and getattr(self, "_dense_probe_specs", None)
                 and (epoch + 1) % self.probe_log_interval == 0):
             try:
                 self.add_dense_probe_figure(epoch, model)

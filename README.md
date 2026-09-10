@@ -214,6 +214,12 @@ predictor, optimizer, scheduler, and scaler.
 When a selected campaign includes `jepa192` and its checkpoint is absent, campaign 20 runs this
 JEPA pretraining command as a preflight before starting any supervised arm.
 
+The current RTX 5090 continuation uses BCE-soft as the inherited baseline (positive 0.90,
+negative 0.05), disables positive weighting, and runs batch 48 / LR 1.2e-4 / eval batch 96.
+Run ids and tags end in `_5090`, with logs under `runs_archs20_5090`. RTX 5090 requires a
+Blackwell-capable CUDA 12.8 PyTorch wheel; the repository pins torch 2.11/cu128, torchvision
+0.26/cu128, and torchaudio 2.11/cu128 in `requirements.txt`.
+
 Multi-scroll character balancing is now available through `character_balance_scrolls=True`.
 Training draws scrolls round-robin while drawing characters uniformly inside each scroll, cycles
 smaller scrolls as needed, and preserves the original total epoch length. Component IDs are domain-

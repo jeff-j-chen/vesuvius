@@ -47,6 +47,8 @@ DEFAULT_CHUNK_X = 32      # 2x tile_size, reasonable cache granularity
 ZARR_DIR = os.getenv("VESUVIUS_ZARR_PATH",
                      "/vesuvius/ves_zarrs2" if os.name == "posix"
                      else r"C:\Users\ChenJeff\Documents\ves_zarrs2")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+MASK_DIR = os.path.join(SCRIPT_DIR, "masks")
 
 
 # ---- mesh rendering functions (formerly render_9um_surface.py) ----
@@ -241,7 +243,7 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
                                  xi[rr, cc2] % RAW_CHUNK]
         return out
 
-    # write zarr + mask
+    # write zarr
     import zarr
     D = len(offsets)
     store = zarr.open(out_zarr, mode="w", shape=(D, H, W), 
@@ -250,9 +252,15 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
     for li, off in enumerate(offsets):
         store[li] = sample_layer(off).astype(np.uint16)
         print(f"[zarr] layer {li+1}/{D}", flush=True)
-    
-    os.makedirs("masks", exist_ok=True)
-    Image.fromarray((validu.astype(np.uint8) * 255)).save(f"masks/{out_id}.png")
+
+        # the rendered zarr is the source of truth for its usable footprint
+        # derive the mask from the center layer rather than mesh validity alone
+        midslice_mask = (np.asarray(store[D // 2]) > 0).astype(np.uint8) * 255
+    os.makedirs(MASK_DIR, exist_ok=True)
+    mask_path = os.path.join(MASK_DIR, f"{out_id}.png")
+    Image.fromarray(midslice_mask).save(mask_path)
+    print(f"[mask] wrote {mask_path} from zarr layer {D // 2}  "
+                    f"valid_frac={(midslice_mask > 0).mean():.3f}", flush=True)
     print(f"[zarr] wrote {out_zarr}  ({D},{H},{W})", flush=True)
 
 
@@ -289,7 +297,7 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
     """render one test fragment. returns (zid, status) for summary."""
     mesh_dir = os.path.join(script_dir, "tifxyz", mesh_sub)
     out_zarr = os.path.join(out_dir, f"{zid}.zarr")
-    mask_path = f"masks/{zid}.png"
+    mask_path = os.path.join(MASK_DIR, f"{zid}.png")
     
     # idempotent: skip if this zarr + mask already exist
     if os.path.isdir(out_zarr) and os.path.exists(mask_path):
@@ -345,11 +353,11 @@ def main():
                     help=f"zarr X chunk size (default {DEFAULT_CHUNK_X})")
     args = ap.parse_args()
     
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir = SCRIPT_DIR
     
     # ensure output directories exist
     os.makedirs(args.out_dir, exist_ok=True)
-    os.makedirs("masks", exist_ok=True)
+    os.makedirs(MASK_DIR, exist_ok=True)
     os.makedirs("_ves_tmp", exist_ok=True)
     
     print(f"[assemble] python={sys.executable}  out_dir={args.out_dir}  workers={args.workers}")

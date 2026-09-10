@@ -28,8 +28,8 @@ Tests:
 - surface_slice12: classify from twelve surface-relative slices
 
   python campaign_archs_20.py --dry-run
-    python campaign_archs_20.py --only future_baseline_a100
-    python campaign_archs_20.py --only multi3_control_a100,dann_0025_a100
+    python campaign_archs_20.py --only future_baseline_5090
+    python campaign_archs_20.py --only multi3_control_5090,dann_0025_5090
   python campaign_archs_20.py
 """
 from __future__ import annotations
@@ -51,7 +51,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 from utils.config import Config, DEFAULT_SCROLLS
 from utils.platform import get_zarr_dir
 
-LOG_DIR = "./runs_archs20_a100"
+LOG_DIR = "./runs_archs20_5090"
 _W013_ID = 20240304141531
 _W013 = [scroll for scroll in DEFAULT_SCROLLS if int(scroll.scroll_id) == _W013_ID]
 _THREE_MASK_IDS = {20240304141531, 20250628074500, 20260115000000}
@@ -132,6 +132,7 @@ def base_config(exp_name: str) -> Config:
 
     config.tra.n_epochs = 15
     config.tra.lr = 1.2e-4
+    config.tra.warmup_epochs = 5
     config.tra.weight_decay = 0.3
     config.tra.l1_lambda = 0.0
     config.tra.grad_norm = 0.5
@@ -234,13 +235,13 @@ TESTS = [
     #     "sanity_min_character_ap": 0.55,
     #     "sanity_min_specificity": 0.25,
     # },
-    {
-        "tid": "bce_soft_noweight",
-        "tag": "20_bce_soft_noweight",
-        "loss_type": "bce",
-        "label_smooth_pos": 0.10,
-        "label_smooth_neg": 0.05,
-    },
+    # {
+    #     "tid": "bce_soft_noweight",
+    #     "tag": "20_bce_soft_noweight",
+    #     "loss_type": "bce",
+    #     "label_smooth_pos": 0.10,
+    #     "label_smooth_neg": 0.05,
+    # },
     {
         "tid": "context_consistency",
         "tag": "20_context_consistency_soft",
@@ -397,8 +398,8 @@ TESTS = [
 ]
 
 for _test in TESTS:
-    _test["tid"] = f"{_test['tid']}_a100"
-    _test["tag"] = f"{_test['tag']}_a100"
+    _test["tid"] = f"{_test['tid']}_5090"
+    _test["tag"] = f"{_test['tag']}_5090"
 
 _OVERRIDES = {
     "batch_size": ("dl", "batch_size"),
@@ -520,7 +521,7 @@ def run_test(config: Config, dry_run: bool) -> bool:
 
 def ensure_pretraining(selected: list[dict], dry_run: bool) -> None:
     """create prerequisite self-supervised checkpoints before campaign training."""
-    if not any(str(test["tid"]) == "jepa192_a100" for test in selected):
+    if not any(str(test["tid"]) == "jepa192_5090" for test in selected):
         return
     root = Path(__file__).resolve().parent
     checkpoint = root / "models/jepa_nnunet_192_ibn.pth"
@@ -588,7 +589,7 @@ def main() -> None:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-        if tid == "future_baseline_a100" and results[tid] == "FAIL":
+        if tid == "future_baseline_5090" and results[tid] == "FAIL":
             print("[archs20] guarded baseline failed; aborting remaining tests")
             break
 

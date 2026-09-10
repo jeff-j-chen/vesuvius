@@ -1627,6 +1627,12 @@ bounding boxes for fast evaluation. DANN lambda scales only the reversed backbon
 the domain classifier receives full cross-entropy gradients, with domain accuracy and GRL scale
 logged each epoch.
 
+The subsequent RTX 5090 continuation inherits BCE-soft targets (0.90/0.05), no positive weight,
+batch 48, LR 1.2e-4, and eval batch 96. Its run ids/tags use `_5090` and log to
+`runs_archs20_5090`. The 5090 is compute capability 12.0 (`sm_120`) and cannot run the old
+torch 2.1/cu118 image. The validated stack is torch 2.11/cu128, torchvision 0.26/cu128, and
+torchaudio 2.11/cu128; these versions are pinned in `requirements.txt`.
+
 The A100 train loop bundles scalar diagnostics into one host transfer, removes unused surface
 `.item()` calls and zero-weight L1 reductions, uses branchless SupCon/spill paths, clears gradients
 with `set_to_none=True`, and enables fused CUDA AdamW. `future_baseline_a100` has an epoch-3 sanity

@@ -194,6 +194,7 @@ class DataloaderConfig:
 class TrainingConfig:
     n_epochs: int = 20
     lr: float = 1e-4
+    warmup_epochs: int = 5
     weight_decay: float = 0.0
     l1_lambda: float = 3e-7
     grad_norm: float = 0.5
