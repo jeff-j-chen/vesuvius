@@ -440,12 +440,24 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
                 x_abs = x_range[0] + x_off
                 sy0 = y_abs - pad
                 sx0 = x_abs - pad
-                ys, ye = max(0, sy0), min(map_h, sy0 + sp)
-                xs, xe = max(0, sx0), min(map_w, sx0 + sp)
+                target_size = min(mt_n * out_tile if mt else tile, sp)
+                target_y = y_abs + (tile - target_size) // 2 if mt else y_abs
+                target_x = x_abs + (tile - target_size) // 2 if mt else x_abs
+                tys, tye = max(0, target_y), min(map_h, target_y + target_size)
+                txs, txe = max(0, target_x), min(map_w, target_x + target_size)
                 selected_start = depth_start
-                if ys < ye and xs < xe:
-                    absolute = np.asarray(surface_depth_map[ys:ye, xs:xe], dtype=np.uint8)
-                    conf = np.asarray(surface_confidence_map[ys:ye, xs:xe], dtype=np.uint8)
+                center_y = min(max(target_y + target_size // 2, 0), map_h - 1)
+                center_x = min(max(target_x + target_size // 2, 0), map_w - 1)
+                center_depth = int(surface_depth_map[center_y, center_x])
+                center_confidence = int(surface_confidence_map[center_y, center_x])
+                if center_depth != 255 and center_confidence > 0:
+                    selected_start = min(
+                        max(center_depth - (depth - 1) // 2, 0),
+                        max(int(vol.shape[0]) - depth, 0),
+                    )
+                elif tys < tye and txs < txe:
+                    absolute = np.asarray(surface_depth_map[tys:tye, txs:txe], dtype=np.uint8)
+                    conf = np.asarray(surface_confidence_map[tys:tye, txs:txe], dtype=np.uint8)
                     valid_surface = (absolute != 255) & (conf > 0)
                     if valid_surface.any():
                         center = int(np.rint(np.median(absolute[valid_surface].astype(np.float32))))
@@ -461,6 +473,8 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
                     continue
                 teacher_depth = np.full((sp, sp), -1.0, dtype=np.float32)
                 teacher_confidence = np.zeros((sp, sp), dtype=np.float32)
+                ys, ye = max(0, sy0), min(map_h, sy0 + sp)
+                xs, xe = max(0, sx0), min(map_w, sx0 + sp)
                 if ys < ye and xs < xe:
                     dst = (slice(ys - sy0, ye - sy0), slice(xs - sx0, xe - sx0))
                     absolute = np.asarray(surface_depth_map[ys:ye, xs:xe], dtype=np.float32)
@@ -471,6 +485,19 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
                     )
                     teacher_depth[dst] = np.where(valid_surface, local, -1.0)
                     teacher_confidence[dst] = np.where(valid_surface, conf, 0.0)
+                surface_downsample = max(
+                    1,
+                    int(getattr(config.data, "context_downsample", 1)),
+                )
+                if surface_downsample > 1:
+                    teacher_depth = teacher_depth[
+                        ::surface_downsample,
+                        ::surface_downsample,
+                    ]
+                    teacher_confidence = teacher_confidence[
+                        ::surface_downsample,
+                        ::surface_downsample,
+                    ]
                 out.append((
                     np.ascontiguousarray(block),
                     y_off,
@@ -1085,7 +1112,10 @@ class TensorboardVisualizer:
         else:
             z_step = max(1, z_step)
 
-        for d in range(0, z_span, z_step):
+        depth_offsets = [0] if bool(
+            getattr(self.c.data, "surface_relative_depth_window", False)
+        ) else range(0, z_span, z_step)
+        for d in depth_offsets:
             if z0 + d + depth > z1:
                 continue
             for y in range(0, y_span, tile):

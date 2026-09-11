@@ -150,7 +150,6 @@ TESTS = [
     _next_test(
         "supcon_lse_literal_surface",
         surface_teacher_input=True,
-        compile_model=False,
     ),
     _next_test(
         "supcon_lse_fixed_depth8_16",
@@ -167,7 +166,6 @@ TESTS = [
         surface_relative_depth_window=True,
         depth=8,
         depth_jitter=0,
-        compile_model=False,
     ),
     _next_test(
         "supcon_lse_literal_surface_slice8_jitter2",
@@ -175,11 +173,42 @@ TESTS = [
         surface_relative_depth_window=True,
         depth=8,
         depth_jitter=2,
-        compile_model=False,
     ),
-    _next_test("supcon_lse_fixed_010", supcon_curriculum=False, supcon_lambda=0.10),
-    _next_test("supcon_lse_fixed_020", supcon_curriculum=False, supcon_lambda=0.20),
-    _next_test("supcon_lse_fixed_050", supcon_curriculum=False, supcon_lambda=0.50),
+    _next_test(
+        "supcon_lse_literal_surface_slice8_curriculum",
+        depth=8,
+        depth_jitter=0,
+        surface_teacher_input=True,
+        surface_relative_depth_window=True,
+        supcon_curriculum=True,
+    ),
+    _next_test(
+        "supcon_lse_literal_surface_slice8_fixed_010",
+        depth=8,
+        depth_jitter=0,
+        surface_teacher_input=True,
+        surface_relative_depth_window=True,
+        supcon_curriculum=False,
+        supcon_lambda=0.10,
+    ),
+    _next_test(
+        "supcon_lse_literal_surface_slice8_fixed_020",
+        depth=8,
+        depth_jitter=0,
+        surface_teacher_input=True,
+        surface_relative_depth_window=True,
+        supcon_curriculum=False,
+        supcon_lambda=0.20,
+    ),
+    _next_test(
+        "supcon_lse_literal_surface_slice8_fixed_050",
+        depth=8,
+        depth_jitter=0,
+        surface_teacher_input=True,
+        surface_relative_depth_window=True,
+        supcon_curriculum=False,
+        supcon_lambda=0.50,
+    ),
 ]
 
 

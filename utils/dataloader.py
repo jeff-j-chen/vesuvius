@@ -596,6 +596,11 @@ class InkVolumeDataset(IterableDataset):
                     f"expected {expected_shape}, got depth={depth_shape}, "
                     f"confidence={confidence_shape}"
                 )
+            if bool(getattr(config.data, "preload_volumes", False)):
+                self._surface_depth_arr = np.load(self._surface_depth_path)
+                self._surface_confidence_arr = np.load(self._surface_confidence_path)
+                self._surface_depth_arr.setflags(write=False)
+                self._surface_confidence_arr.setflags(write=False)
 
         # store mask/labels as uint8 (binary), not float64. the source arrays are
         # mask/255.0 and labels/255.0 (float64): for the big scroll (13513x17381)
@@ -1119,7 +1124,8 @@ class InkVolumeDataset(IterableDataset):
         xy_step = max(1, xy_step)
 
         # iterate over the volume with specified step sizes to generate coordinates
-        for d in range(0, z_range_size, z_step):
+        depth_offsets = [0] if self._surface_relative_depth_window else range(0, z_range_size, z_step)
+        for d in depth_offsets:
             if self.z_start + d + self.depth > self.z_end: continue
             for y in range(0, y_range_size, xy_step):
                 for x in range(0, x_range_size, xy_step):
@@ -1202,6 +1208,8 @@ class InkVolumeDataset(IterableDataset):
                         x - pad - jx,
                         ctx,
                         volume_depth,
+                        target_y=y,
+                        target_x=x,
                     )
                     jitter = random.randint(-max_dj, max_dj) \
                         if max_dj > 0 and self.shuffle and allow_jitter else 0
@@ -1222,6 +1230,8 @@ class InkVolumeDataset(IterableDataset):
                         x,
                         tile,
                         int(self.vol.shape[0]),
+                        target_y=y,
+                        target_x=x,
                     )
                     max_dj = int(getattr(self.c.data, "depth_jitter", 0))
                     jitter = random.randint(-max_dj, max_dj) \
@@ -1242,11 +1252,38 @@ class InkVolumeDataset(IterableDataset):
 
         return self._normalize_block(block), target_offset, dj
 
-    def _surface_centered_start(self, y0, x0, size, volume_depth):
+    def _surface_centered_start(
+        self,
+        y0,
+        x0,
+        size,
+        volume_depth,
+        target_y=None,
+        target_x=None,
+    ):
         """choose a contiguous source window centered on the patch's literal surface."""
         height, width = self.surface_depth.shape
-        ys, ye = max(0, y0), min(height, y0 + size)
-        xs, xe = max(0, x0), min(width, x0 + size)
+        target_size = (
+            self._mt_grid * self._mt_sub if self._mt else self.tile_size
+        )
+        target_size = min(target_size, size)
+        if target_y is None or target_x is None:
+            target_y = y0 + (size - target_size) // 2
+            target_x = x0 + (size - target_size) // 2
+        elif self._mt:
+            target_y += (self.tile_size - target_size) // 2
+            target_x += (self.tile_size - target_size) // 2
+        ys, ye = max(0, target_y), min(height, target_y + target_size)
+        xs, xe = max(0, target_x), min(width, target_x + target_size)
+        center_y = min(max(int(target_y + target_size // 2), 0), height - 1)
+        center_x = min(max(int(target_x + target_size // 2), 0), width - 1)
+        center_depth = int(self.surface_depth[center_y, center_x])
+        center_confidence = int(self.surface_confidence[center_y, center_x])
+        if center_depth != 255 and center_confidence > 0:
+            return min(
+                max(center_depth - (self.depth - 1) // 2, 0),
+                max(int(volume_depth) - self.depth, 0),
+            )
         if ys < ye and xs < xe:
             depth = np.asarray(self.surface_depth[ys:ye, xs:xe], dtype=np.uint8)
             confidence = np.asarray(self.surface_confidence[ys:ye, xs:xe], dtype=np.uint8)
@@ -1553,6 +1590,14 @@ class InkVolumeDataset(IterableDataset):
                     surface_depth,
                     surface_confidence,
                 )
+        if self._use_surface_teacher:
+            surface_downsample = max(1, int(getattr(self.c.data, "context_downsample", 1)))
+            if surface_downsample > 1:
+                surface_depth = surface_depth[::surface_downsample, ::surface_downsample]
+                surface_confidence = surface_confidence[
+                    ::surface_downsample,
+                    ::surface_downsample,
+                ]
         
         # enforce contiguity and dtype before converting to torch to avoid negative strides
         block = np.ascontiguousarray(block, dtype=np.float32)
