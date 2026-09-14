@@ -49,6 +49,14 @@ import matplotlib.pyplot as plt
 from utils.config import Config, DEFAULT_SCROLLS
 from utils.norm import UNIFIED_CACHE_PATH, load_cached_norm, compute_norm
 
+MAE_TEST_SCROLL_IDS = [
+    20260814140748,
+    20260717193517,
+    20260720090842,
+    20250703034159,
+    20260723112922,
+]
+
 try:
     from torch.amp import autocast as _ac, GradScaler as _GS
     def _autocast(dev): return _ac(dev if isinstance(dev, str) else str(dev))
@@ -232,18 +240,23 @@ class NnUnetMAE(nn.Module):
 
 # ── logging ───────────────────────────────────────────────────────────────────
 
-def _log_fig(writer, step, target_ds, masked_ds, pred):
-    """triptych: target | masked input | reconstruction (mean over D)."""
+def _log_fig(writer, step, target_ds, masked_ds, pred, mask):
+    """2x2 target, stitched reconstruction, masked input, and reconstruction."""
     try:
         def _show(t):
             return t[0, 0].mean(0).detach().float().cpu().numpy()
-        fig, ax = plt.subplots(1, 3, figsize=(12, 4))
-        for a, im, title in zip(ax,
-                                [_show(target_ds), _show(masked_ds), _show(pred)],
-                                ["target (ds)", "masked input", "reconstruction"]):
-            a.imshow(im, cmap="gray", vmin=0, vmax=1)
-            a.set_title(title, fontsize=9)
-            a.axis("off")
+        stitched = masked_ds * (1.0 - mask) + pred * mask
+        fig, axes = plt.subplots(2, 2, figsize=(9, 9))
+        panels = [
+            (_show(target_ds), "target (ds)"),
+            (_show(stitched), "stitched reconstruction"),
+            (_show(masked_ds), "masked input"),
+            (_show(pred), "reconstruction"),
+        ]
+        for axis, (image, title) in zip(axes.flat, panels):
+            axis.imshow(image, cmap="gray", vmin=0, vmax=1)
+            axis.set_title(title, fontsize=10)
+            axis.axis("off")
         plt.tight_layout()
         writer.add_figure("MAE/recon", fig, step)
         plt.close(fig)
@@ -260,6 +273,10 @@ def main():
                     help="scroll ids to sample from (default: all DEFAULT_SCROLLS)")
     ap.add_argument("--require-all-scrolls", action="store_true",
                     help="abort rather than silently skipping any requested scroll")
+    ap.add_argument("--include-test-scrolls", action="store_true",
+                    help="append the five configured unseen test zarrs to the sampler")
+    ap.add_argument("--init-weights", default=None,
+                    help="warm-start the backbone from a prior MAE checkpoint")
     ap.add_argument("--ctx", type=int, default=192,
                     help="context window size in pixels (should match campaign ctx)")
     ap.add_argument("--ds", type=int, default=2,
@@ -314,7 +331,10 @@ def main():
     rng = np.random.default_rng(args.seed)
 
     # build samplers from the configured scrolls
-    scroll_ids = args.scroll_ids or [int(s.scroll_id) for s in DEFAULT_SCROLLS]
+    scroll_ids = list(args.scroll_ids or [int(s.scroll_id) for s in DEFAULT_SCROLLS])
+    if args.include_test_scrolls:
+        scroll_ids.extend(MAE_TEST_SCROLL_IDS)
+    scroll_ids = list(dict.fromkeys(scroll_ids))
     split_by_id = {int(s.scroll_id): (s.split_axis, float(s.train_split_frac))
                    for s in DEFAULT_SCROLLS}
 
@@ -375,6 +395,22 @@ def main():
     from utils.model import create_model
     backbone, _ = create_model(cfg)
     model = NnUnetMAE(backbone).to(dev)
+    if args.init_weights:
+        state = torch.load(args.init_weights, map_location=dev, weights_only=True)
+        if isinstance(state, dict) and "state_dict" in state:
+            state = state["state_dict"]
+        cleaned = {
+            key.removeprefix("module.").removeprefix("_orig_mod."): value
+            for key, value in state.items()
+        }
+        incompatible = model.backbone.load_state_dict(cleaned, strict=False)
+        unexpected = [key for key in incompatible.unexpected_keys if not key.startswith("recon_head.")]
+        if unexpected:
+            raise RuntimeError(f"unexpected MAE warm-start keys: {unexpected[:10]}")
+        print(
+            f"[mae] warm-started backbone from {args.init_weights}: "
+            f"missing={len(incompatible.missing_keys)} unexpected={len(incompatible.unexpected_keys)}"
+        )
     model.train()
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -479,9 +515,18 @@ def main():
             model.eval()
             with torch.no_grad(), _autocast(dev):
                 pv = model(xb_masked)
-            _log_fig(writer, step, target_ds, xb_masked if args.ds == 1 else F.avg_pool3d(
-                xb_masked, kernel_size=(1, args.ds, args.ds),
-                stride=(1, args.ds, args.ds)), pv)
+            _log_fig(
+                writer,
+                step,
+                target_ds,
+                xb_masked if args.ds == 1 else F.avg_pool3d(
+                    xb_masked,
+                    kernel_size=(1, args.ds, args.ds),
+                    stride=(1, args.ds, args.ds),
+                ),
+                pv,
+                mask,
+            )
             model.train()
 
         if step % args.save_int == 0 or step == args.steps:

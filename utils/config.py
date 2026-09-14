@@ -86,7 +86,7 @@ class DataConfig:
     scrolls: List[ScrollConfig] = field(default_factory=lambda: list(DEFAULT_SCROLLS))
     test_scroll_ids: List[int] = field(
         default_factory=lambda: [
-            20260716083545,
+            20260814140748,
             20260717193517,
             20260720090842,
             20250703034159,
@@ -304,6 +304,7 @@ class ModelConfig:
     use_depth_profile: bool = False  # replace bag-score with depth-profile-only MLP (no spatial info)
     no_dz: bool = False  # zero the dz input channel; tests whether depth gradient or raw signal carries ink
     channels_mult: float = 1.0  # width multiplier on the 32/64/128/256 channel ladder (0.5 = half)
+    allow_depth4: bool = False  # preserve depth at the third pool for four-slice experiments
     multitile: bool = False       # predict a grid of sub-tiles over the center instead of one 16px tile
     multitile_subtile: int = 8    # px per sub-tile prediction
     multitile_grid: int = 4       # grid side: 4 -> 4x4=16 sub-tiles over a 32px center

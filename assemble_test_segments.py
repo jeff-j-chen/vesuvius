@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """assemble_test_segments.py -- render the 5 competition test-segment zarrs from their tifxyz meshes
-(PHerc0813, PHerc0211 x2, PHerc1203, PHerc1447). the w055 HOLDOUT is a PHerc0139 segment and is
+(PHerc0813, PHerc0211, PHerc1203, PHerc1447, PHerc0826). the w055 HOLDOUT is a PHerc0139 segment and is
 assembled by assemble_training_segments.py (download path), not here.
 
-the tifxyz mesh is stored in:
-  tifxyz/auto_grown_20260716083545968/   <- root level = latest state (max_gen=179)
-  tifxyz/auto_grown_20260716083545968/N/ <- numbered subdirs = historical autosaves
+the exact tifxyz mesh directory and source volume for each patch are listed in FRAGMENTS below.
 
 HOW IT WORKS
 The tifxyz does NOT contain intensity values -- it contains the SURFACE COORDINATES.
@@ -23,8 +21,8 @@ usage:
   python assemble_test_segments.py [--workers N] [--out-dir DIR]
 
 output:
-  ves_zarrs2/20260716083545.zarr   (28, 4421, 4421) uint16
-  masks/20260716083545.png
+    ves_zarrs2/<scroll_id>.zarr
+    masks/<scroll_id>.png
 """
 from __future__ import annotations
 import argparse, multiprocessing, os, subprocess, sys
@@ -37,10 +35,10 @@ Image.MAX_IMAGE_PIXELS = None
 BUCKET = "https://vesuvius-challenge-open-data.s3.amazonaws.com"
 RAW_CHUNK = 128    # raw volume chunks are 128^3 uint8
 
-# OUTPUT zarr chunk sizes (default optimized for 48x48 context, 16x16 tiles, 8-slice windows)
+# OUTPUT zarr chunks optimized for arbitrary 192px contexts and 8-slice windows
 DEFAULT_CHUNK_DEPTH = 8   # matches 8-slice depth windows in triple mode
-DEFAULT_CHUNK_Y = 32      # 2x tile_size, reasonable cache granularity
-DEFAULT_CHUNK_X = 32      # 2x tile_size, reasonable cache granularity
+DEFAULT_CHUNK_Y = 64      # balances arbitrary 192px context reads and chunk over-read
+DEFAULT_CHUNK_X = 64
 
 # output zarr dir: honor $VESUVIUS_ZARR_PATH (same var config/precompute read); default is
 # /vesuvius/ves_zarrs2 on linux, the local documents path on windows.

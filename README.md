@@ -9,10 +9,10 @@ Current production path: **nnunet3d_lcndz** — a 3D nnU-Net-style encoder/decod
 
 ```bash
 # inspect the active campaign without training
-python campaign_archs_20.py --dry-run
+python campaign_archs_23.py --dry-run
 
 # run the active combined baseline and matched-context test
-python campaign_archs_20.py
+python campaign_archs_23.py
 
 # compute/cache normalisation stats (needed once per new zarr)
 python precompute_norm.py --scroll-id 20260206000001
@@ -165,6 +165,26 @@ transforms the maps with each sample, converts absolute depth to crop-local dept
 confidence to weight the soft depth loss. Canonicalization, when enabled, uses the learned
 surface distribution rather than rerunning the transition heuristic.
 
+Surface files use one directory per scroll: `surface_labels/<scroll_id>/depth.npy`,
+`confidence.npy`, and `metadata.json`. Generation writes only the final half-resolution review
+image to `output/surface_review/<scroll_id>/surface_depth_overview.jpg`; per-depth review images
+are no longer emitted.
+
+Campaign 23 uses literal surface-relative eight-slice input and plain LSE on w013, 500P2, and
+w044. Its baseline retains ordinary SupCon but disables DANN, cross-fragment SupCon, context
+replacement, cutout, and depth jitter. Focused arms independently test cross-fragment SupCon,
+the proven replacement/cutout settings, jitter +/-1, and their selected combinations.
+
+To continue the existing 18-scroll MAE warm start for 1,000 additional optimizer steps while
+adding the five configured test scrolls, use `--init-weights` together with
+`--include-test-scrolls`; the continuation writes a new checkpoint rather than overwriting its
+source.
+
+The continuation uses depth 8 with random safe starts over `[0, 28)`, matching the fine-tuning
+backbone while exposing it to every reconstructed layer. Newly assembled zarrs default to chunks
+of `(8, 64, 64)`: depth 8 matches one model window, while 64px spatial chunks balance arbitrary
+192px context reads against over-read and small-file overhead.
+
 The optional matched-128 MAE command remains available for a separate pretraining-scale study:
 
 ```bash
@@ -293,7 +313,7 @@ Ink labels (1.129 µm source, 59 keV) live in `inklabels/` (continuous 0–255 i
 ## Test segments
 
 
-Four VC3D-grown patches are configured as default test targets (`test_scroll_ids` in `utils/config.py`): PHerc0813 ×1, PHerc0211 ×1, PHerc1203 ×1, PHerc1447 ×1. Test figures are generated when `test_int` fires (currently set to 9999 — disabled until a sufficiently good model is found). The visualizer loads each segment sequentially with CUDA cache cleared between renders to keep VRAM bounded for the larger segments.
+Five VC3D-grown patches are configured as default test targets (`test_scroll_ids` in `utils/config.py`): PHerc0813, PHerc0211, PHerc1203, PHerc1447, and PHerc0826. Test figures are generated when `test_int` fires (currently set to 9999 — disabled until a sufficiently good model is found). The visualizer loads each segment sequentially with CUDA cache cleared between renders to keep VRAM bounded for the larger segments.
 
 ### Segment 1 — PHerc0813 updated patch (2026-08-18)
 
@@ -470,7 +490,8 @@ Loads the checkpoint, opens `ves_zarrs2/<SCROLL_ID>.zarr`, uses cached normaliza
 - A **MAX across all depths** collapsed panel + gold inklabel overlay
 - Optional PNG save (`SAVE_PNG` variable)
 
-Default: set `MODEL_PATH` to your best checkpoint (latest: `runs_lcn/` from the LCN sweep) on the PHerc0813 test segment (`20260716083545`).
+The notebook defaults to the campaign-23 baseline and renders all five configured test patches:
+PHerc0813, PHerc0211, PHerc1203, PHerc1447, and PHerc0826.
 
 ---
 

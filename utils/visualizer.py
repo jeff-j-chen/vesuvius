@@ -919,11 +919,11 @@ class TensorboardVisualizer:
         if bool(getattr(self.c.model, "surface_teacher_input", False)):
             surface_dir = str(getattr(self.c.data, "surface_label_dir", "./surface_labels"))
             self.surface_depth_map = np.load(
-                os.path.join(surface_dir, f"{self.scroll1_id}_depth.npy"),
+                os.path.join(surface_dir, str(self.scroll1_id), "depth.npy"),
                 mmap_mode="r",
             )
             self.surface_confidence_map = np.load(
-                os.path.join(surface_dir, f"{self.scroll1_id}_confidence.npy"),
+                os.path.join(surface_dir, str(self.scroll1_id), "confidence.npy"),
                 mmap_mode="r",
             )
         self.full_x_range = getattr(dm, "full_x_range", (0, self.mask.shape[1]))

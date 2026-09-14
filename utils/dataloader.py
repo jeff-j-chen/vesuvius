@@ -573,10 +573,15 @@ class InkVolumeDataset(IterableDataset):
             raise ValueError("surface_relative_depth_window requires pre-generated surface maps")
         if self._use_surface_teacher:
             surface_dir = os.path.abspath(getattr(config.data, "surface_label_dir", "./surface_labels"))
-            self._surface_depth_path = os.path.join(surface_dir, f"{self.scroll_id}_depth.npy")
+            self._surface_depth_path = os.path.join(
+                surface_dir,
+                str(self.scroll_id),
+                "depth.npy",
+            )
             self._surface_confidence_path = os.path.join(
                 surface_dir,
-                f"{self.scroll_id}_confidence.npy",
+                str(self.scroll_id),
+                "confidence.npy",
             )
             missing = [
                 path for path in (self._surface_depth_path, self._surface_confidence_path)

@@ -386,7 +386,14 @@ class NnUnet3dLcndz(nn.Module):
         self.last_surface_valid: torch.Tensor | None = None
 
         self.lse_r = nn.Parameter(torch.tensor(2.0, dtype=torch.float32))
+        input_depth = int(getattr(config.data, "depth", 24))
+        self._allow_depth4 = bool(getattr(config.model, "allow_depth4", False))
+        if self._allow_depth4 and input_depth != 4:
+            raise ValueError("allow_depth4=True is only valid with depth=4")
+        if input_depth < 8 and not (self._allow_depth4 and input_depth == 4):
+            raise ValueError("depth below 8 requires allow_depth4=True and depth=4")
         self.pool = nn.MaxPool3d(2)
+        self.pool3 = nn.MaxPool3d((1, 2, 2)) if self._allow_depth4 else self.pool
 
         use_ibn = bool(getattr(config.model, "use_ibn", False))
         # width multiplier on the 32/64/128/256 channel ladder (0.5 = half -> ~4x fewer conv FLOPs)
@@ -405,7 +412,8 @@ class NnUnet3dLcndz(nn.Module):
         self._enc2_drop = nn.Dropout3d(p=_d2) if _d2 > 0 else None
         self._head_drop = nn.Dropout3d(p=_dh) if _dh > 0 else None
 
-        self.up3 = nn.ConvTranspose3d(c4, c3, kernel_size=2, stride=2)
+        up3_kernel = (1, 2, 2) if self._allow_depth4 else 2
+        self.up3 = nn.ConvTranspose3d(c4, c3, kernel_size=up3_kernel, stride=up3_kernel)
         self.dec3 = ConvBlock3d(c3 * 2, c3)   # cat(up3, enc3)
         self.up2 = nn.ConvTranspose3d(c3, c2, kernel_size=2, stride=2)
         self.dec2 = ConvBlock3d(c2 * 2, c2)
@@ -683,7 +691,7 @@ class NnUnet3dLcndz(nn.Module):
         if self._enc2_drop is not None:
             enc2 = self._enc2_drop(enc2)
         enc3 = self.enc3(self.pool(enc2))
-        bottleneck = self.bottleneck(self.pool(enc3))
+        bottleneck = self.bottleneck(self.pool3(enc3))
 
         dec3 = self.dec3(self._merge_skip(self.up3(bottleneck), enc3))
         dec2 = self.dec2(self._merge_skip(self.up2(dec3), enc2))

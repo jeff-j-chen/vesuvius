@@ -12,11 +12,31 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
 import numpy as np
 import zarr
+
+
+def _depth_quantiles_linear(x: np.ndarray, quantiles: tuple[float, ...]) -> list[np.ndarray]:
+    """exact NumPy-linear quantiles along a short depth axis using one partial partition."""
+    depth = x.shape[0]
+    positions = [float(q) * (depth - 1) for q in quantiles]
+    lower = [int(np.floor(position)) for position in positions]
+    upper = [int(np.ceil(position)) for position in positions]
+    partitioned = np.partition(x, sorted(set(lower + upper)), axis=0)
+    out = []
+    for position, lo, hi in zip(positions, lower, upper):
+        if lo == hi:
+            out.append(partitioned[lo])
+        else:
+            weight = np.float32(position - lo)
+            out.append(partitioned[lo] * (1.0 - weight) + partitioned[hi] * weight)
+    return out
 
 
 def _detect_strip(
@@ -34,28 +54,33 @@ def _detect_strip(
     padded = np.pad(x, ((1, 1), (0, 0), (0, 0)), mode="edge")
     smooth = (padded[:-2] + 2.0 * padded[1:-1] + padded[2:]) * 0.25
 
-    low = np.quantile(smooth, 0.10, axis=0)
-    high = np.quantile(smooth, 0.90, axis=0)
+    low, high = _depth_quantiles_linear(smooth, (0.10, 0.90))
     contrast = high - low
     threshold = low + threshold_frac * contrast
     tau = np.maximum(0.08 * contrast, 0.01)
     occupancy = 1.0 / (1.0 + np.exp(np.clip(-(smooth - threshold[None]) / tau[None], -30.0, 30.0)))
 
     transition = np.maximum(occupancy[:-1] - occupancy[1:], 0.0)
-    for depth in range(transition.shape[0]):
-        fine = cv2.GaussianBlur(
-            transition[depth],
-            ksize=(0, 0),
-            sigmaX=spatial_sigma,
-            sigmaY=spatial_sigma,
-        )
-        coarse = cv2.GaussianBlur(
-            transition[depth],
-            ksize=(0, 0),
-            sigmaX=coarse_sigma,
-            sigmaY=coarse_sigma,
-        )
-        transition[depth] = (1.0 - coarse_weight) * fine + coarse_weight * coarse
+    # OpenCV blurs each channel independently. Treating depth as channels reduces
+    # 2*D Python/OpenCV dispatches to two vectorized calls with identical results.
+    transition_hwd = np.ascontiguousarray(np.moveaxis(transition, 0, -1))
+    fine = cv2.GaussianBlur(
+        transition_hwd,
+        ksize=(0, 0),
+        sigmaX=spatial_sigma,
+        sigmaY=spatial_sigma,
+    )
+    coarse = cv2.GaussianBlur(
+        transition_hwd,
+        ksize=(0, 0),
+        sigmaX=coarse_sigma,
+        sigmaY=coarse_sigma,
+    )
+    transition = np.moveaxis(
+        (1.0 - coarse_weight) * fine + coarse_weight * coarse,
+        -1,
+        0,
+    )
 
     depth_index = transition.argmax(axis=0).astype(np.uint8)
     partitioned = np.partition(transition, -2, axis=0)
@@ -456,7 +481,7 @@ def _write_depth_overview(
     z_start: int,
     z_end: int,
     output_path: Path,
-    max_side: int = 4000,
+    downscale: int = 2,
 ) -> None:
     """write one full-resolution grayscale map encoding all predicted depths."""
     valid = confidence > 0
@@ -464,7 +489,7 @@ def _write_depth_overview(
     gray = np.clip((depth_map.astype(np.float32) - z_start) * scale, 0, 255).astype(np.uint8)
     rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     rgb[~valid] = (80, 0, 80)
-    resize_scale = min(1.0, float(max_side) / max(rgb.shape[:2]))
+    resize_scale = 1.0 / max(1, int(downscale))
     if resize_scale < 1.0:
         rgb = cv2.resize(
             rgb,
@@ -536,7 +561,8 @@ def main() -> None:
     parser.add_argument("--elastic-max-update", type=float, default=0.25)
     parser.add_argument("--elastic-max-gradient", type=float, default=0.55)
     parser.add_argument("--elastic-fill-radius", type=int, default=8)
-    parser.add_argument("--max-review-side", type=int, default=2200)
+    parser.add_argument("--prefetch-blocks", type=int, default=2,
+                        help="bounded background zarr reads to overlap I/O with detection")
     args = parser.parse_args()
 
     scroll_id = str(args.scroll_id)
@@ -550,12 +576,14 @@ def main() -> None:
         raise ValueError(f"missing or mismatched scroll mask for {scroll_id}")
     mask = mask > 0
 
-    output_dir = Path(args.output_dir)
+    output_dir = Path(args.output_dir) / scroll_id
     review_dir = Path(args.review_dir) / scroll_id
     output_dir.mkdir(parents=True, exist_ok=True)
     review_dir.mkdir(parents=True, exist_ok=True)
-    depth_path = output_dir / f"{scroll_id}_depth.npy"
-    confidence_path = output_dir / f"{scroll_id}_confidence.npy"
+    for stale_overlay in review_dir.glob("depth_*.jpg"):
+        stale_overlay.unlink()
+    depth_path = output_dir / "depth.npy"
+    confidence_path = output_dir / "confidence.npy"
     depth_map = np.lib.format.open_memmap(depth_path, mode="w+", dtype=np.uint8, shape=(height, width))
     confidence = np.lib.format.open_memmap(
         confidence_path,
@@ -566,11 +594,41 @@ def main() -> None:
     depth_map[:] = 255
     confidence[:] = 0
 
+    block_specs = []
     for y0 in range(0, height, args.row_block):
         y1 = min(height, y0 + args.row_block)
         ys = max(0, y0 - args.halo)
         ye = min(height, y1 + args.halo)
-        raw = np.asarray(volume[args.z_start:args.z_end, ys:ye, :])
+        block_specs.append((y0, y1, ys, ye))
+
+    def read_block(spec):
+        _y0, _y1, ys, ye = spec
+        return np.asarray(volume[args.z_start:args.z_end, ys:ye, :])
+
+    def prefetched_blocks():
+        prefetch = max(0, int(args.prefetch_blocks))
+        if prefetch == 0:
+            for spec in block_specs:
+                yield spec, read_block(spec)
+            return
+        with ThreadPoolExecutor(max_workers=prefetch) as pool:
+            pending = deque()
+            next_index = 0
+            while next_index < min(prefetch, len(block_specs)):
+                spec = block_specs[next_index]
+                pending.append((spec, pool.submit(read_block, spec)))
+                next_index += 1
+            while pending:
+                spec, future = pending.popleft()
+                raw = future.result()
+                if next_index < len(block_specs):
+                    next_spec = block_specs[next_index]
+                    pending.append((next_spec, pool.submit(read_block, next_spec)))
+                    next_index += 1
+                yield spec, raw
+
+    detection_started = time.perf_counter()
+    for (y0, y1, ys, ye), raw in prefetched_blocks():
         rel_depth, conf, valid = _detect_strip(
             raw,
             threshold_frac=args.threshold_frac,
@@ -587,10 +645,18 @@ def main() -> None:
         depth_map[y0:y1] = np.where(valid, absolute_depth, 255).astype(np.uint8)
         confidence[y0:y1] = np.where(valid, np.clip(conf[keep] * 255.0, 1, 255), 0).astype(np.uint8)
         print(f"[surface] rows {y0}:{y1}/{height}", flush=True)
+    print(f"[surface] detection: {time.perf_counter() - detection_started:.1f}s", flush=True)
 
     depth_map.flush()
     confidence.flush()
+    regularization_started = time.perf_counter()
     regularization = _regularize_surface_map(depth_map, confidence, mask)
+    print(
+        f"[surface] topology regularization: "
+        f"{time.perf_counter() - regularization_started:.1f}s",
+        flush=True,
+    )
+    elastic_started = time.perf_counter()
     elastic = _elastic_surface_map(
         depth_map,
         confidence,
@@ -606,6 +672,7 @@ def main() -> None:
         max_gradient=args.elastic_max_gradient,
         fill_radius=args.elastic_fill_radius,
     )
+    print(f"[surface] elastic fit: {time.perf_counter() - elastic_started:.1f}s", flush=True)
     depth_map.flush()
     confidence.flush()
     valid_count = int((confidence > 0).sum())
@@ -635,18 +702,9 @@ def main() -> None:
         "elastic": elastic,
         "histogram": histogram,
     }
-    with open(output_dir / f"{scroll_id}_metadata.json", "w", encoding="utf-8") as handle:
+    with open(output_dir / "metadata.json", "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)
 
-    _write_overlays(
-        volume,
-        depth_map,
-        confidence,
-        args.z_start,
-        args.z_end,
-        review_dir,
-        args.max_review_side,
-    )
     _write_depth_overview(
         depth_map,
         confidence,
@@ -654,10 +712,10 @@ def main() -> None:
         args.z_start,
         args.z_end,
         review_dir / "surface_depth_overview.jpg",
+        downscale=2,
     )
     print(f"[surface] depth labels -> {depth_path}")
     print(f"[surface] confidence -> {confidence_path}")
-    print(f"[surface] 24 review images -> {review_dir}")
     print(f"[surface] depth overview -> {review_dir / 'surface_depth_overview.jpg'}")
     print(f"[surface] valid inside mask: {100.0 * metadata['valid_fraction_inside_mask']:.2f}%")
 
