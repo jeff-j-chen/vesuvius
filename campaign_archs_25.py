@@ -1,6 +1,6 @@
 """campaign 25: physically grouped multi-scroll baseline over 11 fragments.
 
-The campaign combines six newly assembled fragments with six established anchors.
+The campaign combines five newly assembled fragments with six established anchors.
 Sampling is round-robin by physical scroll, with PHerc0139 repeated twice per
 cycle and every other physical scroll sampled once.
 
@@ -34,7 +34,6 @@ from utils.config import DEFAULT_SCROLLS, DEFAULT_TEST_SCROLL_IDS
 LOG_DIR = "./runs_archs25"
 MODEL_DIR = "models/archs25"
 ROOT = Path(__file__).resolve().parent
-W044_SCROLL_ID = 20260115000000
 PRETRAIN_STEPS = 2_000
 PRETRAIN_SEED_PATH = ROOT / "models" / "mae_nnunet_192_ibn_depth8_22scroll_2k.pth"
 PRETRAIN_SCROLL_IDS = tuple(
@@ -223,7 +222,7 @@ def build_config(test: dict):
     config.tra.n_epochs = 12
     config.tra.eval_int = 12
     config.tra.fast_eval_figure = True
-    config.tra.eval_int_scrolls = 1
+    config.tra.eval_int_scrolls = len(CAMPAIGN_SCROLLS)
     config.tra.test_int = 9_999
     config.tra.probe_int = 9_999
     config.tra.test_on_final = False
@@ -236,7 +235,7 @@ def build_config(test: dict):
     config.data.simple_split = False
     config.data.train_mask_dir = "./train_masks"
     config.data.scrolls = list(CAMPAIGN_SCROLLS)
-    config.data.vis_scroll_ids = [W044_SCROLL_ID]
+    config.data.vis_scroll_ids = list(_SCROLL_IDS)
     config.data.character_balance_scrolls = True
     config.data.character_balanced_sampling = True
     config.data.train_scroll_dict = {

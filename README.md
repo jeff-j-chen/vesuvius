@@ -193,7 +193,7 @@ and w087, full-size PHerc1667 w018, PHerc0009B patch 487, and PHercParis4 to six
 Sampling is round-robin by physical scroll rather than segment: PHerc0139 has weight 2 and every
 other scroll has weight 1. Segments within each physical scroll rotate uniformly. The run uses
 the full-strength literal-surface configuration, fixed DANN 0.03, 12 epochs, fast evaluation at
-epoch 12, and renders only PHerc0139 w044. Its isolated arms are:
+epoch 12, and renders all 11 training fragments. Its isolated arms are:
 
 - unchanged baseline
 - fixed locally supported MIL using the top 2 or top 4 spatial responses
@@ -559,7 +559,7 @@ both training and validation.
 | `campaign_archs_20.py` | Combined c64_t16/GCE/context/surface baseline with matched 192px vs 128px MAE. |
 | `campaign_archs_23.py` | Triple-scroll literal-surface refinements and depth-representation tests. |
 | `campaign_archs_24.py` | Eighteen-way leave-one-fragment-out full-strength training with fixed DANN and held-out full-scroll visualization. |
-| `campaign_archs_25.py` | Eleven-fragment tests with weighted physical-scroll sampling, forced architecture MAE, and w044-only fast evaluation. |
+| `campaign_archs_25.py` | Eleven-fragment tests with weighted physical-scroll sampling, forced architecture MAE, and all-scroll fast evaluation. |
 | `jepa_pretrain_nnunet.py` | 3D masked-block feature prediction with an EMA teacher and collapse guards. |
 | `generate_surface_supervision.py` | Builds full-resolution papyrus-air pseudo-labels and review figures. |
 | `utils/surface.py` | Offline-map soft surface targets and robust smoothness loss. |
