@@ -1,4 +1,4 @@
-"""campaign 25: physically grouped multi-scroll baseline over 12 fragments.
+"""campaign 25: physically grouped multi-scroll baseline over 11 fragments.
 
 The campaign combines six newly assembled fragments with six established anchors.
 Sampling is round-robin by physical scroll, with PHerc0139 repeated twice per
@@ -29,7 +29,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 from campaign_archs_23 import build_config as campaign23_build_config
 from campaign_archs_24 import preflight_train_masks
-from utils.config import DEFAULT_SCROLLS
+from utils.config import DEFAULT_SCROLLS, DEFAULT_TEST_SCROLL_IDS
 
 LOG_DIR = "./runs_archs25"
 MODEL_DIR = "models/archs25"
@@ -37,19 +37,11 @@ ROOT = Path(__file__).resolve().parent
 W044_SCROLL_ID = 20260115000000
 PRETRAIN_STEPS = 2_000
 PRETRAIN_SEED_PATH = ROOT / "models" / "mae_nnunet_192_ibn_depth8_22scroll_2k.pth"
-PRETRAIN_SCROLL_IDS = (
-    20260115000000,
-    20260317000000,
-    20250223000000,
-    20251111010954,
-    20251112000002,
-    20240304141531,
-    20240304144031,
-    20250919125754,
-    20250919131352,
-    20231210121321,
-    20250628074500,
-    20260226000000,
+PRETRAIN_SCROLL_IDS = tuple(
+    dict.fromkeys(
+        [int(scroll.scroll_id) for scroll in DEFAULT_SCROLLS]
+        + [int(scroll_id) for scroll_id in DEFAULT_TEST_SCROLL_IDS]
+    )
 )
 
 PRETRAIN_SPECS = {
@@ -65,6 +57,37 @@ PRETRAIN_SPECS = {
         "--divided-attention", "--divided-attention-spatial",
     ),
 }
+
+PRETRAIN_REQUIRED_PREFIXES = {
+    "base": (),
+    "fiber": ("fiber_coordinate_input.",),
+    "early_3d2d": ("early_depth_attn.", "early_depth_fuse.", "early2d_"),
+    "divided_depth": ("divided_attention.",),
+    "divided_space_depth": ("divided_attention.",),
+    "mednext_k5": ("mednext1.", "mednext2.", "mednext3.", "mednext_bottleneck."),
+    "mednext_k7": ("mednext1.", "mednext2.", "mednext3.", "mednext_bottleneck."),
+    "mednext_k7_divided": (
+        "mednext1.", "mednext2.", "mednext3.", "mednext_bottleneck.",
+        "divided_attention.",
+    ),
+}
+
+
+def _expected_pretrain_key(test: dict) -> str:
+    mednext = bool(test.get("mednext_adapters", False))
+    divided = bool(test.get("divided_attention", False))
+    spatial = bool(test.get("divided_attention_spatial", False))
+    if mednext and divided and spatial and int(test.get("mednext_kernel", 5)) == 7:
+        return "mednext_k7_divided"
+    if mednext:
+        return f"mednext_k{int(test.get('mednext_kernel', 5))}"
+    if divided:
+        return "divided_space_depth" if spatial else "divided_depth"
+    if bool(test.get("early_2d_unet", False)):
+        return "early_3d2d"
+    if bool(test.get("fiber_coordinate_branch", False)):
+        return "fiber"
+    return "base"
 
 
 def _pretrain_name(key: str) -> str:
@@ -88,7 +111,7 @@ def _pretraining_complete(key: str) -> bool:
         metadata = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return False
-    return (
+    metadata_valid = (
         metadata.get("key") == key
         and metadata.get("steps") == PRETRAIN_STEPS
         and metadata.get("scroll_ids") == list(PRETRAIN_SCROLL_IDS)
@@ -99,12 +122,22 @@ def _pretraining_complete(key: str) -> bool:
         )
         and metadata.get("checkpoint") == str(checkpoint.relative_to(ROOT))
     )
+    if not metadata_valid:
+        return False
+    try:
+        state = torch.load(checkpoint, map_location="cpu", weights_only=True)
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return False
+    return all(
+        any(state_key.startswith(prefix) for state_key in state)
+        for prefix in PRETRAIN_REQUIRED_PREFIXES[key]
+    )
 
 TRAIN_SCROLL_DICT = {
     "pherc0139": [20260115000000, 20260317000000, 20250223000000],
     "pherc0172": [20251111010954, 20251112000002],
     "pherc1667": [20240304141531, 20240304144031],
-    "pherc0009b": [20250919125754, 20250919131352],
+    "pherc0009b": [20250919125754],
     "phercparis4": [20231210121321],
     "pherc0500p2": [20250628074500],
     "pherc0814": [20260226000000],
@@ -178,7 +211,14 @@ TESTS = [
 def build_config(test: dict):
     config = campaign23_build_config(test)
     pretrain_key = str(test.get("pretrain_key", "base"))
+    expected_pretrain_key = _expected_pretrain_key(test)
+    if pretrain_key != expected_pretrain_key:
+        raise RuntimeError(
+            f"campaign-25 arm {test['tid']} maps to pretrain_key={pretrain_key!r}, "
+            f"but its architecture requires {expected_pretrain_key!r}"
+        )
     config.init_weights = str(_pretrain_path(pretrain_key).relative_to(ROOT))
+    config.model.require_architecture_init = True
     config.tra.log_dir = LOG_DIR
     config.tra.n_epochs = 12
     config.tra.eval_int = 12
@@ -338,6 +378,11 @@ def run_test(config, dry_run: bool) -> bool:
         f" mednext_kernel={config.model.mednext_kernel})",
         flush=True,
     )
+    print(
+        f"  pretrained={config.init_weights}"
+        f" strict_architecture_init={config.model.require_architecture_init}",
+        flush=True,
+    )
     if dry_run:
         print("  [DRY RUN] skipping", flush=True)
         return True
@@ -358,7 +403,7 @@ def run_test(config, dry_run: bool) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="campaign 25: grouped 12-fragment baseline")
+    parser = argparse.ArgumentParser(description="campaign 25: grouped 11-fragment baseline")
     parser.add_argument("--only", type=str, default=None)
     parser.add_argument("--from", dest="from_id", type=str, default=None)
     parser.add_argument("--dry-run", action="store_true")

@@ -1,0 +1,687 @@
+[campaign25] required pretraining missing: base; running 2000 MAE steps
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1789503243.216227  650410 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1789503243.220962  650410 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1789503243.234390  650410 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789503243.234407  650410 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789503243.234408  650410 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789503243.234409  650410 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+[mae] 20260115000000 (6040x8160) axis=y frac=0.8055 -> y[0,4800] x[0,8064]
+[mae] 20250223000000 (7220x10020) axis=x frac=0.75 -> y[0,7104] x[0,7488]
+[mae] 20260206000001 (5840x8440) axis=x frac=0.75 -> y[0,5760] x[0,6144]
+[mae] 20260115000001 (7180x9740) axis=y frac=0.5 -> y[0,3456] x[0,9600]
+[mae] 20260210000000 (7500x9880) axis=x frac=0.5 -> y[0,7488] x[0,4800]
+[mae] 20260227000000 (7700x9760) axis=x frac=0.75 -> y[0,7680] x[0,7296]
+[mae] 20260318000000 (5660x9400) axis=x frac=0.75 -> y[0,5568] x[0,6912]
+[mae] 20260325000000 (5980x8260) axis=x frac=0.6 -> y[0,5952] x[0,4800]
+[mae] 20260108000000 (6200x8020) axis=x frac=0.7 -> y[0,6144] x[0,5568]
+[mae] 20250831000000 (6400x7980) axis=x frac=0.75 -> y[0,6336] x[0,5952]
+[mae] 20260302000000 (8560x7720) axis=x frac=0.75 -> y[0,8448] x[0,5760]
+[mae] 20260306000000 (6200x7440) axis=x frac=0.75 -> y[0,6144] x[0,5568]
+[mae] 20260310000000 (6140x7200) axis=x frac=0.75 -> y[0,5952] x[0,5376]
+[mae] 20260303000000 (7040x7720) axis=y frac=0.5 -> y[0,3456] x[0,7680]
+[mae] 20260317000000 (5820x5240) axis=y frac=0.75 -> y[0,4224] x[0,5184]
+[mae] 20260226000000 (2180x3560) axis=y frac=0.75 -> y[0,1536] x[0,3456]
+[mae] 20250628074500 (6280x3580) axis=x frac=0.6 -> y[0,6144] x[0,2112]
+[mae] 20240304141531 (10400x4975) axis=x frac=0.75 -> y[0,10368] x[0,3648]
+[mae] 20251112000002 (10494x8128) axis=x frac=0.75 -> y[0,10368] x[0,5952]
+[mae] 20251111010954 (11051x12606) axis=x frac=0.75 -> y[0,10944] x[0,9408]
+[mae] 20240304144031 (10595x24525) axis=x frac=0.75 -> y[0,10560] x[0,18240]
+[mae] 20250919125754 (6497x5260) axis=x frac=0.75 -> y[0,6336] x[0,3840]
+[mae] 20231210121321 (12750x9995) axis=x frac=0.75 -> y[0,12672] x[0,7488]
+[mae] 20260814140748 (5081x5701) axis=x frac=1.0 -> y[0,4992] x[0,5568]
+[mae] 20260717193517 (7181x6501) axis=x frac=1.0 -> y[0,7104] x[0,6336]
+[mae] 20260720090842 (3421x3821) axis=x frac=1.0 -> y[0,3264] x[0,3648]
+[mae] 20250703034159 (7181x9401) axis=x frac=1.0 -> y[0,7104] x[0,9216]
+[mae] 20260723112922 (9481x4521) axis=x frac=1.0 -> y[0,9408] x[0,4416]
+[mae] balanced round-robin across 28/28 scrolls
+Model parameters (nnunet3d_lcndz): 5,602,850
+[mae] warm-started backbone from /vesuvius/models/mae_nnunet_192_ibn_depth8_22scroll_2k.pth: missing=0 unexpected=0
+[mae] nnunet3d backbone  ctx=192 ds=2 depth=8 ibn=True effective_batch=32 mask_frac=0.65  steps=2000  log=runs_mae/mae_nnunet_192_ibn_depth8_campaign25_base_2k_0915_20-14-04
+[mae] architecture early_2d=False divided=(False,False) mednext=(False,k5) fiber=False
+[mae] save -> models/mae_nnunet_192_ibn_depth8_campaign25_base_2k.pth   use as:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_base_2k.pth'
+[mae] step 50/2000  mse=0.08496  (23s)
+[mae] step 100/2000  mse=0.01505  (45s)
+[mae] step 150/2000  mse=0.00853  (64s)
+[mae] step 200/2000  mse=0.00740  (81s)
+[mae] step 250/2000  mse=0.00824  (98s)
+[mae] step 300/2000  mse=0.00710  (114s)
+[mae] step 350/2000  mse=0.00685  (128s)
+[mae] step 400/2000  mse=0.00600  (143s)
+[mae] step 450/2000  mse=0.00661  (156s)
+[mae] step 500/2000  mse=0.00620  (170s)
+[mae] step 550/2000  mse=0.00622  (183s)
+[mae] step 600/2000  mse=0.00616  (195s)
+[mae] step 650/2000  mse=0.00590  (208s)
+[mae] step 700/2000  mse=0.00577  (219s)
+[mae] step 750/2000  mse=0.00608  (231s)
+[mae] step 800/2000  mse=0.00585  (242s)
+[mae] step 850/2000  mse=0.00589  (253s)
+[mae] step 900/2000  mse=0.00618  (264s)
+[mae] step 950/2000  mse=0.00618  (274s)
+[mae] step 1000/2000  mse=0.00602  (284s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_base_2k.pth @ step 1000 (61 keys)
+[mae] step 1050/2000  mse=0.00575  (294s)
+[mae] step 1100/2000  mse=0.00586  (304s)
+[mae] step 1150/2000  mse=0.00568  (314s)
+[mae] step 1200/2000  mse=0.00572  (323s)
+[mae] step 1250/2000  mse=0.00654  (333s)
+[mae] step 1300/2000  mse=0.00562  (342s)
+[mae] step 1350/2000  mse=0.00638  (351s)
+[mae] step 1400/2000  mse=0.00600  (360s)
+[mae] step 1450/2000  mse=0.00566  (369s)
+[mae] step 1500/2000  mse=0.00572  (379s)
+[mae] step 1550/2000  mse=0.00568  (388s)
+[mae] step 1600/2000  mse=0.00578  (397s)
+[mae] step 1650/2000  mse=0.00592  (406s)
+[mae] step 1700/2000  mse=0.00569  (414s)
+[mae] step 1750/2000  mse=0.00581  (423s)
+[mae] step 1800/2000  mse=0.00549  (431s)
+[mae] step 1850/2000  mse=0.00550  (439s)
+[mae] step 1900/2000  mse=0.00585  (447s)
+[mae] step 1950/2000  mse=0.00556  (456s)
+[mae] step 2000/2000  mse=0.00554  (464s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_base_2k.pth @ step 2000 (61 keys)
+[mae] done.  warm-start fine-tune:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_base_2k.pth'
+[campaign25] required pretraining missing: divided_depth; running 2000 MAE steps
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1789503725.548334  654358 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1789503725.552803  654358 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1789503725.565023  654358 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789503725.565040  654358 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789503725.565041  654358 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789503725.565042  654358 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+[mae] 20260115000000 (6040x8160) axis=y frac=0.8055 -> y[0,4800] x[0,8064]
+[mae] 20250223000000 (7220x10020) axis=x frac=0.75 -> y[0,7104] x[0,7488]
+[mae] 20260206000001 (5840x8440) axis=x frac=0.75 -> y[0,5760] x[0,6144]
+[mae] 20260115000001 (7180x9740) axis=y frac=0.5 -> y[0,3456] x[0,9600]
+[mae] 20260210000000 (7500x9880) axis=x frac=0.5 -> y[0,7488] x[0,4800]
+[mae] 20260227000000 (7700x9760) axis=x frac=0.75 -> y[0,7680] x[0,7296]
+[mae] 20260318000000 (5660x9400) axis=x frac=0.75 -> y[0,5568] x[0,6912]
+[mae] 20260325000000 (5980x8260) axis=x frac=0.6 -> y[0,5952] x[0,4800]
+[mae] 20260108000000 (6200x8020) axis=x frac=0.7 -> y[0,6144] x[0,5568]
+[mae] 20250831000000 (6400x7980) axis=x frac=0.75 -> y[0,6336] x[0,5952]
+[mae] 20260302000000 (8560x7720) axis=x frac=0.75 -> y[0,8448] x[0,5760]
+[mae] 20260306000000 (6200x7440) axis=x frac=0.75 -> y[0,6144] x[0,5568]
+[mae] 20260310000000 (6140x7200) axis=x frac=0.75 -> y[0,5952] x[0,5376]
+[mae] 20260303000000 (7040x7720) axis=y frac=0.5 -> y[0,3456] x[0,7680]
+[mae] 20260317000000 (5820x5240) axis=y frac=0.75 -> y[0,4224] x[0,5184]
+[mae] 20260226000000 (2180x3560) axis=y frac=0.75 -> y[0,1536] x[0,3456]
+[mae] 20250628074500 (6280x3580) axis=x frac=0.6 -> y[0,6144] x[0,2112]
+[mae] 20240304141531 (10400x4975) axis=x frac=0.75 -> y[0,10368] x[0,3648]
+[mae] 20251112000002 (10494x8128) axis=x frac=0.75 -> y[0,10368] x[0,5952]
+[mae] 20251111010954 (11051x12606) axis=x frac=0.75 -> y[0,10944] x[0,9408]
+[mae] 20240304144031 (10595x24525) axis=x frac=0.75 -> y[0,10560] x[0,18240]
+[mae] 20250919125754 (6497x5260) axis=x frac=0.75 -> y[0,6336] x[0,3840]
+[mae] 20231210121321 (12750x9995) axis=x frac=0.75 -> y[0,12672] x[0,7488]
+[mae] 20260814140748 (5081x5701) axis=x frac=1.0 -> y[0,4992] x[0,5568]
+[mae] 20260717193517 (7181x6501) axis=x frac=1.0 -> y[0,7104] x[0,6336]
+[mae] 20260720090842 (3421x3821) axis=x frac=1.0 -> y[0,3264] x[0,3648]
+[mae] 20250703034159 (7181x9401) axis=x frac=1.0 -> y[0,7104] x[0,9216]
+[mae] 20260723112922 (9481x4521) axis=x frac=1.0 -> y[0,9408] x[0,4416]
+[mae] balanced round-robin across 28/28 scrolls
+Model parameters (nnunet3d_lcndz): 5,669,156
+[mae] warm-started backbone from /vesuvius/models/mae_nnunet_192_ibn_depth8_campaign25_base_2k.pth: missing=8 unexpected=0
+[mae] froze 5,602,850 loaded parameters; trainable=66,339
+[mae] nnunet3d backbone  ctx=192 ds=2 depth=8 ibn=True effective_batch=32 mask_frac=0.65  steps=2000  log=runs_mae/mae_nnunet_192_ibn_depth8_campaign25_divided_depth_2k_0915_20-22-07
+[mae] architecture early_2d=False divided=(True,False) mednext=(False,k5) fiber=False
+[mae] save -> models/mae_nnunet_192_ibn_depth8_campaign25_divided_depth_2k.pth   use as:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_divided_depth_2k.pth'
+[mae] step 50/2000  mse=0.10884  (8s)
+[mae] step 100/2000  mse=0.02512  (15s)
+[mae] step 150/2000  mse=0.00606  (22s)
+[mae] step 200/2000  mse=0.00588  (28s)
+[mae] step 250/2000  mse=0.00620  (35s)
+[mae] step 300/2000  mse=0.00574  (43s)
+[mae] step 350/2000  mse=0.00610  (52s)
+[mae] step 400/2000  mse=0.00547  (60s)
+[mae] step 450/2000  mse=0.00599  (66s)
+[mae] step 500/2000  mse=0.00570  (73s)
+[mae] step 550/2000  mse=0.00585  (80s)
+[mae] step 600/2000  mse=0.00573  (87s)
+[mae] step 650/2000  mse=0.00559  (93s)
+[mae] step 700/2000  mse=0.00547  (100s)
+[mae] step 750/2000  mse=0.00579  (107s)
+[mae] step 800/2000  mse=0.00558  (113s)
+[mae] step 850/2000  mse=0.00564  (120s)
+[mae] step 900/2000  mse=0.00596  (127s)
+[mae] step 950/2000  mse=0.00596  (133s)
+[mae] step 1000/2000  mse=0.00571  (140s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_divided_depth_2k.pth @ step 1000 (69 keys)
+[mae] step 1050/2000  mse=0.00566  (149s)
+[mae] step 1100/2000  mse=0.00569  (157s)
+[mae] step 1150/2000  mse=0.00556  (164s)
+[mae] step 1200/2000  mse=0.00554  (174s)
+[mae] step 1250/2000  mse=0.00645  (182s)
+[mae] step 1300/2000  mse=0.00553  (189s)
+[mae] step 1350/2000  mse=0.00628  (195s)
+[mae] step 1400/2000  mse=0.00588  (203s)
+[mae] step 1450/2000  mse=0.00563  (212s)
+[mae] step 1500/2000  mse=0.00563  (219s)
+[mae] step 1550/2000  mse=0.00559  (226s)
+[mae] step 1600/2000  mse=0.00577  (233s)
+[mae] step 1650/2000  mse=0.00592  (239s)
+[mae] step 1700/2000  mse=0.00564  (246s)
+[mae] step 1750/2000  mse=0.00578  (252s)
+[mae] step 1800/2000  mse=0.00548  (259s)
+[mae] step 1850/2000  mse=0.00548  (266s)
+[mae] step 1900/2000  mse=0.00585  (273s)
+[mae] step 1950/2000  mse=0.00555  (279s)
+[mae] step 2000/2000  mse=0.00554  (286s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_divided_depth_2k.pth @ step 2000 (69 keys)
+[mae] done.  warm-start fine-tune:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_divided_depth_2k.pth'
+[campaign25] required pretraining missing: divided_space_depth; running 2000 MAE steps
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1789504030.873483  657455 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1789504030.877928  657455 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1789504030.890290  657455 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789504030.890305  657455 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789504030.890306  657455 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789504030.890307  657455 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+[mae] 20260115000000 (6040x8160) axis=y frac=0.8055 -> y[0,4800] x[0,8064]
+[mae] 20250223000000 (7220x10020) axis=x frac=0.75 -> y[0,7104] x[0,7488]
+[mae] 20260206000001 (5840x8440) axis=x frac=0.75 -> y[0,5760] x[0,6144]
+[mae] 20260115000001 (7180x9740) axis=y frac=0.5 -> y[0,3456] x[0,9600]
+[mae] 20260210000000 (7500x9880) axis=x frac=0.5 -> y[0,7488] x[0,4800]
+[mae] 20260227000000 (7700x9760) axis=x frac=0.75 -> y[0,7680] x[0,7296]
+[mae] 20260318000000 (5660x9400) axis=x frac=0.75 -> y[0,5568] x[0,6912]
+[mae] 20260325000000 (5980x8260) axis=x frac=0.6 -> y[0,5952] x[0,4800]
+[mae] 20260108000000 (6200x8020) axis=x frac=0.7 -> y[0,6144] x[0,5568]
+[mae] 20250831000000 (6400x7980) axis=x frac=0.75 -> y[0,6336] x[0,5952]
+[mae] 20260302000000 (8560x7720) axis=x frac=0.75 -> y[0,8448] x[0,5760]
+[mae] 20260306000000 (6200x7440) axis=x frac=0.75 -> y[0,6144] x[0,5568]
+[mae] 20260310000000 (6140x7200) axis=x frac=0.75 -> y[0,5952] x[0,5376]
+[mae] 20260303000000 (7040x7720) axis=y frac=0.5 -> y[0,3456] x[0,7680]
+[mae] 20260317000000 (5820x5240) axis=y frac=0.75 -> y[0,4224] x[0,5184]
+[mae] 20260226000000 (2180x3560) axis=y frac=0.75 -> y[0,1536] x[0,3456]
+[mae] 20250628074500 (6280x3580) axis=x frac=0.6 -> y[0,6144] x[0,2112]
+[mae] 20240304141531 (10400x4975) axis=x frac=0.75 -> y[0,10368] x[0,3648]
+[mae] 20251112000002 (10494x8128) axis=x frac=0.75 -> y[0,10368] x[0,5952]
+[mae] 20251111010954 (11051x12606) axis=x frac=0.75 -> y[0,10944] x[0,9408]
+[mae] 20240304144031 (10595x24525) axis=x frac=0.75 -> y[0,10560] x[0,18240]
+[mae] 20250919125754 (6497x5260) axis=x frac=0.75 -> y[0,6336] x[0,3840]
+[mae] 20231210121321 (12750x9995) axis=x frac=0.75 -> y[0,12672] x[0,7488]
+[mae] 20260814140748 (5081x5701) axis=x frac=1.0 -> y[0,4992] x[0,5568]
+[mae] 20260717193517 (7181x6501) axis=x frac=1.0 -> y[0,7104] x[0,6336]
+[mae] 20260720090842 (3421x3821) axis=x frac=1.0 -> y[0,3264] x[0,3648]
+[mae] 20250703034159 (7181x9401) axis=x frac=1.0 -> y[0,7104] x[0,9216]
+[mae] 20260723112922 (9481x4521) axis=x frac=1.0 -> y[0,9408] x[0,4416]
+[mae] balanced round-robin across 28/28 scrolls
+Model parameters (nnunet3d_lcndz): 5,735,460
+[mae] warm-started backbone from /vesuvius/models/mae_nnunet_192_ibn_depth8_campaign25_base_2k.pth: missing=14 unexpected=0
+[mae] froze 5,602,850 loaded parameters; trainable=132,643
+[mae] nnunet3d backbone  ctx=192 ds=2 depth=8 ibn=True effective_batch=32 mask_frac=0.65  steps=2000  log=runs_mae/mae_nnunet_192_ibn_depth8_campaign25_divided_space_depth_2k_0915_20-27-12
+[mae] architecture early_2d=False divided=(True,True) mednext=(False,k5) fiber=False
+[mae] save -> models/mae_nnunet_192_ibn_depth8_campaign25_divided_space_depth_2k.pth   use as:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_divided_space_depth_2k.pth'
+[mae] step 50/2000  mse=0.10887  (10s)
+[mae] step 100/2000  mse=0.02442  (17s)
+[mae] step 150/2000  mse=0.00639  (26s)
+[mae] step 200/2000  mse=0.00602  (36s)
+[mae] step 250/2000  mse=0.00630  (43s)
+[mae] step 300/2000  mse=0.00582  (51s)
+[mae] step 350/2000  mse=0.00610  (57s)
+[mae] step 400/2000  mse=0.00549  (66s)
+[mae] step 450/2000  mse=0.00600  (73s)
+[mae] step 500/2000  mse=0.00570  (83s)
+[mae] step 550/2000  mse=0.00587  (93s)
+[mae] step 600/2000  mse=0.00578  (103s)
+[mae] step 650/2000  mse=0.00561  (109s)
+[mae] step 700/2000  mse=0.00547  (116s)
+[mae] step 750/2000  mse=0.00579  (123s)
+[mae] step 800/2000  mse=0.00558  (129s)
+[mae] step 850/2000  mse=0.00565  (136s)
+[mae] step 900/2000  mse=0.00599  (143s)
+[mae] step 950/2000  mse=0.00601  (150s)
+[mae] step 1000/2000  mse=0.00574  (158s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_divided_space_depth_2k.pth @ step 1000 (75 keys)
+[mae] step 1050/2000  mse=0.00565  (168s)
+[mae] step 1100/2000  mse=0.00568  (175s)
+[mae] step 1150/2000  mse=0.00553  (182s)
+[mae] step 1200/2000  mse=0.00556  (189s)
+[mae] step 1250/2000  mse=0.00641  (195s)
+[mae] step 1300/2000  mse=0.00552  (202s)
+[mae] step 1350/2000  mse=0.00626  (209s)
+[mae] step 1400/2000  mse=0.00587  (216s)
+[mae] step 1450/2000  mse=0.00564  (224s)
+[mae] step 1500/2000  mse=0.00567  (235s)
+[mae] step 1550/2000  mse=0.00555  (245s)
+[mae] step 1600/2000  mse=0.00575  (254s)
+[mae] step 1650/2000  mse=0.00592  (260s)
+[mae] step 1700/2000  mse=0.00565  (267s)
+[mae] step 1750/2000  mse=0.00578  (274s)
+[mae] step 1800/2000  mse=0.00548  (280s)
+[mae] step 1850/2000  mse=0.00550  (287s)
+[mae] step 1900/2000  mse=0.00582  (294s)
+[mae] step 1950/2000  mse=0.00558  (301s)
+[mae] step 2000/2000  mse=0.00548  (309s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_divided_space_depth_2k.pth @ step 2000 (75 keys)
+[mae] done.  warm-start fine-tune:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_divided_space_depth_2k.pth'
+[campaign25] required pretraining missing: early_3d2d; running 2000 MAE steps
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1789504360.668051  661451 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1789504360.672571  661451 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1789504360.685011  661451 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789504360.685027  661451 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789504360.685028  661451 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789504360.685029  661451 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+[mae] 20260115000000 (6040x8160) axis=y frac=0.8055 -> y[0,4800] x[0,8064]
+[mae] 20250223000000 (7220x10020) axis=x frac=0.75 -> y[0,7104] x[0,7488]
+[mae] 20260206000001 (5840x8440) axis=x frac=0.75 -> y[0,5760] x[0,6144]
+[mae] 20260115000001 (7180x9740) axis=y frac=0.5 -> y[0,3456] x[0,9600]
+[mae] 20260210000000 (7500x9880) axis=x frac=0.5 -> y[0,7488] x[0,4800]
+[mae] 20260227000000 (7700x9760) axis=x frac=0.75 -> y[0,7680] x[0,7296]
+[mae] 20260318000000 (5660x9400) axis=x frac=0.75 -> y[0,5568] x[0,6912]
+[mae] 20260325000000 (5980x8260) axis=x frac=0.6 -> y[0,5952] x[0,4800]
+[mae] 20260108000000 (6200x8020) axis=x frac=0.7 -> y[0,6144] x[0,5568]
+[mae] 20250831000000 (6400x7980) axis=x frac=0.75 -> y[0,6336] x[0,5952]
+[mae] 20260302000000 (8560x7720) axis=x frac=0.75 -> y[0,8448] x[0,5760]
+[mae] 20260306000000 (6200x7440) axis=x frac=0.75 -> y[0,6144] x[0,5568]
+[mae] 20260310000000 (6140x7200) axis=x frac=0.75 -> y[0,5952] x[0,5376]
+[mae] 20260303000000 (7040x7720) axis=y frac=0.5 -> y[0,3456] x[0,7680]
+[mae] 20260317000000 (5820x5240) axis=y frac=0.75 -> y[0,4224] x[0,5184]
+[mae] 20260226000000 (2180x3560) axis=y frac=0.75 -> y[0,1536] x[0,3456]
+[mae] 20250628074500 (6280x3580) axis=x frac=0.6 -> y[0,6144] x[0,2112]
+[mae] 20240304141531 (10400x4975) axis=x frac=0.75 -> y[0,10368] x[0,3648]
+[mae] 20251112000002 (10494x8128) axis=x frac=0.75 -> y[0,10368] x[0,5952]
+[mae] 20251111010954 (11051x12606) axis=x frac=0.75 -> y[0,10944] x[0,9408]
+[mae] 20240304144031 (10595x24525) axis=x frac=0.75 -> y[0,10560] x[0,18240]
+[mae] 20250919125754 (6497x5260) axis=x frac=0.75 -> y[0,6336] x[0,3840]
+[mae] 20231210121321 (12750x9995) axis=x frac=0.75 -> y[0,12672] x[0,7488]
+[mae] 20260814140748 (5081x5701) axis=x frac=1.0 -> y[0,4992] x[0,5568]
+[mae] 20260717193517 (7181x6501) axis=x frac=1.0 -> y[0,7104] x[0,6336]
+[mae] 20260720090842 (3421x3821) axis=x frac=1.0 -> y[0,3264] x[0,3648]
+[mae] 20250703034159 (7181x9401) axis=x frac=1.0 -> y[0,7104] x[0,9216]
+[mae] 20260723112922 (9481x4521) axis=x frac=1.0 -> y[0,9408] x[0,4416]
+[mae] balanced round-robin across 28/28 scrolls
+Model parameters (nnunet3d_lcndz): 7,521,732
+[mae] warm-started backbone from /vesuvius/models/mae_nnunet_192_ibn_depth8_campaign25_base_2k.pth: missing=47 unexpected=0
+[mae] froze 5,602,850 loaded parameters; trainable=1,919,146
+[mae] nnunet3d backbone  ctx=192 ds=2 depth=8 ibn=True effective_batch=32 mask_frac=0.65  steps=2000  log=runs_mae/mae_nnunet_192_ibn_depth8_campaign25_early_3d2d_2k_0915_20-32-42
+[mae] architecture early_2d=True divided=(False,False) mednext=(False,k5) fiber=False
+[mae] save -> models/mae_nnunet_192_ibn_depth8_campaign25_early_3d2d_2k.pth   use as:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_early_3d2d_2k.pth'
+[mae] step 50/2000  mse=0.10933  (7s)
+[mae] step 100/2000  mse=0.02701  (13s)
+[mae] step 150/2000  mse=0.02073  (19s)
+[mae] step 200/2000  mse=0.01875  (25s)
+[mae] step 250/2000  mse=0.01945  (31s)
+[mae] step 300/2000  mse=0.01793  (37s)
+[mae] step 350/2000  mse=0.01709  (42s)
+[mae] step 400/2000  mse=0.01689  (48s)
+[mae] step 450/2000  mse=0.01791  (54s)
+[mae] step 500/2000  mse=0.01800  (63s)
+[mae] step 550/2000  mse=0.01635  (69s)
+[mae] step 600/2000  mse=0.01629  (75s)
+[mae] step 650/2000  mse=0.01605  (83s)
+[mae] step 700/2000  mse=0.01506  (92s)
+[mae] step 750/2000  mse=0.01629  (101s)
+[mae] step 800/2000  mse=0.01579  (110s)
+[mae] step 850/2000  mse=0.01682  (117s)
+[mae] step 900/2000  mse=0.01596  (123s)
+[mae] step 950/2000  mse=0.01641  (129s)
+[mae] step 1000/2000  mse=0.01391  (135s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_early_3d2d_2k.pth @ step 1000 (108 keys)
+[mae] step 1050/2000  mse=0.01369  (141s)
+[mae] step 1100/2000  mse=0.01481  (147s)
+[mae] step 1150/2000  mse=0.01392  (153s)
+[mae] step 1200/2000  mse=0.01412  (162s)
+[mae] step 1250/2000  mse=0.01441  (169s)
+[mae] step 1300/2000  mse=0.01241  (175s)
+[mae] step 1350/2000  mse=0.01344  (181s)
+[mae] step 1400/2000  mse=0.01344  (186s)
+[mae] step 1450/2000  mse=0.01312  (193s)
+[mae] step 1500/2000  mse=0.01300  (201s)
+[mae] step 1550/2000  mse=0.01309  (207s)
+[mae] step 1600/2000  mse=0.01279  (213s)
+[mae] step 1650/2000  mse=0.01282  (219s)
+[mae] step 1700/2000  mse=0.01265  (225s)
+[mae] step 1750/2000  mse=0.01271  (231s)
+[mae] step 1800/2000  mse=0.01236  (237s)
+[mae] step 1850/2000  mse=0.01134  (243s)
+[mae] step 1900/2000  mse=0.01260  (249s)
+[mae] step 1950/2000  mse=0.01233  (259s)
+[mae] step 2000/2000  mse=0.01157  (265s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_early_3d2d_2k.pth @ step 2000 (108 keys)
+[mae] done.  warm-start fine-tune:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_early_3d2d_2k.pth'
+[campaign25] required pretraining missing: fiber; running 2000 MAE steps
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1789504641.874140  664146 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1789504641.878632  664146 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1789504641.890969  664146 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789504641.890987  664146 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789504641.890988  664146 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789504641.890989  664146 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+[mae] 20260115000000 (6040x8160) axis=y frac=0.8055 -> y[0,4800] x[0,8064]
+[mae] 20250223000000 (7220x10020) axis=x frac=0.75 -> y[0,7104] x[0,7488]
+[mae] 20260206000001 (5840x8440) axis=x frac=0.75 -> y[0,5760] x[0,6144]
+[mae] 20260115000001 (7180x9740) axis=y frac=0.5 -> y[0,3456] x[0,9600]
+[mae] 20260210000000 (7500x9880) axis=x frac=0.5 -> y[0,7488] x[0,4800]
+[mae] 20260227000000 (7700x9760) axis=x frac=0.75 -> y[0,7680] x[0,7296]
+[mae] 20260318000000 (5660x9400) axis=x frac=0.75 -> y[0,5568] x[0,6912]
+[mae] 20260325000000 (5980x8260) axis=x frac=0.6 -> y[0,5952] x[0,4800]
+[mae] 20260108000000 (6200x8020) axis=x frac=0.7 -> y[0,6144] x[0,5568]
+[mae] 20250831000000 (6400x7980) axis=x frac=0.75 -> y[0,6336] x[0,5952]
+[mae] 20260302000000 (8560x7720) axis=x frac=0.75 -> y[0,8448] x[0,5760]
+[mae] 20260306000000 (6200x7440) axis=x frac=0.75 -> y[0,6144] x[0,5568]
+[mae] 20260310000000 (6140x7200) axis=x frac=0.75 -> y[0,5952] x[0,5376]
+[mae] 20260303000000 (7040x7720) axis=y frac=0.5 -> y[0,3456] x[0,7680]
+[mae] 20260317000000 (5820x5240) axis=y frac=0.75 -> y[0,4224] x[0,5184]
+[mae] 20260226000000 (2180x3560) axis=y frac=0.75 -> y[0,1536] x[0,3456]
+[mae] 20250628074500 (6280x3580) axis=x frac=0.6 -> y[0,6144] x[0,2112]
+[mae] 20240304141531 (10400x4975) axis=x frac=0.75 -> y[0,10368] x[0,3648]
+[mae] 20251112000002 (10494x8128) axis=x frac=0.75 -> y[0,10368] x[0,5952]
+[mae] 20251111010954 (11051x12606) axis=x frac=0.75 -> y[0,10944] x[0,9408]
+[mae] 20240304144031 (10595x24525) axis=x frac=0.75 -> y[0,10560] x[0,18240]
+[mae] 20250919125754 (6497x5260) axis=x frac=0.75 -> y[0,6336] x[0,3840]
+[mae] 20231210121321 (12750x9995) axis=x frac=0.75 -> y[0,12672] x[0,7488]
+[mae] 20260814140748 (5081x5701) axis=x frac=1.0 -> y[0,4992] x[0,5568]
+[mae] 20260717193517 (7181x6501) axis=x frac=1.0 -> y[0,7104] x[0,6336]
+[mae] 20260720090842 (3421x3821) axis=x frac=1.0 -> y[0,3264] x[0,3648]
+[mae] 20250703034159 (7181x9401) axis=x frac=1.0 -> y[0,7104] x[0,9216]
+[mae] 20260723112922 (9481x4521) axis=x frac=1.0 -> y[0,9408] x[0,4416]
+[mae] balanced round-robin across 28/28 scrolls
+Model parameters (nnunet3d_lcndz): 5,602,946
+[mae] warm-started backbone from /vesuvius/models/mae_nnunet_192_ibn_depth8_campaign25_base_2k.pth: missing=1 unexpected=0
+[mae] froze 5,602,850 loaded parameters; trainable=129
+[mae] nnunet3d backbone  ctx=192 ds=2 depth=8 ibn=True effective_batch=32 mask_frac=0.65  steps=2000  log=runs_mae/mae_nnunet_192_ibn_depth8_campaign25_fiber_2k_0915_20-37-23
+[mae] architecture early_2d=False divided=(False,False) mednext=(False,k5) fiber=True
+[mae] save -> models/mae_nnunet_192_ibn_depth8_campaign25_fiber_2k.pth   use as:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_fiber_2k.pth'
+[mae] step 50/2000  mse=0.10878  (7s)
+[mae] step 100/2000  mse=0.02645  (14s)
+[mae] step 150/2000  mse=0.00663  (20s)
+[mae] step 200/2000  mse=0.00558  (27s)
+[mae] step 250/2000  mse=0.00587  (33s)
+[mae] step 300/2000  mse=0.00565  (40s)
+[mae] step 350/2000  mse=0.00607  (46s)
+[mae] step 400/2000  mse=0.00542  (53s)
+[mae] step 450/2000  mse=0.00593  (59s)
+[mae] step 500/2000  mse=0.00570  (66s)
+[mae] step 550/2000  mse=0.00582  (73s)
+[mae] step 600/2000  mse=0.00573  (79s)
+[mae] step 650/2000  mse=0.00560  (86s)
+[mae] step 700/2000  mse=0.00548  (93s)
+[mae] step 750/2000  mse=0.00578  (100s)
+[mae] step 800/2000  mse=0.00562  (110s)
+[mae] step 850/2000  mse=0.00565  (116s)
+[mae] step 900/2000  mse=0.00595  (123s)
+[mae] step 950/2000  mse=0.00595  (133s)
+[mae] step 1000/2000  mse=0.00572  (140s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_fiber_2k.pth @ step 1000 (62 keys)
+[mae] step 1050/2000  mse=0.00567  (147s)
+[mae] step 1100/2000  mse=0.00568  (156s)
+[mae] step 1150/2000  mse=0.00553  (163s)
+[mae] step 1200/2000  mse=0.00553  (170s)
+[mae] step 1250/2000  mse=0.00645  (176s)
+[mae] step 1300/2000  mse=0.00550  (183s)
+[mae] step 1350/2000  mse=0.00628  (190s)
+[mae] step 1400/2000  mse=0.00586  (196s)
+[mae] step 1450/2000  mse=0.00562  (203s)
+[mae] step 1500/2000  mse=0.00563  (210s)
+[mae] step 1550/2000  mse=0.00557  (217s)
+[mae] step 1600/2000  mse=0.00579  (224s)
+[mae] step 1650/2000  mse=0.00591  (231s)
+[mae] step 1700/2000  mse=0.00566  (237s)
+[mae] step 1750/2000  mse=0.00581  (244s)
+[mae] step 1800/2000  mse=0.00550  (251s)
+[mae] step 1850/2000  mse=0.00547  (257s)
+[mae] step 1900/2000  mse=0.00583  (264s)
+[mae] step 1950/2000  mse=0.00557  (271s)
+[mae] step 2000/2000  mse=0.00553  (277s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_fiber_2k.pth @ step 2000 (62 keys)
+[mae] done.  warm-start fine-tune:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_fiber_2k.pth'
+[campaign25] required pretraining missing: mednext_k5; running 2000 MAE steps
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1789504937.426980  667101 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1789504937.431408  667101 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1789504937.443672  667101 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789504937.443688  667101 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789504937.443690  667101 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789504937.443691  667101 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+[mae] 20260115000000 (6040x8160) axis=y frac=0.8055 -> y[0,4800] x[0,8064]
+[mae] 20250223000000 (7220x10020) axis=x frac=0.75 -> y[0,7104] x[0,7488]
+[mae] 20260206000001 (5840x8440) axis=x frac=0.75 -> y[0,5760] x[0,6144]
+[mae] 20260115000001 (7180x9740) axis=y frac=0.5 -> y[0,3456] x[0,9600]
+[mae] 20260210000000 (7500x9880) axis=x frac=0.5 -> y[0,7488] x[0,4800]
+[mae] 20260227000000 (7700x9760) axis=x frac=0.75 -> y[0,7680] x[0,7296]
+[mae] 20260318000000 (5660x9400) axis=x frac=0.75 -> y[0,5568] x[0,6912]
+[mae] 20260325000000 (5980x8260) axis=x frac=0.6 -> y[0,5952] x[0,4800]
+[mae] 20260108000000 (6200x8020) axis=x frac=0.7 -> y[0,6144] x[0,5568]
+[mae] 20250831000000 (6400x7980) axis=x frac=0.75 -> y[0,6336] x[0,5952]
+[mae] 20260302000000 (8560x7720) axis=x frac=0.75 -> y[0,8448] x[0,5760]
+[mae] 20260306000000 (6200x7440) axis=x frac=0.75 -> y[0,6144] x[0,5568]
+[mae] 20260310000000 (6140x7200) axis=x frac=0.75 -> y[0,5952] x[0,5376]
+[mae] 20260303000000 (7040x7720) axis=y frac=0.5 -> y[0,3456] x[0,7680]
+[mae] 20260317000000 (5820x5240) axis=y frac=0.75 -> y[0,4224] x[0,5184]
+[mae] 20260226000000 (2180x3560) axis=y frac=0.75 -> y[0,1536] x[0,3456]
+[mae] 20250628074500 (6280x3580) axis=x frac=0.6 -> y[0,6144] x[0,2112]
+[mae] 20240304141531 (10400x4975) axis=x frac=0.75 -> y[0,10368] x[0,3648]
+[mae] 20251112000002 (10494x8128) axis=x frac=0.75 -> y[0,10368] x[0,5952]
+[mae] 20251111010954 (11051x12606) axis=x frac=0.75 -> y[0,10944] x[0,9408]
+[mae] 20240304144031 (10595x24525) axis=x frac=0.75 -> y[0,10560] x[0,18240]
+[mae] 20250919125754 (6497x5260) axis=x frac=0.75 -> y[0,6336] x[0,3840]
+[mae] 20231210121321 (12750x9995) axis=x frac=0.75 -> y[0,12672] x[0,7488]
+[mae] 20260814140748 (5081x5701) axis=x frac=1.0 -> y[0,4992] x[0,5568]
+[mae] 20260717193517 (7181x6501) axis=x frac=1.0 -> y[0,7104] x[0,6336]
+[mae] 20260720090842 (3421x3821) axis=x frac=1.0 -> y[0,3264] x[0,3648]
+[mae] 20250703034159 (7181x9401) axis=x frac=1.0 -> y[0,7104] x[0,9216]
+[mae] 20260723112922 (9481x4521) axis=x frac=1.0 -> y[0,9408] x[0,4416]
+[mae] balanced round-robin across 28/28 scrolls
+Model parameters (nnunet3d_lcndz): 5,989,410
+[mae] warm-started backbone from /vesuvius/models/mae_nnunet_192_ibn_depth8_campaign25_base_2k.pth: missing=28 unexpected=0
+[mae] froze 5,602,850 loaded parameters; trainable=386,593
+[mae] nnunet3d backbone  ctx=192 ds=2 depth=8 ibn=True effective_batch=32 mask_frac=0.65  steps=2000  log=runs_mae/mae_nnunet_192_ibn_depth8_campaign25_mednext_k5_2k_0915_20-42-19
+[mae] architecture early_2d=False divided=(False,False) mednext=(True,k5) fiber=False
+[mae] save -> models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k5_2k.pth   use as:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k5_2k.pth'
+[mae] step 50/2000  mse=0.10119  (9s)
+[mae] step 100/2000  mse=0.01162  (17s)
+[mae] step 150/2000  mse=0.00735  (25s)
+[mae] step 200/2000  mse=0.00653  (33s)
+[mae] step 250/2000  mse=0.00698  (41s)
+[mae] step 300/2000  mse=0.00595  (50s)
+[mae] step 350/2000  mse=0.00618  (59s)
+[mae] step 400/2000  mse=0.00560  (67s)
+[mae] step 450/2000  mse=0.00606  (75s)
+[mae] step 500/2000  mse=0.00568  (83s)
+[mae] step 550/2000  mse=0.00588  (91s)
+[mae] step 600/2000  mse=0.00572  (99s)
+[mae] step 650/2000  mse=0.00560  (108s)
+[mae] step 700/2000  mse=0.00548  (119s)
+[mae] step 750/2000  mse=0.00578  (126s)
+[mae] step 800/2000  mse=0.00559  (134s)
+[mae] step 850/2000  mse=0.00565  (142s)
+[mae] step 900/2000  mse=0.00598  (150s)
+[mae] step 950/2000  mse=0.00599  (158s)
+[mae] step 1000/2000  mse=0.00572  (165s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k5_2k.pth @ step 1000 (89 keys)
+[mae] step 1050/2000  mse=0.00565  (174s)
+[mae] step 1100/2000  mse=0.00564  (181s)
+[mae] step 1150/2000  mse=0.00550  (192s)
+[mae] step 1200/2000  mse=0.00553  (201s)
+[mae] step 1250/2000  mse=0.00641  (208s)
+[mae] step 1300/2000  mse=0.00551  (216s)
+[mae] step 1350/2000  mse=0.00628  (227s)
+[mae] step 1400/2000  mse=0.00585  (238s)
+[mae] step 1450/2000  mse=0.00563  (247s)
+[mae] step 1500/2000  mse=0.00562  (258s)
+[mae] step 1550/2000  mse=0.00559  (266s)
+[mae] step 1600/2000  mse=0.00576  (275s)
+[mae] step 1650/2000  mse=0.00588  (283s)
+[mae] step 1700/2000  mse=0.00565  (292s)
+[mae] step 1750/2000  mse=0.00576  (302s)
+[mae] step 1800/2000  mse=0.00550  (310s)
+[mae] step 1850/2000  mse=0.00549  (318s)
+[mae] step 1900/2000  mse=0.00580  (326s)
+[mae] step 1950/2000  mse=0.00556  (334s)
+[mae] step 2000/2000  mse=0.00553  (341s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k5_2k.pth @ step 2000 (89 keys)
+[mae] done.  warm-start fine-tune:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k5_2k.pth'
+[campaign25] required pretraining missing: mednext_k7; running 2000 MAE steps
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1789505298.278982  669740 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1789505298.283476  669740 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1789505298.295869  669740 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789505298.295884  669740 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789505298.295886  669740 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789505298.295887  669740 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+[mae] 20260115000000 (6040x8160) axis=y frac=0.8055 -> y[0,4800] x[0,8064]
+[mae] 20250223000000 (7220x10020) axis=x frac=0.75 -> y[0,7104] x[0,7488]
+[mae] 20260206000001 (5840x8440) axis=x frac=0.75 -> y[0,5760] x[0,6144]
+[mae] 20260115000001 (7180x9740) axis=y frac=0.5 -> y[0,3456] x[0,9600]
+[mae] 20260210000000 (7500x9880) axis=x frac=0.5 -> y[0,7488] x[0,4800]
+[mae] 20260227000000 (7700x9760) axis=x frac=0.75 -> y[0,7680] x[0,7296]
+[mae] 20260318000000 (5660x9400) axis=x frac=0.75 -> y[0,5568] x[0,6912]
+[mae] 20260325000000 (5980x8260) axis=x frac=0.6 -> y[0,5952] x[0,4800]
+[mae] 20260108000000 (6200x8020) axis=x frac=0.7 -> y[0,6144] x[0,5568]
+[mae] 20250831000000 (6400x7980) axis=x frac=0.75 -> y[0,6336] x[0,5952]
+[mae] 20260302000000 (8560x7720) axis=x frac=0.75 -> y[0,8448] x[0,5760]
+[mae] 20260306000000 (6200x7440) axis=x frac=0.75 -> y[0,6144] x[0,5568]
+[mae] 20260310000000 (6140x7200) axis=x frac=0.75 -> y[0,5952] x[0,5376]
+[mae] 20260303000000 (7040x7720) axis=y frac=0.5 -> y[0,3456] x[0,7680]
+[mae] 20260317000000 (5820x5240) axis=y frac=0.75 -> y[0,4224] x[0,5184]
+[mae] 20260226000000 (2180x3560) axis=y frac=0.75 -> y[0,1536] x[0,3456]
+[mae] 20250628074500 (6280x3580) axis=x frac=0.6 -> y[0,6144] x[0,2112]
+[mae] 20240304141531 (10400x4975) axis=x frac=0.75 -> y[0,10368] x[0,3648]
+[mae] 20251112000002 (10494x8128) axis=x frac=0.75 -> y[0,10368] x[0,5952]
+[mae] 20251111010954 (11051x12606) axis=x frac=0.75 -> y[0,10944] x[0,9408]
+[mae] 20240304144031 (10595x24525) axis=x frac=0.75 -> y[0,10560] x[0,18240]
+[mae] 20250919125754 (6497x5260) axis=x frac=0.75 -> y[0,6336] x[0,3840]
+[mae] 20231210121321 (12750x9995) axis=x frac=0.75 -> y[0,12672] x[0,7488]
+[mae] 20260814140748 (5081x5701) axis=x frac=1.0 -> y[0,4992] x[0,5568]
+[mae] 20260717193517 (7181x6501) axis=x frac=1.0 -> y[0,7104] x[0,6336]
+[mae] 20260720090842 (3421x3821) axis=x frac=1.0 -> y[0,3264] x[0,3648]
+[mae] 20250703034159 (7181x9401) axis=x frac=1.0 -> y[0,7104] x[0,9216]
+[mae] 20260723112922 (9481x4521) axis=x frac=1.0 -> y[0,9408] x[0,4416]
+[mae] balanced round-robin across 28/28 scrolls
+Model parameters (nnunet3d_lcndz): 6,023,970
+[mae] warm-started backbone from /vesuvius/models/mae_nnunet_192_ibn_depth8_campaign25_base_2k.pth: missing=28 unexpected=0
+[mae] froze 5,602,850 loaded parameters; trainable=421,153
+[mae] nnunet3d backbone  ctx=192 ds=2 depth=8 ibn=True effective_batch=32 mask_frac=0.65  steps=2000  log=runs_mae/mae_nnunet_192_ibn_depth8_campaign25_mednext_k7_2k_0915_20-48-20
+[mae] architecture early_2d=False divided=(False,False) mednext=(True,k7) fiber=False
+[mae] save -> models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k7_2k.pth   use as:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k7_2k.pth'
+[mae] step 50/2000  mse=0.09930  (9s)
+[mae] step 100/2000  mse=0.01144  (18s)
+[mae] step 150/2000  mse=0.00722  (26s)
+[mae] step 200/2000  mse=0.00648  (35s)
+[mae] step 250/2000  mse=0.00694  (43s)
+[mae] step 300/2000  mse=0.00592  (52s)
+[mae] step 350/2000  mse=0.00619  (60s)
+[mae] step 400/2000  mse=0.00556  (69s)
+[mae] step 450/2000  mse=0.00607  (78s)
+[mae] step 500/2000  mse=0.00569  (87s)
+[mae] step 550/2000  mse=0.00588  (96s)
+[mae] step 600/2000  mse=0.00574  (104s)
+[mae] step 650/2000  mse=0.00559  (113s)
+[mae] step 700/2000  mse=0.00550  (121s)
+[mae] step 750/2000  mse=0.00576  (130s)
+[mae] step 800/2000  mse=0.00564  (138s)
+[mae] step 850/2000  mse=0.00567  (147s)
+[mae] step 900/2000  mse=0.00598  (159s)
+[mae] step 950/2000  mse=0.00602  (168s)
+[mae] step 1000/2000  mse=0.00568  (177s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k7_2k.pth @ step 1000 (89 keys)
+[mae] step 1050/2000  mse=0.00568  (186s)
+[mae] step 1100/2000  mse=0.00569  (198s)
+[mae] step 1150/2000  mse=0.00551  (206s)
+[mae] step 1200/2000  mse=0.00555  (215s)
+[mae] step 1250/2000  mse=0.00641  (223s)
+[mae] step 1300/2000  mse=0.00552  (232s)
+[mae] step 1350/2000  mse=0.00625  (243s)
+[mae] step 1400/2000  mse=0.00588  (252s)
+[mae] step 1450/2000  mse=0.00562  (261s)
+[mae] step 1500/2000  mse=0.00561  (270s)
+[mae] step 1550/2000  mse=0.00556  (279s)
+[mae] step 1600/2000  mse=0.00576  (288s)
+[mae] step 1650/2000  mse=0.00589  (297s)
+[mae] step 1700/2000  mse=0.00565  (305s)
+[mae] step 1750/2000  mse=0.00577  (314s)
+[mae] step 1800/2000  mse=0.00547  (325s)
+[mae] step 1850/2000  mse=0.00547  (335s)
+[mae] step 1900/2000  mse=0.00582  (344s)
+[mae] step 1950/2000  mse=0.00554  (352s)
+[mae] step 2000/2000  mse=0.00550  (361s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k7_2k.pth @ step 2000 (89 keys)
+[mae] done.  warm-start fine-tune:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k7_2k.pth'
+[campaign25] required pretraining missing: mednext_k7_divided; running 2000 MAE steps
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1789505677.914438  672483 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1789505677.918951  672483 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1789505677.931377  672483 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789505677.931393  672483 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789505677.931394  672483 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789505677.931395  672483 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+[mae] 20260115000000 (6040x8160) axis=y frac=0.8055 -> y[0,4800] x[0,8064]
+[mae] 20250223000000 (7220x10020) axis=x frac=0.75 -> y[0,7104] x[0,7488]
+[mae] 20260206000001 (5840x8440) axis=x frac=0.75 -> y[0,5760] x[0,6144]
+[mae] 20260115000001 (7180x9740) axis=y frac=0.5 -> y[0,3456] x[0,9600]
+[mae] 20260210000000 (7500x9880) axis=x frac=0.5 -> y[0,7488] x[0,4800]
+[mae] 20260227000000 (7700x9760) axis=x frac=0.75 -> y[0,7680] x[0,7296]
+[mae] 20260318000000 (5660x9400) axis=x frac=0.75 -> y[0,5568] x[0,6912]
+[mae] 20260325000000 (5980x8260) axis=x frac=0.6 -> y[0,5952] x[0,4800]
+[mae] 20260108000000 (6200x8020) axis=x frac=0.7 -> y[0,6144] x[0,5568]
+[mae] 20250831000000 (6400x7980) axis=x frac=0.75 -> y[0,6336] x[0,5952]
+[mae] 20260302000000 (8560x7720) axis=x frac=0.75 -> y[0,8448] x[0,5760]
+[mae] 20260306000000 (6200x7440) axis=x frac=0.75 -> y[0,6144] x[0,5568]
+[mae] 20260310000000 (6140x7200) axis=x frac=0.75 -> y[0,5952] x[0,5376]
+[mae] 20260303000000 (7040x7720) axis=y frac=0.5 -> y[0,3456] x[0,7680]
+[mae] 20260317000000 (5820x5240) axis=y frac=0.75 -> y[0,4224] x[0,5184]
+[mae] 20260226000000 (2180x3560) axis=y frac=0.75 -> y[0,1536] x[0,3456]
+[mae] 20250628074500 (6280x3580) axis=x frac=0.6 -> y[0,6144] x[0,2112]
+[mae] 20240304141531 (10400x4975) axis=x frac=0.75 -> y[0,10368] x[0,3648]
+[mae] 20251112000002 (10494x8128) axis=x frac=0.75 -> y[0,10368] x[0,5952]
+[mae] 20251111010954 (11051x12606) axis=x frac=0.75 -> y[0,10944] x[0,9408]
+[mae] 20240304144031 (10595x24525) axis=x frac=0.75 -> y[0,10560] x[0,18240]
+[mae] 20250919125754 (6497x5260) axis=x frac=0.75 -> y[0,6336] x[0,3840]
+[mae] 20231210121321 (12750x9995) axis=x frac=0.75 -> y[0,12672] x[0,7488]
+[mae] 20260814140748 (5081x5701) axis=x frac=1.0 -> y[0,4992] x[0,5568]
+[mae] 20260717193517 (7181x6501) axis=x frac=1.0 -> y[0,7104] x[0,6336]
+[mae] 20260720090842 (3421x3821) axis=x frac=1.0 -> y[0,3264] x[0,3648]
+[mae] 20250703034159 (7181x9401) axis=x frac=1.0 -> y[0,7104] x[0,9216]
+[mae] 20260723112922 (9481x4521) axis=x frac=1.0 -> y[0,9408] x[0,4416]
+[mae] balanced round-robin across 28/28 scrolls
+Model parameters (nnunet3d_lcndz): 6,156,580
+[mae] warm-started backbone from /vesuvius/models/mae_nnunet_192_ibn_depth8_campaign25_base_2k.pth: missing=42 unexpected=0
+[mae] froze 5,602,850 loaded parameters; trainable=553,763
+[mae] nnunet3d backbone  ctx=192 ds=2 depth=8 ibn=True effective_batch=32 mask_frac=0.65  steps=2000  log=runs_mae/mae_nnunet_192_ibn_depth8_campaign25_mednext_k7_divided_2k_0915_20-54-39
+[mae] architecture early_2d=False divided=(True,True) mednext=(True,k7) fiber=False
+[mae] save -> models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k7_divided_2k.pth   use as:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k7_divided_2k.pth'
+[mae] step 50/2000  mse=0.09943  (10s)
+[mae] step 100/2000  mse=0.01142  (21s)
+[mae] step 150/2000  mse=0.00724  (33s)
+[mae] step 200/2000  mse=0.00648  (43s)
+[mae] step 250/2000  mse=0.00691  (56s)
+[mae] step 300/2000  mse=0.00594  (68s)
+[mae] step 350/2000  mse=0.00620  (80s)
+[mae] step 400/2000  mse=0.00555  (93s)
+[mae] step 450/2000  mse=0.00607  (105s)
+[mae] step 500/2000  mse=0.00570  (117s)
+[mae] step 550/2000  mse=0.00587  (129s)
+[mae] step 600/2000  mse=0.00576  (139s)
+[mae] step 650/2000  mse=0.00559  (148s)
+[mae] step 700/2000  mse=0.00546  (157s)
+[mae] step 750/2000  mse=0.00578  (166s)
+[mae] step 800/2000  mse=0.00559  (175s)
+[mae] step 850/2000  mse=0.00567  (187s)
+[mae] step 900/2000  mse=0.00598  (199s)
+[mae] step 950/2000  mse=0.00595  (208s)
+[mae] step 1000/2000  mse=0.00567  (217s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k7_divided_2k.pth @ step 1000 (103 keys)
+[mae] step 1050/2000  mse=0.00562  (229s)
+[mae] step 1100/2000  mse=0.00567  (241s)
+[mae] step 1150/2000  mse=0.00551  (250s)
+[mae] step 1200/2000  mse=0.00556  (259s)
+[mae] step 1250/2000  mse=0.00643  (268s)
+[mae] step 1300/2000  mse=0.00552  (277s)
+[mae] step 1350/2000  mse=0.00624  (286s)
+[mae] step 1400/2000  mse=0.00587  (295s)
+[mae] step 1450/2000  mse=0.00560  (304s)
+[mae] step 1500/2000  mse=0.00562  (313s)
+[mae] step 1550/2000  mse=0.00558  (324s)
+[mae] step 1600/2000  mse=0.00577  (336s)
+[mae] step 1650/2000  mse=0.00589  (348s)
+[mae] step 1700/2000  mse=0.00567  (357s)
+[mae] step 1750/2000  mse=0.00579  (366s)
+[mae] step 1800/2000  mse=0.00547  (375s)
+[mae] step 1850/2000  mse=0.00548  (384s)
+[mae] step 1900/2000  mse=0.00582  (393s)
+[mae] step 1950/2000  mse=0.00556  (402s)
+[mae] step 2000/2000  mse=0.00552  (414s)
+[mae] saved models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k7_divided_2k.pth @ step 2000 (103 keys)
+[mae] done.  warm-start fine-tune:  c.init_weights = 'models/mae_nnunet_192_ibn_depth8_campaign25_mednext_k7_divided_2k.pth'

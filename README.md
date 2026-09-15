@@ -188,8 +188,8 @@ is eagerly loaded as the sole visualization scroll and receives a full evaluatio
 literal surface maps and reports full-intensity training pixels, positive/non-ink pixels, and
 explicit half-intensity negatives.
 
-Campaign 25 is one 12-fragment baseline spanning seven physical scrolls. It adds PHerc0172 w068
-and w087, PHerc1667 w018, two PHerc0009B patches, and PHercParis4 to six established anchors.
+Campaign 25 is one 11-fragment baseline spanning seven physical scrolls. It adds PHerc0172 w068
+and w087, full-size PHerc1667 w018, PHerc0009B patch 487, and PHercParis4 to six established anchors.
 Sampling is round-robin by physical scroll rather than segment: PHerc0139 has weight 2 and every
 other scroll has weight 1. Segments within each physical scroll rotate uniformly. The run uses
 the full-strength literal-surface configuration, fixed DANN 0.03, 12 epochs, fast evaluation at
@@ -216,7 +216,10 @@ kernel 5 is the conservative arm and kernel 7 tests broader fiber/stroke context
 arm tests whether large-kernel local bias and nonlocal attention are complementary.
 
 Campaign 25 preflight also enforces MAE initialization. The baseline, aggregation, and loss arms
-share a campaign-specific 12-fragment continuation of the established 22-scroll MAE checkpoint.
+share a campaign-specific 28-fragment continuation of the established 22-scroll MAE checkpoint:
+all 23 eligible training fragments plus the five configured unlabeled test fragments.
+This uses every eligible `DEFAULT_SCROLLS` fragment; removed auto-grown 722 and the deliberately
+unseen w055 holdout are excluded.
 Fiber coordinates, early 3D→2D, both
 divided-attention variants, both MedNeXt kernels, and the combined MedNeXt/attention model each
 use a matching architecture-specific checkpoint. Missing checkpoints are trained automatically
@@ -225,6 +228,11 @@ baseline MAE checkpoint and freeze its restored parameters while pretraining onl
 modules. This preserves a common backbone and avoids giving architecture arms extra backbone
 optimization. Interrupted runs are not accepted as complete. A dry run reports missing pretraining
 without launching it.
+
+Each Campaign 25 arm derives its expected pretraining key from its active architecture flags.
+Configuration fails if that key and the requested checkpoint differ, and runtime loading fails if
+any active fiber, early-2D, divided-attention, or MedNeXt tensor is absent or shape-incompatible.
+Loss and aggregation arms have no additional backbone tensors and therefore use the shared base.
 
 To continue the existing 18-scroll MAE warm start for 1,000 additional optimizer steps while
 adding the five configured test scrolls, use `--init-weights` together with
@@ -312,7 +320,7 @@ domains, while character IDs keep a separate per-segment namespace.
 
 ## Training data
 
-Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113 keV, 1.2 m detector distance, raw volume ID `20250728140407`). The default MAE/training corpus is now **24 fragments**: the previous 18 plus two PHerc0172 patches, PHerc1667 w018, two PHerc0009B patches, and one PHercParis4 segment.
+Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 113 keV, 1.2 m detector distance, raw volume ID `20250728140407`). The default MAE/training corpus is now **23 fragments**: the previous 18 plus two PHerc0172 patches, full-size PHerc1667 w018, PHerc0009B patch 487, and one PHercParis4 segment.
 
 | ID | Fragment | Zarr shape (D,H,W) | Mask valid frac | Split |
 |---|---|---|---|---|
@@ -344,7 +352,9 @@ Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 11
 |---|---|---|---|---|
 | `20250628074500` | **500P2_front** (PHerc0500P2) | (28, 6280, 3580) | 0.559 | 0.014 (in-mask) |
 
-**PHerc1667 (2026-08-13)** — different scroll and scan physics; a pre-rendered 2.399 µm / 78 keV surface volume was converted to an isotropic ~9.5 µm training zarr. Vertical split (left 75% train / right 25% valid):
+**PHerc1667 (2026-08-13)** — different scroll and scan physics; pre-rendered high-resolution
+surface volumes are pooled to approximately 9.4 µm isotropic training zarrs. Vertical split
+(left 75% train / right 25% valid):
 
 | ID | Fragment | Zarr shape (D,H,W) | Mask valid frac | Eroded ink frac |
 |---|---|---|---|---|
@@ -356,14 +366,13 @@ Most fragments come from **PHerc0139** (Herculaneum scroll, 9.362 µm voxels, 11
 |---|---|---|---|---|
 | `20251112000002` | w087 | PHerc0172 | 7.91 µm / 53 keV | area-resampled XY plus linear depth resample to 28 layers at 9.362 µm |
 | `20251111010954` | w068 | PHerc0172 | 7.91 µm / 53 keV | area-resampled XY plus linear depth resample to 28 layers at 9.362 µm |
-| `20240304144031` | w018 | PHerc1667 | 2.399 µm / 78 keV | level-2 XY (9.596 µm), clean-text crop, depth pool 109→28 |
+| `20240304144031` | w018 | PHerc1667 | 2.399 µm / 78 keV | full level-2 XY (9.596 µm), depth pool 109→28 (9.339 µm Z) |
 | `20250919125754` | auto-grown 487 | PHerc0009B | 8.64 µm / 116 keV | area-resampled XY plus linear depth resample to 28 layers at 9.362 µm |
-| `20250919131352` | auto-grown 722 | PHerc0009B | 8.64 µm / 116 keV | area-resampled XY plus linear depth resample to 28 layers at 9.362 µm |
 | `20231210121321` | Paris4 | PHercParis4 | 2.4 µm / 78 keV | level-2 XY (9.6 µm), full segment, depth pool 109→28 |
 
 The assembler downloads each configured ink prediction, resizes it into the exact training frame,
 writes the primary map to `inklabels/<id>.png`, archives aligned copies under
-`inklabels/2_4um/` (and the w018 1.129 µm prediction under `inklabels/1_1um/`), and creates the
+`inklabels/2_4um/`, and creates the
 conservative binary target in `eroded_inklabels/`. Label generation aborts unless at least 95% of
 thresholded ink pixels overlap the output zarr's midslice-derived papyrus mask.
 
@@ -373,11 +382,11 @@ grid `(6625, 8431, 8431)` with no published crop origin or affine transform. Dir
 reuse would sample the wrong anatomy; the 78 keV surface remains the reproducible source until a
 cross-energy registration is established.
 
-Assemble the six additions serially to bound temporary disk and RAM use:
+Assemble the five additions serially to bound temporary disk and RAM use:
 
 ```bash
 python assemble_training_segments.py \
-  --only w087,w068,w018,p9b_487,p9b_722,paris4 \
+  --only w087,w068,w018,p9b_487,paris4 \
   --concurrent-fragments 1
 ```
 
@@ -385,19 +394,19 @@ After assembly and train-mask authoring, generate their literal surface inputs w
 
 ```bash
 for sid in 20251112000002 20251111010954 20240304144031 \
-           20250919125754 20250919131352 20231210121321; do
+           20250919125754 20231210121321; do
   python generate_surface_supervision.py --scroll-id "$sid"
 done
 git add surface_labels/20251112000002 surface_labels/20251111010954 \
   surface_labels/20240304144031 surface_labels/20250919125754 \
-  surface_labels/20250919131352 surface_labels/20231210121321
+  surface_labels/20231210121321
 ```
 
 **w035** labels are downloaded separately: `python download_w035_labels.py` (1.129 µm / 59 keV source, same as all other PHerc0139 fragments). Assemble zarr via `python assemble_training_segments.py --only w035` (mask generation requires the zarr; re-run label script afterwards to apply it). Edit `inklabels/20260317000000.png` and regenerate eroded labels with `python download_w035_labels.py --erode-only`.
 
 The PHerc0500P2 fragment is notable for its **crystal-clear inklabels** derived from a high-resolution 2.215 µm / 111 keV scan. The 2.215 µm ink detection TIF (shape 26440 × 15060) was resized to the 9.362 µm zarr frame at a 4.21× scale ratio, thresholded at 0.55 (140/255), and eroded with a 3×3 kernel (12 iterations) to produce the training labels. Split changed from horizontal to vertical (2026-08-11) for campaign_archs_7 single-scroll isolation testing. Edit `inklabels/20250628074500.png` then regenerate the eroded version with `python download_p500p2_labels.py --erode-only`. Assemble via `python assemble_training_segments.py --only 500P2_front`.
 
-All **24** are wired into `DEFAULT_SCROLLS` in `utils/config.py`, so future default MAE runs include the six additions. Ink footprint = fraction of the frame with ink label > 0.
+All **23** are wired into `DEFAULT_SCROLLS` in `utils/config.py`, so future default MAE runs include the five additions. Ink footprint = fraction of the frame with ink label > 0.
 
 The masks for **w059** and **w047** are intersected with the 1.1 µm ink-detection footprint (ROI2). The **new 10 use the full 9.4 µm papyrus footprint** (not intersected), so ring negatives near the labeled band could in principle fall on un-scanned surface; in practice the ring hugs the ink so this is minor. The full-surface footprint is recoverable directly from the zarr (`z[mid] > 0`); no separate `_full9um.png` is stored.
 
@@ -550,7 +559,7 @@ both training and validation.
 | `campaign_archs_20.py` | Combined c64_t16/GCE/context/surface baseline with matched 192px vs 128px MAE. |
 | `campaign_archs_23.py` | Triple-scroll literal-surface refinements and depth-representation tests. |
 | `campaign_archs_24.py` | Eighteen-way leave-one-fragment-out full-strength training with fixed DANN and held-out full-scroll visualization. |
-| `campaign_archs_25.py` | Twelve-fragment tests with weighted physical-scroll sampling, forced architecture MAE, and w044-only fast evaluation. |
+| `campaign_archs_25.py` | Eleven-fragment tests with weighted physical-scroll sampling, forced architecture MAE, and w044-only fast evaluation. |
 | `jepa_pretrain_nnunet.py` | 3D masked-block feature prediction with an EMA teacher and collapse guards. |
 | `generate_surface_supervision.py` | Builds full-resolution papyrus-air pseudo-labels and review figures. |
 | `utils/surface.py` | Offline-map soft surface targets and robust smoothness loss. |

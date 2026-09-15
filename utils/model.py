@@ -759,6 +759,14 @@ class NnUnet3dLcndz(nn.Module):
             skip = skip * mask
         return torch.cat([upsampled, skip], dim=1)
 
+    def _merge_skip_2d(self, upsampled: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        if upsampled.shape[2:] != skip.shape[2:]:
+            upsampled = F.interpolate(upsampled, size=skip.shape[2:], mode="bilinear", align_corners=False)
+        if self.training and self._skip_drop > 0:
+            mask = torch.bernoulli(torch.full((1,), 1.0 - self._skip_drop, device=skip.device))
+            skip = skip * mask
+        return torch.cat([upsampled, skip], dim=1)
+
     def _apply_learned_surface(self, raw_x: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
         if self.depth_surface_attn is None:
             self.last_surface_attn = None
@@ -971,16 +979,22 @@ class NnUnet3dLcndz(nn.Module):
             features3d = features3d + self.fiber_coordinate_input(self._fiber_coordinates(raw))
         if self.mednext1 is not None:
             features3d = self.mednext1(features3d)
+        if self._enc1_drop is not None:
+            features3d = self._enc1_drop(features3d)
         weights = torch.softmax(self.early_depth_attn(features3d), dim=2)
         weighted = (features3d * weights).sum(dim=2)
         strongest = features3d.amax(dim=2)
         enc1 = self.early_depth_fuse(torch.cat((weighted, strongest), dim=1))
         enc2 = self.early2d_enc2(F.max_pool2d(enc1, 2))
+        if self._enc2_drop is not None:
+            enc2 = F.dropout2d(enc2, p=self._enc2_drop.p, training=self.training)
         enc3 = self.early2d_enc3(F.max_pool2d(enc2, 2))
         bottleneck = self.early2d_bottleneck(F.max_pool2d(enc3, 2))
-        dec3 = self.early2d_dec3(torch.cat((self.early2d_up3(bottleneck), enc3), dim=1))
-        dec2 = self.early2d_dec2(torch.cat((self.early2d_up2(dec3), enc2), dim=1))
-        dec1 = self.early2d_dec1(torch.cat((self.early2d_up1(dec2), enc1), dim=1))
+        dec3 = self.early2d_dec3(self._merge_skip_2d(self.early2d_up3(bottleneck), enc3))
+        dec2 = self.early2d_dec2(self._merge_skip_2d(self.early2d_up2(dec3), enc2))
+        dec1 = self.early2d_dec1(self._merge_skip_2d(self.early2d_up1(dec2), enc1))
+        if self._head_drop is not None:
+            dec1 = F.dropout2d(dec1, p=self._head_drop.p, training=self.training)
         return bottleneck, dec1
 
     @staticmethod

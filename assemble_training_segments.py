@@ -86,11 +86,10 @@ SEGMENTS = [
     # PHerc0172 / Scroll 5: native 7.91um volumes resampled in XYZ to the 28-layer 9.362um frame.
     ("w087", "PHerc0172/segments/20251112000002-w087_20251112000002214_flatboi", "20251112000002"),
     ("w068", "PHerc0172/segments/20251111010954-w068_20251111010954408_flatboi", "20251111010954"),
-    # PHerc1667 w018: use the known clean-text crop from the matching 2.399um flattening.
+    # PHerc1667 w018: full 2.399um flattening, using level 2 at 9.596um in XY.
     ("w018", "PHerc1667/segments/20240304144031-w018_20240304144031_flatboi", "20240304144031"),
     # PHerc0009B: native 8.64um volumes resampled in XYZ to the training frame.
     ("p9b_487", "PHerc0009B/segments/20250919125754-auto_grown_20250919055754487_inp_hr", "20250919125754"),
-    ("p9b_722", "PHerc0009B/segments/20250919131352-auto_grown_20250919061352722_inp_hr", "20250919131352"),
     # PHercParis4: level-2 XY is 9.6um; pool 109 source depths to 28.
     ("paris4", "PHercParis4/segments/20231210121321", "20231210121321"),
 ]
@@ -130,11 +129,11 @@ FRAG_OPTS = {
         "pooled_special": True,
         "surface_name": "2.399um-0.22m-78keV-volume-20251217075048.zarr",
         "surface_level": 2,
-        "surface_crop": (0, 2400, 1536, 4096),
-        "ink_crop_frac": (0.0, 9600 / 42380, 6144 / 98100, 16384 / 98100),
+        "surface_expected_shape": (109, 10595, 24525),
+        "output_dtype": "|u1",
+        "ink_expected_shape": (42380, 98100),
         "ink_sources": [
             ("2_4um", "PHerc1667-20240304144031-2.399um-0.22m-78keV-volume-20251217075048-20260417190342-new_canon_autoresearch_recipe-tile256-stride128.tif", True),
-            ("1_1um", "PHerc1667-20240304144031-1.129um-0.22m-59keV-volume-20260323082859-L1-20260709123958-mrg20736-1um-s1z2-tile256-stride128.tif", False),
         ],
         "force_norm": True,
     },
@@ -142,12 +141,6 @@ FRAG_OPTS = {
         "vol9_name": "8.64um-1.2m-116keV-volume-20250521125136.zarr",
         "resample_um": 8.64,
         "ink_sources": [("2_4um", "PHerc0009B-20250919125754-2.401um-0.35m-77keV-volume-20250820154339-20260417190342-new_canon_autoresearch_recipe-tile256-stride128.tif", True)],
-        "force_norm": True,
-    },
-    "p9b_722": {
-        "vol9_name": "8.64um-1.2m-116keV-volume-20250521125136.zarr",
-        "resample_um": 8.64,
-        "ink_sources": [("2_4um", "PHerc0009B-20250919131352-2.401um-0.35m-77keV-volume-20250820154339-20260417190342-new_canon_autoresearch_recipe-tile256-stride128.tif", True)],
         "force_norm": True,
     },
     "paris4": {
@@ -550,6 +543,12 @@ def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk
     source_url = f"{BUCKET}/{seg}/surface-volumes/{vol_name}/0"
     source = zarr.open(source_url, mode="r")
     source_depth, source_height, source_width = map(int, source.shape)
+    expected_shape = opts.get("surface_expected_shape")
+    if expected_shape is not None and tuple(source.shape) != tuple(expected_shape):
+        raise RuntimeError(
+            f"{zid}: source surface shape {tuple(source.shape)} != expected "
+            f"{tuple(expected_shape)}"
+        )
     output_height = int(round(source_height * float(source_um) / TARGET_VOXEL_UM))
     output_width = int(round(source_width * float(source_um) / TARGET_VOXEL_UM))
     output_shape = (TARGET_DEPTH, output_height, output_width)
@@ -600,7 +599,7 @@ def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk
 
 
 def _assemble_pooled_surface(seg, zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
-    """stream a 2.4um surface's level-2 XY data and pool its native depth to 28."""
+    """stream a high-resolution surface pyramid and pool its native depth to 28."""
     import zarr
 
     out_zarr = os.path.join(ZARR_DIR, f"{zid}.zarr")
@@ -623,6 +622,7 @@ def _assemble_pooled_surface(seg, zid, opts, chunk_depth, chunk_y, chunk_x, forc
     y0, y1 = max(0, int(y0)), min(source_height, int(y1))
     x0, x1 = max(0, int(x0)), min(source_width, int(x1))
     output_shape = (TARGET_DEPTH, y1 - y0, x1 - x0)
+    output_dtype = np.dtype(opts.get("output_dtype", "<u2"))
     print(
         f"  [1/3] level-{level} pool {source.shape} crop={(y0, y1, x0, x1)} "
         f"depth={source_depth}->{TARGET_DEPTH} output={output_shape}"
@@ -633,7 +633,7 @@ def _assemble_pooled_surface(seg, zid, opts, chunk_depth, chunk_y, chunk_x, forc
         mode="w",
         shape=output_shape,
         chunks=(min(chunk_depth, TARGET_DEPTH), chunk_y, chunk_x),
-        dtype="<u2",
+        dtype=output_dtype,
         compressor=None,
         zarr_format=2,
     )
@@ -644,7 +644,7 @@ def _assemble_pooled_surface(seg, zid, opts, chunk_depth, chunk_y, chunk_x, forc
         pooled = _pool_w013_depth(source_row, TARGET_DEPTH)
         output[:, row_start - y0:row_end - y0] = np.clip(
             np.rint(pooled), 0, 255
-        ).astype(np.uint16)
+        ).astype(output_dtype)
         print(f"  [pool] rows {row_end - y0}/{y1 - y0}", flush=True)
     del output
     if os.path.isdir(out_zarr):
@@ -666,13 +666,26 @@ def _download_ink_tif(seg, filename, destination):
     ])
 
 
-def _resize_tiled_tiff(path, output_shape, crop_frac=None, row_block=512):
+def _resize_tiled_tiff(
+    path,
+    output_shape,
+    crop_frac=None,
+    row_block=512,
+    expected_source_shape=None,
+):
     """read only intersecting TIFF tiles and resize a prediction into the training frame."""
     store = tifffile.imread(path, aszarr=True)
     source = __import__("zarr").open(store, mode="r")
     if source.ndim == 3:
         source = source[..., 0]
     source_height, source_width = map(int, source.shape)
+    if expected_source_shape is not None:
+        expected_source_shape = tuple(map(int, expected_source_shape))
+        if (source_height, source_width) != expected_source_shape:
+            raise RuntimeError(
+                f"{path}: TIFF shape {(source_height, source_width)} != expected "
+                f"{expected_source_shape}"
+            )
     if crop_frac is None:
         y0, y1, x0, x1 = 0, source_height, 0, source_width
     else:
@@ -708,31 +721,33 @@ def _build_downloaded_labels(name, seg, zid, opts, force=False):
     mask = np.asarray(Image.open(mask_path).convert("L"), dtype=np.uint8)
     target_shape = mask.shape
     primary = None
+    primary_unmasked = None
     for source_index, (archive_dir, filename, is_primary) in enumerate(ink_sources):
         local_tif = os.path.join(TMP, f"ink_{zid}_{source_index}.tif")
         _download_ink_tif(seg, filename, local_tif)
-        resized = _resize_tiled_tiff(
+        unmasked = _resize_tiled_tiff(
             local_tif,
             target_shape,
             crop_frac=opts.get("ink_crop_frac"),
+            expected_source_shape=opts.get("ink_expected_shape"),
         )
-        resized = cv2.bitwise_and(resized, resized, mask=mask)
+        resized = cv2.bitwise_and(unmasked, unmasked, mask=mask)
         archive_path = os.path.join("inklabels", archive_dir, f"{zid}.png")
         os.makedirs(os.path.dirname(archive_path), exist_ok=True)
         cv2.imwrite(archive_path, resized)
         print(f"  [label] archived {archive_path} shape={resized.shape}")
         if is_primary:
             primary = resized
+            primary_unmasked = unmasked
     if primary is None:
         raise RuntimeError(f"{name}: ink_sources has no primary prediction")
+    if primary_unmasked is None:
+        raise RuntimeError(f"{name}: primary prediction was not retained for overlap QA")
 
     threshold = int(opts.get("ink_threshold", 140))
     raw_binary = primary >= threshold
     # Measure registration BEFORE masking. Reload the primary target map without footprint clipping.
-    primary_entry = next(entry for entry in ink_sources if entry[2])
-    primary_tif = os.path.join(TMP, f"ink_{zid}_{ink_sources.index(primary_entry)}.tif")
-    unmasked = _resize_tiled_tiff(primary_tif, target_shape, crop_frac=opts.get("ink_crop_frac"))
-    predicted = unmasked >= threshold
+    predicted = primary_unmasked >= threshold
     predicted_count = int(predicted.sum())
     overlap = float((predicted & (mask > 0)).sum() / max(predicted_count, 1))
     if predicted_count == 0 or overlap < 0.95:

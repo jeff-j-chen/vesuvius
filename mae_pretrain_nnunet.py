@@ -46,16 +46,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from utils.config import Config, DEFAULT_SCROLLS
+from utils.config import Config, DEFAULT_SCROLLS, DEFAULT_TEST_SCROLL_IDS
 from utils.norm import UNIFIED_CACHE_PATH, load_cached_norm, compute_norm
 
-MAE_TEST_SCROLL_IDS = [
-    20260814140748,
-    20260717193517,
-    20260720090842,
-    20250703034159,
-    20260723112922,
-]
+MAE_TEST_SCROLL_IDS = list(DEFAULT_TEST_SCROLL_IDS)
 
 try:
     from torch.amp import autocast as _ac, GradScaler as _GS
@@ -382,7 +376,7 @@ def main():
             missing_scrolls.append(sid)
             continue
         H, W = int(vol.shape[1]), int(vol.shape[2])
-        axis, frac = split_by_id.get(sid, ("x", 0.75))
+        axis, frac = split_by_id.get(sid, ("x", 1.0))
         ctx = args.ctx
         if axis == "y":
             y0, y1 = 0, (int(H * frac) // ctx) * ctx

@@ -76,9 +76,16 @@ DEFAULT_SCROLLS: List[ScrollConfig] = [
     ScrollConfig(20251111010954, split_axis="x", train_split_frac=0.75),  # w068 PHerc0172
     ScrollConfig(20240304144031, split_axis="x", train_split_frac=0.75),  # w018 PHerc1667
     ScrollConfig(20250919125754, split_axis="x", train_split_frac=0.75),  # PHerc0009B 487
-    ScrollConfig(20250919131352, split_axis="x", train_split_frac=0.75),  # PHerc0009B 722
     ScrollConfig(20231210121321, split_axis="x", train_split_frac=0.75),  # PHercParis4
 ]
+
+DEFAULT_TEST_SCROLL_IDS = (
+    20260814140748,
+    20260717193517,
+    20260720090842,
+    20250703034159,
+    20260723112922,
+)
 
 
 @dataclass
@@ -93,13 +100,7 @@ class DataConfig:
     train_scroll_dict: Optional[Dict[str, List[int]]] = None
     train_scroll_weights: Optional[List[int]] = None
     test_scroll_ids: List[int] = field(
-        default_factory=lambda: [
-            20260814140748,
-            20260717193517,
-            20260720090842,
-            20250703034159,
-            20260723112922,
-        ]
+        default_factory=lambda: list(DEFAULT_TEST_SCROLL_IDS)
     )
     holdout_scroll_ids: List[int] = field(default_factory=lambda: [20251226000000])
 
@@ -304,6 +305,7 @@ class TrainingConfig:
 class ModelConfig:
     arch: str = "nnunet3d_lcndz"
     compile_model: bool = True
+    require_architecture_init: bool = False
     conv1_drop: float = 0.05
     conv2_drop: float = 0.075
     head_drop: float = 0.0

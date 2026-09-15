@@ -347,7 +347,7 @@ class Trainer:
         model, params = create_model(self.c)
         init_path = getattr(self.c, "init_weights", None)
         if init_path:
-            state_dict = torch.load(init_path, map_location=self.c.device)
+            state_dict = torch.load(init_path, map_location=self.c.device, weights_only=True)
             model_state = model.state_dict()
             compatible = {
                 key: value
@@ -356,6 +356,30 @@ class Trainer:
             }
             skipped = len(state_dict) - len(compatible)
             missing, unexpected = model.load_state_dict(compatible, strict=False)
+            if bool(getattr(self.c.model, "require_architecture_init", False)):
+                active_prefixes = []
+                if bool(getattr(self.c.model, "fiber_coordinate_branch", False)):
+                    active_prefixes.append("fiber_coordinate_input.")
+                if bool(getattr(self.c.model, "early_2d_unet", False)):
+                    active_prefixes.extend(("early_depth_attn.", "early_depth_fuse.", "early2d_"))
+                if bool(getattr(self.c.model, "divided_attention", False)):
+                    active_prefixes.append("divided_attention.")
+                if bool(getattr(self.c.model, "mednext_adapters", False)):
+                    active_prefixes.extend(
+                        ("mednext1.", "mednext2.", "mednext3.", "mednext_bottleneck.")
+                    )
+                required_architecture_keys = {
+                    key
+                    for key in model_state
+                    if any(key.startswith(prefix) for prefix in active_prefixes)
+                }
+                missing_architecture_keys = sorted(required_architecture_keys - compatible.keys())
+                if missing_architecture_keys:
+                    raise RuntimeError(
+                        f"[init-weights] checkpoint {init_path} is missing or incompatible with "
+                        f"{len(missing_architecture_keys)} required architecture tensors: "
+                        f"{missing_architecture_keys[:10]}"
+                    )
             print(
                 f"[init-weights] loaded {len(compatible)}/{len(state_dict)} tensors from {init_path} "
                 f"(shape-skipped={skipped} missing={len(missing)} unexpected={len(unexpected)})"
