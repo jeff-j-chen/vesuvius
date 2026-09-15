@@ -126,6 +126,26 @@ def character_groupdro_loss(
     return objective, ratio
 
 
+def clam_instance_loss(
+    instance_logits: torch.Tensor,
+    labels: torch.Tensor,
+    mask: torch.Tensor,
+    k: int,
+) -> torch.Tensor:
+    """CLAM-lite: constrain representative positive/negative instances per bag."""
+    k = min(max(1, int(k)), int(instance_logits.shape[-1]))
+    top = torch.topk(instance_logits, k, dim=-1).values
+    bottom = torch.topk(instance_logits, k, dim=-1, largest=False).values
+    positive = labels > 0.5
+    valid = mask > 0
+    positive_loss = 0.5 * (
+        F.softplus(-top).mean(dim=-1) + F.softplus(bottom).mean(dim=-1)
+    )
+    negative_loss = F.softplus(top).mean(dim=-1)
+    per_bag = torch.where(positive, positive_loss, negative_loss)
+    return (per_bag * valid).sum() / valid.sum().clamp(min=1.0)
+
+
 def set_seed(seed: int = 42, deterministic: bool = False) -> None:
     """set the global RNG state for reproducible training."""
     torch.cuda.manual_seed_all(seed)
@@ -156,6 +176,15 @@ class Trainer:
             getattr(config.tra, "character_cvar", False)
         ):
             raise ValueError("character_groupdro and character_cvar are independent objectives")
+        if float(getattr(config.tra, "sam_rho", 0.0)) > 0 and any([
+            bool(getattr(config.tra, "tta_consistency", False)),
+            bool(getattr(config.tra, "context_consistency", False)),
+            bool(getattr(config.tra, "depth_view_consistency", False)),
+            bool(getattr(config.tra, "spill_reduction", False)),
+            bool(getattr(config.tra, "spill_prob", False)),
+            bool(getattr(config.tra, "spill_entropy", False)),
+        ]):
+            raise ValueError("SAM currently supports primary, DANN, SupCon, CLAM, and ELR losses only")
         set_seed(
             int(getattr(config.tra, "seed", 41)),
             deterministic=bool(getattr(config.tra, "deterministic", False)),
@@ -181,6 +210,9 @@ class Trainer:
         self._character_groupdro_log_weights: dict[int, float] = {}
         self._last_character_objectives = (0.0, 0.0, 0.0, 0.0)
         self._last_depth_consistency = 0.0
+        self._last_clam_loss = 0.0
+        self._last_elr_loss = 0.0
+        self._elr_targets: dict[int, float] = {}
         self._last_dann_accuracy = 0.0
         self._last_grl_scale = 0.0
 
@@ -195,8 +227,47 @@ class Trainer:
         start_time = time.time()
 
         scroll_ids = [int(scroll.scroll_id) for scroll in self.c.data.scrolls]
-        if bool(getattr(self.c.tra, "dann", False)) and int(getattr(self.c.tra, "dann_n_domains", 0)) <= 0:
-            self.c.tra.dann_n_domains = len(scroll_ids)
+        scroll_dict = getattr(self.c.data, "train_scroll_dict", None)
+        sampling_groups = None
+        sampling_weights = None
+        domain_by_scroll = {scroll_id: index for index, scroll_id in enumerate(scroll_ids)}
+        if scroll_dict:
+            group_names = list(scroll_dict)
+            group_ids = [[int(scroll_id) for scroll_id in scroll_dict[name]] for name in group_names]
+            flattened = [scroll_id for group in group_ids for scroll_id in group]
+            if len(flattened) != len(set(flattened)):
+                raise ValueError("train_scroll_dict assigns at least one segment more than once")
+            if set(flattened) != set(scroll_ids):
+                missing = sorted(set(scroll_ids) - set(flattened))
+                extra = sorted(set(flattened) - set(scroll_ids))
+                raise ValueError(
+                    f"train_scroll_dict must exactly cover configured scrolls; "
+                    f"missing={missing} extra={extra}"
+                )
+            requested_weights = getattr(self.c.data, "train_scroll_weights", None)
+            sampling_weights = (
+                [1] * len(group_names)
+                if requested_weights is None else [int(value) for value in requested_weights]
+            )
+            if len(sampling_weights) != len(group_names) or any(value <= 0 for value in sampling_weights):
+                raise ValueError("train_scroll_weights must provide one positive integer per dictionary key")
+            domain_by_scroll = {
+                scroll_id: domain_id
+                for domain_id, group in enumerate(group_ids)
+                for scroll_id in group
+            }
+            index_by_scroll = {scroll_id: index for index, scroll_id in enumerate(scroll_ids)}
+            sampling_groups = [
+                [index_by_scroll[scroll_id] for scroll_id in group]
+                for group in group_ids
+            ]
+            print(
+                f"[multi-scroll] physical groups={dict(zip(group_names, group_ids))} "
+                f"weights={sampling_weights}"
+            )
+        n_domains = len(set(domain_by_scroll.values()))
+        if bool(getattr(self.c.tra, "dann", False)):
+            self.c.tra.dann_n_domains = n_domains
         self._scroll_ids = scroll_ids
         self._scroll_train_sets = None
 
@@ -206,8 +277,14 @@ class Trainer:
             valid_sets = []
             self._scroll_dms = {}
             self._scroll_train_sets = {}
-            for domain_id, scroll_id in enumerate(scroll_ids):
-                data_manager = DataManager(self.c, scroll_id=scroll_id, domain_id=domain_id)
+            for segment_index, scroll_id in enumerate(scroll_ids):
+                domain_id = domain_by_scroll[scroll_id]
+                data_manager = DataManager(
+                    self.c,
+                    scroll_id=scroll_id,
+                    domain_id=domain_id,
+                    character_namespace=segment_index,
+                )
                 train_set, valid_set = data_manager.get_datasets()
                 train_sets.append(train_set)
                 valid_sets.append(valid_set)
@@ -241,6 +318,8 @@ class Trainer:
             merged_train = MultiScrollIterableDataset(
                 train_sets,
                 balance_scrolls=balance_scrolls,
+                sampling_groups=sampling_groups,
+                sampling_weights=sampling_weights,
             )
             merged_valid = MultiScrollIterableDataset(valid_sets)
             train_loader, valid_loader = get_dataloaders(merged_train, merged_valid, self.c)
@@ -406,6 +485,130 @@ class Trainer:
         out = torch.fft.irfft2(torch.polar(blended, phase), s=(H, W))
         return out.clamp(0.0, 1.0)
 
+    def _elr_regularizer(
+        self,
+        outputs: torch.Tensor,
+        labels: torch.Tensor,
+        mask: torch.Tensor,
+        character_ids: torch.Tensor | None,
+        epoch: int,
+        update_targets: bool = True,
+        temporal_override: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        if not bool(getattr(self.c.tra, "elr", False)):
+            return outputs.new_zeros(()), None
+        start_epoch = int(getattr(self.c.tra, "elr_start_epoch", 5))
+        if epoch + 1 < start_epoch or character_ids is None:
+            return outputs.new_zeros(()), None
+        probabilities = torch.sigmoid(outputs)
+        valid = (mask > 0) & (character_ids > 0)
+        if not valid.any():
+            return outputs.new_zeros(()), None
+        if temporal_override is None:
+            temporal = probabilities.detach().clone()
+            beta = float(getattr(self.c.tra, "elr_beta", 0.7))
+            with torch.no_grad():
+                positive = labels > 0.5
+                keys = character_ids.long() * 2 + positive.long()
+                unique_keys = torch.unique(keys[valid])
+                current_values = torch.stack([
+                    probabilities.detach()[valid & (keys == key)].mean()
+                    for key in unique_keys
+                ]).cpu().tolist()
+                key_values = unique_keys.cpu().tolist()
+                for key, current in zip(key_values, current_values):
+                    selected = valid & (keys == key)
+                    previous = self._elr_targets.get(int(key), float(current))
+                    updated = beta * previous + (1.0 - beta) * current
+                    if update_targets:
+                        self._elr_targets[int(key)] = updated
+                    temporal[selected] = updated
+        else:
+            temporal = temporal_override
+        agreement = probabilities * temporal + (1.0 - probabilities) * (1.0 - temporal)
+        per_target = torch.log((1.0 - agreement).clamp(min=1e-4))
+        loss = (per_target * valid).sum() / valid.sum().clamp(min=1.0)
+        return loss, temporal.detach()
+
+    def _sam_objective(
+        self,
+        images: torch.Tensor,
+        targets: torch.Tensor,
+        labels: torch.Tensor,
+        mask: torch.Tensor,
+        sample_pos: torch.Tensor,
+        domain_ids: torch.Tensor | None,
+        character_ids: torch.Tensor | None,
+        target_offsets: torch.Tensor | None,
+        surface_depth: torch.Tensor | None,
+        surface_confidence: torch.Tensor | None,
+        epoch: int,
+        grl_scale: float,
+        elr_temporal: torch.Tensor | None,
+    ) -> torch.Tensor:
+        outputs, _, domain_logits, supcon_z = self.model.forward_with_extras(
+            images,
+            grl_scale=grl_scale,
+            target_offsets=target_offsets,
+            teacher_surface_depth=surface_depth,
+            teacher_surface_confidence=surface_confidence,
+        )
+        loss = (self.criterion(outputs, targets) * mask).sum() / mask.sum().clamp(min=1.0)
+        if bool(getattr(self.c.tra, "dann", False)) and domain_logits is not None and domain_ids is not None:
+            loss = loss + F.cross_entropy(domain_logits, domain_ids)
+        if bool(getattr(self.c.tra, "supcon", False)) and supcon_z is not None:
+            curriculum_epochs = int(getattr(self.c.tra, "supcon_curriculum_epochs", 15))
+            progress = min(1.0, float(epoch) / max(1, curriculum_epochs - 1))
+            supcon_lambda = (
+                float(getattr(self.c.tra, "supcon_lambda_start", 0.1))
+                + (
+                    float(getattr(self.c.tra, "supcon_lambda_end", 0.5))
+                    - float(getattr(self.c.tra, "supcon_lambda_start", 0.1))
+                ) * progress
+                if bool(getattr(self.c.tra, "supcon_curriculum", False))
+                else float(getattr(self.c.tra, "supcon_lambda", 0.1))
+            )
+            supervised = mask > 0
+            if supcon_z.dim() == 3 and supcon_z.shape[:2] == labels.shape:
+                z_input = supcon_z[supervised]
+                z_labels = labels.clamp(min=0)[supervised].long()
+                z_domains = (
+                    domain_ids.unsqueeze(1).expand_as(labels)[supervised]
+                    if domain_ids is not None and bool(getattr(self.c.tra, "supcon_cross_frag", False))
+                    else None
+                )
+            else:
+                z_input = supcon_z
+                z_labels = sample_pos.long()
+                z_domains = domain_ids if bool(getattr(self.c.tra, "supcon_cross_frag", False)) else None
+            loss = loss + supcon_lambda * supcon_loss(
+                z_input,
+                z_labels,
+                temp=float(getattr(self.c.tra, "supcon_temp", 0.07)),
+                domain_ids=z_domains,
+            )
+        if bool(getattr(self.c.tra, "clam_instance", False)):
+            instances = getattr(self.model, "last_clam_instance_logits", None)
+            if instances is None:
+                raise RuntimeError("CLAM instance loss requires model instance logits")
+            loss = loss + float(getattr(self.c.tra, "clam_instance_lambda", 0.1)) * clam_instance_loss(
+                instances,
+                labels,
+                mask,
+                int(getattr(self.c.tra, "clam_instance_k", 4)),
+            )
+        elr_loss, _ = self._elr_regularizer(
+            outputs,
+            labels,
+            mask,
+            character_ids,
+            epoch,
+            update_targets=False,
+            temporal_override=elr_temporal,
+        )
+        loss = loss + float(getattr(self.c.tra, "elr_lambda", 0.1)) * elr_loss
+        return loss
+
     def _train_batch(self, images, labels, mask, domain_ids=None, character_ids=None,
                      target_offsets=None, epoch: int = 0, unlabeled_images=None,
                      surface_depth=None, surface_confidence=None,
@@ -413,6 +616,8 @@ class Trainer:
                      depth_pair=None, depth_pair_surface=None,
                      depth_pair_confidence=None, depth_pair_active=None):
         self._last_depth_consistency = 0.0
+        self._last_clam_loss = 0.0
+        self._last_elr_loss = 0.0
         if mask.reshape(mask.size(0), -1).sum().item() <= 0:
             print("[ERROR] Mask sum is zero, skipping loss calculation.")
             return (np.empty([]), np.empty([]), np.empty([]), *([0.0] * 11))
@@ -453,6 +658,9 @@ class Trainer:
         bag_rank_loss_value = images.new_zeros(())
         groupdro_loss_value = images.new_zeros(())
         cvar_loss_value = images.new_zeros(())
+        clam_loss_value = images.new_zeros(())
+        elr_loss_value = images.new_zeros(())
+        elr_temporal = None
         dann_accuracy_value = images.new_zeros(())
         dann_grl_value = images.new_zeros(())
 
@@ -550,6 +758,27 @@ class Trainer:
                     primary_loss = robust_loss
                     cvar_loss_value = robust_loss
             loss = primary_loss
+            if bool(getattr(self.c.tra, "clam_instance", False)):
+                instances = getattr(self.model, "last_clam_instance_logits", None)
+                if instances is None:
+                    raise RuntimeError("CLAM instance loss requires model instance logits")
+                clam_loss_value = clam_instance_loss(
+                    instances,
+                    labels,
+                    mask,
+                    int(getattr(self.c.tra, "clam_instance_k", 4)),
+                )
+                loss = loss + float(
+                    getattr(self.c.tra, "clam_instance_lambda", 0.1)
+                ) * clam_loss_value
+            elr_loss_value, elr_temporal = self._elr_regularizer(
+                outputs,
+                labels,
+                mask,
+                character_ids_device,
+                epoch,
+            )
+            loss = loss + float(getattr(self.c.tra, "elr_lambda", 0.1)) * elr_loss_value
             if self.c.tra.l1_lambda > 0:
                 l1_loss = sum(param.abs().sum() for param in self.model.parameters())
                 loss = loss + self.c.tra.l1_lambda * l1_loss
@@ -904,6 +1133,47 @@ class Trainer:
                     getattr(self.c.tra, "depth_view_consistency_lambda", 0.2)
                 ) * depth_consistency_loss_value
             self.scaler.scale(weighted_depth_consistency).backward()
+        sam_rho = float(getattr(self.c.tra, "sam_rho", 0.0))
+        if sam_rho > 0:
+            parameters = [
+                parameter
+                for parameter in self.model.parameters()
+                if parameter.grad is not None
+            ]
+            grad_norm = torch.norm(
+                torch.stack([parameter.grad.detach().norm(2) for parameter in parameters]),
+                2,
+            )
+            perturbations = []
+            scale = sam_rho / grad_norm.clamp(min=1e-12)
+            with torch.no_grad():
+                for parameter in parameters:
+                    perturbation = parameter.grad * scale.to(parameter)
+                    parameter.add_(perturbation)
+                    perturbations.append((parameter, perturbation))
+            self.optimizer.zero_grad(set_to_none=True)
+            try:
+                with autocast(self.c.device, enabled=self.c.device == "cuda"):
+                    sam_loss = self._sam_objective(
+                        images,
+                        targets,
+                        labels,
+                        mask,
+                        sample_pos,
+                        domain_ids,
+                        character_ids_device,
+                        target_offsets,
+                        surface_depth,
+                        surface_confidence,
+                        epoch,
+                        grl_scale,
+                        elr_temporal,
+                    )
+                self.scaler.scale(sam_loss).backward()
+            finally:
+                with torch.no_grad():
+                    for parameter, perturbation in perturbations:
+                        parameter.sub_(perturbation)
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()
@@ -926,6 +1196,8 @@ class Trainer:
             cvar_loss_value.detach().float(),
             dann_accuracy_value.detach().float(),
             dann_grl_value.detach().float(),
+            clam_loss_value.detach().float(),
+            elr_loss_value.detach().float(),
         )).cpu().tolist()
         self._last_depth_consistency = diagnostic_values[12]
         self._last_character_objectives = (
@@ -934,6 +1206,8 @@ class Trainer:
         )
         self._last_dann_accuracy = diagnostic_values[16]
         self._last_grl_scale = diagnostic_values[17]
+        self._last_clam_loss = diagnostic_values[18]
+        self._last_elr_loss = diagnostic_values[19]
 
         if hasattr(self.model, "prototype_head") and self.model.prototype_head is not None:
             emb = getattr(self.model, "last_embedding_detached", None)
@@ -1017,6 +1291,8 @@ class Trainer:
         bag_rank_loss_total = 0.0
         groupdro_loss_total = 0.0
         cvar_loss_total = 0.0
+        clam_loss_total = 0.0
+        elr_loss_total = 0.0
 
         entropy_lambda = float(getattr(self.c.tra, "entropy_min_lambda", 0.0))
         u_iter = iter(self.valid_loader) if entropy_lambda > 0 else None
@@ -1153,6 +1429,8 @@ class Trainer:
             bag_rank_loss_total += bag_value
             groupdro_loss_total += groupdro_value
             cvar_loss_total += cvar_value
+            clam_loss_total += self._last_clam_loss
+            elr_loss_total += self._last_elr_loss
 
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
         if bool(getattr(self.c.tra, "character_macro_metrics", False)):
@@ -1184,6 +1462,8 @@ class Trainer:
         metrics["character_bag_ranking_loss"] = bag_rank_loss_total / len(self.train_loader)
         metrics["character_groupdro_loss"] = groupdro_loss_total / len(self.train_loader)
         metrics["character_cvar_loss"] = cvar_loss_total / len(self.train_loader)
+        metrics["clam_instance_loss"] = clam_loss_total / len(self.train_loader)
+        metrics["elr_loss"] = elr_loss_total / len(self.train_loader)
         metrics["scores"] = scores
         metrics["hard_injected"] = total_injected
 
@@ -1418,6 +1698,8 @@ class Trainer:
             ("character_bag_ranking_loss", "Aux/CharacterBagRanking"),
             ("character_groupdro_loss", "Aux/CharacterGroupDRO"),
             ("character_cvar_loss", "Aux/CharacterCVaR"),
+            ("clam_instance_loss", "Aux/CLAMInstance"),
+            ("elr_loss", "Aux/ELR"),
         ):
             if key in train_metrics:
                 self.vis.writer.add_scalar(tag, train_metrics[key], epoch)

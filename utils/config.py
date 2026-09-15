@@ -72,6 +72,12 @@ DEFAULT_SCROLLS: List[ScrollConfig] = [
     ScrollConfig(20260226000000, split_axis="y", train_split_frac=0.75),
     ScrollConfig(20250628074500, split_axis="x", train_split_frac=0.6),
     ScrollConfig(20240304141531, split_axis="x", train_split_frac=0.75),  # w013 PHerc1667
+    ScrollConfig(20251112000002, split_axis="x", train_split_frac=0.75),  # w087 PHerc0172
+    ScrollConfig(20251111010954, split_axis="x", train_split_frac=0.75),  # w068 PHerc0172
+    ScrollConfig(20240304144031, split_axis="x", train_split_frac=0.75),  # w018 PHerc1667
+    ScrollConfig(20250919125754, split_axis="x", train_split_frac=0.75),  # PHerc0009B 487
+    ScrollConfig(20250919131352, split_axis="x", train_split_frac=0.75),  # PHerc0009B 722
+    ScrollConfig(20231210121321, split_axis="x", train_split_frac=0.75),  # PHercParis4
 ]
 
 
@@ -84,6 +90,8 @@ class DataConfig:
         )
     )
     scrolls: List[ScrollConfig] = field(default_factory=lambda: list(DEFAULT_SCROLLS))
+    train_scroll_dict: Optional[Dict[str, List[int]]] = None
+    train_scroll_weights: Optional[List[int]] = None
     test_scroll_ids: List[int] = field(
         default_factory=lambda: [
             20260814140748,
@@ -283,6 +291,14 @@ class TrainingConfig:
     character_groupdro_max_ratio: float = 3.0
     character_cvar: bool = False
     character_cvar_alpha: float = 0.25
+    clam_instance: bool = False
+    clam_instance_k: int = 4
+    clam_instance_lambda: float = 0.1
+    sam_rho: float = 0.0
+    elr: bool = False
+    elr_start_epoch: int = 5
+    elr_beta: float = 0.7
+    elr_lambda: float = 0.1
 
 @dataclass
 class ModelConfig:
@@ -295,6 +311,18 @@ class ModelConfig:
     attn_entropy_weight: float = 0.0
     feature_attn_mil: bool = False
     feature_depth_fusion: bool = False
+    minimum_support_k: int = 0
+    minimum_support_kernel: int = 3
+    weldon_k: int = 0
+    fiber_coordinate_branch: bool = False
+    early_2d_unet: bool = False
+    divided_attention: bool = False
+    divided_attention_spatial: bool = False
+    divided_attention_heads: int = 4
+    divided_attention_window: int = 8
+    mednext_adapters: bool = False
+    mednext_kernel: int = 5
+    mednext_expansion: int = 2
     learned_surface: bool = False
     new_learned_surface: bool = False
     better_surface: bool = False

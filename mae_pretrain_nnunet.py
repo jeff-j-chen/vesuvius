@@ -5,10 +5,10 @@ already understands papyrus texture (depth profiles, fiber patterns, layer inter
 gives the supervised head a richer feature space to separate ink from papyrus -- the
 same lever that made MAE pretraining necessary for the older two-stage architecture.
 
-WHAT IS PRETRAINED: the full nnunet3d_lcndz encoder + decoder -- everything except
-the final binary out_head. a throwaway reconstruction head (1 conv) is appended for
-MAE. at fine-tune time, train.py loads the saved checkpoint with strict=False; the
-backbone weights transfer and the recon head is silently ignored.
+WHAT IS PRETRAINED: the active nnunet3d_lcndz encoder + decoder -- everything except
+the final binary out_head. optional fiber, early-2D, divided-attention, and MedNeXt
+paths can be trained with the same objective. a throwaway reconstruction head is
+appended for MAE. at fine-tune time, train.py loads only the saved backbone.
 
 APPROACH: block-masked 3D inpainting.
   - sample (D, ctx, ctx) crops from each scroll's TRAIN region (no label leakage)
@@ -220,20 +220,29 @@ def _apply_mask(x, mask):
 class NnUnetMAE(nn.Module):
     """nnunet3d_lcndz backbone + throwaway reconstruction head.
 
-    the backbone's _encode_decode runs on the masked input.
-    the recon head maps the decoded features back to the ds-downsampled raw volume.
+    the active 3D or early-2D decoder runs on the masked input. the recon head maps
+    decoded features back to the ds-downsampled raw volume.
     only backbone.* keys are meaningful at fine-tune time.
     """
 
-    def __init__(self, backbone):
+    def __init__(self, backbone, depth: int):
         super().__init__()
         self.backbone = backbone
-        # dec1 has 32 channels; reconstruct at (D, H/ds, W/ds) resolution
-        self.recon_head = nn.Conv3d(32, 1, kernel_size=1, bias=True)
+        self.early_2d = bool(getattr(backbone, "_early_2d_unet", False))
+        decoder_channels = int(backbone.out_head.in_channels)
+        # Both paths reconstruct (B,1,D,H/ds,W/ds). The early-2D decoder emits
+        # one 2D feature map, so its throwaway head predicts D channels directly.
+        self.recon_head = (
+            nn.Conv2d(decoder_channels, int(depth), kernel_size=1, bias=True)
+            if self.early_2d else nn.Conv3d(decoder_channels, 1, kernel_size=1, bias=True)
+        )
         nn.init.zeros_(self.recon_head.weight)
         nn.init.zeros_(self.recon_head.bias)
 
     def forward(self, x_masked):
+        if self.early_2d:
+            _, dec1 = self.backbone._encode_decode_early_2d(x_masked, None, None)
+            return self.recon_head(dec1).unsqueeze(1)
         _, dec1 = self.backbone._encode_decode(x_masked)
         return self.recon_head(dec1)   # (B, 1, D, H/ds, W/ds)
 
@@ -277,12 +286,20 @@ def main():
                     help="append the five configured unseen test zarrs to the sampler")
     ap.add_argument("--init-weights", default=None,
                     help="warm-start the backbone from a prior MAE checkpoint")
+    ap.add_argument("--freeze-loaded-backbone", action="store_true",
+                    help="freeze tensors restored by --init-weights and train only new modules")
     ap.add_argument("--ctx", type=int, default=192,
                     help="context window size in pixels (should match campaign ctx)")
     ap.add_argument("--ds", type=int, default=2,
                     help="context_downsample (must match campaign setting)")
     ap.add_argument("--no-ibn", action="store_false", dest="ibn", default=True,
                     help="disable IBN in the shallow encoder blocks")
+    ap.add_argument("--early-2d-unet", action="store_true")
+    ap.add_argument("--divided-attention", action="store_true")
+    ap.add_argument("--divided-attention-spatial", action="store_true")
+    ap.add_argument("--mednext-adapters", action="store_true")
+    ap.add_argument("--mednext-kernel", type=int, default=5)
+    ap.add_argument("--fiber-coordinate-branch", action="store_true")
     ap.add_argument("--depth", type=int, default=24)
     ap.add_argument("--d-start", type=int, default=4)
     ap.add_argument("--d-end", type=int, default=28)
@@ -312,6 +329,12 @@ def main():
         ap.error("ctx/ds must be an integer divisible by mask-patch")
     if args.batch_size <= 0 or args.accum_steps <= 0:
         ap.error("--batch-size and --accum-steps must be positive")
+    if args.divided_attention_spatial and not args.divided_attention:
+        ap.error("--divided-attention-spatial requires --divided-attention")
+    if args.mednext_kernel < 3 or args.mednext_kernel % 2 == 0:
+        ap.error("--mednext-kernel must be an odd integer >= 3")
+    if args.freeze_loaded_backbone and not args.init_weights:
+        ap.error("--freeze-loaded-backbone requires --init-weights")
 
     # build a minimal config matching the campaign settings
     cfg = Config()
@@ -319,6 +342,16 @@ def main():
     cfg.model.attn_mil = False         # no MIL during pretraining
     cfg.model.learned_surface = False
     cfg.model.use_ibn = args.ibn
+    cfg.model.multitile = bool(args.early_2d_unet)
+    cfg.model.early_2d_unet = bool(args.early_2d_unet)
+    cfg.model.divided_attention = bool(args.divided_attention)
+    cfg.model.divided_attention_spatial = bool(args.divided_attention_spatial)
+    cfg.model.divided_attention_heads = 4
+    cfg.model.divided_attention_window = 8
+    cfg.model.mednext_adapters = bool(args.mednext_adapters)
+    cfg.model.mednext_kernel = int(args.mednext_kernel)
+    cfg.model.mednext_expansion = 2
+    cfg.model.fiber_coordinate_branch = bool(args.fiber_coordinate_branch)
     cfg.tra.supcon = False
     cfg.data.tile_size = 16
     cfg.data.depth = args.depth
@@ -394,7 +427,7 @@ def main():
 
     from utils.model import create_model
     backbone, _ = create_model(cfg)
-    model = NnUnetMAE(backbone).to(dev)
+    model = NnUnetMAE(backbone, args.depth).to(dev)
     if args.init_weights:
         state = torch.load(args.init_weights, map_location=dev, weights_only=True)
         if isinstance(state, dict) and "state_dict" in state:
@@ -402,6 +435,11 @@ def main():
         cleaned = {
             key.removeprefix("module.").removeprefix("_orig_mod."): value
             for key, value in state.items()
+        }
+        backbone_state = model.backbone.state_dict()
+        loaded_keys = {
+            key for key, value in cleaned.items()
+            if key in backbone_state and value.shape == backbone_state[key].shape
         }
         incompatible = model.backbone.load_state_dict(cleaned, strict=False)
         unexpected = [key for key in incompatible.unexpected_keys if not key.startswith("recon_head.")]
@@ -411,6 +449,14 @@ def main():
             f"[mae] warm-started backbone from {args.init_weights}: "
             f"missing={len(incompatible.missing_keys)} unexpected={len(incompatible.unexpected_keys)}"
         )
+        if args.freeze_loaded_backbone:
+            frozen = 0
+            for name, parameter in model.backbone.named_parameters():
+                if name in loaded_keys:
+                    parameter.requires_grad_(False)
+                    frozen += parameter.numel()
+            trainable = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
+            print(f"[mae] froze {frozen:,} loaded parameters; trainable={trainable:,}")
     model.train()
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -436,7 +482,11 @@ def main():
     if args.steps > 0:
         print(f"[mae] nnunet3d backbone  ctx={args.ctx} ds={args.ds} depth={args.depth} "
             f"ibn={args.ibn} effective_batch={args.batch_size * args.accum_steps} "
-            f"mask_frac={args.mask_frac}  steps={args.steps}  log={run_dir}")
+            f"mask_frac={args.mask_frac}  steps={args.steps}  log={run_dir}\n"
+            f"[mae] architecture early_2d={args.early_2d_unet} "
+            f"divided=({args.divided_attention},{args.divided_attention_spatial}) "
+            f"mednext=({args.mednext_adapters},k{args.mednext_kernel}) "
+            f"fiber={args.fiber_coordinate_branch}")
     print(f"[mae] save -> {save_path}   use as:  c.init_weights = '{save_path}'")
 
     t0 = time.time()

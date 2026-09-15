@@ -528,7 +528,7 @@ class Transform:
 
 class InkVolumeDataset(IterableDataset):
     """iterable dataset for ink volume data"""
-    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, scroll_mask=None, split_mask=None, character_grid=None, explicit_negative_mask=None):
+    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, character_namespace=None, scroll_mask=None, split_mask=None, character_grid=None, explicit_negative_mask=None):
         """initializes the dataset.
         scroll_mask: optional papyrus mask distinct from `mask` (which may be ring-restricted);
         multitile uses it to drop sub-tiles straddling the scroll boundary. defaults to `mask`.
@@ -540,9 +540,14 @@ class InkVolumeDataset(IterableDataset):
         per-pixel target uses these CONTINUOUS values instead of the hard binary label —
         calibrated soft edges (see _fetch/__next__ dense path). stored as uint8 0-255.
         scroll_id: integer scroll id for bookkeeping.
-        domain_id: compact 0..N-1 fragment id used by DANN when enabled."""
+        domain_id: compact physical-scroll id used by DANN/SupCon when enabled.
+        character_namespace: compact segment id that prevents component collisions when
+        several segments intentionally share one physical domain id."""
         self.scroll_id = int(scroll_id) if scroll_id is not None else 0
         self.domain_id = int(domain_id) if domain_id is not None else 0
+        self.character_namespace = int(
+            character_namespace if character_namespace is not None else self.domain_id
+        )
         # store zarr path + segment id instead of the open zarr object so that
         # the dataset can be safely pickled for multiprocessing workers on Windows;
         # each worker opens its own zarr handle lazily on first access
@@ -886,7 +891,7 @@ class InkVolumeDataset(IterableDataset):
                 else:
                     out[index] = int(self._character_nearest[gy, gx])
                 if out[index] > 0:
-                    out[index] += int(self.domain_id) * 1_000_000
+                    out[index] += int(self.character_namespace) * 1_000_000
         return out
 
     def _character_balanced_coords(self):
@@ -1721,10 +1726,36 @@ class MultiScrollIterableDataset(IterableDataset):
     tiles from every scroll fragment interleaved (batches are integrated, not
     alternated). each child handles its own per-worker sharding, so worker N
     receives shard N of every scroll."""
-    def __init__(self, datasets, balance_scrolls=False):
+    def __init__(
+        self,
+        datasets,
+        balance_scrolls=False,
+        sampling_groups=None,
+        sampling_weights=None,
+    ):
         super().__init__()
         self.datasets = list(datasets)
         self.balance_scrolls = bool(balance_scrolls)
+        self.sampling_groups = (
+            [list(map(int, group)) for group in sampling_groups]
+            if sampling_groups is not None else None
+        )
+        self.sampling_weights = (
+            [int(weight) for weight in sampling_weights]
+            if sampling_weights is not None else None
+        )
+        if self.sampling_groups is not None:
+            if len(self.sampling_groups) == 0 or any(not group for group in self.sampling_groups):
+                raise ValueError("sampling_groups must contain non-empty groups")
+            flattened = sorted(index for group in self.sampling_groups for index in group)
+            if flattened != list(range(len(self.datasets))):
+                raise ValueError("sampling_groups must partition every dataset exactly once")
+            if self.sampling_weights is None:
+                self.sampling_weights = [1] * len(self.sampling_groups)
+            if len(self.sampling_weights) != len(self.sampling_groups):
+                raise ValueError("sampling_weights must match sampling_groups")
+            if any(weight <= 0 for weight in self.sampling_weights):
+                raise ValueError("sampling_weights must be positive integers")
         self._apply_transforms = False
 
     @property
@@ -1749,6 +1780,34 @@ class MultiScrollIterableDataset(IterableDataset):
                 total = int(np.ceil(total / float(worker_info.num_workers)))
             yielded = 0
             iterators = [iter(dataset) for dataset in self.datasets]
+            if self.sampling_groups is not None:
+                group_orders = [list(np.random.permutation(group)) for group in self.sampling_groups]
+                group_positions = [0] * len(self.sampling_groups)
+                schedule = [
+                    group_index
+                    for group_index, weight in enumerate(self.sampling_weights)
+                    for _ in range(weight)
+                ]
+                while yielded < total:
+                    for group_index in np.random.permutation(schedule):
+                        if yielded >= total:
+                            break
+                        position = group_positions[group_index]
+                        order = group_orders[group_index]
+                        if position >= len(order):
+                            order = list(np.random.permutation(self.sampling_groups[group_index]))
+                            group_orders[group_index] = order
+                            position = 0
+                        dataset_index = order[position]
+                        group_positions[group_index] = position + 1
+                        try:
+                            sample = next(iterators[dataset_index])
+                        except StopIteration:
+                            iterators[dataset_index] = iter(self.datasets[dataset_index])
+                            sample = next(iterators[dataset_index])
+                        yielded += 1
+                        yield sample
+                return
             while yielded < total:
                 order = np.random.permutation(len(iterators))
                 for index in order:
@@ -1881,7 +1940,13 @@ class DotPositiveDataset(IterableDataset):
 
 class DataManager:
     """manages data loading, splitting, and normalization"""
-    def __init__(self, config: Config, scroll_id=None, domain_id: int = 0):
+    def __init__(
+        self,
+        config: Config,
+        scroll_id=None,
+        domain_id: int = 0,
+        character_namespace: int | None = None,
+    ):
         """initializes the data manager.
         scroll_id: which scroll fragment to load; defaults to the first configured scroll.
         passing it explicitly lets the trainer build one manager per fragment."""
@@ -1890,6 +1955,9 @@ class DataManager:
             scroll_id = config.data.scrolls[0].scroll_id
         self.scroll_id = int(scroll_id)
         self.domain_id = int(domain_id)
+        self.character_namespace = int(
+            character_namespace if character_namespace is not None else self.domain_id
+        )
 
         # load raw data and define splits
         self.vol, self.mask, self.labels, self.train_x, self.valid_x, self.y_range = self._load_raw_data()
@@ -2192,6 +2260,7 @@ class DataManager:
             shuffle=True,
             scroll_id=self.scroll_id,
             domain_id=self.domain_id,
+            character_namespace=self.character_namespace,
             scroll_mask=scroll_mask_arg,
             split_mask=train_split_mask,
             character_grid=character_grid,
@@ -2208,6 +2277,7 @@ class DataManager:
             shuffle=False,
             scroll_id=self.scroll_id,
             domain_id=self.domain_id,
+            character_namespace=self.character_namespace,
             scroll_mask=scroll_mask_arg,
             split_mask=valid_split_mask,
             character_grid=character_grid,

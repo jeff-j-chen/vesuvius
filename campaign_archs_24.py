@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import gc
 import os
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -37,11 +38,18 @@ INKLABEL_DIR = Path("./eroded_inklabels")
 SURFACE_LABEL_DIR = Path("./surface_labels")
 ZARR_DIR = Path(os.getenv("VESUVIUS_ZARR_PATH", "/vesuvius/ves_zarrs2"))
 
-ALL_SCROLLS = tuple(DEFAULT_SCROLLS)
-if len(ALL_SCROLLS) != 18:
-    raise RuntimeError(f"campaign 24 requires exactly 18 scrolls, found {len(ALL_SCROLLS)}")
-if len({int(scroll.scroll_id) for scroll in ALL_SCROLLS}) != len(ALL_SCROLLS):
-    raise RuntimeError("campaign 24 scroll ids must be unique")
+_CAMPAIGN24_IDS = (
+    20260115000000, 20250223000000, 20260206000001, 20260115000001,
+    20260210000000, 20260227000000, 20260318000000, 20260325000000,
+    20260108000000, 20250831000000, 20260302000000, 20260306000000,
+    20260310000000, 20260303000000, 20260317000000, 20260226000000,
+    20250628074500, 20240304141531,
+)
+_DEFAULT_SCROLLS_BY_ID = {int(scroll.scroll_id): scroll for scroll in DEFAULT_SCROLLS}
+_missing_campaign24 = set(_CAMPAIGN24_IDS) - set(_DEFAULT_SCROLLS_BY_ID)
+if _missing_campaign24:
+    raise RuntimeError(f"campaign 24 scroll definitions missing: {sorted(_missing_campaign24)}")
+ALL_SCROLLS = tuple(_DEFAULT_SCROLLS_BY_ID[scroll_id] for scroll_id in _CAMPAIGN24_IDS)
 _SCROLLS_BY_ID = {int(scroll.scroll_id): scroll for scroll in ALL_SCROLLS}
 _HOLDOUT_IDS = (
     20250223000000,
@@ -86,7 +94,11 @@ def _count_train_mask(scroll_id: int) -> tuple[dict[str, int], list[str]]:
     label_path = INKLABEL_DIR / f"{scroll_id}.png"
     zarr_path = ZARR_DIR / f"{scroll_id}.zarr"
     surface_dir = SURFACE_LABEL_DIR / str(scroll_id)
-    surface_paths = (surface_dir / "depth.npy", surface_dir / "confidence.npy")
+    surface_paths = (
+        surface_dir / "depth.npy",
+        surface_dir / "confidence.npy",
+        surface_dir / "metadata.json",
+    )
     required = (train_path, mask_path, label_path, zarr_path, *surface_paths)
     missing = [str(path) for path in required if not path.exists()]
     if missing:
@@ -131,8 +143,6 @@ def _count_train_mask(scroll_id: int) -> tuple[dict[str, int], list[str]]:
         errors.append("contains no detected positive ink pixels")
     if stats["nonink_pixels"] == 0:
         errors.append("contains no detected non-ink training pixels")
-    if stats["outside_papyrus"]:
-        errors.append(f"assigns {stats['outside_papyrus']:,} pixels outside the papyrus mask")
     if stats["invalid_value_pixels"]:
         errors.append(
             f"contains {stats['invalid_value_pixels']:,} nonzero pixels outside the full/half bands"
@@ -161,12 +171,30 @@ def preflight_train_masks(scrolls=ALL_SCROLLS) -> None:
                 f" positive={stats['positive_pixels']:,}"
                 f" nonink={stats['nonink_pixels']:,}"
                 f" explicit_negative={stats['explicit_negative_pixels']:,}"
-                f" explicit_label_overlap={stats['explicit_ink_overlap']:,}",
+                f" explicit_label_overlap={stats['explicit_ink_overlap']:,}"
+                f" outside_papyrus_ignored={stats['outside_papyrus']:,}",
                 flush=True,
             )
         if errors:
             failures.extend(f"{scroll_id}: {message}" for message in errors)
             for message in errors:
+                print(f"  {scroll_id}: ERROR {message}", flush=True)
+
+    tracked_result = subprocess.run(
+        ["git", "ls-files", "--cached", "--", "surface_labels"],
+        cwd=Path(__file__).resolve().parent,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    tracked = {Path(line.strip()) for line in tracked_result.stdout.splitlines() if line.strip()}
+    for scroll in scrolls:
+        scroll_id = int(scroll.scroll_id)
+        for name in ("depth.npy", "confidence.npy", "metadata.json"):
+            relative = Path("surface_labels") / str(scroll_id) / name
+            if relative.exists() and relative not in tracked:
+                message = f"surface artifact is not staged or committed: {relative}"
+                failures.append(f"{scroll_id}: {message}")
                 print(f"  {scroll_id}: ERROR {message}", flush=True)
     if failures:
         raise RuntimeError(

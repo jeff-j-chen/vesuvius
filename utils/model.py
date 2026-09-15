@@ -7,6 +7,8 @@ This file keeps only the integrations still exercised by the current sweep:
   - raw + lcn + dz stem
   - optional learned surface attention
   - optional attention-MIL with entropy regularization
+    - fixed minimum-support, WELDON, and CLAM-lite MIL evidence
+    - optional structure-tensor fiber coordinates
   - optional spatial SupCon projection head
 """
 from __future__ import annotations
@@ -363,6 +365,117 @@ class ConvBlock3d(nn.Module):
         return self.net(x)
 
 
+class ConvBlock2d(nn.Module):
+    """two-conv 2D U-Net block used after early surface-normal fusion."""
+
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.InstanceNorm2d(out_channels, affine=True),
+            nn.LeakyReLU(0.01, inplace=False),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.InstanceNorm2d(out_channels, affine=True),
+            nn.LeakyReLU(0.01, inplace=False),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class DividedSpaceDepthAttention3d(nn.Module):
+    """TimeSformer-style depth attention followed by optional windowed XY attention."""
+
+    def __init__(self, channels: int, heads: int = 4, window: int = 8, spatial: bool = True):
+        super().__init__()
+        if channels % heads:
+            raise ValueError("divided-attention channels must be divisible by heads")
+        self.channels = int(channels)
+        self.window = max(1, int(window))
+        self.spatial = bool(spatial)
+        self.depth_norm = nn.LayerNorm(channels)
+        self.depth_attn = nn.MultiheadAttention(channels, heads, batch_first=True)
+        if self.spatial:
+            self.spatial_norm = nn.LayerNorm(channels)
+            self.spatial_attn = nn.MultiheadAttention(channels, heads, batch_first=True)
+        else:
+            self.spatial_norm = None
+            self.spatial_attn = None
+        self.depth_gain = nn.Parameter(torch.tensor(0.0))
+        self.spatial_gain = nn.Parameter(torch.tensor(0.0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch, channels, depth, height, width = x.shape
+        depth_tokens = x.permute(0, 3, 4, 2, 1).reshape(batch * height * width, depth, channels)
+        normalized = self.depth_norm(depth_tokens)
+        attended, _ = self.depth_attn(normalized, normalized, normalized, need_weights=False)
+        depth_tokens = depth_tokens + self.depth_gain * attended
+        x = depth_tokens.reshape(batch, height, width, depth, channels).permute(0, 4, 3, 1, 2)
+        if not self.spatial:
+            return x
+
+        window = self.window
+        pad_h = (-height) % window
+        pad_w = (-width) % window
+        padded = F.pad(x, (0, pad_w, 0, pad_h))
+        padded_h, padded_w = padded.shape[-2:]
+        tokens = padded.permute(0, 2, 3, 4, 1).reshape(
+            batch,
+            depth,
+            padded_h // window,
+            window,
+            padded_w // window,
+            window,
+            channels,
+        ).permute(0, 1, 2, 4, 3, 5, 6).reshape(-1, window * window, channels)
+        normalized = self.spatial_norm(tokens)
+        attended, _ = self.spatial_attn(normalized, normalized, normalized, need_weights=False)
+        tokens = tokens + self.spatial_gain * attended
+        padded = tokens.reshape(
+            batch,
+            depth,
+            padded_h // window,
+            padded_w // window,
+            window,
+            window,
+            channels,
+        ).permute(0, 6, 1, 2, 4, 3, 5).reshape(
+            batch, channels, depth, padded_h, padded_w
+        )
+        return padded[:, :, :, :height, :width]
+
+
+class MedNeXtAdapter3d(nn.Module):
+    """zero-initialized anisotropic large-kernel ConvNeXt residual adapter."""
+
+    def __init__(self, channels: int, spatial_kernel: int = 5, expansion: int = 2):
+        super().__init__()
+        if spatial_kernel < 3 or spatial_kernel % 2 == 0:
+            raise ValueError("MedNeXt spatial kernel must be an odd integer >=3")
+        hidden = channels * max(1, int(expansion))
+        self.depthwise = nn.Conv3d(
+            channels,
+            channels,
+            kernel_size=(3, spatial_kernel, spatial_kernel),
+            padding=(1, spatial_kernel // 2, spatial_kernel // 2),
+            groups=channels,
+            bias=False,
+        )
+        self.norm = nn.InstanceNorm3d(channels, affine=True)
+        self.expand = nn.Conv3d(channels, hidden, kernel_size=1)
+        self.project = nn.Conv3d(hidden, channels, kernel_size=1)
+
+    def reset_output(self) -> None:
+        nn.init.zeros_(self.project.weight)
+        nn.init.zeros_(self.project.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = self.depthwise(x)
+        residual = self.norm(residual)
+        residual = F.gelu(self.expand(residual))
+        return x + self.project(residual)
+
+
 class NnUnet3dLcndz(nn.Module):
     """current production backbone: nnU-Net with raw + lcn + dz stem."""
 
@@ -384,6 +497,7 @@ class NnUnet3dLcndz(nn.Module):
         self.last_surface_guided_alpha: torch.Tensor | None = None
         self.last_surface_target: torch.Tensor | None = None
         self.last_surface_valid: torch.Tensor | None = None
+        self.last_clam_instance_logits: torch.Tensor | None = None
 
         self.lse_r = nn.Parameter(torch.tensor(2.0, dtype=torch.float32))
         input_depth = int(getattr(config.data, "depth", 24))
@@ -420,6 +534,68 @@ class NnUnet3dLcndz(nn.Module):
         self.up1 = nn.ConvTranspose3d(c2, c1, kernel_size=2, stride=2)
         self.dec1 = ConvBlock3d(c1 * 2, c1)
         self.out_head = nn.Conv3d(c1, 1, kernel_size=1, bias=True)
+
+        self._early_2d_unet = bool(getattr(config.model, "early_2d_unet", False))
+        if self._early_2d_unet:
+            if not bool(getattr(config.model, "multitile", False)):
+                raise ValueError("early_2d_unet requires multitile=True")
+            self.early_depth_attn = nn.Conv3d(c1, 1, kernel_size=1)
+            self.early_depth_fuse = nn.Conv2d(c1 * 2, c1, kernel_size=1, bias=False)
+            self.early2d_enc2 = ConvBlock2d(c1, c2)
+            self.early2d_enc3 = ConvBlock2d(c2, c3)
+            self.early2d_bottleneck = ConvBlock2d(c3, c4)
+            self.early2d_up3 = nn.ConvTranspose2d(c4, c3, kernel_size=2, stride=2)
+            self.early2d_dec3 = ConvBlock2d(c3 * 2, c3)
+            self.early2d_up2 = nn.ConvTranspose2d(c3, c2, kernel_size=2, stride=2)
+            self.early2d_dec2 = ConvBlock2d(c2 * 2, c2)
+            self.early2d_up1 = nn.ConvTranspose2d(c2, c1, kernel_size=2, stride=2)
+            self.early2d_dec1 = ConvBlock2d(c1 * 2, c1)
+            self.early2d_head = nn.Conv2d(c1, 1, kernel_size=1)
+        else:
+            self.early_depth_attn = None
+            self.early_depth_fuse = None
+            self.early2d_enc2 = None
+            self.early2d_enc3 = None
+            self.early2d_bottleneck = None
+            self.early2d_up3 = None
+            self.early2d_dec3 = None
+            self.early2d_up2 = None
+            self.early2d_dec2 = None
+            self.early2d_up1 = None
+            self.early2d_dec1 = None
+            self.early2d_head = None
+
+        self._divided_attention = bool(getattr(config.model, "divided_attention", False))
+        self.divided_attention = (
+            DividedSpaceDepthAttention3d(
+                c3,
+                heads=int(getattr(config.model, "divided_attention_heads", 4)),
+                window=int(getattr(config.model, "divided_attention_window", 8)),
+                spatial=bool(getattr(config.model, "divided_attention_spatial", False)),
+            )
+            if self._divided_attention else None
+        )
+
+        self._mednext_adapters = bool(getattr(config.model, "mednext_adapters", False))
+        if self._mednext_adapters:
+            kernel = int(getattr(config.model, "mednext_kernel", 5))
+            expansion = int(getattr(config.model, "mednext_expansion", 2))
+            self.mednext1 = MedNeXtAdapter3d(c1, kernel, expansion)
+            self.mednext2 = MedNeXtAdapter3d(c2, kernel, expansion)
+            self.mednext3 = MedNeXtAdapter3d(c3, kernel, expansion)
+            self.mednext_bottleneck = MedNeXtAdapter3d(c4, kernel, expansion)
+        else:
+            self.mednext1 = None
+            self.mednext2 = None
+            self.mednext3 = None
+            self.mednext_bottleneck = None
+        self._fiber_coordinate_branch = bool(
+            getattr(config.model, "fiber_coordinate_branch", False)
+        )
+        self.fiber_coordinate_input = (
+            nn.Conv3d(3, c1, kernel_size=1, bias=False)
+            if self._fiber_coordinate_branch else None
+        )
 
         use_better_surface = bool(getattr(config.model, "better_surface", False))
         use_new_surface = bool(getattr(config.model, "new_learned_surface", False))
@@ -477,6 +653,19 @@ class NnUnet3dLcndz(nn.Module):
         else:
             self.depth_fusion_attn = None
             self.depth_fusion_head = None
+
+        self._minimum_support_k = int(getattr(config.model, "minimum_support_k", 0))
+        self._minimum_support_kernel = int(
+            getattr(config.model, "minimum_support_kernel", 3)
+        )
+        self._weldon_k = int(getattr(config.model, "weldon_k", 0))
+        self._clam_instance = bool(getattr(config.tra, "clam_instance", False))
+        if self._minimum_support_k < 0 or self._weldon_k < 0:
+            raise ValueError("minimum-support and WELDON k must be non-negative")
+        if self._minimum_support_k and self._weldon_k:
+            raise ValueError("minimum-support and WELDON aggregators are mutually exclusive")
+        if self._minimum_support_kernel < 1 or self._minimum_support_kernel % 2 == 0:
+            raise ValueError("minimum_support_kernel must be a positive odd integer")
 
         self._surface_guided_mil = bool(getattr(config.model, "surface_guided_mil", False))
         self._surface_guided_mix = float(getattr(config.model, "surface_guided_mix", 0.5))
@@ -539,6 +728,27 @@ class NnUnet3dLcndz(nn.Module):
         if not self._no_dz:
             dz[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
         return torch.cat([x, _lcn2d(x, 5), dz], dim=1)
+
+    @staticmethod
+    def _fiber_coordinates(x: torch.Tensor) -> torch.Tensor:
+        """local tangent orientation and anisotropy from a per-slice structure tensor."""
+        lcn = _lcn2d(x, 5)
+        batch, channels, depth, height, width = lcn.shape
+        flat = lcn.reshape(batch * depth, channels, height, width)
+        gx = F.pad(flat, (1, 1, 0, 0), mode="replicate")[:, :, :, 2:] \
+            - F.pad(flat, (1, 1, 0, 0), mode="replicate")[:, :, :, :-2]
+        gy = F.pad(flat, (0, 0, 1, 1), mode="replicate")[:, :, 2:, :] \
+            - F.pad(flat, (0, 0, 1, 1), mode="replicate")[:, :, :-2, :]
+        jxx = F.avg_pool2d(gx.square(), 7, stride=1, padding=3)
+        jyy = F.avg_pool2d(gy.square(), 7, stride=1, padding=3)
+        jxy = F.avg_pool2d(gx * gy, 7, stride=1, padding=3)
+        delta = torch.sqrt((jxx - jyy).square() + 4.0 * jxy.square() + 1e-6)
+        trace = (jxx + jyy).clamp(min=1e-4)
+        coherence = delta / trace
+        cos2theta = (jxx - jyy) / delta
+        sin2theta = 2.0 * jxy / delta
+        features = torch.cat((coherence, cos2theta, sin2theta), dim=1)
+        return features.reshape(batch, 3, depth, height, width)
 
     def _merge_skip(self, upsampled: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         if upsampled.shape[2:] != skip.shape[2:]:
@@ -701,22 +911,76 @@ class NnUnet3dLcndz(nn.Module):
 
         stem_x = self._stem_in(raw_for_backbone)
         enc1 = self.enc1(stem_x)
+        if self.fiber_coordinate_input is not None:
+            enc1 = enc1 + self.fiber_coordinate_input(
+                self._fiber_coordinates(raw_for_backbone)
+            )
         if surface_for_backbone is not None:
             enc1 = enc1 + self.new_surface_input(surface_for_backbone)
         enc1 = self._apply_learned_surface(raw_for_backbone, enc1)
+        if self.mednext1 is not None:
+            enc1 = self.mednext1(enc1)
         if self._enc1_drop is not None:
             enc1 = self._enc1_drop(enc1)
         enc2 = self.enc2(self.pool(enc1))
+        if self.mednext2 is not None:
+            enc2 = self.mednext2(enc2)
         if self._enc2_drop is not None:
             enc2 = self._enc2_drop(enc2)
         enc3 = self.enc3(self.pool(enc2))
+        if self.mednext3 is not None:
+            enc3 = self.mednext3(enc3)
+        if self.divided_attention is not None:
+            enc3 = self.divided_attention(enc3)
         bottleneck = self.bottleneck(self.pool3(enc3))
+        if self.mednext_bottleneck is not None:
+            bottleneck = self.mednext_bottleneck(bottleneck)
 
         dec3 = self.dec3(self._merge_skip(self.up3(bottleneck), enc3))
         dec2 = self.dec2(self._merge_skip(self.up2(dec3), enc2))
         dec1 = self.dec1(self._merge_skip(self.up1(dec2), enc1))
         if self._head_drop is not None:
             dec1 = self._head_drop(dec1)
+        return bottleneck, dec1
+
+    def _encode_decode_early_2d(
+        self,
+        x: torch.Tensor,
+        teacher_surface_depth: torch.Tensor | None,
+        teacher_surface_confidence: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """use a local 3D stem, then spend the remaining U-Net capacity on sheet-tangent XY."""
+        if self.early_depth_attn is None or self.early_depth_fuse is None:
+            raise RuntimeError("early 2D U-Net modules are not initialized")
+        raw = self._prepare_input(x)
+        surface = None
+        if self._surface_teacher_input:
+            if teacher_surface_depth is None or teacher_surface_confidence is None:
+                raise RuntimeError("surface_teacher_input requires depth and confidence maps")
+            surface = self._teacher_surface_features(
+                teacher_surface_depth,
+                teacher_surface_confidence,
+                raw,
+            )
+        elif self.new_surface_head is not None:
+            raise ValueError("early_2d_unet currently requires literal or disabled surface input")
+        features3d = self.enc1(self._stem_in(raw))
+        if surface is not None and self.new_surface_input is not None:
+            features3d = features3d + self.new_surface_input(surface)
+        if self.fiber_coordinate_input is not None:
+            features3d = features3d + self.fiber_coordinate_input(self._fiber_coordinates(raw))
+        if self.mednext1 is not None:
+            features3d = self.mednext1(features3d)
+        weights = torch.softmax(self.early_depth_attn(features3d), dim=2)
+        weighted = (features3d * weights).sum(dim=2)
+        strongest = features3d.amax(dim=2)
+        enc1 = self.early_depth_fuse(torch.cat((weighted, strongest), dim=1))
+        enc2 = self.early2d_enc2(F.max_pool2d(enc1, 2))
+        enc3 = self.early2d_enc3(F.max_pool2d(enc2, 2))
+        bottleneck = self.early2d_bottleneck(F.max_pool2d(enc3, 2))
+        dec3 = self.early2d_dec3(torch.cat((self.early2d_up3(bottleneck), enc3), dim=1))
+        dec2 = self.early2d_dec2(torch.cat((self.early2d_up2(dec3), enc2), dim=1))
+        dec1 = self.early2d_dec1(torch.cat((self.early2d_up1(dec2), enc1), dim=1))
         return bottleneck, dec1
 
     @staticmethod
@@ -778,6 +1042,40 @@ class NnUnet3dLcndz(nn.Module):
         r = self.lse_r.clamp(min=0.5, max=10.0)
         m = c.new_tensor(float(c.shape[-1]))
         return (1.0 / r) * (torch.logsumexp(r * c, dim=2) - torch.log(m))   # (B, grid*grid)
+
+    def _multitile_spatial_instances(self, center: torch.Tensor) -> torch.Tensor:
+        """depth-collapse voxel logits and return locally supported XY instances per cell."""
+        n, sub = self._mt_grid, self._mt_sub_feat
+        values = center.squeeze(1)
+        r = self.lse_r.clamp(min=0.5, max=10.0)
+        depth_count = values.new_tensor(float(values.shape[1]))
+        spatial = (
+            torch.logsumexp(r * values, dim=1) - torch.log(depth_count)
+        ) / r
+        kernel = self._minimum_support_kernel
+        if kernel > 1:
+            padded = F.pad(
+                spatial.unsqueeze(1),
+                (kernel // 2,) * 4,
+                mode="replicate",
+            )
+            spatial = F.avg_pool2d(padded, kernel, stride=1).squeeze(1)
+        batch = spatial.shape[0]
+        return spatial.reshape(batch, n, sub, n, sub).permute(
+            0, 1, 3, 2, 4
+        ).reshape(batch, n * n, sub * sub)
+
+    def _multitile_minimum_support(self, center: torch.Tensor, k: int) -> torch.Tensor:
+        instances = self._multitile_spatial_instances(center)
+        k = min(max(1, int(k)), instances.shape[-1])
+        return torch.topk(instances, k, dim=-1).values.mean(dim=-1)
+
+    def _multitile_weldon(self, center: torch.Tensor, k: int) -> torch.Tensor:
+        instances = self._multitile_spatial_instances(center)
+        k = min(max(1, int(k)), instances.shape[-1])
+        positive = torch.topk(instances, k, dim=-1).values.mean(dim=-1)
+        negative = torch.topk(instances, k, dim=-1, largest=False).values.mean(dim=-1)
+        return 0.5 * (positive + negative)
 
     def _multitile_feature_depth_fusion(
         self,
@@ -863,6 +1161,42 @@ class NnUnet3dLcndz(nn.Module):
         pooled = bags.mean(dim=(2, 3, 4))
         return pooled.view(batch, self._mt_grid * self._mt_grid, -1)
 
+    def _multitile_aggregate_2d(
+        self,
+        voxel_map: torch.Tensor,
+        target_offsets: torch.Tensor | None,
+    ) -> torch.Tensor:
+        center = self._crop_center_feat(
+            voxel_map.unsqueeze(2),
+            self._mt_center_feat,
+            target_offsets,
+        ).squeeze(1).squeeze(1)
+        n, sub = self._mt_grid, self._mt_sub_feat
+        batch = center.shape[0]
+        cells = center.reshape(batch, n, sub, n, sub).permute(
+            0, 1, 3, 2, 4
+        ).reshape(batch, n * n, sub * sub)
+        r = self.lse_r.clamp(min=0.5, max=10.0)
+        count = cells.new_tensor(float(cells.shape[-1]))
+        return (torch.logsumexp(r * cells, dim=-1) - torch.log(count)) / r
+
+    def _multitile_embeddings_2d(
+        self,
+        decoded: torch.Tensor,
+        target_offsets: torch.Tensor | None,
+    ) -> torch.Tensor:
+        center = self._crop_center_feat(
+            decoded.unsqueeze(2),
+            self._mt_center_feat,
+            target_offsets,
+        ).squeeze(2)
+        n, sub = self._mt_grid, self._mt_sub_feat
+        batch, channels = center.shape[:2]
+        bags = center.reshape(batch, channels, n, sub, n, sub).permute(
+            0, 2, 4, 1, 3, 5
+        ).reshape(batch, n * n, channels, sub * sub)
+        return bags.mean(dim=-1)
+
     def _surface_guided_aggregate(
         self,
         center_voxels: torch.Tensor,
@@ -922,6 +1256,38 @@ class NnUnet3dLcndz(nn.Module):
         teacher_surface_depth: torch.Tensor | None = None,
         teacher_surface_confidence: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        if self._early_2d_unet:
+            bottleneck2d, decoded2d = self._encode_decode_early_2d(
+                x,
+                teacher_surface_depth,
+                teacher_surface_confidence,
+            )
+            voxel2d = self.early2d_head(decoded2d)
+            center2d = self._crop_center_feat(
+                voxel2d.unsqueeze(2),
+                self._mt_center_feat,
+                target_offsets,
+            ).clone()
+            self.last_voxel_map = None if self.training else voxel2d.unsqueeze(2).detach().clone()
+            self.last_voxel_map_full = voxel2d.unsqueeze(2)
+            self.last_center_voxel_map = center2d
+            self.last_clam_instance_logits = None
+            embedding = F.adaptive_avg_pool2d(bottleneck2d, 1).flatten(1)
+            self.last_embedding_detached = embedding.detach().clone()
+            domain_logits = (
+                self.domain_head(embedding, grl_scale=grl_scale)
+                if self.domain_head is not None else None
+            )
+            supcon_z = (
+                self.supcon_head(self._multitile_embeddings_2d(decoded2d, target_offsets))
+                if self.supcon_head is not None else None
+            )
+            score = self._multitile_aggregate_2d(voxel2d, target_offsets)
+            self.last_attn_entropy_loss = voxel2d.new_zeros(())
+            self.last_attn_entropy_per_target = None
+            self.last_surface_guided_alpha = None
+            return score, embedding, domain_logits, supcon_z
+
         bottleneck, decoded = self._encode_decode(
             x,
             teacher_surface_depth=teacher_surface_depth,
@@ -944,6 +1310,10 @@ class NnUnet3dLcndz(nn.Module):
         else:
             center_voxels = self._crop_to_center_tile(voxel_map).clone()
         self.last_center_voxel_map = center_voxels
+        self.last_clam_instance_logits = (
+            self._multitile_spatial_instances(center_voxels)
+            if self._multitile and self._clam_instance else None
+        )
         embedding = self._embedding(bottleneck)
         self.last_embedding_detached = embedding.detach().clone()
         domain_logits = self.domain_head(embedding, grl_scale=grl_scale) if self.domain_head is not None else None
@@ -958,6 +1328,13 @@ class NnUnet3dLcndz(nn.Module):
         if self._multitile:
             if self._feature_depth_fusion:
                 score = self._multitile_feature_depth_fusion(decoded, target_offsets)
+            elif self._minimum_support_k > 0:
+                score = self._multitile_minimum_support(
+                    center_voxels,
+                    self._minimum_support_k,
+                )
+            elif self._weldon_k > 0:
+                score = self._multitile_weldon(center_voxels, self._weldon_k)
             elif self.feature_attn_mil is not None:
                 score = self._multitile_feature_attn_aggregate(decoded, target_offsets)
             elif self.attn_mil is not None:
@@ -1028,12 +1405,19 @@ def create_model(config: Config):
     if model.new_surface_input is not None:
         # begin as the pretrained baseline while the auxiliary loss trains the new head
         nn.init.zeros_(model.new_surface_input.weight)
+    if model.fiber_coordinate_input is not None:
+        nn.init.zeros_(model.fiber_coordinate_input.weight)
     if model.depth_fusion_attn is not None:
         nn.init.zeros_(model.depth_fusion_attn.weight)
         nn.init.zeros_(model.depth_fusion_attn.bias)
+    if model.early_depth_attn is not None:
+        nn.init.zeros_(model.early_depth_attn.weight)
+        nn.init.zeros_(model.early_depth_attn.bias)
     for module in model.modules():
         if isinstance(module, DepthSurfaceAttn):
             module.reset_output_layer()
+        elif isinstance(module, MedNeXtAdapter3d):
+            module.reset_output()
 
     params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters ({arch}): {params:,}")
