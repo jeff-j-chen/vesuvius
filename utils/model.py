@@ -459,6 +459,25 @@ class NnUnet3dLcndz(nn.Module):
         else:
             self.feature_attn_mil = None
 
+        self._feature_depth_fusion = bool(
+            getattr(config.model, "feature_depth_fusion", False)
+        )
+        if self._feature_depth_fusion:
+            if not bool(getattr(config.model, "multitile", False)):
+                raise ValueError("feature_depth_fusion requires multitile=True")
+            if self.attn_mil is not None or self.feature_attn_mil is not None:
+                raise ValueError("feature_depth_fusion is mutually exclusive with attention-MIL")
+            self.depth_fusion_attn = nn.Conv3d(c1, 1, kernel_size=1, bias=True)
+            self.depth_fusion_head = nn.Sequential(
+                nn.Conv2d(c1 * 2, c1, kernel_size=3, padding=1, bias=False),
+                nn.InstanceNorm2d(c1, affine=True),
+                nn.LeakyReLU(0.01, inplace=False),
+                nn.Conv2d(c1, 1, kernel_size=1, bias=True),
+            )
+        else:
+            self.depth_fusion_attn = None
+            self.depth_fusion_head = None
+
         self._surface_guided_mil = bool(getattr(config.model, "surface_guided_mil", False))
         self._surface_guided_mix = float(getattr(config.model, "surface_guided_mix", 0.5))
         self._surface_band_sigma = float(getattr(config.model, "surface_band_sigma", 1.5))
@@ -760,6 +779,32 @@ class NnUnet3dLcndz(nn.Module):
         m = c.new_tensor(float(c.shape[-1]))
         return (1.0 / r) * (torch.logsumexp(r * c, dim=2) - torch.log(m))   # (B, grid*grid)
 
+    def _multitile_feature_depth_fusion(
+        self,
+        decoded: torch.Tensor,
+        target_offsets: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """fuse the short surface-normal profile before spatial multitile LSE."""
+        if self.depth_fusion_attn is None or self.depth_fusion_head is None:
+            raise RuntimeError("feature depth fusion modules are not initialized")
+        depth_weights = torch.softmax(self.depth_fusion_attn(decoded), dim=2)
+        weighted = (decoded * depth_weights).sum(dim=2)
+        strongest = decoded.amax(dim=2)
+        fused = self.depth_fusion_head(torch.cat((weighted, strongest), dim=1))
+        center = self._crop_center_feat(
+            fused.unsqueeze(2),
+            self._mt_center_feat,
+            target_offsets,
+        ).squeeze(1).squeeze(1)
+        n, sub = self._mt_grid, self._mt_sub_feat
+        batch = center.shape[0]
+        cells = center.reshape(batch, n, sub, n, sub).permute(
+            0, 1, 3, 2, 4
+        ).reshape(batch, n * n, sub * sub)
+        r = self.lse_r.clamp(min=0.5, max=10.0)
+        count = cells.new_tensor(float(cells.shape[-1]))
+        return (torch.logsumexp(r * cells, dim=2) - torch.log(count)) / r
+
     def _multitile_attn_aggregate(self, center: torch.Tensor) -> torch.Tensor:
         """per-sub-tile gated attention-MIL: fold the grid into the batch dim so one attn_mil
         call pools every 8px sub-tile bag (D*sub*sub voxels) independently. returns (B, grid*grid)
@@ -911,7 +956,9 @@ class NnUnet3dLcndz(nn.Module):
         else:
             supcon_z = None
         if self._multitile:
-            if self.feature_attn_mil is not None:
+            if self._feature_depth_fusion:
+                score = self._multitile_feature_depth_fusion(decoded, target_offsets)
+            elif self.feature_attn_mil is not None:
                 score = self._multitile_feature_attn_aggregate(decoded, target_offsets)
             elif self.attn_mil is not None:
                 score = self._multitile_attn_aggregate(center_voxels)
@@ -974,13 +1021,16 @@ def create_model(config: Config):
             nn.init.xavier_uniform_(module.weight, gain=0.8)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
-        elif isinstance(module, (nn.InstanceNorm3d, nn.BatchNorm3d, nn.GroupNorm, nn.LayerNorm)):
+        elif isinstance(module, (nn.InstanceNorm2d, nn.InstanceNorm3d, nn.BatchNorm3d, nn.GroupNorm, nn.LayerNorm)):
             _init_norm(module)
 
     model.apply(init_weights)
     if model.new_surface_input is not None:
         # begin as the pretrained baseline while the auxiliary loss trains the new head
         nn.init.zeros_(model.new_surface_input.weight)
+    if model.depth_fusion_attn is not None:
+        nn.init.zeros_(model.depth_fusion_attn.weight)
+        nn.init.zeros_(model.depth_fusion_attn.bias)
     for module in model.modules():
         if isinstance(module, DepthSurfaceAttn):
             module.reset_output_layer()

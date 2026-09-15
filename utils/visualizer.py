@@ -1518,6 +1518,17 @@ class TensorboardVisualizer:
                 train_metrics['weighted_supcon_loss'],
                 epoch,
             )
+        if bool(getattr(self.c.tra, "supcon_cross_frag", False)):
+            self.writer.add_scalar(
+                "G_M/Loss/Train_CrossFragmentSupCon",
+                train_metrics.get('supcon_loss', 0.0),
+                epoch,
+            )
+            self.writer.add_scalar(
+                "G_M/Loss/Train_CrossFragmentSupConWeighted",
+                train_metrics.get('weighted_supcon_loss', 0.0),
+                epoch,
+            )
         self.writer.add_scalar("G_M/Loss/Valid", val_metrics['loss'], epoch)
 
         self.writer.add_scalar("G_M/Acc/Train", train_metrics['accuracy'], epoch)

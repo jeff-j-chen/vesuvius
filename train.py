@@ -180,6 +180,7 @@ class Trainer:
         self.best_val_character = -1.0
         self._character_groupdro_log_weights: dict[int, float] = {}
         self._last_character_objectives = (0.0, 0.0, 0.0, 0.0)
+        self._last_depth_consistency = 0.0
         self._last_dann_accuracy = 0.0
         self._last_grl_scale = 0.0
 
@@ -297,8 +298,42 @@ class Trainer:
         print(f" done in {time.time() - start_time:.2f}s")
         return model, params, optimizer, scheduler, criterion
 
+    def _update_encoder_optimization(self, epoch: int) -> None:
+        """keep the MAE encoder fixed initially, then enable its scaled learning rate."""
+        freeze_epochs = int(getattr(self.c.tra, "encoder_freeze_epochs", 0))
+        encoder_groups = [
+            group for group in self.optimizer.param_groups
+            if group.get("group_name") == "encoder"
+        ]
+        if not encoder_groups:
+            return
+
+        task_lr = next(
+            group["lr"] for group in self.optimizer.param_groups
+            if group.get("group_name") == "task"
+        )
+        enabled = epoch >= freeze_epochs
+        for group in encoder_groups:
+            was_enabled = bool(group.get("lr_enabled", True))
+            group["lr_enabled"] = enabled
+            group["lr"] = task_lr * float(group.get("lr_scale", 1.0)) if enabled else 0.0
+            if enabled and not was_enabled:
+                for parameter in group["params"]:
+                    self.optimizer.state.pop(parameter, None)
+            if enabled != was_enabled or epoch == 0:
+                state = "enabled" if enabled else "frozen"
+                print(f"[mae-preserve] encoder {state}: lr={group['lr']:.3e}")
+
     def _init_visualizers(self) -> None:
         scroll_ids = self._scroll_ids
+        visualizer_ids = list(
+            dict.fromkeys(
+                int(scroll_id)
+                for scroll_id in (
+                    getattr(self.c.data, "vis_scroll_ids", None) or scroll_ids
+                )
+            )
+        )
         tra = self.c.tra
         will_test = (tra.test_int <= tra.n_epochs) or bool(getattr(tra, "test_on_final", False))
         if not will_test:
@@ -310,7 +345,7 @@ class Trainer:
         if len(scroll_ids) > 1:
             self.vis = TensorboardVisualizer(self.c, mode="metrics")
             self.scroll_vis = {}
-            for index, scroll_id in enumerate(scroll_ids):
+            for index, scroll_id in enumerate(visualizer_ids):
                 self.scroll_vis[scroll_id] = TensorboardVisualizer(
                     self.c,
                     mode="train",
@@ -374,7 +409,10 @@ class Trainer:
     def _train_batch(self, images, labels, mask, domain_ids=None, character_ids=None,
                      target_offsets=None, epoch: int = 0, unlabeled_images=None,
                      surface_depth=None, surface_confidence=None,
-                     context_pair=None, context_pair_active=None):
+                     context_pair=None, context_pair_active=None,
+                     depth_pair=None, depth_pair_surface=None,
+                     depth_pair_confidence=None, depth_pair_active=None):
+        self._last_depth_consistency = 0.0
         if mask.reshape(mask.size(0), -1).sum().item() <= 0:
             print("[ERROR] Mask sum is zero, skipping loss calculation.")
             return (np.empty([]), np.empty([]), np.empty([]), *([0.0] * 11))
@@ -411,6 +449,7 @@ class Trainer:
             if context_pair_active is not None else None
         )
         context_loss_value = images.new_zeros(())
+        depth_consistency_loss_value = images.new_zeros(())
         bag_rank_loss_value = images.new_zeros(())
         groupdro_loss_value = images.new_zeros(())
         cvar_loss_value = images.new_zeros(())
@@ -827,6 +866,44 @@ class Trainer:
                     getattr(self.c.tra, "context_consistency_lambda", 0.1)
                 ) * context_loss_value
             self.scaler.scale(weighted_context_loss).backward()
+        if (
+            bool(getattr(self.c.tra, "depth_view_consistency", False))
+            and depth_pair is not None
+            and depth_pair_active is not None
+            and (depth_pair_active.view(-1) > 0).any()
+        ):
+            if depth_pair_surface is None or depth_pair_confidence is None:
+                raise RuntimeError("depth-view consistency requires paired surface maps")
+            active_cpu = depth_pair_active.view(-1) > 0
+            active_device = active_cpu.to(self.c.device, non_blocking=True)
+            pair_images = depth_pair[active_cpu].to(self.c.device, non_blocking=True)
+            pair_offsets = target_offsets[active_device] if target_offsets is not None else None
+            pair_surface = depth_pair_surface[active_cpu].to(
+                self.c.device,
+                non_blocking=True,
+            ).float()
+            pair_confidence = depth_pair_confidence[active_cpu].to(
+                self.c.device,
+                non_blocking=True,
+            ).float()
+            pair_target = torch.sigmoid(outputs[active_device]).detach()
+            with autocast(self.c.device, enabled=self.c.device == "cuda"):
+                self.model.eval()
+                pair_outputs = self.model(
+                    pair_images,
+                    target_offsets=pair_offsets,
+                    teacher_surface_depth=pair_surface,
+                    teacher_surface_confidence=pair_confidence,
+                )
+                self.model.train()
+                pair_mask = mask[active_device]
+                depth_consistency_loss_value = (
+                    (torch.sigmoid(pair_outputs) - pair_target).square() * pair_mask
+                ).sum() / pair_mask.sum().clamp(min=1.0)
+                weighted_depth_consistency = float(
+                    getattr(self.c.tra, "depth_view_consistency_lambda", 0.2)
+                ) * depth_consistency_loss_value
+            self.scaler.scale(weighted_depth_consistency).backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()
@@ -843,15 +920,20 @@ class Trainer:
             supcon_loss_value.detach().float(),
             weighted_supcon_loss_value.detach().float(),
             context_loss_value.detach().float(),
+            depth_consistency_loss_value.detach().float(),
             bag_rank_loss_value.detach().float(),
             groupdro_loss_value.detach().float(),
             cvar_loss_value.detach().float(),
             dann_accuracy_value.detach().float(),
             dann_grl_value.detach().float(),
         )).cpu().tolist()
-        self._last_character_objectives = tuple(diagnostic_values[11:15])
-        self._last_dann_accuracy = diagnostic_values[15]
-        self._last_grl_scale = diagnostic_values[16]
+        self._last_depth_consistency = diagnostic_values[12]
+        self._last_character_objectives = (
+            diagnostic_values[11],
+            *diagnostic_values[13:16],
+        )
+        self._last_dann_accuracy = diagnostic_values[16]
+        self._last_grl_scale = diagnostic_values[17]
 
         if hasattr(self.model, "prototype_head") and self.model.prototype_head is not None:
             emb = getattr(self.model, "last_embedding_detached", None)
@@ -931,6 +1013,7 @@ class Trainer:
         dann_accuracy_total = 0.0
         grl_scale_total = 0.0
         context_loss_total = 0.0
+        depth_consistency_loss_total = 0.0
         bag_rank_loss_total = 0.0
         groupdro_loss_total = 0.0
         cvar_loss_total = 0.0
@@ -977,9 +1060,20 @@ class Trainer:
             if bool(getattr(self.c.tra, "context_consistency", False)):
                 batch_context_pair = batch[optional_index]
                 batch_context_pair_active = batch[optional_index + 1]
+                optional_index += 2
             else:
                 batch_context_pair = None
                 batch_context_pair_active = None
+            if bool(getattr(self.c.tra, "depth_view_consistency", False)):
+                batch_depth_pair = batch[optional_index]
+                batch_depth_pair_surface = batch[optional_index + 1]
+                batch_depth_pair_confidence = batch[optional_index + 2]
+                batch_depth_pair_active = batch[optional_index + 3]
+            else:
+                batch_depth_pair = None
+                batch_depth_pair_surface = None
+                batch_depth_pair_confidence = None
+                batch_depth_pair_active = None
 
             u_imgs = None
             if u_iter is not None:
@@ -999,6 +1093,8 @@ class Trainer:
             total_injected += injected
             if batch_surface_confidence is not None and injected_indices:
                 batch_surface_confidence[injected_indices] = 0
+            if batch_depth_pair_active is not None and injected_indices:
+                batch_depth_pair_active[injected_indices] = 0
             (
                 batch_scores,
                 batch_labels_out,
@@ -1027,6 +1123,10 @@ class Trainer:
                 surface_confidence=batch_surface_confidence,
                 context_pair=batch_context_pair,
                 context_pair_active=batch_context_pair_active,
+                depth_pair=batch_depth_pair,
+                depth_pair_surface=batch_depth_pair_surface,
+                depth_pair_confidence=batch_depth_pair_confidence,
+                depth_pair_active=batch_depth_pair_active,
             )
             if batch_scores.size == 0:
                 continue
@@ -1049,6 +1149,7 @@ class Trainer:
             character_ids_all.extend(batch_character_ids_out)
             context_value, bag_value, groupdro_value, cvar_value = self._last_character_objectives
             context_loss_total += context_value
+            depth_consistency_loss_total += self._last_depth_consistency
             bag_rank_loss_total += bag_value
             groupdro_loss_total += groupdro_value
             cvar_loss_total += cvar_value
@@ -1077,6 +1178,9 @@ class Trainer:
         metrics["supcon_loss"] = supcon_loss_total / len(self.train_loader)
         metrics["weighted_supcon_loss"] = weighted_supcon_loss_total / len(self.train_loader)
         metrics["context_consistency_loss"] = context_loss_total / len(self.train_loader)
+        metrics["depth_view_consistency_loss"] = (
+            depth_consistency_loss_total / len(self.train_loader)
+        )
         metrics["character_bag_ranking_loss"] = bag_rank_loss_total / len(self.train_loader)
         metrics["character_groupdro_loss"] = groupdro_loss_total / len(self.train_loader)
         metrics["character_cvar_loss"] = cvar_loss_total / len(self.train_loader)
@@ -1295,8 +1399,22 @@ class Trainer:
             self.params,
             None,
         )
+        encoder_group = next(
+            (
+                group for group in self.optimizer.param_groups
+                if group.get("group_name") == "encoder"
+            ),
+            None,
+        )
+        if encoder_group is not None:
+            self.vis.writer.add_scalar(
+                "Learning_Rate/Encoder",
+                float(encoder_group["lr"]),
+                epoch,
+            )
         for key, tag in (
             ("context_consistency_loss", "Aux/ContextConsistency"),
+            ("depth_view_consistency_loss", "Aux/DepthViewConsistency"),
             ("character_bag_ranking_loss", "Aux/CharacterBagRanking"),
             ("character_groupdro_loss", "Aux/CharacterGroupDRO"),
             ("character_cvar_loss", "Aux/CharacterCVaR"),
@@ -1348,6 +1466,8 @@ class Trainer:
         for epoch in range(self.c.tra.n_epochs):
             print(f"\n--- Epoch {epoch + 1}/{self.c.tra.n_epochs} ---")
             start_time = time.time()
+
+            self._update_encoder_optimization(epoch)
 
             self.train_dataset.apply_transforms = bool(
                 epoch >= int(getattr(self.c.tra, "aug_start_epoch", 5)) and self.c.dl.data_aug

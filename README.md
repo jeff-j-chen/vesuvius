@@ -173,7 +173,20 @@ are no longer emitted.
 Campaign 23 uses literal surface-relative eight-slice input and plain LSE on w013, 500P2, and
 w044. Its baseline retains ordinary SupCon but disables DANN, cross-fragment SupCon, context
 replacement, cutout, and depth jitter. Focused arms independently test cross-fragment SupCon,
-the proven replacement/cutout settings, jitter +/-1, and their selected combinations.
+the proven replacement/cutout settings, jitter +/-1, and their selected combinations. Three
+follow-up arms test feature-level attention-plus-max depth fusion, preservation of the MAE encoder
+with a two-epoch freeze and 0.1x encoder learning rate, and literal per-column surface
+canonicalization from a twelve-slice safety slab to an eight-slice backbone input. A paired
+depth-view arm keeps the supervised view surface-centered and matches its prediction against a
+second overlapping eight-slice view shifted by two slices, without changing inference geometry.
+
+Campaign 24 runs an 18-way leave-one-fragment-out matrix. Every run trains on 17 fragments using
+the campaign-23 full-strength combination, context-replacement margin 20, and fixed DANN lambda
+0.03 for 20 epochs. Scroll/character round-robin sampling remains enabled. The excluded fragment
+is eagerly loaded as the sole visualization scroll and receives a full evaluation figure at epoch
+20. Before allocating training data, the campaign validates all 18 train masks, zarrs, labels, and
+literal surface maps and reports full-intensity training pixels, positive/non-ink pixels, and
+explicit half-intensity negatives.
 
 To continue the existing 18-scroll MAE warm start for 1,000 additional optimizer steps while
 adding the five configured test scrolls, use `--init-weights` together with
@@ -447,6 +460,8 @@ both training and validation.
 | `campaign_archs_18.py` | Character-balanced sampling, character-macro metrics, and isolated hard-augmentation tests. |
 | `campaign_archs_19.py` | Standalone c32 feature-attention + surface + character-balanced baseline and c64 follow-ups. |
 | `campaign_archs_20.py` | Combined c64_t16/GCE/context/surface baseline with matched 192px vs 128px MAE. |
+| `campaign_archs_23.py` | Triple-scroll literal-surface refinements and depth-representation tests. |
+| `campaign_archs_24.py` | Eighteen-way leave-one-fragment-out full-strength training with fixed DANN and held-out full-scroll visualization. |
 | `jepa_pretrain_nnunet.py` | 3D masked-block feature prediction with an EMA teacher and collapse guards. |
 | `generate_surface_supervision.py` | Builds full-resolution papyrus-air pseudo-labels and review figures. |
 | `utils/surface.py` | Offline-map soft surface targets and robust smoothness loss. |

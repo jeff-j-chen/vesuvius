@@ -736,6 +736,21 @@ class InkVolumeDataset(IterableDataset):
         self._context_consistency_prob = float(
             getattr(config.tra, "context_consistency_prob", 0.25)
         )
+        self._depth_view_consistency = bool(
+            getattr(config.tra, "depth_view_consistency", False)
+        ) and self.shuffle
+        self._depth_view_consistency_prob = float(
+            getattr(config.tra, "depth_view_consistency_prob", 0.5)
+        )
+        self._depth_view_consistency_offset = int(
+            getattr(config.tra, "depth_view_consistency_offset", 2)
+        )
+        if self._depth_view_consistency and self._context_consistency:
+            raise ValueError("depth-view and context consistency cannot share one paired sample")
+        if self._depth_view_consistency and not self._surface_relative_depth_window:
+            raise ValueError("depth-view consistency requires surface-relative depth windows")
+        if self._depth_view_consistency_offset < 1:
+            raise ValueError("depth_view_consistency_offset must be positive")
         self._context_donor_coords = []
 
         self.z_start = getattr(self.c.data, "train_d_start", self.c.data.d_start)
@@ -1168,7 +1183,14 @@ class InkVolumeDataset(IterableDataset):
         # ensure dtype and contiguity
         return np.ascontiguousarray(np.clip(norm_block, 0, 1).astype(np.float32, copy=False))
 
-    def _fetch_block(self, z_off, y_off, x_off, allow_jitter=True):
+    def _fetch_block(
+        self,
+        z_off,
+        y_off,
+        x_off,
+        allow_jitter=True,
+        depth_shift_override=None,
+    ):
         """fetches and normalizes a block from zarr volume"""
         z = self.z_start + z_off
         y = self.y_start + y_off
@@ -1216,8 +1238,11 @@ class InkVolumeDataset(IterableDataset):
                         target_y=y,
                         target_x=x,
                     )
-                    jitter = random.randint(-max_dj, max_dj) \
-                        if max_dj > 0 and self.shuffle and allow_jitter else 0
+                    if depth_shift_override is not None:
+                        jitter = int(depth_shift_override)
+                    else:
+                        jitter = random.randint(-max_dj, max_dj) \
+                            if max_dj > 0 and self.shuffle and allow_jitter else 0
                     selected_start = min(
                         max(surface_start + jitter, 0),
                         max(volume_depth - self.depth, 0),
@@ -1239,8 +1264,11 @@ class InkVolumeDataset(IterableDataset):
                         target_x=x,
                     )
                     max_dj = int(getattr(self.c.data, "depth_jitter", 0))
-                    jitter = random.randint(-max_dj, max_dj) \
-                        if max_dj > 0 and self.shuffle and allow_jitter else 0
+                    if depth_shift_override is not None:
+                        jitter = int(depth_shift_override)
+                    else:
+                        jitter = random.randint(-max_dj, max_dj) \
+                            if max_dj > 0 and self.shuffle and allow_jitter else 0
                     selected_start = min(
                         max(selected_start + jitter, 0),
                         max(int(self.vol.shape[0]) - self.depth, 0),
@@ -1540,6 +1568,31 @@ class InkVolumeDataset(IterableDataset):
                 target_offset_tensor,
             )
             paired_active = 1.0
+        paired_surface_depth = surface_depth if self._use_surface_teacher else None
+        paired_surface_confidence = surface_confidence if self._use_surface_teacher else None
+        if (
+            self._depth_view_consistency
+            and random.random() < self._depth_view_consistency_prob
+        ):
+            pair_offset = random.choice((
+                -self._depth_view_consistency_offset,
+                self._depth_view_consistency_offset,
+            ))
+            paired_block, _, paired_depth_shift = self._fetch_block(
+                z_off,
+                y_off,
+                x_off,
+                allow_jitter=False,
+                depth_shift_override=pair_offset,
+            )
+            paired_surface_depth, paired_surface_confidence = self._fetch_surface_teacher(
+                z_off,
+                y_off,
+                x_off,
+                target_offset,
+                paired_depth_shift,
+            )
+            paired_active = float(paired_depth_shift != depth_shift)
         if (
             self.apply_transforms
             and self._context_donor_coords
@@ -1563,7 +1616,7 @@ class InkVolumeDataset(IterableDataset):
         # apply transforms if enabled
         if self.apply_transforms:
             if self._mt:
-                if self._context_consistency:
+                if self._context_consistency or self._depth_view_consistency:
                     transformed, paired_block = self.transform.paired(
                         block,
                         paired_block,
@@ -1595,6 +1648,13 @@ class InkVolumeDataset(IterableDataset):
                     surface_depth,
                     surface_confidence,
                 )
+                if self._depth_view_consistency:
+                    paired_surface_depth, paired_surface_confidence = (
+                        self.transform.transform_surface_teacher(
+                            paired_surface_depth,
+                            paired_surface_confidence,
+                        )
+                    )
         if self._use_surface_teacher:
             surface_downsample = max(1, int(getattr(self.c.data, "context_downsample", 1)))
             if surface_downsample > 1:
@@ -1603,6 +1663,15 @@ class InkVolumeDataset(IterableDataset):
                     ::surface_downsample,
                     ::surface_downsample,
                 ]
+                if self._depth_view_consistency:
+                    paired_surface_depth = paired_surface_depth[
+                        ::surface_downsample,
+                        ::surface_downsample,
+                    ]
+                    paired_surface_confidence = paired_surface_confidence[
+                        ::surface_downsample,
+                        ::surface_downsample,
+                    ]
         
         # enforce contiguity and dtype before converting to torch to avoid negative strides
         block = np.ascontiguousarray(block, dtype=np.float32)
@@ -1631,6 +1700,17 @@ class InkVolumeDataset(IterableDataset):
         if self._context_consistency:
             result.extend([
                 paired_block_tensor,
+                torch.tensor(paired_active, dtype=torch.float32),
+            ])
+        if self._depth_view_consistency:
+            result.extend([
+                paired_block_tensor,
+                torch.from_numpy(
+                    np.ascontiguousarray(paired_surface_depth, dtype=np.float32)
+                ).unsqueeze(0),
+                torch.from_numpy(
+                    np.ascontiguousarray(paired_surface_confidence, dtype=np.float32)
+                ).unsqueeze(0),
                 torch.tensor(paired_active, dtype=torch.float32),
             ])
         return tuple(result)

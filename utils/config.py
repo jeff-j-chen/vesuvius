@@ -196,6 +196,8 @@ class DataloaderConfig:
 class TrainingConfig:
     n_epochs: int = 20
     lr: float = 1e-4
+    encoder_lr_scale: float = 1.0
+    encoder_freeze_epochs: int = 0
     warmup_epochs: int = 5
     weight_decay: float = 0.0
     l1_lambda: float = 3e-7
@@ -268,6 +270,10 @@ class TrainingConfig:
     context_consistency: bool = False
     context_consistency_prob: float = 0.25
     context_consistency_lambda: float = 0.1
+    depth_view_consistency: bool = False
+    depth_view_consistency_prob: float = 0.5
+    depth_view_consistency_lambda: float = 0.2
+    depth_view_consistency_offset: int = 2
     character_bag_ranking: bool = False
     character_bag_margin: float = 0.5
     character_bag_topk_frac: float = 0.5
@@ -288,6 +294,7 @@ class ModelConfig:
     attn_mil: bool = False
     attn_entropy_weight: float = 0.0
     feature_attn_mil: bool = False
+    feature_depth_fusion: bool = False
     learned_surface: bool = False
     new_learned_surface: bool = False
     better_surface: bool = False
