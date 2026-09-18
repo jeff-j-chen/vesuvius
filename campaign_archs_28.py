@@ -16,6 +16,10 @@ import sys
 import traceback
 from pathlib import Path
 
+# Config probes CUDA availability before arm isolation. NVML keeps that probe from
+# initializing CUDA runtime state that cannot be inherited across os.fork().
+os.environ["PYTORCH_NVML_BASED_CUDA_CHECK"] = "1"
+
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))

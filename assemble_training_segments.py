@@ -23,7 +23,7 @@ usage:
 """
 from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys, time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import cv2
 import numpy as np
 from PIL import Image
@@ -92,6 +92,9 @@ SEGMENTS = [
     ("p9b_487", "PHerc0009B/segments/20250919125754-auto_grown_20250919055754487_inp_hr", "20250919125754"),
     # PHercParis4: level-2 XY is 9.6um; pool 109 source depths to 28.
     ("paris4", "PHercParis4/segments/20231210121321", "20231210121321"),
+    # dl.ash2txt fragments: native 3.24um surface TIFF stacks resampled in XYZ.
+    ("paris2_fr143", "", "20230301213755"),
+    ("scroll6_fr8", "", "20231205222200"),
 ]
 
 # per-fragment behaviour overrides. skip_labels=True skips the eroded label check
@@ -148,6 +151,18 @@ FRAG_OPTS = {
         "surface_name": "2.4um-0.22m-78keV-volume-20260411134726.zarr",
         "surface_level": 2,
         "ink_sources": [("2_4um", "PHercParis4-20231210121321-2.4um-0.22m-78keV-volume-20260411134726-20260417190342-new_canon_autoresearch_recipe-tile256-stride128.tif", True)],
+        "force_norm": True,
+    },
+    "paris2_fr143": {
+        "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag2/PHercParis2Fr143.volpkg/working/54keV_exposed_surface",
+        "surface_expected_shape": (65, 14830, 9506),
+        "source_um": 3.24,
+        "force_norm": True,
+    },
+    "scroll6_fr8": {
+        "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag6/PHerc51Cr4Fr8.volpkg/working/PHerc0051Cr04Fr08_53keV_3.24um/surface_processing",
+        "surface_expected_shape": (65, 8853, 6205),
+        "source_um": 3.24,
         "force_norm": True,
     },
 }
@@ -523,6 +538,232 @@ def _write_mask_from_midslice(output, mask_path):
     print(f"  [mask] wrote {mask_path} from midslice valid_frac={(mask > 0).mean():.3f}")
 
 
+def _curl_range(url, start, end, output):
+    command = [
+        "curl", "-s", "--fail", "--connect-timeout", "20", "--max-time", "180",
+        "--retry", "3", "--retry-delay", "2", "--show-error",
+        "-r", f"{start}-{end}", "-o", output, url,
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        if os.path.exists(output):
+            os.remove(output)
+        detail = result.stderr.strip() or "no curl error text"
+        raise RuntimeError(
+            f"range download failed ({result.returncode}) for {url} "
+            f"bytes={start}-{end}: {detail}"
+        )
+
+
+def _fetch_dlash_band(args):
+    layer, url, start, end, output, rows, width = args
+    _curl_range(url, start, end, output)
+    band = np.fromfile(output, dtype="<u2")
+    if band.size != rows * width:
+        raise RuntimeError(f"layer {layer}: downloaded {band.size} pixels, expected {rows * width}")
+    return layer, band.reshape(rows, width)
+
+
+def _dlash_depth_positions(source_depth, source_um):
+    source_center = (source_depth - 1) / 2.0
+    output_center = (TARGET_DEPTH - 1) / 2.0
+    return source_center + (np.arange(TARGET_DEPTH) - output_center) * TARGET_VOXEL_UM / source_um
+
+
+def _download_once(url, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.isfile(path) and os.path.getsize(path) > 0:
+        return
+    run([
+        "curl", "-L", "--fail", "--retry", "5", "--retry-delay", "2",
+        "-o", path, url,
+    ])
+
+
+def _assemble_dlash_surface(name, zid, opts, workers, chunk_depth, chunk_y, chunk_x, force=False):
+    """stream a dl.ash2txt uint16 TIFF stack and resample it to the training voxel grid."""
+    import zarr
+
+    source_depth, source_height, source_width = map(int, opts["surface_expected_shape"])
+    source_um = float(opts["source_um"])
+    output_height = int(round(source_height * source_um / TARGET_VOXEL_UM))
+    output_width = int(round(source_width * source_um / TARGET_VOXEL_UM))
+    output_shape = (TARGET_DEPTH, output_height, output_width)
+    output_path = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    partial_path = output_path + ".partial"
+    cache_dir = os.path.join(TMP, f"dlash_{zid}")
+    progress_path = os.path.join(partial_path, ".assembly_progress.json")
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if force:
+        shutil.rmtree(output_path, ignore_errors=True)
+        shutil.rmtree(partial_path, ignore_errors=True)
+        if os.path.exists(mask_path):
+            os.remove(mask_path)
+    if os.path.isdir(output_path) and os.path.exists(mask_path):
+        print("  [1/3] dl.ash2txt volume+mask exist -> skip")
+        return
+
+    os.makedirs(cache_dir, exist_ok=True)
+    row_height = 512
+    next_source_y = 0
+    output = None
+    if os.path.isdir(partial_path) and os.path.isfile(progress_path):
+        with open(progress_path, encoding="utf-8") as handle:
+            progress = json.load(handle)
+        if tuple(progress.get("output_shape", ())) == output_shape:
+            output = zarr.open(partial_path, mode="r+")
+            next_source_y = int(progress.get("next_source_y", 0))
+        else:
+            shutil.rmtree(partial_path)
+    if output is None:
+        shutil.rmtree(partial_path, ignore_errors=True)
+        output = zarr.open(
+            partial_path,
+            mode="w",
+            shape=output_shape,
+            chunks=(min(chunk_depth, TARGET_DEPTH), chunk_y, chunk_x),
+            dtype="<u2",
+            compressor=None,
+            zarr_format=2,
+        )
+
+    positions = _dlash_depth_positions(source_depth, source_um)
+    valid_depths = np.flatnonzero((positions >= 0) & (positions <= source_depth - 1))
+    base = opts["dlash_surface_base"].rstrip("/")
+    print(
+        f"  [1/3] dl.ash2txt resample {(source_depth, source_height, source_width)} "
+        f"@{source_um:.3f}um -> {output_shape} @{TARGET_VOXEL_UM:.3f}um; "
+        f"valid target depths={valid_depths[0]}..{valid_depths[-1]}"
+    )
+    for source_y0 in range(next_source_y, source_height, row_height):
+        source_y1 = min(source_y0 + row_height, source_height)
+        output_y0 = int(round(source_y0 * output_height / source_height))
+        output_y1 = int(round(source_y1 * output_height / source_height))
+        rows = source_y1 - source_y0
+        start = 8 + source_y0 * source_width * 2
+        end = 8 + source_y1 * source_width * 2 - 1
+        jobs = [
+            (
+                layer,
+                f"{base}/surface_volume/{layer:02d}.tif",
+                start,
+                end,
+                os.path.join(cache_dir, f"band_{layer:02d}.raw"),
+                rows,
+                source_width,
+            )
+            for layer in range(source_depth)
+        ]
+        source_band = np.empty((source_depth, rows, source_width), dtype=np.uint16)
+        with ProcessPoolExecutor(max_workers=max(1, min(int(workers), source_depth))) as executor:
+            for layer, band in executor.map(_fetch_dlash_band, jobs):
+                source_band[layer] = band
+        for output_z, position in enumerate(positions):
+            if position < 0 or position > source_depth - 1:
+                output[output_z, output_y0:output_y1, :] = 0
+                continue
+            lower = int(np.floor(position))
+            upper = min(lower + 1, source_depth - 1)
+            fraction = float(position - lower)
+            plane = source_band[lower].astype(np.float32)
+            if upper != lower:
+                plane *= 1.0 - fraction
+                plane += source_band[upper] * fraction
+            resized = cv2.resize(
+                plane,
+                (output_width, output_y1 - output_y0),
+                interpolation=cv2.INTER_AREA,
+            )
+            output[output_z, output_y0:output_y1, :] = np.clip(
+                np.rint(resized), 0, 65535
+            ).astype(np.uint16)
+        with open(progress_path, "w", encoding="utf-8") as handle:
+            json.dump({"output_shape": output_shape, "next_source_y": source_y1}, handle)
+        print(f"  [dlash] rows {source_y1}/{source_height}", flush=True)
+    del output
+    os.remove(progress_path)
+    os.replace(partial_path, output_path)
+    print(f"  [dlash] wrote {output_path} shape={output_shape}")
+
+
+def _build_dlash_labels(name, zid, opts):
+    base = opts["dlash_surface_base"].rstrip("/")
+    cache_dir = os.path.join(TMP, f"dlash_{zid}")
+    source_mask_path = os.path.join(cache_dir, "mask.png")
+    source_label_path = os.path.join(cache_dir, "inklabels.png")
+    _download_once(f"{base}/mask.png", source_mask_path)
+    _download_once(f"{base}/inklabels.png", source_label_path)
+    source_mask = cv2.imread(source_mask_path, cv2.IMREAD_GRAYSCALE)
+    source_label = cv2.imread(source_label_path, cv2.IMREAD_GRAYSCALE)
+    expected_shape = tuple(map(int, opts["surface_expected_shape"][1:]))
+    if source_mask is None or source_label is None:
+        raise RuntimeError(f"{name}: failed to load downloaded mask or inklabels")
+    if source_mask.shape != expected_shape or source_label.shape != expected_shape:
+        raise RuntimeError(
+            f"{name}: source mask/label shapes {source_mask.shape}/{source_label.shape} "
+            f"!= {expected_shape}"
+        )
+    outside_source = int(((source_label > 0) & (source_mask == 0)).sum())
+    if outside_source:
+        print(f"  [label] clipping {outside_source} source inklabel pixels outside mask")
+
+    output = __import__("zarr").open(os.path.join(ZARR_DIR, f"{zid}.zarr"), mode="r")
+    target_shape = tuple(map(int, output.shape[1:]))
+    mask = cv2.resize(source_mask, target_shape[::-1], interpolation=cv2.INTER_NEAREST)
+    label = cv2.resize(source_label, target_shape[::-1], interpolation=cv2.INTER_AREA)
+    label[mask == 0] = 0
+    os.makedirs("masks", exist_ok=True)
+    os.makedirs(os.path.join("inklabels", "2_4um"), exist_ok=True)
+    os.makedirs("eroded_inklabels", exist_ok=True)
+    cv2.imwrite(f"masks/{zid}.png", mask)
+    cv2.imwrite(f"inklabels/{zid}.png", label)
+    cv2.imwrite(f"inklabels/2_4um/{zid}.png", label)
+    binary = cv2.morphologyEx(
+        (label > 0).astype(np.uint8) * 255,
+        cv2.MORPH_CLOSE,
+        np.ones((3, 3), np.uint8),
+    )
+    eroded = cv2.erode(binary, np.ones((3, 3), np.uint8), iterations=12)
+    eroded[mask == 0] = 0
+    if not np.any(eroded):
+        raise RuntimeError(f"{name}: erosion removed every positive label pixel")
+    cv2.imwrite(f"eroded_inklabels/{zid}.png", eroded)
+    print(f"  [label] wrote mask, top-level/2_4um inklabels, and eroded labels for {zid}")
+
+
+def _verify_dlash_outputs(name, zid, opts):
+    import zarr
+
+    source_depth, source_height, source_width = map(int, opts["surface_expected_shape"])
+    source_um = float(opts["source_um"])
+    expected_shape = (
+        TARGET_DEPTH,
+        int(round(source_height * source_um / TARGET_VOXEL_UM)),
+        int(round(source_width * source_um / TARGET_VOXEL_UM)),
+    )
+    volume = zarr.open(os.path.join(ZARR_DIR, f"{zid}.zarr"), mode="r")
+    if tuple(volume.shape) != expected_shape or np.dtype(volume.dtype) != np.dtype("<u2"):
+        raise RuntimeError(f"{name}: zarr shape/dtype {volume.shape}/{volume.dtype} != {expected_shape}/uint16")
+    positions = _dlash_depth_positions(source_depth, source_um)
+    valid_depths = np.flatnonzero((positions >= 0) & (positions <= source_depth - 1))
+    for depth in valid_depths:
+        if not np.any(np.asarray(volume[int(depth), ::64, ::64])):
+            raise RuntimeError(f"{name}: target depth {depth} has no sampled data")
+    mask = np.asarray(Image.open(f"masks/{zid}.png").convert("L")) > 0
+    label = np.asarray(Image.open(f"inklabels/{zid}.png").convert("L")) > 0
+    archived = np.asarray(Image.open(f"inklabels/2_4um/{zid}.png").convert("L")) > 0
+    if mask.shape != expected_shape[1:] or label.shape != mask.shape or archived.shape != mask.shape:
+        raise RuntimeError(f"{name}: output mask/label dimensions do not match zarr XY")
+    midslice = np.asarray(volume[TARGET_DEPTH // 2]) > 0
+    overlap = float((mask & midslice).sum() / max(int(mask.sum()), 1))
+    outside = int((label & ~mask).sum() + (archived & ~mask).sum())
+    if overlap <= 0.99:
+        raise RuntimeError(f"{name}: mask/midslice overlap {overlap:.5f} is not >0.99")
+    if outside:
+        raise RuntimeError(f"{name}: {outside} output inklabel pixels lie outside mask")
+    print(f"  [verify] {name}: shape={volume.shape} mask/midslice={overlap:.5f} labels contained")
+
+
 def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk_y, chunk_x, force=False):
     """resample a small isotropic surface zarr in XYZ to the 28-layer training frame."""
     import cv2
@@ -825,6 +1066,11 @@ def _assemble_w013_volume(zid, chunk_depth, chunk_y, chunk_x, force=False):
 
 def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
     opts = FRAG_OPTS.get(name, {})
+    if opts.get("dlash_surface_base"):
+        _assemble_dlash_surface(
+            name, zid, opts, workers, chunk_depth, chunk_y, chunk_x, force=force
+        )
+        return
     if opts.get("w013_special"):
         _assemble_w013_volume(zid, chunk_depth, chunk_y, chunk_x, force=force)
         return
@@ -929,7 +1175,10 @@ def process_fragment(name, seg, zid, workers, skip_norm, chunk_depth, chunk_y, c
     try:
         print(f"\n{'='*70}\n{tag}  id={zid}\n{'='*70}", flush=True)
         step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
-        if opts.get("ink_sources"):
+        if opts.get("dlash_surface_base"):
+            _build_dlash_labels(name, zid, opts)
+            _verify_dlash_outputs(name, zid, opts)
+        elif opts.get("ink_sources"):
             _build_downloaded_labels(name, seg, zid, opts, force=force)
         elif not opts.get("skip_labels"):
             step2_check_eroded_labels(name, seg, zid)

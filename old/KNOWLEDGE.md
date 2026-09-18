@@ -1750,3 +1750,32 @@ weighting requires defining a new meta-objective rather than toggling two losses
 modes and GroupDRO/CVaR all replace the primary reduction and are intentionally alternatives.
 SagNet already applies full style mixing, so MixStyle plus SagNet is technically possible but
 redundant and remains invalid.
+
+## 23) Campaign 28: Targeted Winner Combinations
+
+Campaign 28 uses the unchanged Campaign 27 full-IBN baseline copied to
+`runs_archs28/baseline`. It queues three combinations rather than another broad matrix:
+
+- `gradient_conflict_mid_gated` combines the best broad domain-conflict objective with the
+  mid-3D/2D plus gated-stem architecture that was strongest on PHerc0139, PHerc0172, PHerc1667,
+  and PHercParis4.
+- `cluster_balance_sparse_deep` combines the highest character AP arm with sparse deep
+  supervision, Campaign 26's most consistently positive auxiliary architecture change.
+- `gradient_conflict_gated_sparse_deep` keeps the standard 3D backbone and combines conflict
+  weighting with gated input cues and direct supervision of intermediate decoder scales.
+
+The campaign excludes MLDG plus dual-scale after its large regression, WELDON plus dual-scale
+after their combination erased the individual gains, `cluster_worst` after its collapse, and
+GroupDRO combinations that conflict with the domain-gradient reduction. A larger dual-scale stack
+was also excluded because fixed dual-scale was inconsistent and its unfinished Campaign 27 stack
+does not yet provide evidence strong enough for a three-arm campaign.
+
+The runner retains Campaign 27's parent cache prewarm and one-child-per-arm process isolation.
+Synthetic CUDA optimizer steps verified nonzero updates in the mid-2D, gated-stem, and deep
+supervision branches and populated domain-gradient cosine measurements for all three arms.
+
+The isolated runners set `PYTORCH_NVML_BASED_CUDA_CHECK=1` before importing PyTorch. Config
+construction probes CUDA availability in the controller; the default runtime-based probe poisons
+later forked arms with `Cannot re-initialize CUDA in forked subprocess`. The NVML probe preserves
+the campaign-lifetime copy-on-write RAM cache while allowing each isolated arm to initialize its
+own CUDA runtime and persistent DataLoader workers.
