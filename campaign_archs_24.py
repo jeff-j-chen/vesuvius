@@ -87,11 +87,14 @@ def _test(holdout):
 TESTS = [_test(_SCROLLS_BY_ID[scroll_id]) for scroll_id in _HOLDOUT_IDS]
 
 
-def _count_train_mask(scroll_id: int) -> tuple[dict[str, int], list[str]]:
+def _count_train_mask(
+    scroll_id: int,
+    inklabel_dir: Path = INKLABEL_DIR,
+) -> tuple[dict[str, int], list[str]]:
     errors: list[str] = []
     train_path = TRAIN_MASK_DIR / f"{scroll_id}.png"
     mask_path = MASK_DIR / f"{scroll_id}.png"
-    label_path = INKLABEL_DIR / f"{scroll_id}.png"
+    label_path = inklabel_dir / f"{scroll_id}.png"
     zarr_path = ZARR_DIR / f"{scroll_id}.zarr"
     surface_dir = SURFACE_LABEL_DIR / str(scroll_id)
     surface_paths = (
@@ -111,35 +114,59 @@ def _count_train_mask(scroll_id: int) -> tuple[dict[str, int], list[str]]:
         return {}, ["one or more mask images could not be decoded"]
 
     volume = zarr.open(str(zarr_path), mode="r")
-    common_shape = (
-        min(int(volume.shape[1]), int(papyrus_mask.shape[0]), int(inklabels.shape[0])),
-        min(int(volume.shape[2]), int(papyrus_mask.shape[1]), int(inklabels.shape[1])),
-    )
-    if train_mask.shape != common_shape:
+    volume_shape = tuple(int(value) for value in volume.shape[-2:])
+    if any(
+        abs(mask_size - volume_size) > 32
+        for mask_size, volume_size in zip(train_mask.shape, volume_shape)
+    ):
         errors.append(
-            f"train mask shape {train_mask.shape} != dataloader shape {common_shape}"
+            f"train mask shape mismatch: expected {volume_shape}, got {train_mask.shape}"
         )
-        return {}, errors
-
+    common_shape = (
+        min(
+            int(volume.shape[1]),
+            int(papyrus_mask.shape[0]),
+            int(inklabels.shape[0]),
+            int(train_mask.shape[0]),
+        ),
+        min(
+            int(volume.shape[2]),
+            int(papyrus_mask.shape[1]),
+            int(inklabels.shape[1]),
+            int(train_mask.shape[1]),
+        ),
+    )
+    train_mask = train_mask[:common_shape[0], :common_shape[1]]
     papyrus = papyrus_mask[:common_shape[0], :common_shape[1]] > 0
     ink = inklabels[:common_shape[0], :common_shape[1]] > 0
-    normal = train_mask >= 192
+    normal = train_mask >= 240
     explicit_negative = (train_mask >= 112) & (train_mask <= 143)
-    invalid_value = (train_mask > 0) & ~normal & ~explicit_negative
-    assigned = normal | explicit_negative
+    explicit_positive = train_mask == 185
+    ignored = np.isin(train_mask, (94, 104))
+    invalid_value = (
+        (train_mask > 0)
+        & ~normal
+        & ~explicit_negative
+        & ~explicit_positive
+        & ~ignored
+    )
+    assigned = normal | explicit_negative | explicit_positive
 
     stats = {
         "train_pixels": int(normal.sum()),
         "positive_pixels": int((normal & ink & papyrus).sum()),
         "nonink_pixels": int((normal & ~ink & papyrus).sum()),
+        "explicit_positive_pixels": int((explicit_positive & papyrus).sum()),
+        "explicit_positive_ink_overlap": int((explicit_positive & ink).sum()),
         "explicit_negative_pixels": int((explicit_negative & papyrus).sum()),
         "explicit_ink_overlap": int((explicit_negative & ink).sum()),
+        "ignored_pixels": int(ignored.sum()),
         "outside_papyrus": int((assigned & ~papyrus).sum()),
         "invalid_value_pixels": int(invalid_value.sum()),
     }
     if stats["train_pixels"] == 0:
         errors.append("contains no full-intensity training pixels")
-    if stats["positive_pixels"] == 0:
+    if stats["positive_pixels"] + stats["explicit_positive_pixels"] == 0:
         errors.append("contains no detected positive ink pixels")
     if stats["nonink_pixels"] == 0:
         errors.append("contains no detected non-ink training pixels")
@@ -149,7 +176,6 @@ def _count_train_mask(scroll_id: int) -> tuple[dict[str, int], list[str]]:
         )
     depth_shape = np.load(surface_paths[0], mmap_mode="r").shape
     confidence_shape = np.load(surface_paths[1], mmap_mode="r").shape
-    volume_shape = tuple(int(value) for value in volume.shape[-2:])
     if depth_shape != volume_shape or confidence_shape != volume_shape:
         errors.append(
             "surface map shape mismatch: "
@@ -158,20 +184,26 @@ def _count_train_mask(scroll_id: int) -> tuple[dict[str, int], list[str]]:
     return stats, errors
 
 
-def preflight_train_masks(scrolls=ALL_SCROLLS) -> None:
+def preflight_train_masks(
+    scrolls=ALL_SCROLLS,
+    inklabel_dir: Path = INKLABEL_DIR,
+) -> None:
     """validate all manual masks before any leave-one-out run allocates data."""
     print(f"[preflight] validating {len(scrolls)} train masks", flush=True)
     failures: list[str] = []
     for scroll in scrolls:
         scroll_id = int(scroll.scroll_id)
-        stats, errors = _count_train_mask(scroll_id)
+        stats, errors = _count_train_mask(scroll_id, inklabel_dir=inklabel_dir)
         if stats:
             print(
                 f"  {scroll_id}: train={stats['train_pixels']:,}"
                 f" positive={stats['positive_pixels']:,}"
                 f" nonink={stats['nonink_pixels']:,}"
+                f" explicit_positive={stats['explicit_positive_pixels']:,}"
+                f" explicit_positive_label_overlap={stats['explicit_positive_ink_overlap']:,}"
                 f" explicit_negative={stats['explicit_negative_pixels']:,}"
                 f" explicit_label_overlap={stats['explicit_ink_overlap']:,}"
+                f" ignored={stats['ignored_pixels']:,}"
                 f" outside_papyrus_ignored={stats['outside_papyrus']:,}",
                 flush=True,
             )

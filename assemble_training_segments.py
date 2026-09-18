@@ -6,14 +6,11 @@ volumes use level-2 XY and pool 109 native depth samples to 28 output layers.
 
 per fragment, in order (each step skips if its output already exists):
   1. download 9.362um surface volume (level 0)  -> ves_zarrs2/<id>.zarr + masks/<id>.png
-  2. download/resize configured ink predictions, archive them under inklabels/2_4um
-      (and inklabels/1_1um when available), build conservative eroded labels, and require
-      at least 95% overlap with the zarr midslice footprint; legacy fragments only verify
-      that their existing eroded label is present
+    2. verify that the repository-provided eroded label is present; inklabels are never fetched
   3. precompute normalization stats
 
-The top-level inklabels/<id>.png is the aligned continuous prediction used for ring QA;
-eroded_inklabels/<id>.png is the conservative binary training target.
+Label files are repository-owned inputs. This script never downloads or rewrites them.
+Use old/ink_shrinker.py to derive top-level inklabels from conservative targets.
 
 usage:
   python assemble_training_segments.py --only w058          # one fragment (pilot)
@@ -27,7 +24,6 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import cv2
 import numpy as np
 from PIL import Image
-import tifffile
 Image.MAX_IMAGE_PIXELS = None
 
 BUCKET = "https://vesuvius-challenge-open-data.s3.amazonaws.com"
@@ -95,6 +91,7 @@ SEGMENTS = [
     # dl.ash2txt fragments: native 3.24um surface TIFF stacks resampled in XYZ.
     ("paris2_fr143", "", "20230301213755"),
     ("scroll6_fr8", "", "20231205222200"),
+    ("paris1_fr34", "", "20230301213423"),
 ]
 
 # per-fragment behaviour overrides. skip_labels=True skips the eroded label check
@@ -119,13 +116,11 @@ FRAG_OPTS = {
     "w087": {
         "vol9_name": "7.91um-53keV-volume-20241024131838.zarr",
         "resample_um": 7.91,
-        "ink_sources": [("2_4um", "PHerc0172-20251112000002-7.91um-53keV-volume-20241024131838-20251222202946-timesformer_scroll5_november19-tile64-stride16.tif", True)],
         "force_norm": True,
     },
     "w068": {
         "vol9_name": "7.91um-53keV-volume-20241024131838.zarr",
         "resample_um": 7.91,
-        "ink_sources": [("2_4um", "PHerc0172-20251111010954-7.91um-53keV-volume-20241024131838-20251222202946-timesformer_scroll5_november19-tile64-stride16.tif", True)],
         "force_norm": True,
     },
     "w018": {
@@ -134,23 +129,17 @@ FRAG_OPTS = {
         "surface_level": 2,
         "surface_expected_shape": (109, 10595, 24525),
         "output_dtype": "|u1",
-        "ink_expected_shape": (42380, 98100),
-        "ink_sources": [
-            ("2_4um", "PHerc1667-20240304144031-2.399um-0.22m-78keV-volume-20251217075048-20260417190342-new_canon_autoresearch_recipe-tile256-stride128.tif", True),
-        ],
         "force_norm": True,
     },
     "p9b_487": {
         "vol9_name": "8.64um-1.2m-116keV-volume-20250521125136.zarr",
         "resample_um": 8.64,
-        "ink_sources": [("2_4um", "PHerc0009B-20250919125754-2.401um-0.35m-77keV-volume-20250820154339-20260417190342-new_canon_autoresearch_recipe-tile256-stride128.tif", True)],
         "force_norm": True,
     },
     "paris4": {
         "pooled_special": True,
         "surface_name": "2.4um-0.22m-78keV-volume-20260411134726.zarr",
         "surface_level": 2,
-        "ink_sources": [("2_4um", "PHercParis4-20231210121321-2.4um-0.22m-78keV-volume-20260411134726-20260417190342-new_canon_autoresearch_recipe-tile256-stride128.tif", True)],
         "force_norm": True,
     },
     "paris2_fr143": {
@@ -162,6 +151,12 @@ FRAG_OPTS = {
     "scroll6_fr8": {
         "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag6/PHerc51Cr4Fr8.volpkg/working/PHerc0051Cr04Fr08_53keV_3.24um/surface_processing",
         "surface_expected_shape": (65, 8853, 6205),
+        "source_um": 3.24,
+        "force_norm": True,
+    },
+    "paris1_fr34": {
+        "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag3/PHercParis1Fr34.volpkg/working/54keV_exposed_surface",
+        "surface_expected_shape": (65, 7606, 5249),
         "source_um": 3.24,
         "force_norm": True,
     },
@@ -599,8 +594,8 @@ def _assemble_dlash_surface(name, zid, opts, workers, chunk_depth, chunk_y, chun
         shutil.rmtree(partial_path, ignore_errors=True)
         if os.path.exists(mask_path):
             os.remove(mask_path)
-    if os.path.isdir(output_path) and os.path.exists(mask_path):
-        print("  [1/3] dl.ash2txt volume+mask exist -> skip")
+    if os.path.isdir(output_path):
+        print("  [1/3] dl.ash2txt volume exists -> skip")
         return
 
     os.makedirs(cache_dir, exist_ok=True)
@@ -686,49 +681,26 @@ def _assemble_dlash_surface(name, zid, opts, workers, chunk_depth, chunk_y, chun
     print(f"  [dlash] wrote {output_path} shape={output_shape}")
 
 
-def _build_dlash_labels(name, zid, opts):
+def _build_dlash_mask(name, zid, opts):
     base = opts["dlash_surface_base"].rstrip("/")
     cache_dir = os.path.join(TMP, f"dlash_{zid}")
     source_mask_path = os.path.join(cache_dir, "mask.png")
-    source_label_path = os.path.join(cache_dir, "inklabels.png")
     _download_once(f"{base}/mask.png", source_mask_path)
-    _download_once(f"{base}/inklabels.png", source_label_path)
     source_mask = cv2.imread(source_mask_path, cv2.IMREAD_GRAYSCALE)
-    source_label = cv2.imread(source_label_path, cv2.IMREAD_GRAYSCALE)
     expected_shape = tuple(map(int, opts["surface_expected_shape"][1:]))
-    if source_mask is None or source_label is None:
-        raise RuntimeError(f"{name}: failed to load downloaded mask or inklabels")
-    if source_mask.shape != expected_shape or source_label.shape != expected_shape:
+    if source_mask is None:
+        raise RuntimeError(f"{name}: failed to load downloaded mask")
+    if source_mask.shape != expected_shape:
         raise RuntimeError(
-            f"{name}: source mask/label shapes {source_mask.shape}/{source_label.shape} "
-            f"!= {expected_shape}"
+            f"{name}: source mask shape {source_mask.shape} != {expected_shape}"
         )
-    outside_source = int(((source_label > 0) & (source_mask == 0)).sum())
-    if outside_source:
-        print(f"  [label] clipping {outside_source} source inklabel pixels outside mask")
 
     output = __import__("zarr").open(os.path.join(ZARR_DIR, f"{zid}.zarr"), mode="r")
     target_shape = tuple(map(int, output.shape[1:]))
     mask = cv2.resize(source_mask, target_shape[::-1], interpolation=cv2.INTER_NEAREST)
-    label = cv2.resize(source_label, target_shape[::-1], interpolation=cv2.INTER_AREA)
-    label[mask == 0] = 0
     os.makedirs("masks", exist_ok=True)
-    os.makedirs(os.path.join("inklabels", "2_4um"), exist_ok=True)
-    os.makedirs("eroded_inklabels", exist_ok=True)
     cv2.imwrite(f"masks/{zid}.png", mask)
-    cv2.imwrite(f"inklabels/{zid}.png", label)
-    cv2.imwrite(f"inklabels/2_4um/{zid}.png", label)
-    binary = cv2.morphologyEx(
-        (label > 0).astype(np.uint8) * 255,
-        cv2.MORPH_CLOSE,
-        np.ones((3, 3), np.uint8),
-    )
-    eroded = cv2.erode(binary, np.ones((3, 3), np.uint8), iterations=12)
-    eroded[mask == 0] = 0
-    if not np.any(eroded):
-        raise RuntimeError(f"{name}: erosion removed every positive label pixel")
-    cv2.imwrite(f"eroded_inklabels/{zid}.png", eroded)
-    print(f"  [label] wrote mask, top-level/2_4um inklabels, and eroded labels for {zid}")
+    print(f"  [mask] wrote masks/{zid}.png shape={mask.shape}")
 
 
 def _verify_dlash_outputs(name, zid, opts):
@@ -750,18 +722,13 @@ def _verify_dlash_outputs(name, zid, opts):
         if not np.any(np.asarray(volume[int(depth), ::64, ::64])):
             raise RuntimeError(f"{name}: target depth {depth} has no sampled data")
     mask = np.asarray(Image.open(f"masks/{zid}.png").convert("L")) > 0
-    label = np.asarray(Image.open(f"inklabels/{zid}.png").convert("L")) > 0
-    archived = np.asarray(Image.open(f"inklabels/2_4um/{zid}.png").convert("L")) > 0
-    if mask.shape != expected_shape[1:] or label.shape != mask.shape or archived.shape != mask.shape:
-        raise RuntimeError(f"{name}: output mask/label dimensions do not match zarr XY")
+    if mask.shape != expected_shape[1:]:
+        raise RuntimeError(f"{name}: output mask dimensions do not match zarr XY")
     midslice = np.asarray(volume[TARGET_DEPTH // 2]) > 0
     overlap = float((mask & midslice).sum() / max(int(mask.sum()), 1))
-    outside = int((label & ~mask).sum() + (archived & ~mask).sum())
     if overlap <= 0.99:
         raise RuntimeError(f"{name}: mask/midslice overlap {overlap:.5f} is not >0.99")
-    if outside:
-        raise RuntimeError(f"{name}: {outside} output inklabel pixels lie outside mask")
-    print(f"  [verify] {name}: shape={volume.shape} mask/midslice={overlap:.5f} labels contained")
+    print(f"  [verify] {name}: shape={volume.shape} mask/midslice={overlap:.5f}")
 
 
 def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk_y, chunk_x, force=False):
@@ -894,124 +861,6 @@ def _assemble_pooled_surface(seg, zid, opts, chunk_depth, chunk_y, chunk_x, forc
     output = zarr.open(out_zarr, mode="r")
     _write_mask_from_midslice(output, mask_path)
     print(f"  [pool] wrote {out_zarr} shape={output_shape}")
-
-
-def _download_ink_tif(seg, filename, destination):
-    os.makedirs(os.path.dirname(destination), exist_ok=True)
-    if os.path.isfile(destination) and os.path.getsize(destination) > 0:
-        return
-    url = f"{BUCKET}/{seg}/ink-detection/{filename}"
-    run([
-        "curl", "-L", "--fail", "--retry", "5", "--retry-delay", "2",
-        "--continue-at", "-", "-o", destination, url,
-    ])
-
-
-def _resize_tiled_tiff(
-    path,
-    output_shape,
-    crop_frac=None,
-    row_block=512,
-    expected_source_shape=None,
-):
-    """read only intersecting TIFF tiles and resize a prediction into the training frame."""
-    store = tifffile.imread(path, aszarr=True)
-    source = __import__("zarr").open(store, mode="r")
-    if source.ndim == 3:
-        source = source[..., 0]
-    source_height, source_width = map(int, source.shape)
-    if expected_source_shape is not None:
-        expected_source_shape = tuple(map(int, expected_source_shape))
-        if (source_height, source_width) != expected_source_shape:
-            raise RuntimeError(
-                f"{path}: TIFF shape {(source_height, source_width)} != expected "
-                f"{expected_source_shape}"
-            )
-    if crop_frac is None:
-        y0, y1, x0, x1 = 0, source_height, 0, source_width
-    else:
-        fy0, fy1, fx0, fx1 = map(float, crop_frac)
-        y0, y1 = int(round(fy0 * source_height)), int(round(fy1 * source_height))
-        x0, x1 = int(round(fx0 * source_width)), int(round(fx1 * source_width))
-    crop_height, crop_width = y1 - y0, x1 - x0
-    output_height, output_width = map(int, output_shape)
-    output = np.empty((output_height, output_width), dtype=np.uint8)
-    for output_y0 in range(0, output_height, row_block):
-        output_y1 = min(output_y0 + row_block, output_height)
-        source_y0 = y0 + int(round(output_y0 * crop_height / output_height))
-        source_y1 = y0 + int(round(output_y1 * crop_height / output_height))
-        source_y1 = max(source_y1, source_y0 + 1)
-        strip = np.asarray(source[source_y0:source_y1, x0:x1], dtype=np.uint8)
-        output[output_y0:output_y1] = cv2.resize(
-            strip,
-            (output_width, output_y1 - output_y0),
-            interpolation=cv2.INTER_AREA,
-        )
-    close = getattr(store, "close", None)
-    if close is not None:
-        close()
-    return output
-
-
-def _build_downloaded_labels(name, seg, zid, opts, force=False):
-    """download, align, archive, erode, and QA all configured ink predictions."""
-    ink_sources = opts.get("ink_sources") or []
-    if not ink_sources:
-        return False
-    mask_path = os.path.join("masks", f"{zid}.png")
-    mask = np.asarray(Image.open(mask_path).convert("L"), dtype=np.uint8)
-    target_shape = mask.shape
-    primary = None
-    primary_unmasked = None
-    for source_index, (archive_dir, filename, is_primary) in enumerate(ink_sources):
-        local_tif = os.path.join(TMP, f"ink_{zid}_{source_index}.tif")
-        _download_ink_tif(seg, filename, local_tif)
-        unmasked = _resize_tiled_tiff(
-            local_tif,
-            target_shape,
-            crop_frac=opts.get("ink_crop_frac"),
-            expected_source_shape=opts.get("ink_expected_shape"),
-        )
-        resized = cv2.bitwise_and(unmasked, unmasked, mask=mask)
-        archive_path = os.path.join("inklabels", archive_dir, f"{zid}.png")
-        os.makedirs(os.path.dirname(archive_path), exist_ok=True)
-        cv2.imwrite(archive_path, resized)
-        print(f"  [label] archived {archive_path} shape={resized.shape}")
-        if is_primary:
-            primary = resized
-            primary_unmasked = unmasked
-    if primary is None:
-        raise RuntimeError(f"{name}: ink_sources has no primary prediction")
-    if primary_unmasked is None:
-        raise RuntimeError(f"{name}: primary prediction was not retained for overlap QA")
-
-    threshold = int(opts.get("ink_threshold", 140))
-    raw_binary = primary >= threshold
-    # Measure registration BEFORE masking. Reload the primary target map without footprint clipping.
-    predicted = primary_unmasked >= threshold
-    predicted_count = int(predicted.sum())
-    overlap = float((predicted & (mask > 0)).sum() / max(predicted_count, 1))
-    if predicted_count == 0 or overlap < 0.95:
-        raise RuntimeError(
-            f"{name}: ink/midslice overlap QA failed: ink_pixels={predicted_count:,} "
-            f"overlap={overlap:.4f} (required >=0.95)"
-        )
-
-    os.makedirs("inklabels", exist_ok=True)
-    os.makedirs("eroded_inklabels", exist_ok=True)
-    cv2.imwrite(f"inklabels/{zid}.png", primary)
-    binary = (raw_binary.astype(np.uint8) * 255)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
-    eroded = cv2.erode(binary, np.ones((3, 3), np.uint8), iterations=12)
-    eroded[mask == 0] = 0
-    if not np.any(eroded):
-        raise RuntimeError(f"{name}: erosion removed every positive label pixel")
-    cv2.imwrite(f"eroded_inklabels/{zid}.png", eroded)
-    print(
-        f"  [label] overlap={overlap:.4f} raw_frac={raw_binary.mean():.5f} "
-        f"eroded_frac={(eroded > 0).mean():.5f}"
-    )
-    return True
 
 
 def _assemble_w013_volume(zid, chunk_depth, chunk_y, chunk_x, force=False):
@@ -1176,11 +1025,9 @@ def process_fragment(name, seg, zid, workers, skip_norm, chunk_depth, chunk_y, c
         print(f"\n{'='*70}\n{tag}  id={zid}\n{'='*70}", flush=True)
         step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
         if opts.get("dlash_surface_base"):
-            _build_dlash_labels(name, zid, opts)
+            _build_dlash_mask(name, zid, opts)
             _verify_dlash_outputs(name, zid, opts)
-        elif opts.get("ink_sources"):
-            _build_downloaded_labels(name, seg, zid, opts, force=force)
-        elif not opts.get("skip_labels"):
+        if not opts.get("skip_labels"):
             step2_check_eroded_labels(name, seg, zid)
         else:
             print(f"  [labels] skip_labels -> keeping existing eroded_inklabels")

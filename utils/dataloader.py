@@ -640,7 +640,7 @@ class Transform:
 
 class InkVolumeDataset(IterableDataset):
     """iterable dataset for ink volume data"""
-    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, character_namespace=None, scroll_mask=None, split_mask=None, character_grid=None, explicit_negative_mask=None, prepared_state=None):
+    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, character_namespace=None, scroll_mask=None, split_mask=None, character_grid=None, explicit_negative_mask=None, explicit_positive_mask=None, prepared_state=None):
         """initializes the dataset.
         scroll_mask: optional papyrus mask distinct from `mask` (which may be ring-restricted);
         multitile uses it to drop sub-tiles straddling the scroll boundary. defaults to `mask`.
@@ -830,6 +830,29 @@ class InkVolumeDataset(IterableDataset):
             self._explicit_negative_path = None
             self._explicit_negative_arr = None
             self._explicit_negative_shape = None
+        self._has_explicit_positive_mask = explicit_positive_mask is not None
+        if self._has_explicit_positive_mask:
+            explicit_positive_array = np.asarray(explicit_positive_mask)
+            explicit_positive_u8 = (
+                explicit_positive_array if explicit_positive_array.dtype == np.uint8
+                else (explicit_positive_array > 0.5).astype(np.uint8)
+            )
+            if getattr(config.data, "mask_memmap", False):
+                self._explicit_positive_path = _write_memmap(
+                    explicit_positive_u8,
+                    pack_bits=use_bitpack,
+                    original_shape=explicit_positive_u8.shape,
+                )
+                self._explicit_positive_arr = None
+                self._explicit_positive_shape = explicit_positive_u8.shape
+            else:
+                self._explicit_positive_path = None
+                self._explicit_positive_arr = explicit_positive_u8
+                self._explicit_positive_shape = None
+        else:
+            self._explicit_positive_path = None
+            self._explicit_positive_arr = None
+            self._explicit_positive_shape = None
         # optional soft labels (continuous ink probability, 0-255 uint8). stored parallel
         # to the hard labels; used only by the dense target path when dense_soft_labels is on.
         self._soft_path = None
@@ -1218,6 +1241,23 @@ class InkVolumeDataset(IterableDataset):
                 self._explicit_negative_arr = packed
         return self._explicit_negative_arr
 
+    @property
+    def explicit_positive_mask(self):
+        """binary guaranteed-positive mask, lazily reopened in each worker."""
+        if not self._has_explicit_positive_mask:
+            return None
+        if self._explicit_positive_arr is None and self._explicit_positive_path is not None:
+            packed = np.load(self._explicit_positive_path, mmap_mode="r")
+            if self._use_bitpack:
+                unpacked = np.unpackbits(packed)
+                total_pixels = int(np.prod(self._explicit_positive_shape))
+                self._explicit_positive_arr = unpacked[:total_pixels].reshape(
+                    self._explicit_positive_shape
+                )
+            else:
+                self._explicit_positive_arr = packed
+        return self._explicit_positive_arr
+
     def __getstate__(self):
         """pickle only the memmap PATHS, never the open memmap. pickling a numpy
         memmap would copy its full contents into the pickle stream — exactly the
@@ -1237,6 +1277,8 @@ class InkVolumeDataset(IterableDataset):
             state["_split_mask_arr"] = None
         if state.get("_explicit_negative_path") is not None:
             state["_explicit_negative_arr"] = None
+        if state.get("_explicit_positive_path") is not None:
+            state["_explicit_positive_arr"] = None
         state["_surface_depth_arr"] = None
         state["_surface_confidence_arr"] = None
         # never pickle an open zarr handle to a spawned worker (unpicklable on Windows,
@@ -1600,6 +1642,10 @@ class InkVolumeDataset(IterableDataset):
             self.explicit_negative_mask[y:y+self.tile_size, x:x+self.tile_size] > 0
         ):
             return torch.tensor([-1.0], dtype=torch.float32)
+        if self._has_explicit_positive_mask and np.any(
+            self.explicit_positive_mask[y:y+self.tile_size, x:x+self.tile_size] > 0
+        ):
+            return torch.tensor([1.0], dtype=torch.float32)
         has_ink = bool(np.any(label_tile > 0.5))
         return torch.tensor([float(has_ink)], dtype=torch.float32)
 
@@ -1626,6 +1672,10 @@ class InkVolumeDataset(IterableDataset):
                     self.explicit_negative_mask[ysc:yec, xsc:xec] > 0
                 ):
                     out[index] = -1.0
+                elif self._has_explicit_positive_mask and np.any(
+                    self.explicit_positive_mask[ysc:yec, xsc:xec] > 0
+                ):
+                    out[index] = 1.0
                 elif np.any(lbl[ysc:yec, xsc:xec] > 0.5):
                     out[index] = 1.0
         return torch.from_numpy(out)
@@ -1643,6 +1693,7 @@ class InkVolumeDataset(IterableDataset):
         target_mask = self.split_mask
         supervision_mask = self.mask if self._mt_pos_only else None
         explicit_mask = self.explicit_negative_mask
+        explicit_positive_mask = self.explicit_positive_mask
         lbl = self._fetch_label_mt(y_off, x_off).numpy()
         Hm, Wm = int(m.shape[0]), int(m.shape[1])
         out = np.zeros(n * n, dtype=np.float32)
@@ -1657,11 +1708,15 @@ class InkVolumeDataset(IterableDataset):
                 explicit = explicit_mask is not None and np.all(
                     explicit_mask[ys:ye, xs:xe] > 0
                 )
+                explicit_positive = explicit_positive_mask is not None and np.any(
+                    explicit_positive_mask[ys:ye, xs:xe] > 0
+                )
                 if (np.all(m[ys:ye, xs:xe] > 0)
                         and (target_mask is None or np.all(target_mask[ys:ye, xs:xe] > 0))
                         and (supervision_mask is None
                              or np.all(supervision_mask[ys:ye, xs:xe] > 0)
-                             or explicit)):
+                             or explicit
+                             or explicit_positive)):
                     idx = iy * n + ix
                     if self._mt_pos_only and lbl[idx] == 0:
                         # the combined supervision mask also covers the full positive 16px
@@ -2243,6 +2298,7 @@ class DataManager:
         manager_names = (
             "vol", "mask", "labels", "train_x", "valid_x", "y_range", "norm_stats",
             "full_x_range", "full_y_range", "manual_train_mask", "explicit_negative_mask",
+            "explicit_positive_mask",
             "train_range", "valid_range", "shared_range", "split_axis",
         )
         entry = {
@@ -2253,6 +2309,7 @@ class DataManager:
                 "split_mask": train_set.split_mask,
                 "character_grid": train_set._character_grid,
                 "explicit_negative_mask": train_set.explicit_negative_mask,
+                "explicit_positive_mask": train_set.explicit_positive_mask,
                 "x_range": (train_set.x_start, train_set.x_end),
                 "y_range": (train_set.y_start, train_set.y_end),
                 "state": train_set.prepared_state(),
@@ -2263,6 +2320,7 @@ class DataManager:
                 "split_mask": valid_set.split_mask,
                 "character_grid": valid_set._character_grid,
                 "explicit_negative_mask": valid_set.explicit_negative_mask,
+                "explicit_positive_mask": valid_set.explicit_positive_mask,
                 "x_range": (valid_set.x_start, valid_set.x_end),
                 "y_range": (valid_set.y_start, valid_set.y_end),
                 "state": valid_set.prepared_state(),
@@ -2337,6 +2395,18 @@ class DataManager:
                 )
 
         volume_h, volume_w = int(vol.shape[1]), int(vol.shape[2])
+        if manual_mask is not None and any(
+            abs(mask_size - volume_size) > 32
+            for mask_size, volume_size in zip(
+                manual_mask.shape,
+                (volume_h, volume_w),
+            )
+        ):
+            raise ValueError(
+                f"manual train mask shape {manual_mask.shape} does not match volume "
+                f"{(volume_h, volume_w)} for scroll {self.scroll_id}; resample the mask "
+                "to the assembled volume grid"
+            )
         common_h = min(volume_h, int(mask.shape[0]), int(labels.shape[0]))
         common_w = min(volume_w, int(mask.shape[1]), int(labels.shape[1]))
         if manual_mask is not None:
@@ -2386,15 +2456,17 @@ class DataManager:
         # axis split: a missing mask would invalidate the experiment's train/valid meaning.
         self.manual_train_mask = None
         self.explicit_negative_mask = None
+        self.explicit_positive_mask = None
         if not bool(getattr(self.c.data, "simple_split", True)):
             if manual_mask.shape != mask.shape or manual_mask.shape != labels.shape:
                 raise ValueError(
                     f"manual train mask shape {manual_mask.shape} does not match scroll mask "
                     f"{mask.shape} and labels {labels.shape} for scroll {self.scroll_id}"
                 )
-            normal_train = manual_mask >= 192
-            # tolerate paint-tool rounding around half intensity; current masks use 119
+            normal_train = manual_mask >= 240
+            # current masks use exact paint-tool palette values: 119, 185, and 255
             explicit_negative = (manual_mask >= 112) & (manual_mask <= 143)
+            explicit_positive = manual_mask == 185
             explicit_unit = (
                 int(getattr(self.c.model, "multitile_subtile", T))
                 if getattr(self.c.model, "multitile", False)
@@ -2405,19 +2477,30 @@ class DataManager:
                 explicit_unit,
             ) > 0
             explicit_negative &= mask > 0
+            explicit_positive &= mask > 0
             overlap = explicit_negative & (labels > 0.5)
             if overlap.any():
                 print(
                     f"[explicit-negative] scroll {self.scroll_id}: overriding "
                     f"{int(overlap.sum()):,} ink-label pixels"
                 )
-            self.manual_train_mask = (normal_train | explicit_negative).astype(np.uint8)
+            conflict = explicit_negative & explicit_positive
+            if conflict.any():
+                raise ValueError(
+                    f"manual mask has {int(conflict.sum()):,} pixels marked both positive and negative"
+                )
+            labels[explicit_positive] = 1.0
+            self.manual_train_mask = (
+                normal_train | explicit_negative | explicit_positive
+            ).astype(np.uint8)
             self.explicit_negative_mask = explicit_negative.astype(np.uint8)
+            self.explicit_positive_mask = explicit_positive.astype(np.uint8)
             frac_train = float(self.manual_train_mask.mean())
             print(
                 f"[split] scroll {self.scroll_id}: manual mask={train_mask_path} "
                 f"train_pixels={100.0 * frac_train:.1f}% "
-                f"explicit_negative_pixels={int(explicit_negative.sum()):,}"
+                f"explicit_negative_pixels={int(explicit_negative.sum()):,} "
+                f"explicit_positive_pixels={int(explicit_positive.sum()):,}"
             )
 
         # resolve split axis and fraction: ScrollConfig takes priority, then split_overrides
@@ -2552,6 +2635,7 @@ class DataManager:
                 split_mask=prepared_train["split_mask"],
                 character_grid=prepared_train["character_grid"],
                 explicit_negative_mask=prepared_train["explicit_negative_mask"],
+                explicit_positive_mask=prepared_train["explicit_positive_mask"],
                 prepared_state=prepared_train["state"],
             )
             valid_set = InkVolumeDataset(
@@ -2570,6 +2654,7 @@ class DataManager:
                 split_mask=prepared_valid["split_mask"],
                 character_grid=prepared_valid["character_grid"],
                 explicit_negative_mask=prepared_valid["explicit_negative_mask"],
+                explicit_positive_mask=prepared_valid["explicit_positive_mask"],
                 prepared_state=prepared_valid["state"],
             )
             return train_set, valid_set
@@ -2608,6 +2693,13 @@ class DataManager:
             explicit_negative = (
                 (explicit_negative > 0) & (np.asarray(self.mask) > 0.5)
             ).astype(np.uint8)
+            explicit_positive = self._align_manual_mask(
+                self.explicit_positive_mask,
+                split_unit,
+            )
+            explicit_positive = (
+                (explicit_positive > 0) & (np.asarray(self.mask) > 0.5)
+            ).astype(np.uint8)
             if character_grid is not None:
                 character_grid = self._exclude_characters_crossing_split(
                     character_grid,
@@ -2617,12 +2709,18 @@ class DataManager:
             eligible = np.asarray(supervision_mask) > 0.5
             if getattr(self.c.model, "multitile", False):
                 # preserve the legacy ring-window gate and partition only the emitted targets
-                train_mask = np.maximum(supervision_mask, explicit_negative)
+                train_mask = np.maximum.reduce(
+                    (supervision_mask, explicit_negative, explicit_positive)
+                )
                 valid_mask = supervision_mask
                 train_split_mask = assignment
                 valid_split_mask = (assignment == 0).astype(np.uint8)
             else:
-                train_mask = ((eligible & (assignment > 0)) | (explicit_negative > 0)).astype(np.uint8)
+                train_mask = (
+                    (eligible & (assignment > 0))
+                    | (explicit_negative > 0)
+                    | (explicit_positive > 0)
+                ).astype(np.uint8)
                 valid_mask = (eligible & (assignment == 0)).astype(np.uint8)
                 train_split_mask = valid_split_mask = None
             print(
@@ -2633,6 +2731,7 @@ class DataManager:
         else:
             train_mask = supervision_mask
             explicit_negative = None
+            explicit_positive = None
         # when ring_negatives is on, restrict validation to ring tiles too so validation
         # throughput and signal quality match the training distribution. without this,
         # the full valid region (tens of thousands of easy tiles) swamps the validation
@@ -2680,6 +2779,7 @@ class DataManager:
             split_mask=train_split_mask,
             character_grid=character_grid,
             explicit_negative_mask=explicit_negative,
+            explicit_positive_mask=explicit_positive,
         )
         valid_set = InkVolumeDataset(
             self.vol,
@@ -2837,7 +2937,7 @@ class DataManager:
 
         # determine which labels to use for ring boundary computation
         ring_source = getattr(self.c.data, 'ring_label_source', 'original')
-        if ring_source == 'original':
+        if ring_source in {'original', 'closed'}:
             orig_path = f"./inklabels/{self.scroll_id}.png"
             orig_img = imread_gray(orig_path)
             if orig_img is not None:
@@ -2847,7 +2947,7 @@ class DataManager:
                 print(f"[ring] original inklabels not found at {orig_path}, falling back to eroded")
                 ring_labels = labels_crop
         else:
-            # 'eroded' and 'closed' both build the ring off the (hand-cleaned) eroded map
+            # 'eroded' builds the ring from the configured authoritative label map
             ring_labels = labels_crop
 
         # build tile-level maps using ring_labels for boundary, eroded for positives
@@ -2884,7 +2984,7 @@ class DataManager:
                 k_gap = 2 * GAP_R + 1
                 kern_gap = cv2.getStructuringElement(cv2.MORPH_RECT, (k_gap, k_gap))
                 ink_tile_ring = cv2.dilate(ink_tile_ring, kern_gap) & mask_tile
-            print(f"[ring] closed(base=eroded): CLOSE_R={CLOSE_R} GAP_R={GAP_R} exclusion_tiles={ink_tile_ring.sum()}")
+            print(f"[ring] closed(base=regular): CLOSE_R={CLOSE_R} GAP_R={GAP_R} exclusion_tiles={ink_tile_ring.sum()}")
 
         ink_count = int(ink_tile_eroded.sum())
         if ink_count == 0:

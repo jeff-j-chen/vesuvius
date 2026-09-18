@@ -38,7 +38,7 @@ Run a model on every single test scroll. 5 test patches correspond to 5 test scr
 
 ## Fragments
 
-`utils/config.py` registers 23 labeled fragments. Individual campaigns select subsets from this shared inventory.
+`utils/config.py` registers 26 labeled fragments. Individual campaigns select subsets from this shared inventory.
 
 | ID | Fragment | Physical scroll | Default split | Notes |
 |---|---|---|---|---|
@@ -65,6 +65,9 @@ Run a model on every single test scroll. 5 test patches correspond to 5 test scr
 | `20251111010954` | w068 | PHerc0172 | x 75% | Resampled from 7.91µm |
 | `20250919125754` | patch 487 | PHerc0009B | x 75% | Resampled to the training grid |
 | `20231210121321` | Paris4 | PHercParis4 | x 75% | 78keV surface pooled to 28 layers |
+| `20230301213755` | Fr143 | PHercParis2 | x 75% | 54keV surface TIFF stack resampled from 3.24µm |
+| `20231205222200` | Cr4 Fr8 | PHerc51 | x 75% | 53keV surface TIFF stack resampled from 3.24µm |
+| `20230301213423` | Fr34 | PHercParis1 | x 75% | 54keV surface TIFF stack resampled from 3.24µm |
 
 ### Holdout
 
@@ -94,8 +97,25 @@ Each labeled fragment has four main artifacts:
 
 - `ves_zarrs2/<id>.zarr` — 28-layer surface volume
 - `masks/<id>.png` — valid papyrus footprint
-- `inklabels/<id>.png` — aligned continuous ink prediction for review
+- `inklabels/<id>.png` — mask-clipped radius-12 dilation of the conservative target
 - `eroded_inklabels/<id>.png` — conservative binary training target
+
+Generate regular labels from the conservative targets with a radius-12 dilation:
+
+```bash
+python3 old/ink_shrinker.py dilate --input-folder eroded_inklabels \
+	--output-folder inklabels --radius 12 --mask-folder masks
+```
+
+After creating the Paris1 Fr34 conservative label, generate only its regular label with:
+
+```bash
+python3 old/ink_shrinker.py dilate --input-folder eroded_inklabels \
+	--output-folder inklabels --radius 12 --mask-folder masks --only 20230301213423
+```
+
+Manual train masks use exact grayscale values: `255` for the normal training region,
+`185` for explicit positives, `119` for explicit negatives, and `0` for unassigned pixels.
 
 Literal surface maps are stored under `surface_labels/<id>/` as `depth.npy`, `confidence.npy`, and `metadata.json`.
 

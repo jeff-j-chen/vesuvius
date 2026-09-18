@@ -1,78 +1,106 @@
-import cv2
-import numpy as np
-import os
+from __future__ import annotations
+
+import argparse
 from pathlib import Path
 
-def erode_ink_labels(input_folder="eroded_inklabels", output_folder="eroded2_inklabels", erosion_size=3, iterations=3):
-    """
-    Apply erosion to grayscale ink label images to shrink white regions (1s).
-    
-    Parameters:
-    input_folder (str): Path to folder containing input PNG files
-    output_folder (str): Path to folder where eroded images will be saved
-    erosion_size (int): Size of the erosion kernel (odd numbers work best)
-    iterations (int): Number of times to apply erosion
-    """
-    
-    # Create output directory if it doesn't exist
-    Path(output_folder).mkdir(exist_ok=True)
-    
-    # Get all PNG files from input folder
+import cv2
+import numpy as np
+
+
+def transform_ink_labels(
+    input_folder="eroded_inklabels",
+    output_folder="eroded2_inklabels",
+    mode="shrink",
+    radius=3,
+    mask_folder=None,
+    only=None,
+):
     input_path = Path(input_folder)
-    if not input_path.exists():
-        print(f"Error: Input folder '{input_folder}' does not exist!")
-        return
-    
-    png_files = list(input_path.glob("*.png"))
-    
-    if not png_files:
-        print(f"No PNG files found in '{input_folder}' folder!")
-        return
-    
-    # Create erosion kernel
-    kernel = np.ones((erosion_size, erosion_size), np.uint8)
-    
-    print(f"Processing {len(png_files)} PNG files...")
-    print(f"Erosion kernel size: {erosion_size}x{erosion_size}")
-    print(f"Iterations: {iterations}")
-    
-    for i, file_path in enumerate(png_files):
-        try:
-            # Read the image in grayscale
-            img = cv2.imread(str(file_path), cv2.IMREAD_GRAYSCALE)
-            
-            if img is None:
-                print(f"Warning: Could not read {file_path.name}")
-                continue
-            
-            # Apply erosion
-            eroded_img = cv2.erode(img, kernel, iterations=iterations)
-            
-            # Save the eroded image with the same filename
-            output_path = Path(output_folder) / file_path.name
-            success = cv2.imwrite(str(output_path), eroded_img)
-            
-            if success:
-                print(f"Processed ({i+1}/{len(png_files)}): {file_path.name}")
-            else:
-                print(f"Error saving: {file_path.name}")
-                
-        except Exception as e:
-            print(f"Error processing {file_path.name}: {str(e)}")
-    
-    print(f"\nCompleted! Eroded images saved in '{output_folder}' folder.")
+    output_path = Path(output_folder)
+    if not input_path.is_dir():
+        raise FileNotFoundError(f"input folder does not exist: {input_path}")
+    if mode not in {"shrink", "dilate"}:
+        raise ValueError(f"unsupported mode: {mode}")
+    if radius < 0:
+        raise ValueError("radius must be non-negative")
+
+    files = sorted(input_path.glob("*.png"))
+    if only:
+        filename = only if str(only).lower().endswith(".png") else f"{only}.png"
+        files = [path for path in files if path.name == filename]
+    if not files:
+        raise FileNotFoundError(f"no PNG files found in {input_path}")
+    output_path.mkdir(parents=True, exist_ok=True)
+    mask_path = Path(mask_folder) if mask_folder else None
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (2 * radius + 1, 2 * radius + 1),
+    )
+    operation = cv2.erode if mode == "shrink" else cv2.dilate
+
+    print(f"processing {len(files)} labels: mode={mode} radius={radius}")
+    for index, source in enumerate(files, 1):
+        image = cv2.imread(str(source), cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            raise RuntimeError(f"failed to read {source}")
+        if mask_path is not None:
+            mask_file = mask_path / source.name
+            mask = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
+            if mask is None:
+                raise FileNotFoundError(f"mask not found: {mask_file}")
+            if mask.shape != image.shape:
+                source_shape = image.shape
+                image = cv2.resize(
+                    image,
+                    mask.shape[::-1],
+                    interpolation=cv2.INTER_NEAREST,
+                )
+                print(
+                    f"[resample] {source.name}: label={source_shape} -> {image.shape}"
+                )
+        transformed = operation(image, kernel, iterations=1) if radius else image.copy()
+        if mask_path is not None:
+            transformed[mask == 0] = 0
+
+        destination = output_path / source.name
+        temporary = destination.with_suffix(".tmp.png")
+        if not cv2.imwrite(str(temporary), transformed):
+            raise RuntimeError(f"failed to write {temporary}")
+        temporary.replace(destination)
+        print(f"[{index}/{len(files)}] {source.name}")
+
+
+def erode_ink_labels(
+    input_folder="eroded_inklabels",
+    output_folder="eroded2_inklabels",
+    erosion_size=3,
+    iterations=3,
+):
+    radius = iterations * (erosion_size // 2)
+    transform_ink_labels(input_folder, output_folder, mode="shrink", radius=radius)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="shrink or dilate binary ink labels")
+    parser.add_argument("mode", choices=("shrink", "dilate"))
+    parser.add_argument("--input-folder", default="eroded_inklabels")
+    parser.add_argument("--output-folder", default=None)
+    parser.add_argument("--radius", type=int, default=3)
+    parser.add_argument("--mask-folder", default=None)
+    parser.add_argument("--only", default=None, help="process one PNG filename or stem")
+    args = parser.parse_args()
+    output_folder = args.output_folder
+    if output_folder is None:
+        output_folder = "eroded2_inklabels" if args.mode == "shrink" else "inklabels"
+    transform_ink_labels(
+        input_folder=args.input_folder,
+        output_folder=output_folder,
+        mode=args.mode,
+        radius=args.radius,
+        mask_folder=args.mask_folder,
+        only=args.only,
+    )
+
 
 if __name__ == "__main__":
-    # Configuration - modify these values as needed
-    INPUT_FOLDER = "eroded_inklabels"
-    OUTPUT_FOLDER = "eroded2_inklabels"
-    EROSION_SIZE = 3  # Size of erosion kernel (3x3, 5x5, etc.)
-    ITERATIONS = 3    # ~18% shrink from eroded_inklabels
-    
-    # Run the erosion process
-    erode_ink_labels(
-        input_folder=INPUT_FOLDER,
-        output_folder=OUTPUT_FOLDER,
-        erosion_size=EROSION_SIZE,
-        iterations=ITERATIONS
-    )
+    main()

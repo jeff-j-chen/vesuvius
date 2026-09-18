@@ -1751,28 +1751,37 @@ modes and GroupDRO/CVaR all replace the primary reduction and are intentionally 
 SagNet already applies full style mixing, so MixStyle plus SagNet is technically possible but
 redundant and remains invalid.
 
-## 23) Campaign 28: Targeted Winner Combinations
+## 23) Campaign 28: Expanded-Data Attribution Study
 
-Campaign 28 uses the unchanged Campaign 27 full-IBN baseline copied to
-`runs_archs28/baseline`. It queues three combinations rather than another broad matrix:
+Late Campaign 27 results changed the ranking. `gradient_conflict_dual_scale` reached character AP
+0.7593 and PR-AUC 0.7617, while `stack_weldon_gated_dual_groupdro` became the clear winner at
+character AP 0.7778, character F1 0.6765, and PR-AUC 0.7875. The latter raised every physical
+domain over baseline, including PHerc0139. `physical_groupdro_dual_scale` and
+`mid_3d2d_physical_groupdro` were also strong but did not match the full stack. The remaining
+Campaign 27 full-stack arms produced no usable validation scalars.
 
-- `gradient_conflict_mid_gated` combines the best broad domain-conflict objective with the
-  mid-3D/2D plus gated-stem architecture that was strongest on PHerc0139, PHerc0172, PHerc1667,
-  and PHercParis4.
-- `cluster_balance_sparse_deep` combines the highest character AP arm with sparse deep
-  supervision, Campaign 26's most consistently positive auxiliary architecture change.
-- `gradient_conflict_gated_sparse_deep` keeps the standard 3D backbone and combines conflict
-  weighting with gated input cues and direct supervision of intermediate decoder scales.
+Campaign 28 adds three fragments and therefore trains a new baseline as its first arm. The old
+copied baseline is retained only as `runs_archs28/legacy_c27_baseline` and must not be used for
+comparison. The 29-arm sequence is ordered by value and attribution:
 
-The campaign excludes MLDG plus dual-scale after its large regression, WELDON plus dual-scale
-after their combination erased the individual gains, `cluster_worst` after its collapse, and
-GroupDRO combinations that conflict with the domain-gradient reduction. A larger dual-scale stack
-was also excluded because fixed dual-scale was inconsistent and its unfinished Campaign 27 stack
-does not yet provide evidence strong enough for a three-arm campaign.
+- baseline plus single WELDON, gated-stem, dual-scale, GroupDRO, conflict-weighted, and
+  cluster-balanced effects establish the new dataset's main effects.
+- pair, leave-one-out, and full-stack arms around WELDON + gated stems + dual-scale + GroupDRO
+  identify which component and interaction caused Campaign 27's large gain.
+- conflict-weighted and cluster-balanced objectives are compared at matched dual-scale,
+  gated-dual, and WELDON-gated-dual capacities. GroupDRO and domain-gradient reductions remain
+  alternatives and are never enabled together.
+- a five-arm mid-3D/2D ladder isolates gated stems, GroupDRO, and the final dual-scale addition.
+- sparse deep-supervision arms run last because the late Campaign 27 evidence increased the value
+  of dual-scale and GroupDRO relative to that earlier hypothesis.
+
+The Paris1 Fr34 source label is native 3.24um while its assembled volume is 9.362um.
+`old/ink_shrinker.py` now nearest-neighbor resamples mismatched labels to the target mask before
+applying morphology. Its Campaign 28 label is dilated by 12 target pixels and masked to the valid
+surface; its train mask is generated from the assembled volume's middle slice.
 
 The runner retains Campaign 27's parent cache prewarm and one-child-per-arm process isolation.
-Synthetic CUDA optimizer steps verified nonzero updates in the mid-2D, gated-stem, and deep
-supervision branches and populated domain-gradient cosine measurements for all three arms.
+All 29 models construct successfully, and all 14 train-mask/label/surface preflights pass.
 
 The isolated runners set `PYTORCH_NVML_BASED_CUDA_CHECK=1` before importing PyTorch. Config
 construction probes CUDA availability in the controller; the default runtime-based probe poisons
