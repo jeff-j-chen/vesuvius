@@ -1,0 +1,39 @@
+{
+    "area_cm2": 51.27398447802793,
+    "area_vx2": 68686214.63213187,
+    "bbox": [
+        [
+            1916.72607421875,
+            2396.08251953125,
+            2276.370361328125
+        ],
+        [
+            5800.3544921875,
+            5928.181640625,
+            8902.3486328125
+        ]
+    ],
+    "date_last_modified": "20260722160449399",
+    "elapsed_time_s": 551.091486067,
+    "format": "tifxyz",
+    "grid_offset": [
+        2,
+        2
+    ],
+    "max_gen": 638,
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "seed": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "seed_surface_id": "20250703034159-auto_grown_20250703034159599-derived-native-L0-07287aeb4d154fbe",
+    "type": "seg",
+    "uuid": "20250703034159-auto_grown_20250703034159599-derived-native-L0-07287aeb4d154fbe",
+    "vc3d_segment_display_id": "20250703034159-auto_grown_20250703034159599-derived-native-L0-07287aeb4d154fbe",
+    "vc3d_segment_folder": "20250521151220_editable",
+    "vc3d_segment_folder_default_palette": true
+}

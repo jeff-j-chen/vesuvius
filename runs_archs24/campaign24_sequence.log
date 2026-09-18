@@ -1,0 +1,316 @@
+[surface] 20260115000000 complete -> skip
+[surface] 20250223000000 complete -> skip
+[surface] 20260206000001 complete -> skip
+[surface] 20260115000001 complete -> skip
+[surface] 20260210000000 complete -> skip
+[surface] 20260227000000 complete -> skip
+[surface] 20260318000000 complete -> skip
+[surface] 20260325000000 complete -> skip
+[surface] 20260108000000 complete -> skip
+[surface] 20250831000000 complete -> skip
+[surface] 20260302000000 complete -> skip
+[surface] 20260306000000 complete -> skip
+[surface] 20260310000000 complete -> skip
+[surface] 20260303000000 complete -> skip
+[surface] 20260317000000 complete -> skip
+[surface] 20260226000000 complete -> skip
+[surface] 20250628074500 complete -> skip
+[surface] 20240304141531 complete -> skip
+[surface] all maps generated and staged
+[preflight] validating 18 train masks
+  20260115000000: train=1,090,451 positive=160,455 nonink=929,996 explicit_negative=483,665 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20250223000000: train=1,113,269 positive=109,157 nonink=1,004,112 explicit_negative=433,355 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20260206000001: train=1,135,963 positive=155,336 nonink=980,627 explicit_negative=235,382 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20260115000001: train=1,221,250 positive=197,550 nonink=1,023,700 explicit_negative=583,256 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20260210000000: train=360,253 positive=55,342 nonink=304,911 explicit_negative=141,752 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20260227000000: train=769,202 positive=123,312 nonink=645,890 explicit_negative=186,301 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20260318000000: train=436,174 positive=64,804 nonink=371,370 explicit_negative=321,702 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20260325000000: train=834,780 positive=107,350 nonink=727,430 explicit_negative=341,711 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20260108000000: train=725,171 positive=84,466 nonink=640,705 explicit_negative=159,315 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20250831000000: train=2,272,917 positive=283,458 nonink=1,972,679 explicit_negative=898,900 explicit_label_overlap=0 outside_papyrus_ignored=16,780
+  20260302000000: train=290,546 positive=36,183 nonink=254,363 explicit_negative=247,086 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20260306000000: train=585,176 positive=75,249 nonink=509,927 explicit_negative=197,491 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20260310000000: train=558,857 positive=80,882 nonink=477,975 explicit_negative=426,942 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20260303000000: train=339,885 positive=45,627 nonink=294,258 explicit_negative=285,104 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20260317000000: train=1,533,766 positive=198,481 nonink=1,335,285 explicit_negative=501,025 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20260226000000: train=529,536 positive=60,970 nonink=430,702 explicit_negative=134,908 explicit_label_overlap=0 outside_papyrus_ignored=47,678
+  20250628074500: train=1,816,208 positive=268,018 nonink=1,548,190 explicit_negative=629,335 explicit_label_overlap=0 outside_papyrus_ignored=0
+  20240304141531: train=8,839,509 positive=890,972 nonink=7,948,537 explicit_negative=480,843 explicit_label_overlap=0 outside_papyrus_ignored=0
+[preflight] all 18 train masks and surface inputs passed
+[campaign24] 18 run(s) queued (log -> ./runs_archs24)
+
+==============================================================================
+[campaign24] 24_holdout_20250223000000
+==============================================================================
+  train_scrolls=17 holdout=20250223000000 samples/scroll=6667 total~=113339
+  epochs=20 eval=20 full_eval=True DANN=fixed:0.03 domains=17 xfrag=True replace_margin=20
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1789509077.732860  695206 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1789509077.737520  695206 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1789509077.749716  695206 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789509077.749732  695206 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789509077.749733  695206 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1789509077.749734  695206 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+[seed] fast mode (seed=41) — cudnn benchmark on, tiny run-to-run fp noise
+--- Configuration ---
+data: DataConfig(zarr_path='/vesuvius/ves_zarrs2', scrolls=[ScrollConfig(scroll_id=20260115000000, split_axis='y', train_split_frac=0.8055, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260206000001, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260115000001, split_axis='y', train_split_frac=0.5, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260210000000, split_axis='x', train_split_frac=0.5, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260227000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260318000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260325000000, split_axis='x', train_split_frac=0.6, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260108000000, split_axis='x', train_split_frac=0.7, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250831000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260302000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260306000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260310000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260303000000, split_axis='y', train_split_frac=0.5, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260317000000, split_axis='y', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260226000000, split_axis='y', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250628074500, split_axis='x', train_split_frac=0.6, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20240304141531, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0))], train_scroll_dict=None, train_scroll_weights=None, test_scroll_ids=[20260814140748, 20260717193517, 20260720090842, 20250703034159, 20260723112922], holdout_scroll_ids=[20251226000000], tile_size=16, depth=8, d_start=4, d_end=28, train_d_start=4, train_d_end=28, composite_method='maxproj', composite_d0=10, composite_d1=18, composite_display='raw', voxel_um=9.362, mask_memmap=True, mask_bitpack=True, preload_volumes=True, ring_negatives=True, ring_label_source='closed', ring_close_r=3, ring_gap_r=3, ring_shell_r=2, simple_split=False, train_mask_dir='train_masks', surface_label_dir='./surface_labels', context_size=192, context_downsample=2, eval_infer_bs=192, eval_prefetch=4, eval_chunk_gb=4.0, tta_mode='light', probe_rois={20240304141531: [ProbeROI(x=960, y=2688, label='easy', size=576), ProbeROI(x=3840, y=2784, label='hard', size=576)], 20250223000000: [ProbeROI(x=4320, y=3456, label='easy', size=576), ProbeROI(x=8352, y=2496, label='hard', size=576)], 20250628074500: [ProbeROI(x=1152, y=2784, label='easy', size=576), ProbeROI(x=1440, y=4800, label='hard', size=576)], 20250831000000: [ProbeROI(x=2208, y=1152, label='easy', size=576), ProbeROI(x=6720, y=576, label='hard', size=576)], 20260108000000: [ProbeROI(x=576, y=1824, label='easy', size=576), ProbeROI(x=5664, y=3072, label='hard', size=576)], 20260115000000: [ProbeROI(x=2976, y=4320, label='easy', size=576), ProbeROI(x=2496, y=4800, label='hard', size=576)], 20260115000001: [ProbeROI(x=5472, y=2688, label='easy', size=576), ProbeROI(x=8160, y=5376, label='hard', size=576)], 20260206000001: [ProbeROI(x=864, y=960, label='easy', size=576), ProbeROI(x=6336, y=2304, label='hard', size=576)], 20260210000000: [ProbeROI(x=4128, y=2592, label='easy', size=576), ProbeROI(x=4032, y=3168, label='hard', size=576)], 20260226000000: [ProbeROI(x=480, y=960, label='easy', size=576), ProbeROI(x=288, y=1536, label='hard', size=576)], 20260227000000: [ProbeROI(x=3552, y=3744, label='easy', size=576), ProbeROI(x=7296, y=3456, label='hard', size=576)], 20260302000000: [ProbeROI(x=3936, y=3744, label='easy', size=576), ProbeROI(x=6816, y=4320, label='hard', size=576)], 20260303000000: [ProbeROI(x=5280, y=2304, label='easy', size=576), ProbeROI(x=5760, y=3744, label='hard', size=576)], 20260306000000: [ProbeROI(x=2880, y=2496, label='easy', size=576), ProbeROI(x=5664, y=2976, label='hard', size=576)], 20260310000000: [ProbeROI(x=192, y=864, label='easy', size=576), ProbeROI(x=5184, y=1824, label='hard', size=576)], 20260317000000: [ProbeROI(x=2496, y=1728, label='easy', size=576), ProbeROI(x=1056, y=4608, label='hard', size=576)], 20260318000000: [ProbeROI(x=4128, y=960, label='easy', size=576), ProbeROI(x=7680, y=864, label='hard', size=576)], 20260325000000: [ProbeROI(x=2304, y=2688, label='easy', size=576), ProbeROI(x=5376, y=2976, label='hard', size=576)]}, vis_scroll_ids=[20250223000000], inklabel_dir='./eroded_inklabels', dot_inklabel_dir='', dot_scroll_whitelist=[], ctx_jitter=32, target_aware_ctx_jitter=True, depth_jitter=1, surface_relative_depth_window=True, multitile_train_step=16, multitile_pos_only=True, character_balanced_sampling=True, character_balance_scrolls=True, character_min_pixels=8, max_samples_per_epoch=6667)
+dl: DataloaderConfig(batch_size=96, num_workers=8, data_aug=True, rotation_prob=0.6, flip_prob=0.6, noise_prob=0.0, brightness_prob=0.0, contrast_prob=0.0, brightness_delta=0.15, contrast_delta=0.15, noise_std_min=0.001, noise_std_max=0.005, cutout_prob=0.5, cutout_max_frac=0.16, cutout_n_patches=3, depth_mask_prob=0.0, fda_prob=0.0, fda_beta=0.05, elastic_prob=0.0, elastic_alpha=15.0, elastic_sigma=5.0, depth_warp_prob=0.0, depth_warp_max=2.0, depth_warp_sigma=24.0, surface_atten_prob=0.0, surface_atten_min=0.1, surface_atten_max=0.35, surface_atten_sigma=2.0, acquisition_blur_prob=0.0, acquisition_blur_min=0.4, acquisition_blur_max=0.9, correlated_noise_prob=0.0, correlated_noise_min=0.003, correlated_noise_max=0.015, correlated_noise_sigma=6.0, cutout_protect_center=True, context_replace_prob=0.35, context_replace_keep_size=0, context_replace_margin=20, context_replace_feather=40, context_replace_min_mask_frac=0.8, context_replace_surface_align=True)
+tra: TrainingConfig(n_epochs=20, lr=0.00015, encoder_lr_scale=1.0, encoder_freeze_epochs=0, warmup_epochs=5, weight_decay=0, l1_lambda=0.0, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=15, log_dir='./runs_archs24', eval_int=20, eval_int_scrolls=1, test_int=999, probe_int=999, loss_type='bce', gce_q=0.9, label_smooth_pos=0.1, label_smooth_neg=0.05, tta_consistency=False, tta_consistency_lambda=0.3, tta_consistency_mode='flips', tta_consistency_prob=1.0, tile_pos_weight=1, tile_pos_weight_auto=False, dann=True, dann_lambda=0.03, dann_n_domains=17, dann_grl_anneal=False, spill_reduction=False, spill_lambda=0.0, spill_depth_threshold=0.35, spill_active_depth_tau=0.08, spill_max_active_depth_frac=0.35, spill_min_depth_var=0.8, spill_prob=False, spill_entropy=False, spill_entropy_lambda=0.3, spill_max_depth_entropy=2.1, new_surface_lambda=0.2, new_surface_smooth_lambda=0.02, surface_target_sigma=0.75, seed=41, deterministic=False, epoch_cooldown_secs=0, val_cooldown_secs=0, eval_cooldown_secs=0, fig_chunk_cooldown_ms=0, save_vis=False, fast_eval_figure=False, test_on_final=False, supcon=True, supcon_lambda=0.1, supcon_temp=0.07, supcon_proj_dim=128, supcon_hidden_dim=256, supcon_curriculum=True, supcon_lambda_start=0.05, supcon_lambda_end=0.8, supcon_curriculum_epochs=8, supcon_cross_frag=True, entropy_min_lambda=0.0, entropy_min_batch_size=8, character_macro_metrics=True, character_score_threshold=0.5, character_recall_target=0.5, character_max_ring_fpr=0.1, character_checkpoint_metric='character_ap_macro', sanity_guard_epoch=0, sanity_min_character_ap=0.0, sanity_min_specificity=0.0, context_consistency=False, context_consistency_prob=0.25, context_consistency_lambda=0.1, depth_view_consistency=False, depth_view_consistency_prob=0.5, depth_view_consistency_lambda=0.2, depth_view_consistency_offset=2, character_bag_ranking=False, character_bag_margin=0.5, character_bag_topk_frac=0.5, character_bag_lambda=0.2, character_groupdro=False, character_groupdro_eta=0.05, character_groupdro_max_ratio=3.0, character_cvar=False, character_cvar_alpha=0.25, clam_instance=False, clam_instance_k=4, clam_instance_lambda=0.1, sam_rho=0.0, elr=False, elr_start_epoch=5, elr_beta=0.7, elr_lambda=0.1)
+model: ModelConfig(arch='nnunet3d_lcndz', compile_model=True, require_architecture_init=False, conv1_drop=0.05, conv2_drop=0.05, head_drop=0.1, attn_mil=False, attn_entropy_weight=0.03, feature_attn_mil=False, feature_depth_fusion=False, minimum_support_k=0, minimum_support_kernel=3, weldon_k=0, fiber_coordinate_branch=False, early_2d_unet=False, divided_attention=False, divided_attention_spatial=False, divided_attention_heads=4, divided_attention_window=8, mednext_adapters=False, mednext_kernel=5, mednext_expansion=2, learned_surface=False, new_learned_surface=False, better_surface=False, surface_teacher_input=True, surface_canonicalize=False, surface_canonical_depth=24, surface_guided_mil=False, surface_guided_mix=0.5, surface_band_sigma=1.5, use_ibn=True, use_prototype=False, prototype_ema=0.99, skip_drop=0.2, use_depth_profile=False, no_dz=False, channels_mult=1.0, allow_depth4=False, multitile=True, multitile_subtile=16, multitile_grid=4)
+hm: HardMiningConfig(enabled=False, hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1, dir='./hard_negs')
+device: cuda
+model_dir: models/archs24/holdout_20250223000000
+exp_name: 24_holdout_20250223000000
+init_weights: models/mae_nnunet_192_ibn_depth8_22scroll_2k.pth
+---------------------
+Creating datasets...
+[preload] scroll 20260115000000: loading 2.57 GiB into RAM
+[preload] scroll 20260115000000: ready shape=(28, 6040, 8160) dtype=uint16 contiguous=True
+[align] scroll 20260115000000: volume=(6040, 8160) mask=(6040, 8160) labels=(6021, 8141) -> common=(6021, 8141)
+[split] scroll 20260115000000: manual mask=train_masks/20260115000000.png train_pixels=3.5% explicit_negative_pixels=688,128
+[split] scroll 20260115000000: axis=y train_frac=0.8055
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=4093
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=1243  ring_tiles=1566  ratio=1.26
+[character-components] 11 components at 16px target resolution
+[manual-split] scroll 20260115000000: unit=16px train_ring=561152px valid_ring=157952px
+[character-sampling] scroll 20260115000000: 9 characters with positive and ring-negative windows
+[context-replace] scroll 20260115000000: 2161 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260115000000: train_tiles=6667 valid_tiles=1074
+[preload] scroll 20260206000001: loading 2.57 GiB into RAM
+[preload] scroll 20260206000001: ready shape=(28, 5840, 8440) dtype=uint16 contiguous=True
+[align] scroll 20260206000001: volume=(5840, 8440) mask=(5840, 8440) labels=(5821, 8421) -> common=(5821, 8421)
+[split] scroll 20260206000001: manual mask=train_masks/20260206000001.png train_pixels=2.9% explicit_negative_pixels=341,248
+[split] scroll 20260206000001: axis=x train_frac=0.75
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=3774
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=1247  ring_tiles=1696  ratio=1.36
+[character-components] 10 components at 16px target resolution
+[manual-split] scroll 20260206000001: unit=16px train_ring=483840px valid_ring=269568px
+[character-sampling] scroll 20260206000001: 7 characters with positive and ring-negative windows
+[context-replace] scroll 20260206000001: 1949 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260206000001: train_tiles=5194 valid_tiles=1935
+[preload] scroll 20260115000001: loading 3.65 GiB into RAM
+[preload] scroll 20260115000001: ready shape=(28, 7180, 9740) dtype=uint16 contiguous=True
+[align] scroll 20260115000001: volume=(7180, 9740) mask=(7180, 9740) labels=(7161, 9721) -> common=(7161, 9721)
+[split] scroll 20260115000001: manual mask=train_masks/20260115000001.png train_pixels=2.8% explicit_negative_pixels=769,280
+[split] scroll 20260115000001: axis=y train_frac=0.5
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=4790
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=1634  ring_tiles=1889  ratio=1.16
+[character-components] 13 components at 16px target resolution
+[manual-split] scroll 20260115000001: unit=16px train_ring=633088px valid_ring=268800px
+[character-sampling] scroll 20260115000001: 9 characters with positive and ring-negative windows
+[context-replace] scroll 20260115000001: 2794 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260115000001: train_tiles=6667 valid_tiles=1822
+[preload] scroll 20260210000000: loading 3.86 GiB into RAM
+[preload] scroll 20260210000000: ready shape=(28, 7500, 9880) dtype=uint16 contiguous=True
+[split] scroll 20260210000000: manual mask=train_masks/20260210000000.png train_pixels=0.7% explicit_negative_pixels=198,400
+[split] scroll 20260210000000: axis=x train_frac=0.5
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=1347
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=413  ring_tiles=673  ratio=1.63
+[character-components] 4 components at 16px target resolution
+[manual-split] scroll 20260210000000: unit=16px train_ring=199168px valid_ring=78848px
+[character-sampling] scroll 20260210000000: 3 characters with positive and ring-negative windows
+[context-replace] scroll 20260210000000: 633 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260210000000: train_tiles=2318 valid_tiles=560
+[preload] scroll 20260227000000: loading 3.92 GiB into RAM
+[preload] scroll 20260227000000: ready shape=(28, 7700, 9760) dtype=uint16 contiguous=True
+[split] scroll 20260227000000: manual mask=train_masks/20260227000000.png train_pixels=1.3% explicit_negative_pixels=258,048
+[split] scroll 20260227000000: axis=x train_frac=0.75
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=2575
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=847  ring_tiles=1061  ratio=1.25
+[character-components] 7 components at 16px target resolution
+[manual-split] scroll 20260227000000: unit=16px train_ring=417536px valid_ring=70912px
+[character-sampling] scroll 20260227000000: 6 characters with positive and ring-negative windows
+[context-replace] scroll 20260227000000: 632 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260227000000: train_tiles=3787 valid_tiles=485
+[preload] scroll 20260318000000: loading 2.77 GiB into RAM
+[preload] scroll 20260318000000: ready shape=(28, 5660, 9400) dtype=uint16 contiguous=True
+[split] scroll 20260318000000: manual mask=train_masks/20260318000000.png train_pixels=1.6% explicit_negative_pixels=433,664
+[split] scroll 20260318000000: axis=x train_frac=0.75
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=2433
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=758  ring_tiles=1232  ratio=1.63
+[character-components] 8 components at 16px target resolution
+[manual-split] scroll 20260318000000: unit=16px train_ring=274944px valid_ring=234496px
+[character-sampling] scroll 20260318000000: 4 characters with positive and ring-negative windows
+[context-replace] scroll 20260318000000: 1296 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260318000000: train_tiles=3922 valid_tiles=1646
+[preload] scroll 20260325000000: loading 2.58 GiB into RAM
+[preload] scroll 20260325000000: ready shape=(28, 5980, 8260) dtype=uint16 contiguous=True
+[split] scroll 20260325000000: manual mask=train_masks/20260325000000.png train_pixels=2.6% explicit_negative_pixels=464,128
+[split] scroll 20260325000000: axis=x train_frac=0.6
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=3187
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=990  ring_tiles=1555  ratio=1.57
+[character-components] 9 components at 16px target resolution
+[manual-split] scroll 20260325000000: unit=16px train_ring=427776px valid_ring=223744px
+[character-sampling] scroll 20260325000000: 6 characters with positive and ring-negative windows
+[context-replace] scroll 20260325000000: 1756 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260325000000: train_tiles=5265 valid_tiles=1554
+[preload] scroll 20260108000000: loading 2.59 GiB into RAM
+[preload] scroll 20260108000000: ready shape=(28, 6200, 8020) dtype=uint16 contiguous=True
+[split] scroll 20260108000000: manual mask=train_masks/20260108000000.png train_pixels=1.9% explicit_negative_pixels=220,416
+[split] scroll 20260108000000: axis=x train_frac=0.7
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=3092
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=931  ring_tiles=1411  ratio=1.52
+[character-components] 8 components at 16px target resolution
+[manual-split] scroll 20260108000000: unit=16px train_ring=314624px valid_ring=284928px
+[character-sampling] scroll 20260108000000: 4 characters with positive and ring-negative windows
+[context-replace] scroll 20260108000000: 1181 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260108000000: train_tiles=3215 valid_tiles=2087
+[preload] scroll 20250831000000: loading 2.66 GiB into RAM
+[preload] scroll 20250831000000: ready shape=(28, 6400, 7980) dtype=uint16 contiguous=True
+[split] scroll 20250831000000: manual mask=train_masks/20250831000000.png train_pixels=6.6% explicit_negative_pixels=1,214,960
+[split] scroll 20250831000000: axis=x train_frac=0.75
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=8104
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=2542  ring_tiles=3642  ratio=1.43
+[character-components] 22 components at 16px target resolution
+[character-split] excluded 1 character(s) crossing the fixed split
+[manual-split] scroll 20250831000000: unit=16px train_ring=1131776px valid_ring=451328px
+[character-sampling] scroll 20250831000000: 14 characters with positive and ring-negative windows
+[context-replace] scroll 20250831000000: 4599 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20250831000000: train_tiles=6667 valid_tiles=3281
+[preload] scroll 20260302000000: loading 3.45 GiB into RAM
+[preload] scroll 20260302000000: ready shape=(28, 8560, 7720) dtype=uint16 contiguous=True
+[split] scroll 20260302000000: manual mask=train_masks/20260302000000.png train_pixels=0.9% explicit_negative_pixels=334,336
+[split] scroll 20260302000000: axis=x train_frac=0.75
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=1199
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=340  ring_tiles=673  ratio=1.98
+[character-components] 3 components at 16px target resolution
+[manual-split] scroll 20260302000000: unit=16px train_ring=168448px valid_ring=90880px
+[character-sampling] scroll 20260302000000: 2 characters with positive and ring-negative windows
+[context-replace] scroll 20260302000000: 1176 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260302000000: train_tiles=3055 valid_tiles=626
+[preload] scroll 20260306000000: loading 2.41 GiB into RAM
+[preload] scroll 20260306000000: ready shape=(28, 6200, 7440) dtype=uint16 contiguous=True
+[split] scroll 20260306000000: manual mask=train_masks/20260306000000.png train_pixels=1.8% explicit_negative_pixels=285,440
+[split] scroll 20260306000000: axis=x train_frac=0.75
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=2314
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=692  ring_tiles=1183  ratio=1.71
+[character-components] 7 components at 16px target resolution
+[manual-split] scroll 20260306000000: unit=16px train_ring=315648px valid_ring=164352px
+[character-sampling] scroll 20260306000000: 5 characters with positive and ring-negative windows
+[context-replace] scroll 20260306000000: 819 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260306000000: train_tiles=3266 valid_tiles=1129
+[preload] scroll 20260310000000: loading 2.31 GiB into RAM
+[preload] scroll 20260310000000: ready shape=(28, 6140, 7200) dtype=uint16 contiguous=True
+[split] scroll 20260310000000: manual mask=train_masks/20260310000000.png train_pixels=2.5% explicit_negative_pixels=591,616
+[split] scroll 20260310000000: axis=x train_frac=0.75
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=2691
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=861  ring_tiles=1120  ratio=1.30
+[character-components] 7 components at 16px target resolution
+[character-split] excluded 1 character(s) crossing the fixed split
+[manual-split] scroll 20260310000000: unit=16px train_ring=310272px valid_ring=196864px
+[character-sampling] scroll 20260310000000: 4 characters with positive and ring-negative windows
+[context-replace] scroll 20260310000000: 1886 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260310000000: train_tiles=5048 valid_tiles=1435
+[preload] scroll 20260303000000: loading 2.83 GiB into RAM
+[preload] scroll 20260303000000: ready shape=(28, 7040, 7720) dtype=uint16 contiguous=True
+[split] scroll 20260303000000: manual mask=train_masks/20260303000000.png train_pixels=1.3% explicit_negative_pixels=395,776
+[split] scroll 20260303000000: axis=y train_frac=0.5
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=1431
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=480  ring_tiles=603  ratio=1.26
+[character-components] 4 components at 16px target resolution
+[manual-split] scroll 20260303000000: unit=16px train_ring=176128px valid_ring=101120px
+[character-sampling] scroll 20260303000000: 3 characters with positive and ring-negative windows
+[context-replace] scroll 20260303000000: 1462 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260303000000: train_tiles=3437 valid_tiles=724
+[preload] scroll 20260317000000: loading 1.59 GiB into RAM
+[preload] scroll 20260317000000: ready shape=(28, 5820, 5240) dtype=uint16 contiguous=True
+[split] scroll 20260317000000: manual mask=train_masks/20260317000000.png train_pixels=7.0% explicit_negative_pixels=676,352
+[split] scroll 20260317000000: axis=y train_frac=0.75
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=5272
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=1657  ring_tiles=2401  ratio=1.45
+[character-components] 14 components at 16px target resolution
+[character-split] excluded 1 character(s) crossing the fixed split
+[manual-split] scroll 20260317000000: unit=16px train_ring=752384px valid_ring=286464px
+[character-sampling] scroll 20260317000000: 10 characters with positive and ring-negative windows
+[context-replace] scroll 20260317000000: 2698 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260317000000: train_tiles=6667 valid_tiles=2060
+[preload] scroll 20260226000000: loading 0.40 GiB into RAM
+[preload] scroll 20260226000000: ready shape=(28, 2180, 3560) dtype=uint16 contiguous=True
+[split] scroll 20260226000000: manual mask=train_masks/20260226000000.png train_pixels=8.9% explicit_negative_pixels=188,284
+[split] scroll 20260226000000: axis=y train_frac=0.75
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=2138
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=646  ring_tiles=904  ratio=1.40
+[character-components] 8 components at 16px target resolution
+[manual-split] scroll 20260226000000: unit=16px train_ring=260096px valid_ring=136704px
+[character-sampling] scroll 20260226000000: 5 characters with positive and ring-negative windows
+[context-replace] scroll 20260226000000: 496 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260226000000: train_tiles=2456 valid_tiles=925
+[preload] scroll 20250628074500: loading 1.17 GiB into RAM
+[preload] scroll 20250628074500: ready shape=(28, 6280, 3580) dtype=uint16 contiguous=True
+[split] scroll 20250628074500: manual mask=train_masks/20250628074500.png train_pixels=11.8% explicit_negative_pixels=862,976
+[split] scroll 20250628074500: axis=x train_frac=0.6
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=7608
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=2308  ring_tiles=3320  ratio=1.44
+[character-components] 22 components at 16px target resolution
+[manual-split] scroll 20250628074500: unit=16px train_ring=878848px valid_ring=561920px
+[character-sampling] scroll 20250628074500: 13 characters with positive and ring-negative windows
+[context-replace] scroll 20250628074500: 3395 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20250628074500: train_tiles=6667 valid_tiles=3967
+[preload] scroll 20240304141531: loading 2.70 GiB into RAM
+[preload] scroll 20240304141531: ready shape=(28, 10400, 4975) dtype=uint16 contiguous=True
+[split] scroll 20240304141531: manual mask=train_masks/20240304141531.png train_pixels=18.4% explicit_negative_pixels=702,464
+[split] scroll 20240304141531: axis=x train_frac=0.75
+[ring] closed(base=eroded): CLOSE_R=3 GAP_R=3 exclusion_tiles=39475
+[ring_negatives] source='closed' tile_radius=2  ink_tiles=11812  ring_tiles=18823  ratio=1.59
+[character-components] 93 components at 16px target resolution
+[character-split] excluded 1 character(s) crossing the fixed split
+[manual-split] scroll 20240304141531: unit=16px train_ring=3599360px valid_ring=4243200px
+[character-sampling] scroll 20240304141531: 42 characters with positive and ring-negative windows
+[context-replace] scroll 20240304141531: 10222 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20240304141531: train_tiles=6667 valid_tiles=30952
+[multi-scroll] merged train_tiles=80965 valid_tiles=56262
+Data setup done in 804.66s
+Creating model and loss... l1 lambda 0.0... Model parameters (nnunet3d_lcndz): 5,679,379
+[init-weights] loaded 61/61 tensors from models/mae_nnunet_192_ibn_depth8_22scroll_2k.pth (shape-skipped=0 missing=9 unexpected=0)
+ done in 1.64s
+Initializing Tensorboard...
+[test] test_int=999 > n_epochs=20 and test_on_final=False -> skipping test-frag load
+TensorBoard logs will be saved to: ./runs_archs24/24_holdout_20250223000000_15_22-04-45
+To view, run: tensorboard --logdir=./runs_archs24
+[preload] scroll 20250223000000: loading 3.77 GiB into RAM
+[preload] scroll 20250223000000: ready shape=(28, 7220, 10020) dtype=uint16 contiguous=True
+[explicit-negative] scroll 20250223000000: overriding 1 ink-label pixels
+[split] scroll 20250223000000: manual mask=train_masks/20250223000000.png train_pixels=2.4% explicit_negative_pixels=651,520
+[config] saved run config -> ./runs_archs24/24_holdout_20250223000000_15_22-04-45/config.json
+/vesuvius/train.py:204: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = GradScaler(enabled=self.c.device == "cuda")
+
+--- Epoch 1/20 ---
+Training:   0%|          | 0/843 [00:00<?, ?it/s]Training:   0%|          | 1/843 [00:18<4:23:52, 18.80s/it]Training:   5%|▍         | 38/843 [00:23<06:31,  2.06it/s] Training:   7%|▋         | 61/843 [00:29<04:48,  2.71it/s]Training:  11%|█         | 93/843 [00:34<03:23,  3.69it/s]Training:  15%|█▍        | 126/843 [00:40<02:43,  4.37it/s]Training:  17%|█▋        | 145/843 [00:46<02:54,  3.99it/s]Training:  20%|██        | 169/843 [00:52<02:52,  3.92it/s]Training:  23%|██▎       | 193/843 [00:58<02:46,  3.90it/s]Training:  26%|██▌       | 216/843 [01:03<02:34,  4.07it/s]Training:  28%|██▊       | 233/843 [01:09<02:43,  3.72it/s]Training:  30%|███       | 257/843 [01:15<02:35,  3.77it/s]Training:  33%|███▎      | 277/843 [01:20<02:27,  3.83it/s]Training:  35%|███▌      | 297/843 [01:25<02:21,  3.86it/s]Training:  38%|███▊      | 321/843 [01:30<02:06,  4.11it/s]Training:  41%|████      | 345/843 [01:37<02:05,  3.98it/s]Training:  45%|████▌     | 381/843 [01:42<01:35,  4.84it/s]Training:  48%|████▊     | 401/843 [01:47<01:38,  4.49it/s]Training:  50%|█████     | 422/843 [01:53<01:35,  4.40it/s]Training:  52%|█████▏    | 441/843 [01:58<01:38,  4.09it/s]Training:  55%|█████▍    | 462/843 [02:03<01:32,  4.11it/s]Training:  59%|█████▊    | 494/843 [02:08<01:13,  4.77it/s]Training:  63%|██████▎   | 529/843 [02:13<00:58,  5.35it/s]Training:  67%|██████▋   | 564/843 [02:18<00:47,  5.83it/s]Training:  70%|███████   | 593/843 [02:24<00:44,  5.56it/s]Training:  73%|███████▎  | 617/843 [02:29<00:42,  5.30it/s]Training:  77%|███████▋  | 645/843 [02:34<00:36,  5.36it/s]Training:  80%|███████▉  | 672/843 [02:39<00:31,  5.37it/s]Training:  83%|████████▎ | 697/843 [02:44<00:27,  5.25it/s]Training:  86%|████████▋ | 729/843 [02:51<00:22,  5.10it/s]Training:  90%|█████████ | 761/843 [02:56<00:15,  5.45it/s]Training:  93%|█████████▎| 786/843 [03:01<00:10,  5.31it/s]Training:  96%|█████████▋| 812/843 [03:06<00:05,  5.25it/s]Training: 100%|█████████▉| 840/843 [03:11<00:00,  4.39it/s]
+Validating:   0%|          | 0/587 [00:00<?, ?it/s]Validating:   7%|▋         | 42/587 [00:05<01:06,  8.24it/s]Validating:  18%|█▊        | 108/587 [00:10<00:43, 11.05it/s]Validating:  31%|███       | 180/587 [00:15<00:32, 12.54it/s]Validating:  46%|████▌     | 269/587 [00:20<00:21, 14.55it/s]Validating:  62%|██████▏   | 365/587 [00:25<00:13, 16.13it/s]Validating:  79%|███████▊  | 461/587 [00:30<00:07, 17.11it/s]Validating:  95%|█████████▌| 558/587 [00:35<00:01, 17.82it/s]Validating: 100%|█████████▉| 585/587 [00:43<00:00, 11.35it/s]Validating: 588it [00:48, 12.06it/s]                         
+New best character model saved! Val character_ap_macro: 0.5711
+New best F1 model saved! Val F1: 0.5804
+New best loss model saved! Val Loss: 0.6850
+[METRICS] epoch=1 train_loss=3.8396 val_loss=0.6850 train_f1=0.4874 val_character_success=0.0000
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/20 ---
+Training:   0%|          | 0/843 [00:00<?, ?it/s]Training:   2%|▏         | 14/843 [00:05<04:58,  2.77it/s]Training:   4%|▍         | 33/843 [00:10<04:08,  3.26it/s]Training:   6%|▋         | 53/843 [00:15<03:40,  3.58it/s]Training:   9%|▊         | 73/843 [00:20<03:31,  3.64it/s]Training:  12%|█▏        | 97/843 [00:26<03:10,  3.92it/s]Training:  15%|█▌        | 129/843 [00:31<02:34,  4.61it/s]Training:  19%|█▉        | 161/843 [00:36<02:14,  5.07it/s]Training:  23%|██▎       | 193/843 [00:42<01:59,  5.44it/s]Training:  27%|██▋       | 227/843 [00:47<01:45,  5.84it/s]Training:  31%|███       | 259/843 [00:52<01:37,  5.98it/s]Training:  35%|███▍      | 294/843 [00:57<01:27,  6.25it/s]Training:  38%|███▊      | 321/843 [01:02<01:27,  5.98it/s]Training:  42%|████▏     | 353/843 [01:07<01:21,  6.02it/s]Training:  46%|████▌     | 385/843 [01:12<01:15,  6.09it/s]Training:  49%|████▊     | 410/843 [01:18<01:18,  5.51it/s]Training:  51%|█████▏    | 434/843 [01:24<01:19,  5.12it/s]Training:  54%|█████▍    | 457/843 [01:29<01:17,  4.96it/s]Training:  56%|█████▌    | 474/843 [01:34<01:25,  4.29it/s]Training:  60%|██████    | 509/843 [01:39<01:06,  5.05it/s]Training:  64%|██████▎   | 537/843 [01:45<00:59,  5.15it/s]Training:  66%|██████▌   | 554/843 [01:50<01:02,  4.64it/s]Training:  68%|██████▊   | 577/843 [01:55<00:58,  4.53it/s]Training:  72%|███████▏  | 610/843 [02:00<00:45,  5.11it/s]Training:  76%|███████▌  | 638/843 [02:05<00:39,  5.22it/s]Training:  78%|███████▊  | 661/843 [02:10<00:36,  5.03it/s]Training:  82%|████████▏ | 693/843 [02:15<00:27,  5.43it/s]Training:  86%|████████▌ | 721/843 [02:21<00:23,  5.30it/s]Training:  89%|████████▉ | 751/843 [02:26<00:16,  5.47it/s]Training:  92%|█████████▏| 778/843 [02:31<00:11,  5.42it/s]Training:  96%|█████████▌| 810/843 [02:36<00:05,  5.69it/s]Training: 100%|█████████▉| 840/843 [02:41<00:00,  5.72it/s]Training: 100%|█████████▉| 840/843 [02:42<00:00,  5.17it/s]
+Validating:   0%|          | 0/587 [00:00<?, ?it/s]Validating:  11%|█         | 62/587 [00:05<00:43, 12.20it/s]Validating:  24%|██▍       | 141/587 [00:10<00:31, 14.26it/s]Validating:  37%|███▋      | 217/587 [00:15<00:25, 14.63it/s]Validating:  49%|████▉     | 290/587 [00:20<00:20, 14.60it/s]Validating:  64%|██████▍   | 377/587 [00:25<00:13, 15.55it/s]Validating:  78%|███████▊  | 455/587 [00:30<00:08, 15.54it/s]Validating:  90%|████████▉ | 528/587 [00:35<00:03, 15.22it/s]Validating: 588it [00:38, 15.11it/s]                         
+New best character model saved! Val character_ap_macro: 0.6297
+New best F1 model saved! Val F1: 0.5906
+New best loss model saved! Val Loss: 0.6609
+[METRICS] epoch=2 train_loss=4.4219 val_loss=0.6609 train_f1=0.6355 val_character_success=0.0100
+Logging metrics for epoch: 2
+
+--- Epoch 3/20 ---
+Training:   0%|          | 0/843 [00:00<?, ?it/s]Training:   1%|          | 10/843 [00:05<07:16,  1.91it/s]Training:   4%|▍         | 34/843 [00:11<04:21,  3.10it/s]Training:   8%|▊         | 66/843 [00:16<02:58,  4.36it/s]Training:  12%|█▏        | 98/843 [00:23<02:38,  4.70it/s]Training:  15%|█▍        | 125/843 [00:28<02:26,  4.92it/s]Training:  19%|█▊        | 158/843 [00:33<02:05,  5.45it/s]Training:  22%|██▏       | 185/843 [00:38<02:07,  5.17it/s]Training:  26%|██▌       | 217/843 [00:44<01:55,  5.44it/s]Training:  29%|██▊       | 242/843 [00:49<01:53,  5.30it/s]Training:  33%|███▎      | 275/843 [00:54<01:40,  5.68it/s]Training:  36%|███▋      | 307/843 [00:59<01:31,  5.87it/s]Training:  41%|████      | 342/843 [01:04<01:20,  6.19it/s]Training:  44%|████▍     | 371/843 [01:09<01:18,  6.04it/s]Training:  47%|████▋     | 394/843 [01:14<01:20,  5.61it/s]Training:  49%|████▉     | 417/843 [01:20<01:24,  5.05it/s]Training:  52%|█████▏    | 438/843 [01:25<01:24,  4.79it/s]Training:  54%|█████▍    | 457/843 [01:30<01:27,  4.40it/s]Training:  57%|█████▋    | 479/843 [01:35<01:22,  4.40it/s]Training:  60%|█████▉    | 505/843 [01:41<01:16,  4.40it/s]Training:  63%|██████▎   | 533/843 [01:46<01:05,  4.74it/s]Training:  65%|██████▌   | 551/843 [01:51<01:06,  4.39it/s]Training:  69%|██████▉   | 582/843 [01:56<00:53,  4.90it/s]Training:  72%|███████▏  | 609/843 [02:03<00:50,  4.68it/s]Training:  76%|███████▌  | 641/843 [02:08<00:39,  5.11it/s]Training:  80%|███████▉  | 671/843 [02:13<00:32,  5.29it/s]Training:  83%|████████▎ | 698/843 [02:19<00:28,  5.07it/s]Training:  87%|████████▋ | 732/843 [02:24<00:20,  5.54it/s]Training:  91%|█████████ | 766/843 [02:29<00:13,  5.88it/s]Training:  95%|█████████▌| 802/843 [02:34<00:06,  6.21it/s]Training:  98%|█████████▊| 827/843 [02:39<00:02,  5.84it/s]Training: 100%|█████████▉| 840/843 [02:42<00:00,  5.18it/s]
+Validating:   0%|          | 0/587 [00:00<?, ?it/s]Validating:  11%|█         | 62/587 [00:05<00:42, 12.34it/s]Validating:  23%|██▎       | 135/587 [00:10<00:33, 13.63it/s]Validating:  37%|███▋      | 219/587 [00:15<00:24, 15.06it/s]Validating:  49%|████▊     | 286/587 [00:20<00:21, 14.32it/s]Validating:  60%|█████▉    | 351/587 [00:25<00:17, 13.74it/s]Validating:  71%|███████   | 417/587 [00:30<00:12, 13.55it/s]Validating:  83%|████████▎ | 486/587 [00:35<00:07, 13.62it/s]Validating:  95%|█████████▍| 557/587 [00:40<00:02, 13.78it/s]Validating: 588it [00:42, 13.89it/s]                         
+New best character model saved! Val character_ap_macro: 0.6632
+New best F1 model saved! Val F1: 0.6115
+New best loss model saved! Val Loss: 0.6467
+[METRICS] epoch=3 train_loss=4.9905 val_loss=0.6467 train_f1=0.6901 val_character_success=0.0200
+Logging metrics for epoch: 3
+
+--- Epoch 4/20 ---
+Training:   0%|          | 0/843 [00:00<?, ?it/s]Training:   1%|▏         | 11/843 [00:05<06:35,  2.10it/s]Training:   4%|▍         | 36/843 [00:10<03:35,  3.75it/s]Training:   8%|▊         | 67/843 [00:16<02:57,  4.38it/s]Training:  11%|█         | 91/843 [00:22<02:54,  4.32it/s]Training:  15%|█▌        | 127/843 [00:27<02:17,  5.22it/s]Training:  18%|█▊        | 148/843 [00:32<02:22,  4.88it/s]Training:  21%|██        | 178/843 [00:37<02:07,  5.20it/s]Training:  24%|██▍       | 204/843 [00:42<02:03,  5.19it/s]Training:  27%|██▋       | 227/843 [00:47<02:03,  4.98it/s]Training:  29%|██▉       | 244/843 [00:52<02:15,  4.43it/s]Training:  33%|███▎      | 275/843 [00:57<01:55,  4.93it/s]Training:  35%|███▌      | 296/843 [01:03<01:59,  4.58it/s]Training:  39%|███▉      | 330/843 [01:08<01:38,  5.20it/s]Training:  42%|████▏     | 358/843 [01:13<01:31,  5.30it/s]Training:  46%|████▌     | 386/843 [01:18<01:24,  5.38it/s]Training:  49%|████▉     | 417/843 [01:24<01:18,  5.45it/s]Training:  53%|█████▎    | 449/843 [01:29<01:11,  5.47it/s]Training:  56%|█████▌    | 473/843 [01:36<01:15,  4.93it/s]Training:  59%|█████▉    | 499/843 [01:41<01:09,  4.98it/s]Training:  63%|██████▎   | 532/843 [01:46<00:57,  5.41it/s]Training:  66%|██████▌   | 553/843 [01:51<00:58,  4.98it/s]Training:  69%|██████▉   | 584/843 [01:56<00:48,  5.32it/s]Training:  72%|███████▏  | 609/843 [02:02<00:46,  4.99it/s]Training:  76%|███████▌  | 641/843 [02:07<00:37,  5.32it/s]Training:  80%|███████▉  | 673/843 [02:12<00:30,  5.57it/s]Training:  84%|████████▍ | 708/843 [02:18<00:22,  5.95it/s]Training:  88%|████████▊ | 740/843 [02:23<00:16,  6.08it/s]Training:  90%|█████████ | 759/843 [02:28<00:16,  5.18it/s]Training:  94%|█████████▍| 792/843 [02:33<00:09,  5.57it/s]Training:  97%|█████████▋| 820/843 [02:38<00:04,  5.55it/s]Training: 100%|█████████▉| 840/843 [02:42<00:00,  5.17it/s]
+Validating:   0%|          | 0/587 [00:00<?, ?it/s]Validating:  10%|█         | 59/587 [00:05<00:45, 11.66it/s]Validating:  21%|██▏       | 125/587 [00:10<00:36, 12.54it/s]Validating:  33%|███▎      | 192/587 [00:15<00:30, 12.84it/s]Validating:  44%|████▎     | 256/587 [00:20<00:25, 12.80it/s]Validating:  55%|█████▍    | 320/587 [00:25<00:20, 12.78it/s]Validating:  66%|██████▌   | 388/587 [00:30<00:15, 13.02it/s]Validating:  77%|███████▋  | 453/587 [00:35<00:10, 12.98it/s]Validating:  88%|████████▊ | 516/587 [00:40<00:05, 12.83it/s]Validating:  99%|█████████▉| 582/587 [00:45<00:00, 12.83it/s]Validating: 588it [00:45, 12.88it/s]                         
+New best character model saved! Val character_ap_macro: 0.6911
+New best F1 model saved! Val F1: 0.6207
+New best loss model saved! Val Loss: 0.6334
+[METRICS] epoch=4 train_loss=5.5644 val_loss=0.6334 train_f1=0.7260 val_character_success=0.0700
+Logging metrics for epoch: 4
+
+--- Epoch 5/20 ---
+Training:   0%|          | 0/843 [00:00<?, ?it/s]Training:   2%|▏         | 13/843 [00:05<05:24,  2.56it/s]Training:   4%|▍         | 35/843 [00:10<04:05,  3.29it/s]Training:   8%|▊         | 69/843 [00:16<02:48,  4.60it/s]Training:  10%|█         | 86/843 [00:21<03:05,  4.07it/s]Training:  13%|█▎        | 110/843 [00:26<02:51,  4.27it/s]

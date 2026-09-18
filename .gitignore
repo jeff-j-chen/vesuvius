@@ -1,0 +1,15 @@
+#*.pth
+# keep MAE pretraining bases (warm-start weights) tracked despite the blanket *.pth ignore
+#!models/mae_*.pth
+*.npz
+.venv
+__pycache__/
+*.pyc
+*.tar
+ves_3zars.tar
+ves_zarrs2/
+runs_old/
+runs/
+.vscode/*
+_ves_tmp/
+PHerc0813_spiral_dataset/*
