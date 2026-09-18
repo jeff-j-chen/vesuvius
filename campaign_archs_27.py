@@ -32,7 +32,7 @@ from campaign_archs_26 import (
 
 LOG_DIR = "./runs_archs27"
 MODEL_DIR = "models/archs27"
-BASELINE_RUN = ROOT / "runs_archs27" / "26_pure_ibn_17_07-19-08"
+BASELINE_RUN = ROOT / "runs_archs27" / "baseline"
 
 
 def _test(tid: str, **overrides):
@@ -300,6 +300,82 @@ def run_test(config, dry_run: bool) -> bool:
         cleanup_mmap_files()
 
 
+def _open_fd_count() -> int:
+    try:
+        return len(os.listdir("/proc/self/fd"))
+    except OSError:
+        return -1
+
+
+def prewarm_data_cache(config) -> None:
+    """populate campaign-lifetime RAM caches before any child initializes CUDA."""
+    from train import Trainer
+    from utils.chunk_cache import _CACHE_REGISTRY
+    from utils.dataloader import _PREPARED_DATASET_CACHE
+
+    if torch.cuda.is_initialized():
+        raise RuntimeError(
+            "Campaign 27 controller initialized CUDA before cache warmup; "
+            "isolated fork workers would be unsafe"
+        )
+
+    warmup = Trainer.__new__(Trainer)
+    warmup.c = config
+    train_dataset = train_loader = valid_loader = None
+    try:
+        train_dataset, train_loader, valid_loader = warmup._setup_data()
+    finally:
+        # DataLoader workers are lazy and have not started because no iterator was made.
+        # Drop the lightweight wrappers while global prepared/chunk caches retain arrays.
+        del train_dataset, train_loader, valid_loader, warmup
+        gc.collect()
+    if not _PREPARED_DATASET_CACHE or not _CACHE_REGISTRY:
+        raise RuntimeError("Campaign 27 RAM cache warmup did not populate global caches")
+    if torch.cuda.is_initialized():
+        raise RuntimeError("Campaign 27 cache warmup unexpectedly initialized CUDA")
+    cached_gib = sum(
+        volume.cached_nbytes for volume in _CACHE_REGISTRY.values()
+    ) / 1024**3
+    print(
+        f"[campaign27] parent RAM cache ready: "
+        f"datasets={len(_PREPARED_DATASET_CACHE)} "
+        f"volumes={len(_CACHE_REGISTRY)} ram={cached_gib:.2f}GiB "
+        f"controller_fds={_open_fd_count()}",
+        flush=True,
+    )
+
+
+def run_test_isolated(config) -> bool:
+    """fork one arm so OS process exit reclaims every worker and tensor-sharing FD."""
+    if not hasattr(os, "fork"):
+        return run_test(config, False)
+    before = _open_fd_count()
+    pid = os.fork()
+    if pid == 0:
+        try:
+            success = run_test(config, False)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0 if success else 1)
+        except BaseException:
+            traceback.print_exc()
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(1)
+    _, status = os.waitpid(pid, 0)
+    after = _open_fd_count()
+    print(
+        f"[campaign27] isolated arm pid={pid} status={status} "
+        f"controller_fds={before}->{after}",
+        flush=True,
+    )
+    if before >= 0 and after > before + 4:
+        raise RuntimeError(
+            f"Campaign 27 controller leaked file descriptors across arm: {before}->{after}"
+        )
+    return os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="campaign 27: full-IBN scale and domain compatibility study"
@@ -331,16 +407,20 @@ def main() -> None:
     preflight_pretraining(selected, args.dry_run)
     print(f"[campaign27] {len(selected)} run(s) queued (log -> {LOG_DIR})")
 
+    if not args.dry_run and selected:
+        prewarm_data_cache(build_config(selected[0]))
+
     results = {}
     for test in selected:
         config = build_config(test)
-        results[test["tid"]] = "OK" if run_test(config, args.dry_run) else "FAIL"
+        if args.dry_run:
+            success = run_test(config, True)
+        else:
+            success = run_test_isolated(config)
+        results[test["tid"]] = "OK" if success else "FAIL"
         if not args.dry_run:
             del config
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
 
     print(f"\n{'=' * 78}\n[campaign27] SUMMARY\n{'=' * 78}")
     for tid, status in results.items():
