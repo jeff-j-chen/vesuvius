@@ -92,6 +92,9 @@ SEGMENTS = [
     ("paris2_fr143", "", "20230301213755"),
     ("scroll6_fr8", "", "20231205222200"),
     ("paris1_fr34", "", "20230301213423"),
+    ("p343", "PHerc0343P/segments/20250511003658-tifxyz", "20250511003658"),
+    ("cr1fr3", "", "20231201215900"),
+    ("p841", "PHerc0841/segments/20260221022814-auto_grown_20260220174252405", "20260221022814"),
 ]
 
 # per-fragment behaviour overrides. skip_labels=True skips the eroded label check
@@ -158,6 +161,24 @@ FRAG_OPTS = {
         "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag3/PHercParis1Fr34.volpkg/working/54keV_exposed_surface",
         "surface_expected_shape": (65, 7606, 5249),
         "source_um": 3.24,
+        "force_norm": True,
+    },
+    "p343": {
+        "vol9_name": "8.64um-1.2m-116keV-volume-20250521134555.zarr",
+        "resample_um": 8.64,
+        "surface_expected_shape": (31, 3440, 2060),
+        "force_norm": True,
+    },
+    "cr1fr3": {
+        "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag5/PHerc1667Cr1Fr3.volpkg/working/PHerc1667Cr01Fr03_70keV_3.24um/surface_processing",
+        "surface_expected_shape": (65, 7309, 4560),
+        "source_um": 3.24,
+        "force_norm": True,
+    },
+    "p841": {
+        "cropped_surface_url": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0841/segments/20260221022814-auto_grown_20260220174252405/surface-volumes/9.366um-1.2m-113keV-volume-20250821151531.zarr/0",
+        "surface_expected_shape": (28, 21560, 12260),
+        "surface_crop": (14656, 21560, 0, 5248),
         "force_norm": True,
     },
 }
@@ -524,6 +545,27 @@ def _pool_w013_depth(volume, layers_out):
     return out
 
 
+def _resample_depth_physical(volume, source_um, layers_out=TARGET_DEPTH):
+    """linearly sample source depths on a centered TARGET_VOXEL_UM grid."""
+    source_depth = int(volume.shape[0])
+    source_center = (source_depth - 1) / 2.0
+    output_center = (layers_out - 1) / 2.0
+    positions = source_center + (
+        np.arange(layers_out) - output_center
+    ) * TARGET_VOXEL_UM / float(source_um)
+    output = np.zeros((layers_out, volume.shape[1], volume.shape[2]), dtype=np.float32)
+    for output_depth, position in enumerate(positions):
+        if position < 0 or position > source_depth - 1:
+            continue
+        lower = int(np.floor(position))
+        upper = min(lower + 1, source_depth - 1)
+        fraction = float(position - lower)
+        output[output_depth] = volume[lower] * (1.0 - fraction)
+        if upper != lower:
+            output[output_depth] += volume[upper] * fraction
+    return output
+
+
 def _write_mask_from_midslice(output, mask_path):
     """write the physical surface footprint from the output volume's middle slice."""
     middle = np.asarray(output[int(output.shape[0]) // 2])
@@ -731,7 +773,8 @@ def _verify_dlash_outputs(name, zid, opts):
     print(f"  [verify] {name}: shape={volume.shape} mask/midslice={overlap:.5f}")
 
 
-def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk_y, chunk_x, force=False):
+def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk_y, chunk_x,
+                               expected_shape=None, force=False):
     """resample a small isotropic surface zarr in XYZ to the 28-layer training frame."""
     import cv2
     import zarr
@@ -751,7 +794,6 @@ def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk
     source_url = f"{BUCKET}/{seg}/surface-volumes/{vol_name}/0"
     source = zarr.open(source_url, mode="r")
     source_depth, source_height, source_width = map(int, source.shape)
-    expected_shape = opts.get("surface_expected_shape")
     if expected_shape is not None and tuple(source.shape) != tuple(expected_shape):
         raise RuntimeError(
             f"{zid}: source surface shape {tuple(source.shape)} != expected "
@@ -783,7 +825,11 @@ def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk
         if output_y1 <= output_y0:
             continue
         source_strip = np.asarray(source[:, source_y0:source_y1, :], dtype=np.uint8)
-        depth_resampled = _pool_w013_depth(source_strip, TARGET_DEPTH)
+        depth_resampled = _resample_depth_physical(
+            source_strip,
+            source_um,
+            TARGET_DEPTH,
+        )
         output_strip = np.empty(
             (TARGET_DEPTH, output_y1 - output_y0, output_width),
             dtype=np.uint16,
@@ -804,6 +850,56 @@ def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk
     output = zarr.open(out_zarr, mode="r")
     _write_mask_from_midslice(output, mask_path)
     print(f"  [resample] wrote {out_zarr} shape={output_shape}")
+
+
+def _assemble_cropped_surface(zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
+    """stream a native-target-resolution remote zarr into a tightly cropped local zarr."""
+    import zarr
+
+    out_zarr = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    partial = out_zarr + ".partial"
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if force:
+        shutil.rmtree(out_zarr, ignore_errors=True)
+        shutil.rmtree(partial, ignore_errors=True)
+        if os.path.exists(mask_path):
+            os.remove(mask_path)
+    if os.path.isdir(out_zarr) and os.path.exists(mask_path):
+        print("  [1/3] cropped volume+mask exist -> skip")
+        return
+
+    source = zarr.open(str(opts["cropped_surface_url"]), mode="r")
+    expected_shape = tuple(map(int, opts["surface_expected_shape"]))
+    if tuple(source.shape) != expected_shape:
+        raise RuntimeError(f"{zid}: source surface shape {tuple(source.shape)} != {expected_shape}")
+    y0, y1, x0, x1 = map(int, opts["surface_crop"])
+    if not (0 <= y0 < y1 <= source.shape[1] and 0 <= x0 < x1 <= source.shape[2]):
+        raise ValueError(f"{zid}: invalid surface crop {(y0, y1, x0, x1)} for {source.shape}")
+    output_shape = (int(source.shape[0]), y1 - y0, x1 - x0)
+    shutil.rmtree(partial, ignore_errors=True)
+    output = zarr.open(
+        partial,
+        mode="w",
+        shape=output_shape,
+        chunks=(min(chunk_depth, output_shape[0]), chunk_y, chunk_x),
+        dtype="<u2",
+        compressor=None,
+        zarr_format=2,
+    )
+    for source_y0 in range(y0, y1, 128):
+        source_y1 = min(source_y0 + 128, y1)
+        output[:, source_y0 - y0:source_y1 - y0, :] = np.asarray(
+            source[:, source_y0:source_y1, x0:x1],
+            dtype=np.uint16,
+        )
+        print(f"  [crop] rows {source_y1 - y0}/{y1 - y0}", flush=True)
+    del output
+    if os.path.isdir(out_zarr):
+        shutil.rmtree(out_zarr)
+    os.replace(partial, out_zarr)
+    output = zarr.open(out_zarr, mode="r")
+    _write_mask_from_midslice(output, mask_path)
+    print(f"  [crop] wrote {out_zarr} shape={output_shape} crop={(y0, y1, x0, x1)}")
 
 
 def _assemble_pooled_surface(seg, zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
@@ -920,6 +1016,11 @@ def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=F
             name, zid, opts, workers, chunk_depth, chunk_y, chunk_x, force=force
         )
         return
+    if opts.get("cropped_surface_url"):
+        _assemble_cropped_surface(
+            zid, opts, chunk_depth, chunk_y, chunk_x, force=force
+        )
+        return
     if opts.get("w013_special"):
         _assemble_w013_volume(zid, chunk_depth, chunk_y, chunk_x, force=force)
         return
@@ -931,6 +1032,7 @@ def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=F
             chunk_depth,
             chunk_y,
             chunk_x,
+            expected_shape=opts.get("surface_expected_shape"),
             force=force,
         )
         return

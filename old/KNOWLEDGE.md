@@ -1762,26 +1762,30 @@ Campaign 27 full-stack arms produced no usable validation scalars.
 
 Campaign 28 adds three fragments and therefore trains a new baseline as its first arm. The old
 copied baseline is retained only as `runs_archs28/legacy_c27_baseline` and must not be used for
-comparison. The 29-arm sequence is ordered by value and attribution:
+comparison. The focused 14-arm sequence runs for 10 epochs and is ordered by value and
+attribution:
 
-- baseline plus single WELDON, gated-stem, dual-scale, GroupDRO, conflict-weighted, and
-  cluster-balanced effects establish the new dataset's main effects.
-- pair, leave-one-out, and full-stack arms around WELDON + gated stems + dual-scale + GroupDRO
-  identify which component and interaction caused Campaign 27's large gain.
-- conflict-weighted and cluster-balanced objectives are compared at matched dual-scale,
-  gated-dual, and WELDON-gated-dual capacities. GroupDRO and domain-gradient reductions remain
-  alternatives and are never enabled together.
-- a five-arm mid-3D/2D ladder isolates gated stems, GroupDRO, and the final dual-scale addition.
-- sparse deep-supervision arms run last because the late Campaign 27 evidence increased the value
-  of dual-scale and GroupDRO relative to that earlier hypothesis.
+- baseline, sparse deep supervision, dual-scale, GroupDRO, conflict weighting, cluster balance,
+  and mid-3D/2D plus gated stems retain the strongest distinct Campaign 26/27 directions.
+- gated-dual, GroupDRO-dual, conflict-dual, and gated-dual-GroupDRO provide matched attribution
+  around the late Campaign 27 combination winners.
+- the WELDON-gated-dual stack compares GroupDRO against conflict weighting at equal capacity;
+  comparison with gated-dual-GroupDRO isolates WELDON's contribution.
+- mid-3D/2D plus gated-dual-GroupDRO resolves the other unfinished Campaign 27 full stack.
+
+Only the baseline renders evaluation figures. At epoch 10 it renders all 14 training fragments
+and saves the figures using streamed zarr access (`ram_safe_vis=True`) so full volumes are not
+materialized in RAM. Every other arm keeps evaluation rendering disabled while retaining scalar
+validation and per-domain PR-AUC logging.
 
 The Paris1 Fr34 source label is native 3.24um while its assembled volume is 9.362um.
 `old/ink_shrinker.py` now nearest-neighbor resamples mismatched labels to the target mask before
-applying morphology. Its Campaign 28 label is dilated by 12 target pixels and masked to the valid
-surface; its train mask is generated from the assembled volume's middle slice.
+applying morphology. All root `inklabels` were regenerated from their eroded sources with radius
+12 and masked to the valid surface; its train mask is generated from the assembled volume's middle
+slice.
 
 The runner retains Campaign 27's parent cache prewarm and one-child-per-arm process isolation.
-All 29 models construct successfully, and all 14 train-mask/label/surface preflights pass.
+All 14 models construct successfully, and all 14 train-mask/label/surface preflights pass.
 
 The isolated runners set `PYTORCH_NVML_BASED_CUDA_CHECK=1` before importing PyTorch. Config
 construction probes CUDA availability in the controller; the default runtime-based probe poisons

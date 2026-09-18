@@ -38,7 +38,7 @@ Run a model on every single test scroll. 5 test patches correspond to 5 test scr
 
 ## Fragments
 
-`utils/config.py` registers 26 labeled fragments. Individual campaigns select subsets from this shared inventory.
+`utils/config.py` registers 29 training-fragment slots. Individual campaigns select subsets from this shared inventory; newly assembled slots require repository labels and train masks before training.
 
 | ID | Fragment | Physical scroll | Default split | Notes |
 |---|---|---|---|---|
@@ -68,6 +68,9 @@ Run a model on every single test scroll. 5 test patches correspond to 5 test scr
 | `20230301213755` | Fr143 | PHercParis2 | x 75% | 54keV surface TIFF stack resampled from 3.24µm |
 | `20231205222200` | Cr4 Fr8 | PHerc51 | x 75% | 53keV surface TIFF stack resampled from 3.24µm |
 | `20230301213423` | Fr34 | PHercParis1 | x 75% | 54keV surface TIFF stack resampled from 3.24µm |
+| `20250511003658` | tifxyz segment | PHerc0343P | x 75% | 8.64µm / 116keV surface resampled to 28 layers |
+| `20231201215900` | Cr1 Fr3 | PHerc1667 | x 75% | 70keV flattened TIFF stack resampled from 3.24µm |
+| `20260221022814` | auto-grown 405 | PHerc0841 | x 75% | 9.366µm / 113keV surface cropped to its nonblank component |
 
 ### Holdout
 
@@ -112,6 +115,13 @@ After creating the Paris1 Fr34 conservative label, generate only its regular lab
 ```bash
 python3 old/ink_shrinker.py dilate --input-folder eroded_inklabels \
 	--output-folder inklabels --radius 12 --mask-folder masks --only 20230301213423
+```
+
+Archive the supplied researcher references for the three newest fragments separately from
+the volume downloader:
+
+```bash
+python3 archive_research_inklabels.py p343 cr1fr3 p841
 ```
 
 Manual train masks use exact grayscale values: `255` for the normal training region,

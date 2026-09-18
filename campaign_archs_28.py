@@ -1,4 +1,4 @@
-"""campaign 28: expanded-data attribution study of Campaign 27 winners.
+"""campaign 28: focused expanded-data study of Campaign 27 winners.
 
 The first arm trains a new full-IBN baseline on the expanded scroll set.
 
@@ -37,7 +37,7 @@ W044_SCROLL_ID = 20260115000000
 CAMPAIGN28_SCROLL_DICT = {
     "pherc0139": [20260115000000, 20260317000000, 20250223000000],
     "pherc0172": [20251111010954, 20251112000002],
-    "pherc1667": [20240304141531, 20240304144031],
+    "pherc1667": [20240304141531, 20240304144031, 20231201215900],
     "pherc0009b": [20250919125754],
     "phercparis4": [20231210121321],
     "pherc0500p2": [20250628074500],
@@ -45,8 +45,10 @@ CAMPAIGN28_SCROLL_DICT = {
     "phercparis2_fr143": [20230301213755],
     "pherc51cr4_fr8": [20231205222200],
     "phercparis1_fr34": [20230301213423],
+    "pherc0343p": [20250511003658],
+    "pherc0841": [20260221022814],
 }
-CAMPAIGN28_SCROLL_WEIGHTS = [4, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+CAMPAIGN28_SCROLL_WEIGHTS = [4] + [1] * (len(CAMPAIGN28_SCROLL_DICT) - 1)
 CAMPAIGN28_SCROLL_IDS = tuple(
     scroll_id
     for scroll_ids in CAMPAIGN28_SCROLL_DICT.values()
@@ -88,13 +90,13 @@ CAMPAIGN28_SETTINGS = {
     "ring_gap_r": 2,
     "ring_shell_r": 4,
     "multitile_pos_only": True,
-    "n_epochs": 9,
+    "n_epochs": 10,
     "eval_int": 999,
     "eval_int_scrolls": 1,
     "test_int": 9_999,
     "probe_int": 9_999,
     "test_on_final": False,
-    "fast_eval_figure": False,
+    "fast_eval_figure": True,
     "dann": False,
     "dann_lambda": 0.0,
     "dann_grl_anneal": False,
@@ -167,39 +169,28 @@ SPARSE_DEEP = {"sparse_deep_supervision": True}
 
 
 TESTS = [
-    # Expanded-data baseline and single-component effects.
+    # Expanded-data baseline and the strongest reusable main effects.
     _test("baseline", pretrain_key="full_ibn"),
-    _combo("weldon", WELDON, pretrain_key="full_ibn"),
-    _combo("gated_stems", GATED, pretrain_key="full_ibn"),
+    _combo("sparse_deep", SPARSE_DEEP, pretrain_key="full_ibn"),
     _combo("dual_scale", DUAL, pretrain_key="full_ibn"),
     _combo("physical_groupdro", GROUPDRO, pretrain_key="full_ibn"),
     _combo("gradient_conflict", GRADIENT_CONFLICT, pretrain_key="full_ibn"),
     _combo("gradient_cluster_balance", CLUSTER_BALANCE, pretrain_key="full_ibn"),
+    _combo("mid_3d2d_gated", MID_3D2D, GATED),
 
-    # Attribute the WELDON + gated + dual-scale + GroupDRO winner.
-    _combo("weldon_dual", WELDON, DUAL, pretrain_key="full_ibn"),
+    # Matched dual-scale interactions isolate gated stems and robust objectives.
     _combo("gated_dual", GATED, DUAL, pretrain_key="full_ibn"),
     _combo("groupdro_dual", GROUPDRO, DUAL, pretrain_key="full_ibn"),
-    _combo("weldon_gated_dual", WELDON, GATED, DUAL, pretrain_key="full_ibn"),
+    _combo("gradient_conflict_dual", GRADIENT_CONFLICT, DUAL, pretrain_key="full_ibn"),
     _combo("gated_dual_groupdro", GATED, DUAL, GROUPDRO, pretrain_key="full_ibn"),
-    _combo("weldon_dual_groupdro", WELDON, DUAL, GROUPDRO, pretrain_key="full_ibn"),
-    _combo("weldon_gated_groupdro", WELDON, GATED, GROUPDRO, pretrain_key="full_ibn"),
+
+    # Test the Campaign 27 winner and its matched conflict-weighted alternative.
     _combo(
         "weldon_gated_dual_groupdro",
         WELDON,
         GATED,
         DUAL,
         GROUPDRO,
-        pretrain_key="full_ibn",
-    ),
-
-    # Compare robust objectives at identical architecture capacities.
-    _combo("gradient_conflict_dual", GRADIENT_CONFLICT, DUAL, pretrain_key="full_ibn"),
-    _combo(
-        "gradient_conflict_gated_dual",
-        GRADIENT_CONFLICT,
-        GATED,
-        DUAL,
         pretrain_key="full_ibn",
     ),
     _combo(
@@ -210,45 +201,9 @@ TESTS = [
         DUAL,
         pretrain_key="full_ibn",
     ),
-    _combo("cluster_balance_dual", CLUSTER_BALANCE, DUAL, pretrain_key="full_ibn"),
-    _combo(
-        "cluster_balance_gated_dual",
-        CLUSTER_BALANCE,
-        GATED,
-        DUAL,
-        pretrain_key="full_ibn",
-    ),
-    _combo(
-        "cluster_balance_weldon_gated_dual",
-        CLUSTER_BALANCE,
-        WELDON,
-        GATED,
-        DUAL,
-        pretrain_key="full_ibn",
-    ),
 
-    # Resolve the mid-3D/2D architecture and GroupDRO interaction.
-    _combo("mid_3d2d", MID_3D2D),
-    _combo("mid_3d2d_gated", MID_3D2D, GATED),
-    _combo("mid_3d2d_groupdro", MID_3D2D, GROUPDRO),
-    _combo("mid_3d2d_gated_groupdro", MID_3D2D, GATED, GROUPDRO),
+    # Resolve the unfinished Campaign 27 mid-3D/2D full stack.
     _combo("mid_3d2d_gated_dual_groupdro", MID_3D2D, GATED, DUAL, GROUPDRO),
-
-    # Lower-priority checks for the original sparse-supervision hypothesis.
-    _combo("sparse_deep", SPARSE_DEEP, pretrain_key="full_ibn"),
-    _combo(
-        "gradient_conflict_sparse_deep",
-        GRADIENT_CONFLICT,
-        SPARSE_DEEP,
-        pretrain_key="full_ibn",
-    ),
-    _combo(
-        "gradient_conflict_gated_sparse_deep",
-        GRADIENT_CONFLICT,
-        GATED,
-        SPARSE_DEEP,
-        pretrain_key="full_ibn",
-    ),
 ]
 
 
@@ -273,7 +228,17 @@ def build_config(test: dict):
     ):
         setattr(config.data, name, CAMPAIGN28_SETTINGS[name])
     config.data.scrolls = list(CAMPAIGN28_SCROLLS)
-    config.data.vis_scroll_ids = [W044_SCROLL_ID]
+    if test["tid"] == "baseline":
+        config.tra.eval_int = config.tra.n_epochs
+        config.tra.eval_int_scrolls = len(CAMPAIGN28_SCROLLS)
+        config.tra.save_vis = True
+        config.data.ram_safe_vis = True
+        config.data.vis_scroll_ids = list(CAMPAIGN28_SCROLL_IDS)
+    else:
+        config.tra.eval_int = 999
+        config.tra.eval_int_scrolls = 0
+        config.tra.save_vis = False
+        config.data.vis_scroll_ids = [W044_SCROLL_ID]
     config.data.train_scroll_dict = {
         name: list(scroll_ids) for name, scroll_ids in CAMPAIGN28_SCROLL_DICT.items()
     }
@@ -425,7 +390,7 @@ def main() -> None:
         CAMPAIGN28_SCROLLS,
         inklabel_dir=Path(CAMPAIGN28_SETTINGS["inklabel_dir"]),
     )
-    preflight_pretraining(selected, args.dry_run)
+    preflight_pretraining(selected, args.dry_run, reuse_compatible=True)
     print(f"[campaign28] {len(selected)} run(s) queued (log -> {LOG_DIR})")
 
     if not args.dry_run and selected:

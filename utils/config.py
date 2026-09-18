@@ -80,6 +80,9 @@ DEFAULT_SCROLLS: List[ScrollConfig] = [
     ScrollConfig(20230301213755, split_axis="x", train_split_frac=0.75),  # PHercParis2 Fr143
     ScrollConfig(20231205222200, split_axis="x", train_split_frac=0.75),  # PHerc51 Cr4 Fr8
     ScrollConfig(20230301213423, split_axis="x", train_split_frac=0.75),  # PHercParis1 Fr34
+    ScrollConfig(20250511003658, split_axis="x", train_split_frac=0.75),  # PHerc0343P
+    ScrollConfig(20231201215900, split_axis="x", train_split_frac=0.75),  # PHerc1667 Cr1 Fr3
+    ScrollConfig(20260221022814, split_axis="x", train_split_frac=0.75),  # PHerc0841
 ]
 
 DEFAULT_TEST_SCROLL_IDS = (

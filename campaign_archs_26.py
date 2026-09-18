@@ -579,7 +579,11 @@ def build_config(test: dict):
     return config
 
 
-def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:
+def preflight_pretraining(
+    selected: list[dict],
+    dry_run: bool,
+    reuse_compatible: bool = False,
+) -> None:
     from utils.model import create_model
 
     if not AVAILABLE_PRETRAIN_SCROLL_IDS:
@@ -599,7 +603,10 @@ def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:
         if key not in PRETRAIN_ROUTES:
             raise ValueError(f"unknown campaign-26 transfer key: {key}")
         checkpoint, strict, note = PRETRAIN_ROUTES[key]
-        if key in PRETRAIN_SPECS and not _pretraining_complete(key):
+        checkpoint_exists = checkpoint.is_file() and checkpoint.stat().st_size > 0
+        if key in PRETRAIN_SPECS and not _pretraining_complete(key) and not (
+            reuse_compatible and checkpoint_exists
+        ):
             if dry_run:
                 print(
                     f"[campaign26] matched pretraining missing: {key} "
@@ -641,6 +648,12 @@ def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:
             )
             if not _pretraining_complete(key):
                 raise RuntimeError(f"Campaign 26 MAE checkpoint failed validation: {checkpoint}")
+        elif key in PRETRAIN_SPECS and not _pretraining_complete(key):
+            print(
+                f"[campaign26] reusing existing compatible pretrain despite "
+                f"corpus-marker drift: {key}",
+                flush=True,
+            )
         if not checkpoint.is_file() or checkpoint.stat().st_size == 0:
             raise FileNotFoundError(f"Campaign 26 pretraining checkpoint is missing: {checkpoint}")
         if checkpoint not in states:
