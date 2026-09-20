@@ -339,6 +339,12 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
 
 def main():
     ap = argparse.ArgumentParser(description="assemble test segment zarrs from tifxyz meshes")
+    ap.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        help="assemble one output ID; repeat to select multiple fragments",
+    )
     ap.add_argument("--workers", type=int, default=32,
                     help="parallel S3 chunk-download workers PER fragment (default 32 for EPYC 7702)")
     ap.add_argument("--out-dir", type=str, default=ZARR_DIR,
@@ -350,6 +356,14 @@ def main():
     ap.add_argument("--chunk-x", type=int, default=DEFAULT_CHUNK_X,
                     help=f"zarr X chunk size (default {DEFAULT_CHUNK_X})")
     args = ap.parse_args()
+    selected_ids = {str(value) for value in args.only}
+    fragments = [
+        fragment for fragment in FRAGMENTS
+        if not selected_ids or fragment[0] in selected_ids
+    ]
+    missing_ids = selected_ids - {fragment[0] for fragment in fragments}
+    if missing_ids:
+        ap.error(f"unknown --only IDs: {sorted(missing_ids)}")
     
     script_dir = SCRIPT_DIR
     
@@ -359,12 +373,12 @@ def main():
     os.makedirs("_ves_tmp", exist_ok=True)
     
     print(f"[assemble] python={sys.executable}  out_dir={args.out_dir}  workers={args.workers}")
-    print(f"[assemble] {len(FRAGMENTS)} test fragment(s)  "
+    print(f"[assemble] {len(fragments)} test fragment(s)  "
           f"chunks=({args.chunk_depth},{args.chunk_y},{args.chunk_x})")
     
     results = []
-    for i, (zid, mesh_sub, vol_base, vol_shape) in enumerate(FRAGMENTS, 1):
-        print(f"\n{'='*70}\n=== {i}/{len(FRAGMENTS)}  {zid}  (mesh {mesh_sub}) ===\n{'='*70}", flush=True)
+    for i, (zid, mesh_sub, vol_base, vol_shape) in enumerate(fragments, 1):
+        print(f"\n{'='*70}\n=== {i}/{len(fragments)}  {zid}  (mesh {mesh_sub}) ===\n{'='*70}", flush=True)
         result = render_fragment(zid, mesh_sub, vol_base, vol_shape, 
                                 args.workers, args.out_dir, script_dir,
                                 args.chunk_depth, args.chunk_y, args.chunk_x)

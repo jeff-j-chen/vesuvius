@@ -266,7 +266,7 @@ def _process_chunk_mt(valid, pm_sum, pm_cnt, pm_sum_t, pm_cnt_t, model, device,
             del bt
 
 
-def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False, also_tta=False, surface_depth_map=None, surface_confidence_map=None):
+def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False, also_tta=False, surface_depth_map=None, surface_confidence_map=None, surface_depth_offset=0):
     """run batched prediction over given coords returning downsampled map.
 
     reads tiles as y-row strips: one zarr call per row of tiles instead of one
@@ -453,7 +453,7 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
                 center_confidence = int(surface_confidence_map[center_y, center_x])
                 if center_depth != 255 and center_confidence > 0:
                     selected_start = min(
-                        max(center_depth - (depth - 1) // 2, 0),
+                        max(center_depth + int(surface_depth_offset) - (depth - 1) // 2, 0),
                         max(int(vol.shape[0]) - depth, 0),
                     )
                 elif tys < tye and txs < txe:
@@ -463,7 +463,7 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
                     if valid_surface.any():
                         center = int(np.rint(np.median(absolute[valid_surface].astype(np.float32))))
                         selected_start = min(
-                            max(center - (depth - 1) // 2, 0),
+                            max(center + int(surface_depth_offset) - (depth - 1) // 2, 0),
                             max(int(vol.shape[0]) - depth, 0),
                         )
                 if use_ctx:

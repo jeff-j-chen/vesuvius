@@ -70,8 +70,8 @@ CAMPAIGN28_SETTINGS = {
     "cutout_n_patches": 3,
     "depth_jitter": 1,
     "norm_mode": "ibn_full",
-    "num_workers": 24,
-    "prefetch_factor": 4,
+    "num_workers": 8,
+    "prefetch_factor": 2,
     "simple_split": False,
     "preload_volumes": False,
     "selective_chunk_preload": True,
@@ -233,6 +233,8 @@ def build_config(test: dict):
         config.tra.eval_int_scrolls = len(CAMPAIGN28_SCROLLS)
         config.tra.save_vis = True
         config.data.ram_safe_vis = True
+        config.data.eval_chunk_gb = 0.25
+        config.data.eval_prefetch = 0
         config.data.vis_scroll_ids = list(CAMPAIGN28_SCROLL_IDS)
     else:
         config.tra.eval_int = 999
@@ -246,6 +248,7 @@ def build_config(test: dict):
     config.tra.dann_n_domains = len(CAMPAIGN28_SCROLL_DICT)
     config.model.norm_mode = str(test.get("norm_mode", CAMPAIGN28_SETTINGS["norm_mode"]))
     config.model.use_ibn = config.model.norm_mode == "ibn"
+    config.model.compile_model = False
 
     checkpoint_dir = os.path.join(MODEL_DIR, test["tid"])
     os.makedirs(checkpoint_dir, exist_ok=True)
