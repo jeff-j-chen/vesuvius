@@ -789,11 +789,14 @@ class Trainer:
 
     def _init_visualizers(self) -> None:
         scroll_ids = self._scroll_ids
+        configured_visualizer_ids = getattr(self.c.data, "vis_scroll_ids", None)
         visualizer_ids = list(
             dict.fromkeys(
                 int(scroll_id)
                 for scroll_id in (
-                    getattr(self.c.data, "vis_scroll_ids", None) or scroll_ids
+                    scroll_ids
+                    if configured_visualizer_ids is None
+                    else configured_visualizer_ids
                 )
             )
         )

@@ -771,7 +771,9 @@ class TensorboardVisualizer:
         # scrolls render (default); otherwise only listed scrolls do. test/probe
         # figures are unaffected.
         _vis_ids = getattr(config.data, "vis_scroll_ids", None)
-        self.eval_enabled = (not _vis_ids) or (int(self.scroll1_id) in [int(v) for v in _vis_ids])
+        self.eval_enabled = _vis_ids is None or (
+            int(self.scroll1_id) in [int(value) for value in _vis_ids]
+        )
         self.probe_log_interval = max(1, int(getattr(config.tra, "probe_int", 5)))
 
         if config.exp_name is None:
