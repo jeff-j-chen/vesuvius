@@ -334,10 +334,21 @@ class TrainingConfig:
     physical_domain_groupdro: bool = False
     physical_domain_groupdro_eta: float = 0.05
     physical_domain_groupdro_max_ratio: float = 3.0
+    domain_vrex: bool = False
+    domain_vrex_lambda: float = 1.0
+    domain_vrex_warmup_epochs: int = 2
+    domain_cvar: bool = False
+    domain_cvar_alpha: float = 0.25
+    pcgrad: bool = False
+    model_ema: bool = False
+    model_ema_decay: float = 0.999
+    model_ema_start_epoch: int = 0
+    mae_anchor_lambda: float = 0.0
     domain_gradient_mode: str = ""
     domain_gradient_threshold: float = 0.0
     domain_gradient_strength: float = 4.0
     domain_gradient_ema: float = 0.9
+    domain_gradient_blend: float = 1.0
     character_cvar: bool = False
     character_cvar_alpha: float = 0.25
     clam_instance: bool = False
@@ -348,6 +359,9 @@ class TrainingConfig:
     elr_start_epoch: int = 5
     elr_beta: float = 0.7
     elr_lambda: float = 0.1
+    depth_shift_aux: bool = False
+    depth_shift_aux_lambda: float = 0.1
+    depth_shift_aux_classes: int = 3
 
 @dataclass
 class ModelConfig:
@@ -379,6 +393,12 @@ class ModelConfig:
     factorized_2plus1d: bool = False
     residual_unet: bool = False
     gated_stems: bool = True
+    cue_dropout: float = 0.0
+    explicit_depth_channels: bool = False
+    overlapping_depth_windows: bool = False
+    overlapping_depth_window_size: int = 4
+    overlapping_depth_window_stride: int = 2
+    depth_antialias: bool = False
     sparse_deep_supervision: bool = False
     sparse_deep_supervision_dec2_weight: float = 0.3
     sparse_deep_supervision_dec3_weight: float = 0.1
@@ -426,7 +446,7 @@ class ModelConfig:
     allow_depth4: bool = False  # preserve depth at the third pool for four-slice experiments
     multitile: bool = True       # predict a grid of sub-tiles over the center instead of one 16px tile
     multitile_subtile: int = 16    # px per sub-tile prediction
-    multitile_grid: int = 4       # grid side: 4 -> 4x4=16 sub-tiles over a 32px center
+    multitile_grid: int = 4       # grid side: 4 -> 16 predictions over a 64px center
 
 
 @dataclass

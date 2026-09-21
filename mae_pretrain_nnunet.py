@@ -245,7 +245,14 @@ class NnUnetMAE(nn.Module):
             _, dec1 = self.backbone._encode_decode_early_2d(x_masked, None, None)
             return self.recon_head(dec1).unsqueeze(1)
         if self.mid_2d:
-            _, dec1 = self.backbone._encode_decode_mid_2d(x_masked, None, None)
+            if self.backbone._overlapping_depth_windows:
+                _, dec1 = self.backbone._encode_decode_overlapping_depth(
+                    x_masked,
+                    None,
+                    None,
+                )
+            else:
+                _, dec1 = self.backbone._encode_decode_mid_2d(x_masked, None, None)
             return self.recon_head(dec1).unsqueeze(1)
         _, dec1 = self.backbone._encode_decode(x_masked)
         return self.recon_head(dec1)   # (B, 1, D, H/ds, W/ds)
@@ -302,6 +309,12 @@ def main():
     ap.add_argument("--early-2d-unet", action="store_true")
     ap.add_argument("--early-2d-channels-mult", type=float, default=1.0)
     ap.add_argument("--mid-2d-unet", action="store_true")
+    ap.add_argument("--gated-stems", action="store_true")
+    ap.add_argument("--explicit-depth-channels", action="store_true")
+    ap.add_argument("--overlapping-depth-windows", action="store_true")
+    ap.add_argument("--overlapping-depth-window-size", type=int, default=4)
+    ap.add_argument("--overlapping-depth-window-stride", type=int, default=2)
+    ap.add_argument("--depth-antialias", action="store_true")
     ap.add_argument("--factorized-2plus1d", action="store_true")
     ap.add_argument("--divided-attention", action="store_true")
     ap.add_argument("--divided-attention-spatial", action="store_true")
@@ -325,6 +338,7 @@ def main():
     ap.add_argument("--holdout-frac", type=float, default=0.1)
     ap.add_argument("--log-int", type=int, default=50)
     ap.add_argument("--fig-int", type=int, default=500)
+    ap.add_argument("--no-figures", action="store_true")
     ap.add_argument("--save-int", type=int, default=1000)
     ap.add_argument("--log-dir", default="runs_mae")
     ap.add_argument("--seed", type=int, default=0)
@@ -341,6 +355,8 @@ def main():
         ap.error("--divided-attention-spatial requires --divided-attention")
     if args.early_2d_unet and args.mid_2d_unet:
         ap.error("--early-2d-unet and --mid-2d-unet are mutually exclusive")
+    if args.overlapping_depth_windows and not args.mid_2d_unet:
+        ap.error("--overlapping-depth-windows requires --mid-2d-unet")
     if args.early_2d_channels_mult <= 0:
         ap.error("--early-2d-channels-mult must be positive")
     if args.mednext_kernel < 3 or args.mednext_kernel % 2 == 0:
@@ -353,12 +369,19 @@ def main():
     cfg.model.arch = "nnunet3d_lcndz"
     cfg.model.attn_mil = False         # no MIL during pretraining
     cfg.model.learned_surface = False
+    cfg.model.surface_teacher_input = False
     cfg.model.use_ibn = args.ibn
     cfg.model.norm_mode = args.norm_mode or ("ibn" if args.ibn else "instance")
     cfg.model.multitile = bool(args.early_2d_unet or args.mid_2d_unet)
     cfg.model.early_2d_unet = bool(args.early_2d_unet)
     cfg.model.early_2d_channels_mult = float(args.early_2d_channels_mult)
     cfg.model.mid_2d_unet = bool(args.mid_2d_unet)
+    cfg.model.gated_stems = bool(args.gated_stems)
+    cfg.model.explicit_depth_channels = bool(args.explicit_depth_channels)
+    cfg.model.overlapping_depth_windows = bool(args.overlapping_depth_windows)
+    cfg.model.overlapping_depth_window_size = int(args.overlapping_depth_window_size)
+    cfg.model.overlapping_depth_window_stride = int(args.overlapping_depth_window_stride)
+    cfg.model.depth_antialias = bool(args.depth_antialias)
     cfg.model.factorized_2plus1d = bool(args.factorized_2plus1d)
     cfg.model.divided_attention = bool(args.divided_attention)
     cfg.model.divided_attention_spatial = bool(args.divided_attention_spatial)
@@ -578,7 +601,7 @@ def main():
             print(f"[mae] step {step}/{args.steps}  "
                 f"mse={loss_value:.5f}  ({elapsed:.0f}s)", flush=True)
 
-        if step % args.fig_int == 0 or step == args.steps:
+        if not args.no_figures and (step % args.fig_int == 0 or step == args.steps):
             model.eval()
             with torch.no_grad(), _autocast(dev):
                 pv = model(xb_masked)

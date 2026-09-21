@@ -72,6 +72,9 @@ def needs_domain_ids(config: Config) -> bool:
         bool(getattr(config.tra, "cdan", False)),
         bool(getattr(config.tra, "mldg", False)),
         bool(getattr(config.tra, "physical_domain_groupdro", False)),
+        bool(getattr(config.tra, "domain_vrex", False)),
+        bool(getattr(config.tra, "domain_cvar", False)),
+        bool(getattr(config.tra, "pcgrad", False)),
         bool(getattr(config.tra, "domain_gradient_mode", "")),
         bool(getattr(config.model, "mixstyle", False)),
         bool(getattr(config.model, "sagnet", False)),
@@ -1452,6 +1455,7 @@ class InkVolumeDataset(IterableDataset):
         sp = ctx if use_ctx else tile
         target_offset = (0, 0)
         dj = 0
+        augmentation_depth_shift = 0
 
         try:
             if use_ctx:
@@ -1490,6 +1494,7 @@ class InkVolumeDataset(IterableDataset):
                     else:
                         jitter = random.randint(-max_dj, max_dj) \
                             if max_dj > 0 and self.shuffle and allow_jitter else 0
+                    augmentation_depth_shift = jitter
                     selected_start = min(
                         max(surface_start + jitter, 0),
                         max(volume_depth - self.depth, 0),
@@ -1499,6 +1504,7 @@ class InkVolumeDataset(IterableDataset):
                     min_dj = max(-max_dj, -z)
                     max_valid_dj = min(max_dj, volume_depth - (z + self.depth))
                     dj = random.randint(min_dj, max_valid_dj)
+                    augmentation_depth_shift = dj
                 block = self._read_ctx_block(z + dj, self.depth, y - pad - jy, x - pad - jx, ctx)
             else:
                 if self._surface_relative_depth_window:
@@ -1516,6 +1522,7 @@ class InkVolumeDataset(IterableDataset):
                     else:
                         jitter = random.randint(-max_dj, max_dj) \
                             if max_dj > 0 and self.shuffle and allow_jitter else 0
+                    augmentation_depth_shift = jitter
                     selected_start = min(
                         max(selected_start + jitter, 0),
                         max(int(self.vol.shape[0]) - self.depth, 0),
@@ -1533,7 +1540,7 @@ class InkVolumeDataset(IterableDataset):
         if block.shape != (self.depth, sp, sp):
             block = np.zeros((self.depth, sp, sp), dtype=np.float32)
 
-        return self._normalize_block(block), target_offset, dj
+        return self._normalize_block(block), target_offset, dj, augmentation_depth_shift
 
     def _surface_centered_start(
         self,
@@ -1787,7 +1794,11 @@ class InkVolumeDataset(IterableDataset):
         
         # fetch data components
         mask = self._fetch_mask(y_off, x_off)
-        block, target_offset, depth_shift = self._fetch_block(z_off, y_off, x_off)
+        block, target_offset, depth_shift, augmentation_depth_shift = self._fetch_block(
+            z_off,
+            y_off,
+            x_off,
+        )
         if self._use_surface_teacher:
             surface_depth, surface_confidence = self._fetch_surface_teacher(
                 z_off,
@@ -1819,7 +1830,7 @@ class InkVolumeDataset(IterableDataset):
             donor_y, donor_x = self._context_donor_coords[
                 random.randrange(len(self._context_donor_coords))
             ]
-            donor, _, _ = self._fetch_block(
+            donor, _, _, _ = self._fetch_block(
                 z_off,
                 donor_y,
                 donor_x,
@@ -1841,7 +1852,7 @@ class InkVolumeDataset(IterableDataset):
                 -self._depth_view_consistency_offset,
                 self._depth_view_consistency_offset,
             ))
-            paired_block, _, paired_depth_shift = self._fetch_block(
+            paired_block, _, paired_depth_shift, _ = self._fetch_block(
                 z_off,
                 y_off,
                 x_off,
@@ -1864,7 +1875,7 @@ class InkVolumeDataset(IterableDataset):
             donor_y, donor_x = self._context_donor_coords[
                 random.randrange(len(self._context_donor_coords))
             ]
-            donor, _, _ = self._fetch_block(
+            donor, _, _, _ = self._fetch_block(
                 z_off,
                 donor_y,
                 donor_x,
@@ -1958,6 +1969,8 @@ class InkVolumeDataset(IterableDataset):
                 torch.from_numpy(np.ascontiguousarray(surface_depth, dtype=np.float32)).unsqueeze(0),
                 torch.from_numpy(np.ascontiguousarray(surface_confidence, dtype=np.float32)).unsqueeze(0),
             ])
+        if bool(getattr(self.c.tra, "depth_shift_aux", False)):
+            result.append(torch.tensor(augmentation_depth_shift, dtype=torch.long))
         if self._context_consistency:
             result.extend([
                 paired_block_tensor,

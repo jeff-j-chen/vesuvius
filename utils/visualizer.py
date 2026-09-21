@@ -1899,14 +1899,14 @@ class TensorboardVisualizer:
 
             t_coords = train_grouped.get(d_off, [])
 
-            # ONE read+predict pass over the full train+valid region (also_tta -> raw + TTA maps)
-            full_pred, full_tta = predict_tiles(
+            # one plain prediction pass over the full train+valid region
+            full_pred = predict_tiles(
                 self.c, model, self.volume, eval_mask, full_grouped.get(d_off, []), full_y, full_x,
                 depth_start, "eval", self.global_mean, self.global_std, self.global_min, self.global_max,
-                also_tta=True,
                 surface_depth_map=self.surface_depth_map,
                 surface_confidence_map=self.surface_confidence_map,
             )
+            full_tta = full_pred
 
             tile = self.c.data.tile_size
 
@@ -2072,8 +2072,7 @@ class TensorboardVisualizer:
                 # regular inference map (primary depth block)
                 reg_pred = all_pred_data[0][0]
 
-                # TTA map: computed in the SAME read pass as reg_pred (also_tta=True above),
-                # so we do NOT re-read the zarr -- TTA just re-augments the already-loaded tiles.
+                # retain the existing figure layout using the plain prediction in both views
                 tta_pred = all_tta_data[0] if all_tta_data else None
 
                 # raw 1.1um / 2.4um inklabels (visual reference), cropped to the eval extent.
@@ -2353,10 +2352,10 @@ class TensorboardVisualizer:
     def add_test_figures(self, epoch, model):
         """FULL-SIZE, notebook-style 4-panel test figures for every test fragment + holdout.
 
-        each figure (one per fragment): [raw pred | TTA pred | composite | overlay], inferno
+        each figure (one per fragment): [raw pred | pred | composite | overlay], inferno
         heatmaps upsampled to native resolution, native-resolution VC3D-style composite,
-        cropped to the mask bbox with white padding on a black background. NO downscaling: the
-        model runs over the full-resolution fragment and the saved JPG is full size.
+        cropped to the mask bbox with white padding on a black background. inference and
+        compositing only read that bbox, and the saved JPG uses its native pixel scale.
 
         the FULL-SIZE JPG is written to <log>/test_figs/ AND ./output/test_visualizations/<exp>/;
         a bounded copy (<=4096 px) is logged to tensorboard so event files stay small."""
@@ -2380,24 +2379,28 @@ class TensorboardVisualizer:
                     pass
 
     # ---- full-size test-fragment rendering (ported from test_inference.ipynb) ----
-    def _frag_project_depth(self, vol, d0, d1, method):
+    def _frag_project_depth(self, vol, d0, d1, method, bounds=None):
         """memory-bounded depth projection over slices [d0, d1) (one slice at a time)."""
         Z, H, W = int(vol.shape[0]), int(vol.shape[1]), int(vol.shape[2])
         d0, d1 = max(0, d0), min(d1, Z)
+        y0, y1, x0, x1 = bounds or (0, H, 0, W)
         if method == "meanproj":
-            acc = np.zeros((H, W), np.float64)
+            acc = np.zeros((y1 - y0, x1 - x0), np.float64)
             for d in range(d0, d1):
-                acc += np.asarray(vol[d])
+                acc += np.asarray(vol[d, y0:y1, x0:x1])
             return (acc / max(d1 - d0, 1)).astype(np.float32)
         # default: maxproj (VC3D's max filter over the surface window)
-        acc = np.zeros((H, W), np.float32)
+        acc = np.zeros((y1 - y0, x1 - x0), np.float32)
         for d in range(d0, d1):
-            acc = np.maximum(acc, np.asarray(vol[d]).astype(np.float32))
+            acc = np.maximum(
+                acc,
+                np.asarray(vol[d, y0:y1, x0:x1]).astype(np.float32),
+            )
         return acc
 
-    def _frag_composite(self, vol, mask_bool, d0, d1, method, display):
+    def _frag_composite(self, vol, mask_bool, d0, d1, method, display, bounds=None):
         """native-resolution fiber-visibility composite (uint8), matched to VC3D."""
-        proj = self._frag_project_depth(vol, d0, d1, method)
+        proj = self._frag_project_depth(vol, d0, d1, method, bounds=bounds)
         m = mask_bool if mask_bool.shape == proj.shape else (proj > 0)
         if display == "raw":
             img = np.clip(proj, 0, 255).astype(np.uint8)   # VC3D linear volume window
@@ -2407,13 +2410,16 @@ class TensorboardVisualizer:
             img = (np.clip((proj - lo) / max(hi - lo, 1e-6), 0, 1) * 255).astype(np.uint8)
         return img * m.astype(np.uint8)
 
-    def _frag_bbox(self, mask_bool, margin):
-        """outer bounding box of the mask (+margin), clamped to image bounds."""
+    def _frag_bbox(self, mask_bool, margin, align=1):
+        """outward-aligned mask bounding box with margin, clamped to image bounds."""
         ys, xs = np.where(mask_bool)
         if ys.size == 0:
             return 0, mask_bool.shape[0], 0, mask_bool.shape[1]
-        y0 = max(0, int(ys.min()) - margin); y1 = min(mask_bool.shape[0], int(ys.max()) + 1 + margin)
-        x0 = max(0, int(xs.min()) - margin); x1 = min(mask_bool.shape[1], int(xs.max()) + 1 + margin)
+        align = max(1, int(align))
+        y0 = max(0, ((int(ys.min()) - margin) // align) * align)
+        x0 = max(0, ((int(xs.min()) - margin) // align) * align)
+        y1 = min(mask_bool.shape[0], ((int(ys.max()) + 1 + margin + align - 1) // align) * align)
+        x1 = min(mask_bool.shape[1], ((int(xs.max()) + 1 + margin + align - 1) // align) * align)
         return y0, y1, x0, x1
 
     def _frag_colorize(self, pmap, out_hw):
@@ -2469,31 +2475,43 @@ class TensorboardVisualizer:
         mask_bool = mask01 > 0
         T = int(self.c.data.tile_size)
         d_start = int(self.c.data.d_start)
+        y0, y1, x0, x1 = self._frag_bbox(mask_bool, 32, align=T)
+        Hc, Wc = y1 - y0, x1 - x0
+        y_range, x_range = (y0, y1), (x0, x1)
 
-        # full-fragment tile coords (only tiles that touch the mask)
-        coords = [(0, y, x) for y in range(0, H - T + 1, T) for x in range(0, W - T + 1, T)
-                  if mask01[y:y+T, x:x+T].sum() > 0]
-        # single read -> BOTH the raw and TTA maps (also_tta), matching the eval-figure
-        # optimization: TTA re-augments the already-loaded tiles instead of re-reading the zarr.
-        raw, ttp = predict_tiles(self.c, model, vol, mask01, coords, (0, H), (0, W),
-                                 d_start, f"Frag_{sid}", gm, gs, gmin, gmax, also_tta=True)
+        coords = [
+            (0, y, x)
+            for y in range(0, Hc - T + 1, T)
+            for x in range(0, Wc - T + 1, T)
+            if mask01[y0 + y:y0 + y + T, x0 + x:x0 + x + T].sum() > 0
+        ]
+        raw = predict_tiles(
+            self.c, model, vol, mask01, coords, y_range, x_range,
+            d_start, f"Frag_{sid}", gm, gs, gmin, gmax,
+        )
 
         cm    = getattr(self.c.data, "composite_method", "maxproj")
         cd0   = int(getattr(self.c.data, "composite_d0", 10))
         cd1   = int(getattr(self.c.data, "composite_d1", 18))
         cdisp = getattr(self.c.data, "composite_display", "raw")
-        comp  = self._frag_composite(vol, mask_bool, cd0, cd1, cm, cdisp)   # native-res uint8
+        comp = self._frag_composite(
+            vol,
+            mask_bool[y0:y1, x0:x1],
+            cd0,
+            cd1,
+            cm,
+            cdisp,
+            bounds=(y0, y1, x0, x1),
+        )
 
-        y0, y1, x0, x1 = self._frag_bbox(mask_bool, 32)
-        Hc, Wc = y1 - y0, x1 - x0
-        p1 = self._frag_colorize(raw, (H, W))[y0:y1, x0:x1]
-        p2 = self._frag_colorize(ttp, (H, W))[y0:y1, x0:x1]
-        p3 = cv2.cvtColor(comp, cv2.COLOR_GRAY2BGR)[y0:y1, x0:x1]
+        p1 = self._frag_colorize(raw, (Hc, Wc))
+        p2 = p1.copy()
+        p3 = cv2.cvtColor(comp, cv2.COLOR_GRAY2BGR)
         panels = [p1, p2, p3.copy(), p3.copy()]
         panels[3] = self._frag_scale_bar(panels[3], float(getattr(self.c.data, "voxel_um", 9.362)))
-        # label panels so the mosaic reads: name [ raw | TTA | composite | overlay ]
+        # keep the four-panel layout while both prediction panels use one plain pass
         # (the 4th 'overlay' panel is the composite the user annotates by hand)
-        _labels = [f"{name}  raw", "TTA", "composite", "overlay"]
+        _labels = [f"{name}  raw", "inference", "composite", "overlay"]
         panels = [self._frag_label(p, lb) for p, lb in zip(panels, _labels)]
         panels = [self._frag_pad(p, 24) for p in panels]
         big = np.hstack(panels) if Hc >= Wc else np.vstack(panels)   # tall->side by side; wide->stacked
@@ -2604,7 +2622,7 @@ class TensorboardVisualizer:
                                 raw_1_1, raw_2_4, train_split_n, split_axis="x",
                                 manual_train_grid=None):
         """2-column x 2-row eval figure:
-            row 0: TTA inference            | TTA + inklabel overlay
+            row 0: inference                | inference + inklabel overlay
             row 1: 1.1um inklabel_raw       | 2.4um inklabel_raw
         every panel occupies the same cell footprint; predictions use SCROLL_CMAP (0-1),
         the raw inklabel references are grayscale. the split boundary is drawn only on
@@ -2664,8 +2682,8 @@ class TensorboardVisualizer:
 
         tp = tta_pred if tta_pred is not None else reg_pred
         tp_disp = self._display_norm(tp)
-        _pred_panel(axes[0, 0], tp_disp, "TTA inference")
-        _pred_panel(axes[0, 1], tp_disp, "TTA + inklabel", overlay=True)
+        _pred_panel(axes[0, 0], tp_disp, "inference")
+        _pred_panel(axes[0, 1], tp_disp, "inference + inklabel", overlay=True)
 
         for ax, raw, ttl in ((axes[1, 0], raw_1_1, "1.1um inklabel_raw"),
                              (axes[1, 1], raw_2_4, "2.4um inklabel_raw")):
@@ -3083,8 +3101,7 @@ class TensorboardVisualizer:
         for d_off in depth_offsets:
             depth_start = self.c.data.d_start + d_off
             depth_end = depth_start + self.c.data.depth
-            # single read -> raw + TTA maps (TTA re-augments the loaded tiles; no extra disk read)
-            pred, pred_tta = predict_tiles(
+            pred = predict_tiles(
                 self.c,
                 model,
                 volume,
@@ -3098,8 +3115,8 @@ class TensorboardVisualizer:
                 g_std,
                 g_min,
                 g_max,
-                also_tta=True,
             )
+            pred_tta = pred
 
             metrics = self._compute_readability_metrics(pred, label_binary, label_fraction, valid_tiles)
             metrics_tta = self._compute_readability_metrics(pred_tta, label_binary, label_fraction, valid_tiles)

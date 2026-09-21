@@ -143,6 +143,7 @@ FRAG_OPTS = {
         "pooled_special": True,
         "surface_name": "2.4um-0.22m-78keV-volume-20260411134726.zarr",
         "surface_level": 2,
+        "surface_expected_shape": (109, 12750, 9995),
         "force_norm": True,
     },
     "paris2_fr143": {
@@ -902,7 +903,9 @@ def _assemble_cropped_surface(zid, opts, chunk_depth, chunk_y, chunk_x, force=Fa
     print(f"  [crop] wrote {out_zarr} shape={output_shape} crop={(y0, y1, x0, x1)}")
 
 
-def _assemble_pooled_surface(seg, zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
+def _assemble_pooled_surface(
+    seg, zid, opts, chunk_depth, chunk_y, chunk_x, expected_shape=None, force=False
+):
     """stream a high-resolution surface pyramid and pool its native depth to 28."""
     import zarr
 
@@ -921,6 +924,11 @@ def _assemble_pooled_surface(seg, zid, opts, chunk_depth, chunk_y, chunk_x, forc
     level = int(opts.get("surface_level", 2))
     source_url = f"{BUCKET}/{seg}/surface-volumes/{opts['surface_name']}/{level}"
     source = zarr.open(source_url, mode="r")
+    if expected_shape is not None and tuple(source.shape) != tuple(expected_shape):
+        raise RuntimeError(
+            f"{zid}: source surface shape {tuple(source.shape)} != expected "
+            f"{tuple(expected_shape)}"
+        )
     source_depth, source_height, source_width = map(int, source.shape)
     y0, y1, x0, x1 = opts.get("surface_crop", (0, source_height, 0, source_width))
     y0, y1 = max(0, int(y0)), min(source_height, int(y1))

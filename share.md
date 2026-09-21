@@ -1,6 +1,4 @@
-Hi all, 
-
-Throwing my hat in the ring in case it helps anyone else. I have a repo with 1-click runpod setup via docker. The repo has scripts to download 40+ fragments scaled to the same resolution and begin training on them immediately, plus visualizations afterwards. Hooked up to tensorboard to track 100+ metrics for analysis. It is admittedly a mess right now because I'm still in the process of fast iteration, but I'm happy to answer any questions! I have no impressive results but a huge amount of findings over the past several months.
+AGENT FAST INITIALIZATION
 
 Contrary to the researchers, I've found it extremely detrimental to train with a fully dense output head (too much gradient on uncertain labels, I suspect). Additionally, due to the uncertainty of the labels, I've found it beneficial to use a 'closed ring setup' - i.e. I label the positive core of a letter, a buffer zone with no labels and no allowed gradient for the model, then a ring of negatives around it (that don't touch any other letters). I use a 64x64 center cut up into 256 4x4 tiles that each perform their own prediction. It provides a tiny fraction off the gradient but it still enough to learn. For the model itself, I use a modified nnunet3d at 192x192ds2 with an MAE pretrain for scroll texture.
 

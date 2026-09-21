@@ -3,6 +3,7 @@ import os
 import random
 import sys
 import time
+from contextlib import contextmanager
 
 import numpy as np
 import torch
@@ -182,6 +183,33 @@ def character_cvar_loss(
     return torch.topk(stacked, tail_count).values.mean(), tail_count
 
 
+def domain_vrex_loss(
+    domain_losses: list[torch.Tensor],
+    penalty_weight: float,
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    """average physical-domain risk plus a variance-equality penalty."""
+    if not domain_losses:
+        return None, None
+    risks = torch.stack(domain_losses)
+    penalty = risks.var(unbiased=False)
+    return risks.mean() + float(penalty_weight) * penalty, penalty
+
+
+def domain_cvar_loss(
+    domain_losses: list[torch.Tensor],
+    alpha: float,
+) -> tuple[torch.Tensor | None, int]:
+    """mean risk over the worst alpha fraction of physical domains in a batch."""
+    if not domain_losses:
+        return None, 0
+    risks = torch.stack(domain_losses)
+    tail_count = max(
+        1,
+        int(math.ceil(risks.numel() * min(max(float(alpha), 1e-6), 1.0))),
+    )
+    return torch.topk(risks, tail_count).values.mean(), tail_count
+
+
 def character_groupdro_loss(
     group_ids: list[int],
     group_losses: list[torch.Tensor],
@@ -314,9 +342,26 @@ class Trainer:
                 f"unknown domain_gradient_mode={domain_gradient_mode!r}; "
                 f"valid={sorted(valid_domain_gradient_modes)}"
             )
+        domain_robust_modes = [
+            bool(domain_gradient_mode),
+            bool(getattr(config.tra, "physical_domain_groupdro", False)),
+            bool(getattr(config.tra, "domain_vrex", False)),
+            bool(getattr(config.tra, "domain_cvar", False)),
+            bool(getattr(config.tra, "pcgrad", False)),
+        ]
+        if sum(domain_robust_modes) > 1:
+            raise ValueError(
+                "domain-gradient, physical GroupDRO, V-REx, domain CVaR, and PCGrad "
+                "are mutually exclusive"
+            )
+        if not 0.0 <= float(getattr(config.tra, "domain_gradient_blend", 1.0)) <= 1.0:
+            raise ValueError("domain_gradient_blend must be in [0, 1]")
+        if not 0.0 < float(getattr(config.tra, "domain_cvar_alpha", 0.25)) <= 1.0:
+            raise ValueError("domain_cvar_alpha must be in (0, 1]")
+        if not 0.0 <= float(getattr(config.tra, "model_ema_decay", 0.999)) < 1.0:
+            raise ValueError("model_ema_decay must be in [0, 1)")
         if domain_gradient_mode and any([
             bool(getattr(config.tra, "mldg", False)),
-            bool(getattr(config.tra, "physical_domain_groupdro", False)),
             bool(getattr(config.tra, "character_groupdro", False)),
             bool(getattr(config.tra, "character_cvar", False)),
         ]):
@@ -360,6 +405,13 @@ class Trainer:
         self._dump_run_config()
 
         self.scaler = GradScaler(enabled=self.c.device == "cuda")
+        self._ema_state = (
+            {
+                name: value.detach().clone()
+                for name, value in self.model.state_dict().items()
+            }
+            if bool(getattr(self.c.tra, "model_ema", False)) else None
+        )
         self.hard_manager = HardMiningManager(self.c.hm.dir)
         self.hard_samples: list[dict] = []
         self.best_val_loss = float("inf")
@@ -389,6 +441,10 @@ class Trainer:
             "mae_reconstruction_loss": 0.0,
             "mldg_meta_train_loss": 0.0,
             "mldg_meta_test_loss": 0.0,
+            "domain_vrex_loss": 0.0,
+            "domain_cvar_loss": 0.0,
+            "depth_shift_aux_loss": 0.0,
+            "mae_anchor_loss": 0.0,
         }
         self._closed = False
 
@@ -525,6 +581,7 @@ class Trainer:
         start_time = time.time()
 
         model, params = create_model(self.c)
+        self._mae_anchor_reference: dict[str, torch.Tensor] = {}
         init_path = getattr(self.c, "init_weights", None)
         if init_path:
             state_dict = torch.load(init_path, map_location=self.c.device, weights_only=True)
@@ -544,6 +601,10 @@ class Trainer:
                     active_prefixes.extend(("early_depth_attn.", "early_depth_fuse.", "early2d_"))
                 if bool(getattr(self.c.model, "mid_2d_unet", False)):
                     active_prefixes.extend(("mid_depth_attn.", "mid_depth_fuse.", "mid_skip1_fuse.", "mid2d_"))
+                if bool(getattr(self.c.model, "gated_stems", False)):
+                    active_prefixes.append("gated_cue_stem.")
+                if bool(getattr(self.c.model, "overlapping_depth_windows", False)):
+                    active_prefixes.extend(("overlap_bottleneck_fuse.", "overlap_decoded_fuse."))
                 if bool(getattr(self.c.model, "divided_attention", False)):
                     active_prefixes.append("divided_attention.")
                 if bool(getattr(self.c.model, "mednext_adapters", False)):
@@ -571,6 +632,36 @@ class Trainer:
                 f"[init-weights] loaded {len(compatible)}/{len(state_dict)} tensors from {init_path} "
                 f"(shape-skipped={skipped} missing={len(missing)} unexpected={len(unexpected)})"
             )
+            anchor_lambda = float(getattr(self.c.tra, "mae_anchor_lambda", 0.0))
+            if anchor_lambda > 0:
+                anchor_prefixes = (
+                    "enc1.",
+                    "enc2.",
+                    "gated_cue_stem.",
+                    "mid_depth_attn.",
+                    "mid_depth_fuse.",
+                    "mid_skip1_fuse.",
+                    "mid2d_enc3.",
+                    "mid2d_bottleneck.",
+                    "mid2d_up3.",
+                    "mid2d_dec3.",
+                    "mid2d_up2.",
+                    "mid2d_dec2.",
+                    "mid2d_up1.",
+                    "mid2d_dec1.",
+                )
+                self._mae_anchor_reference = {
+                    name: parameter.detach().clone()
+                    for name, parameter in model.named_parameters()
+                    if name in compatible and name.startswith(anchor_prefixes)
+                }
+                if not self._mae_anchor_reference:
+                    raise RuntimeError("MAE anchoring found no loaded feature parameters")
+                anchored = sum(value.numel() for value in self._mae_anchor_reference.values())
+                print(
+                    f"[mae-anchor] lambda={anchor_lambda:g} "
+                    f"parameters={anchored:,} tensors={len(self._mae_anchor_reference)}"
+                )
 
         optimizer, scheduler = create_optimizer_and_scheduler(model, self.c)
         # multitile supervises at the 8px sub-tile level, whose class balance (~5:1 neg:pos) is
@@ -613,6 +704,88 @@ class Trainer:
             if enabled != was_enabled or epoch == 0:
                 state = "enabled" if enabled else "frozen"
                 print(f"[mae-preserve] encoder {state}: lr={group['lr']:.3e}")
+
+    def _update_model_ema(self, epoch: int) -> None:
+        if self._ema_state is None:
+            return
+        decay = float(getattr(self.c.tra, "model_ema_decay", 0.999))
+        start_epoch = int(getattr(self.c.tra, "model_ema_start_epoch", 0))
+        current = self.model.state_dict()
+        with torch.no_grad():
+            for name, value in current.items():
+                if epoch < start_epoch or not value.is_floating_point():
+                    self._ema_state[name].copy_(value)
+                else:
+                    self._ema_state[name].lerp_(value, 1.0 - decay)
+
+    @contextmanager
+    def _ema_weights(self):
+        if self._ema_state is None:
+            yield
+            return
+        current = {
+            name: value.detach().clone()
+            for name, value in self.model.state_dict().items()
+        }
+        self.model.load_state_dict(self._ema_state, strict=True)
+        try:
+            yield
+        finally:
+            self.model.load_state_dict(current, strict=True)
+
+    def _pcgrad_backward(
+        self,
+        loss: torch.Tensor,
+        primary_loss: torch.Tensor,
+        domain_losses: list[torch.Tensor],
+    ) -> None:
+        if len(domain_losses) < 2:
+            self.scaler.scale(loss).backward()
+            return
+        parameters = [
+            parameter for parameter in self.model.parameters()
+            if parameter.requires_grad
+        ]
+        auxiliary_loss = loss - primary_loss
+        self.scaler.scale(auxiliary_loss).backward(retain_graph=True)
+        task_gradients = []
+        for index, domain_loss in enumerate(domain_losses):
+            gradients = torch.autograd.grad(
+                self.scaler.scale(domain_loss),
+                parameters,
+                retain_graph=index + 1 < len(domain_losses),
+                allow_unused=True,
+            )
+            task_gradients.append([
+                torch.zeros_like(parameter) if gradient is None else gradient
+                for parameter, gradient in zip(parameters, gradients)
+            ])
+        projected = []
+        for task_index, gradients in enumerate(task_gradients):
+            adjusted = [gradient.clone() for gradient in gradients]
+            order = torch.randperm(len(task_gradients), device=loss.device).tolist()
+            for other_index in order:
+                if other_index == task_index:
+                    continue
+                other = task_gradients[other_index]
+                dot = sum((left * right).sum() for left, right in zip(adjusted, other))
+                norm = sum((gradient * gradient).sum() for gradient in other).clamp(min=1e-12)
+                if dot < 0:
+                    scale = dot / norm
+                    adjusted = [
+                        left - scale * right
+                        for left, right in zip(adjusted, other)
+                    ]
+            projected.append(adjusted)
+        with torch.no_grad():
+            for parameter_index, parameter in enumerate(parameters):
+                gradient = torch.stack([
+                    task[parameter_index] for task in projected
+                ]).mean(dim=0)
+                if parameter.grad is None:
+                    parameter.grad = gradient
+                else:
+                    parameter.grad.add_(gradient)
 
     def _init_visualizers(self) -> None:
         scroll_ids = self._scroll_ids
@@ -979,6 +1152,7 @@ class Trainer:
     def _train_batch(self, images, labels, mask, domain_ids=None, character_ids=None,
                      target_offsets=None, epoch: int = 0, unlabeled_images=None,
                      surface_depth=None, surface_confidence=None,
+                     depth_shift=None,
                      context_pair=None, context_pair_active=None,
                      depth_pair=None, depth_pair_surface=None,
                      depth_pair_confidence=None, depth_pair_active=None):
@@ -1020,6 +1194,8 @@ class Trainer:
             domain_ids = domain_ids.to(self.c.device, non_blocking=True).view(-1)
         if target_offsets is not None:
             target_offsets = target_offsets.to(self.c.device, non_blocking=True).view(B, 2)
+        if depth_shift is not None:
+            depth_shift = depth_shift.to(self.c.device, non_blocking=True).view(-1)
         character_ids_device = (
             character_ids.to(self.c.device, non_blocking=True).view(B, -1)
             if character_ids is not None else None
@@ -1043,6 +1219,7 @@ class Trainer:
         elr_temporal = None
         dann_accuracy_value = images.new_zeros(())
         dann_grl_value = images.new_zeros(())
+        pcgrad_domain_losses: list[torch.Tensor] = []
 
         if bool(getattr(self.c.tra, "mldg", False)):
             if domain_ids is None:
@@ -1132,17 +1309,31 @@ class Trainer:
             denom = mask.sum()
             raw_loss_value = raw_loss.sum() / denom
             primary_loss = raw_loss.sum() / denom
+            needs_domain_losses = any([
+                bool(getattr(self.c.tra, "domain_gradient_mode", "")),
+                bool(getattr(self.c.tra, "physical_domain_groupdro", False)),
+                bool(getattr(self.c.tra, "domain_vrex", False)),
+                bool(getattr(self.c.tra, "domain_cvar", False)),
+                bool(getattr(self.c.tra, "pcgrad", False)),
+            ])
+            if needs_domain_losses:
+                if domain_ids is None:
+                    raise RuntimeError("physical-domain objectives require domain IDs")
+                domain_group_ids, domain_group_losses = _physical_domain_group_losses(
+                    per_target_loss,
+                    mask,
+                    domain_ids,
+                )
+            else:
+                domain_group_ids, domain_group_losses = [], []
             domain_gradient_mode = str(
                 getattr(self.c.tra, "domain_gradient_mode", "") or ""
             )
             if domain_gradient_mode:
                 if domain_ids is None:
                     raise RuntimeError("domain-gradient objectives require physical-domain IDs")
-                gradient_domain_ids, gradient_domain_losses = _physical_domain_group_losses(
-                    per_target_loss,
-                    mask,
-                    domain_ids,
-                )
+                gradient_domain_ids = domain_group_ids
+                gradient_domain_losses = domain_group_losses
                 probe_names = (
                     "dec1.net.3.weight",
                     "out_head.weight",
@@ -1229,10 +1420,12 @@ class Trainer:
                         * float(getattr(self.c.tra, "domain_gradient_strength", 4.0)),
                         dim=0,
                     )
-                    primary_loss = sum(
+                    conflict_loss = sum(
                         weight * domain_loss
                         for weight, domain_loss in zip(weights, gradient_domain_losses)
                     )
+                    blend = float(getattr(self.c.tra, "domain_gradient_blend", 1.0))
+                    primary_loss = (1.0 - blend) * raw_loss_value + blend * conflict_loss
                 else:
                     raise ValueError(
                         "domain_gradient_mode must be cluster_balance, cluster_worst, "
@@ -1241,11 +1434,6 @@ class Trainer:
             if bool(getattr(self.c.tra, "physical_domain_groupdro", False)):
                 if domain_ids is None:
                     raise RuntimeError("physical-domain GroupDRO requires physical-domain IDs")
-                domain_group_ids, domain_group_losses = _physical_domain_group_losses(
-                    per_target_loss,
-                    mask,
-                    domain_ids,
-                )
                 robust_loss, _ = character_groupdro_loss(
                     domain_group_ids,
                     domain_group_losses,
@@ -1260,6 +1448,27 @@ class Trainer:
                     self._last_physical_domain_groupdro_loss = float(
                         robust_loss.detach()
                     )
+            if bool(getattr(self.c.tra, "domain_vrex", False)) and domain_group_losses:
+                vrex_lambda = (
+                    float(getattr(self.c.tra, "domain_vrex_lambda", 1.0))
+                    if epoch >= int(getattr(self.c.tra, "domain_vrex_warmup_epochs", 2))
+                    else 0.0
+                )
+                primary_loss, vrex_penalty = domain_vrex_loss(
+                    domain_group_losses,
+                    vrex_lambda,
+                )
+                self._last_dg_losses["domain_vrex_loss"] = float(vrex_penalty.detach())
+            if bool(getattr(self.c.tra, "domain_cvar", False)) and domain_group_losses:
+                primary_loss, _ = domain_cvar_loss(
+                    domain_group_losses,
+                    float(getattr(self.c.tra, "domain_cvar_alpha", 0.25)),
+                )
+                self._last_dg_losses["domain_cvar_loss"] = float(primary_loss.detach())
+            if bool(getattr(self.c.tra, "pcgrad", False)):
+                pcgrad_domain_losses = domain_group_losses
+                if domain_group_losses:
+                    primary_loss = torch.stack(domain_group_losses).mean()
             group_ids: list[int] = []
             group_losses: list[torch.Tensor] = []
             if character_ids_device is not None and any([
@@ -1291,6 +1500,31 @@ class Trainer:
                     primary_loss = robust_loss
                     cvar_loss_value = robust_loss
             loss = primary_loss
+            anchor_lambda = float(getattr(self.c.tra, "mae_anchor_lambda", 0.0))
+            if anchor_lambda > 0:
+                named_parameters = dict(self.model.named_parameters())
+                anchor_loss = sum(
+                    (named_parameters[name] - reference).square().sum()
+                    for name, reference in self._mae_anchor_reference.items()
+                )
+                loss = loss + anchor_lambda * anchor_loss
+                self._last_dg_losses["mae_anchor_loss"] = float(anchor_loss.detach())
+            if bool(getattr(self.c.tra, "depth_shift_aux", False)):
+                depth_shift_logits = getattr(self.model, "last_depth_shift_logits", None)
+                if depth_shift_logits is None or depth_shift is None:
+                    raise RuntimeError("depth-shift auxiliary loss requires model logits and shifts")
+                classes = int(getattr(self.c.tra, "depth_shift_aux_classes", 3))
+                target_shift = depth_shift.clamp(
+                    min=-(classes // 2),
+                    max=classes // 2,
+                ) + classes // 2
+                depth_shift_loss = F.cross_entropy(depth_shift_logits, target_shift.long())
+                loss = loss + float(
+                    getattr(self.c.tra, "depth_shift_aux_lambda", 0.1)
+                ) * depth_shift_loss
+                self._last_dg_losses["depth_shift_aux_loss"] = float(
+                    depth_shift_loss.detach()
+                )
             deep_scores = getattr(self.model, "last_deep_supervision_scores", None)
             if deep_scores is not None:
                 deep_weights = (
@@ -1734,7 +1968,10 @@ class Trainer:
                 h = -(p * p.log() + (1 - p) * (1 - p).log()).mean()
                 loss = loss - entropy_lambda * h  # subtract to maximize H on unlabeled
 
-        self.scaler.scale(loss).backward()
+        if bool(getattr(self.c.tra, "pcgrad", False)):
+            self._pcgrad_backward(loss, primary_loss, pcgrad_domain_losses)
+        else:
+            self.scaler.scale(loss).backward()
         if (
             bool(getattr(self.c.tra, "context_consistency", False))
             and context_pair is not None
@@ -1850,6 +2087,7 @@ class Trainer:
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()
+        self._update_model_ema(epoch)
         diagnostic_values = torch.stack((
             loss.detach().float(),
             raw_loss_value.detach().float(),
@@ -2026,6 +2264,11 @@ class Trainer:
             else:
                 batch_surface_depth = None
                 batch_surface_confidence = None
+            if bool(getattr(self.c.tra, "depth_shift_aux", False)):
+                batch_depth_shift = batch[optional_index]
+                optional_index += 1
+            else:
+                batch_depth_shift = None
             if bool(getattr(self.c.tra, "context_consistency", False)):
                 batch_context_pair = batch[optional_index]
                 batch_context_pair_active = batch[optional_index + 1]
@@ -2090,6 +2333,7 @@ class Trainer:
                 unlabeled_images=u_imgs,
                 surface_depth=batch_surface_depth,
                 surface_confidence=batch_surface_confidence,
+                depth_shift=batch_depth_shift,
                 context_pair=batch_context_pair,
                 context_pair_active=batch_context_pair_active,
                 depth_pair=batch_depth_pair,
@@ -2481,6 +2725,10 @@ class Trainer:
             ("mae_reconstruction_loss", "Aux/MAEReconstruction"),
             ("mldg_meta_train_loss", "Aux/MLDGMetaTrain"),
             ("mldg_meta_test_loss", "Aux/MLDGMetaTest"),
+            ("domain_vrex_loss", "Aux/DomainVREx"),
+            ("domain_cvar_loss", "Aux/DomainCVaR"),
+            ("depth_shift_aux_loss", "Aux/DepthShiftClassification"),
+            ("mae_anchor_loss", "Aux/MAEAnchor"),
         ):
             if key in train_metrics:
                 self.vis.writer.add_scalar(tag, train_metrics[key], epoch)
@@ -2590,24 +2838,25 @@ class Trainer:
                 print(f"[COOLDOWN] train->val pause {val_cooldown}s...")
                 time.sleep(val_cooldown)
 
-            val_metrics = self.validate_epoch()
-            guard_epoch = int(getattr(self.c.tra, "sanity_guard_epoch", 0))
-            if guard_epoch > 0 and (epoch + 1) == guard_epoch:
-                character_ap = float(val_metrics.get("character_ap_macro", 0.0))
-                specificity = float(val_metrics.get("specificity", 0.0))
-                min_ap = float(getattr(self.c.tra, "sanity_min_character_ap", 0.0))
-                min_specificity = float(getattr(self.c.tra, "sanity_min_specificity", 0.0))
-                print(
-                    f"[sanity] epoch={epoch + 1} character_ap={character_ap:.4f}"
-                    f" specificity={specificity:.4f}"
-                    f" required=({min_ap:.4f},{min_specificity:.4f})"
-                )
-                if character_ap < min_ap or specificity < min_specificity:
-                    raise RuntimeError(
-                        "sanity guard failed: early validation is below historical tolerance"
+            with self._ema_weights():
+                val_metrics = self.validate_epoch()
+                guard_epoch = int(getattr(self.c.tra, "sanity_guard_epoch", 0))
+                if guard_epoch > 0 and (epoch + 1) == guard_epoch:
+                    character_ap = float(val_metrics.get("character_ap_macro", 0.0))
+                    specificity = float(val_metrics.get("specificity", 0.0))
+                    min_ap = float(getattr(self.c.tra, "sanity_min_character_ap", 0.0))
+                    min_specificity = float(getattr(self.c.tra, "sanity_min_specificity", 0.0))
+                    print(
+                        f"[sanity] epoch={epoch + 1} character_ap={character_ap:.4f}"
+                        f" specificity={specificity:.4f}"
+                        f" required=({min_ap:.4f},{min_specificity:.4f})"
                     )
-            self.scheduler.step(val_metrics["loss"])
-            self._periodic_model_save(epoch, val_metrics)
+                    if character_ap < min_ap or specificity < min_specificity:
+                        raise RuntimeError(
+                            "sanity guard failed: early validation is below historical tolerance"
+                        )
+                self.scheduler.step(val_metrics["loss"])
+                self._periodic_model_save(epoch, val_metrics)
             figure_due = any([
                 (epoch + 1) % self.c.tra.eval_int == 0,
                 (epoch + 1) % self.c.tra.test_int == 0,
@@ -2635,7 +2884,8 @@ class Trainer:
         final_path = getattr(self.c, "save_final", None)
         if final_path:
             os.makedirs(os.path.dirname(final_path), exist_ok=True)
-            save_model(self.model, final_path)
+            with self._ema_weights():
+                save_model(self.model, final_path)
             print(f"[save-final] wrote final model to {final_path}")
 
         self.close()

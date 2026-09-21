@@ -25,7 +25,7 @@ output:
     masks/<scroll_id>.png
 """
 from __future__ import annotations
-import argparse, multiprocessing, os, subprocess, sys
+import argparse, multiprocessing, os, shutil, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import cv2
@@ -291,11 +291,17 @@ FRAGMENTS = [
 
 
 def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script_dir,
-                   chunk_depth, chunk_y, chunk_x):
+                   chunk_depth, chunk_y, chunk_x, force=False):
     """render one test fragment. returns (zid, status) for summary."""
     mesh_dir = os.path.join(script_dir, "tifxyz", mesh_sub)
     out_zarr = os.path.join(out_dir, f"{zid}.zarr")
     mask_path = os.path.join(MASK_DIR, f"{zid}.png")
+
+    if force:
+        shutil.rmtree(out_zarr, ignore_errors=True)
+        if os.path.exists(mask_path):
+            os.remove(mask_path)
+        print("  --force: cleared zarr + mask; keeping the raw chunk cache")
     
     # idempotent: skip if this zarr + mask already exist
     if os.path.isdir(out_zarr) and os.path.exists(mask_path):
@@ -349,6 +355,8 @@ def main():
                     help="parallel S3 chunk-download workers PER fragment (default 32 for EPYC 7702)")
     ap.add_argument("--out-dir", type=str, default=ZARR_DIR,
                     help=f"output zarr directory (default: {ZARR_DIR})")
+    ap.add_argument("--force", action="store_true",
+                    help="re-render selected fragments while keeping downloaded raw chunks")
     ap.add_argument("--chunk-depth", type=int, default=DEFAULT_CHUNK_DEPTH,
                     help=f"zarr depth chunk size (default {DEFAULT_CHUNK_DEPTH}, optimized for 8-slice windows)")
     ap.add_argument("--chunk-y", type=int, default=DEFAULT_CHUNK_Y,
@@ -381,7 +389,8 @@ def main():
         print(f"\n{'='*70}\n=== {i}/{len(fragments)}  {zid}  (mesh {mesh_sub}) ===\n{'='*70}", flush=True)
         result = render_fragment(zid, mesh_sub, vol_base, vol_shape, 
                                 args.workers, args.out_dir, script_dir,
-                                args.chunk_depth, args.chunk_y, args.chunk_x)
+                                args.chunk_depth, args.chunk_y, args.chunk_x,
+                                force=args.force)
         results.append(result)
     
     print(f"\n{'='*70}\n[assemble] SUMMARY\n{'='*70}")

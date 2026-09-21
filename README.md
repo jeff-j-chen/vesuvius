@@ -24,6 +24,17 @@ python3 train.py -n experiment_name
 
 Campaign files define complete experiments and call `train.py`. Checkpoints are stored under `models/`; TensorBoard logs are stored in the corresponding `runs_*` directory.
 
+Campaign 29 extends the Campaign 28 mid-3D/2D + gated baseline with physical-domain
+robust objectives, depth-localization variants, 8px multitile targets, and fragment-only
+controls. It performs architecture-matched MAE pretraining over every configured training
+and test zarr before the selected arms and intentionally produces no evaluation figures.
+
+```bash
+python3 campaign_archs_29.py --dry-run
+python3 campaign_archs_29.py --only baseline
+python3 campaign_archs_29.py --from domain_vrex
+```
+
 ## Evaluation notebooks
 
 The two evaluation notebooks have different roles.

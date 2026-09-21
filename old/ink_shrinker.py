@@ -83,20 +83,24 @@ def erode_ink_labels(
 def main():
     parser = argparse.ArgumentParser(description="shrink or dilate binary ink labels")
     parser.add_argument("mode", choices=("shrink", "dilate"))
-    parser.add_argument("--input-folder", default="eroded_inklabels")
+    parser.add_argument("--input-folder", default=None)
     parser.add_argument("--output-folder", default=None)
-    parser.add_argument("--radius", type=int, default=3)
+    parser.add_argument("--radius", type=int, default=None)
     parser.add_argument("--mask-folder", default=None)
     parser.add_argument("--only", default=None, help="process one PNG filename or stem")
     args = parser.parse_args()
-    output_folder = args.output_folder
-    if output_folder is None:
-        output_folder = "eroded2_inklabels" if args.mode == "shrink" else "inklabels"
+    input_folder = args.input_folder or (
+        "eroded_inklabels" if args.mode == "shrink" else "inklabels"
+    )
+    output_folder = args.output_folder or (
+        "eroded2_inklabels" if args.mode == "shrink" else "dilated_inklabels"
+    )
+    radius = args.radius if args.radius is not None else (3 if args.mode == "shrink" else 2)
     transform_ink_labels(
-        input_folder=args.input_folder,
+        input_folder=input_folder,
         output_folder=output_folder,
         mode=args.mode,
-        radius=args.radius,
+        radius=radius,
         mask_folder=args.mask_folder,
         only=args.only,
     )

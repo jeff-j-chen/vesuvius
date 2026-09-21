@@ -727,6 +727,7 @@ class NnUnet3dLcndz(nn.Module):
         self.last_surface_valid: torch.Tensor | None = None
         self.last_clam_instance_logits: torch.Tensor | None = None
         self.last_sagnet_logits: torch.Tensor | None = None
+        self.last_depth_shift_logits: torch.Tensor | None = None
 
         self.lse_r = nn.Parameter(torch.tensor(2.0, dtype=torch.float32))
         input_depth = int(getattr(config.data, "depth", 24))
@@ -749,6 +750,22 @@ class NnUnet3dLcndz(nn.Module):
             getattr(config.model, "factorized_2plus1d", False)
         )
         self._residual_unet = bool(getattr(config.model, "residual_unet", False))
+        self._cue_dropout = float(getattr(config.model, "cue_dropout", 0.0))
+        self._explicit_depth_channels = bool(
+            getattr(config.model, "explicit_depth_channels", False)
+        )
+        self._depth_antialias = bool(getattr(config.model, "depth_antialias", False))
+        self._overlapping_depth_windows = bool(
+            getattr(config.model, "overlapping_depth_windows", False)
+        )
+        self._overlap_window_size = int(
+            getattr(config.model, "overlapping_depth_window_size", 4)
+        )
+        self._overlap_window_stride = int(
+            getattr(config.model, "overlapping_depth_window_stride", 2)
+        )
+        if not 0.0 <= self._cue_dropout <= 1.0:
+            raise ValueError("cue_dropout must be in [0, 1]")
         if self._factorized_2plus1d and self._residual_unet:
             raise ValueError("factorized_2plus1d and residual_unet are mutually exclusive")
         # width multiplier on the 32/64/128/256 channel ladder (0.5 = half -> ~4x fewer conv FLOPs)
@@ -777,7 +794,8 @@ class NnUnet3dLcndz(nn.Module):
                 norm_mode=norm_mode,
             )
 
-        self.enc1 = block3d(3, c1, shallow=True)
+        stem_channels = 5 if self._explicit_depth_channels else 3
+        self.enc1 = block3d(stem_channels, c1, shallow=True)
         self.gated_cue_stem = (
             GatedCueStem3d()
             if bool(getattr(config.model, "gated_stems", False)) else None
@@ -945,6 +963,32 @@ class NnUnet3dLcndz(nn.Module):
             self.mid2d_up1 = nn.ConvTranspose2d(c2, c1, kernel_size=2, stride=2)
             self.mid2d_dec1 = ConvBlock2d(c1 * 2, c1)
             self.mid2d_head = nn.Conv2d(c1, 1, kernel_size=1)
+            if self._overlapping_depth_windows:
+                if self._overlap_window_size < 2 or self._overlap_window_stride < 1:
+                    raise ValueError("overlapping depth window size/stride must be positive")
+                if input_depth < self._overlap_window_size:
+                    raise ValueError("input depth is smaller than the overlapping window")
+                self._overlap_window_count = (
+                    (input_depth - self._overlap_window_size)
+                    // self._overlap_window_stride
+                    + 1
+                )
+                self.overlap_bottleneck_fuse = nn.Conv2d(
+                    self._overlap_window_count * c4,
+                    c4,
+                    kernel_size=1,
+                    bias=False,
+                )
+                self.overlap_decoded_fuse = nn.Conv2d(
+                    self._overlap_window_count * c1,
+                    c1,
+                    kernel_size=1,
+                    bias=False,
+                )
+            else:
+                self._overlap_window_count = 0
+                self.overlap_bottleneck_fuse = None
+                self.overlap_decoded_fuse = None
         else:
             self.mid_depth_attn = None
             self.mid_depth_fuse = None
@@ -958,6 +1002,9 @@ class NnUnet3dLcndz(nn.Module):
             self.mid2d_up1 = None
             self.mid2d_dec1 = None
             self.mid2d_head = None
+            self._overlap_window_count = 0
+            self.overlap_bottleneck_fuse = None
+            self.overlap_decoded_fuse = None
 
         self._divided_attention = bool(getattr(config.model, "divided_attention", False))
         self.divided_attention = (
@@ -1186,6 +1233,13 @@ class NnUnet3dLcndz(nn.Module):
             nn.Parameter(torch.zeros(1, 1, input_depth, 1, 1))
             if self._depth_attention_2d_head else None
         )
+        self.depth_shift_head = (
+            nn.Linear(
+                c4,
+                int(getattr(config.tra, "depth_shift_aux_classes", 3)),
+            )
+            if bool(getattr(config.tra, "depth_shift_aux", False)) else None
+        )
 
     def _prepare_input(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 4:
@@ -1234,11 +1288,55 @@ class NnUnet3dLcndz(nn.Module):
         )
         return torch.where(apply, mixed, features)
 
-    def _stem_in(self, x: torch.Tensor) -> torch.Tensor:
-        dz = torch.zeros_like(x)
+    def _stem_in(
+        self,
+        x: torch.Tensor,
+        surface_features: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        raw = x
+        if self._depth_antialias and x.shape[2] > 1:
+            padded = F.pad(x, (0, 0, 0, 0, 1, 1), mode="replicate")
+            raw = (
+                padded[:, :, :-2]
+                + 2.0 * padded[:, :, 1:-1]
+                + padded[:, :, 2:]
+            ) * 0.25
+        dz = torch.zeros_like(raw)
         if not self._no_dz:
-            dz[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
-        return torch.cat([x, _lcn2d(x, 5), dz], dim=1)
+            dz[:, :, 1:] = raw[:, :, 1:] - raw[:, :, :-1]
+        cues = torch.cat([raw, _lcn2d(raw, 5), dz], dim=1)
+        if self.training and self._cue_dropout > 0:
+            apply = torch.rand(cues.shape[0], device=cues.device) < self._cue_dropout
+            cue_index = torch.randint(0, 3, (cues.shape[0],), device=cues.device)
+            keep = torch.ones(
+                cues.shape[0], 3, 1, 1, 1,
+                device=cues.device,
+                dtype=cues.dtype,
+            )
+            keep[torch.arange(cues.shape[0], device=cues.device), cue_index] = (~apply).to(
+                cues.dtype
+            )
+            cues = cues * keep
+        if not self._explicit_depth_channels:
+            return cues
+        relative = torch.linspace(
+            -1.0,
+            1.0,
+            raw.shape[2],
+            device=raw.device,
+            dtype=raw.dtype,
+        ).view(1, 1, -1, 1, 1).expand(raw.shape[0], 1, -1, raw.shape[3], raw.shape[4])
+        signed_surface = (
+            surface_features[:, 2:3]
+            if surface_features is not None else torch.zeros_like(relative)
+        )
+        return torch.cat((cues, relative, signed_surface), dim=1)
+
+    def _apply_gated_cues(self, stem: torch.Tensor) -> torch.Tensor:
+        if self.gated_cue_stem is None:
+            return stem
+        gated = self.gated_cue_stem(stem[:, :3])
+        return torch.cat((gated, stem[:, 3:]), dim=1)
 
     @staticmethod
     def _fiber_coordinates(x: torch.Tensor) -> torch.Tensor:
@@ -1430,9 +1528,9 @@ class NnUnet3dLcndz(nn.Module):
             raw_for_backbone = raw_x
             surface_for_backbone = None
 
-        stem_x = self._stem_in(raw_for_backbone)
-        if self.gated_cue_stem is not None:
-            stem_x = self.gated_cue_stem(stem_x)
+        stem_x = self._apply_gated_cues(
+            self._stem_in(raw_for_backbone, surface_for_backbone)
+        )
         enc1 = self.enc1(stem_x)
         if self.style_film is not None:
             enc1 = self.style_film(enc1, raw_for_backbone)
@@ -1503,7 +1601,7 @@ class NnUnet3dLcndz(nn.Module):
             )
         elif self.new_surface_head is not None:
             raise ValueError("early_2d_unet currently requires literal or disabled surface input")
-        features3d = self.enc1(self._stem_in(raw))
+        features3d = self.enc1(self._apply_gated_cues(self._stem_in(raw, surface)))
         if surface is not None and self.new_surface_input is not None:
             features3d = features3d + self.new_surface_input(surface)
         if self.fiber_coordinate_input is not None:
@@ -1549,9 +1647,7 @@ class NnUnet3dLcndz(nn.Module):
             )
         elif self.new_surface_head is not None:
             raise ValueError("mid_2d_unet currently requires literal or disabled surface input")
-        stem = self._stem_in(raw)
-        if self.gated_cue_stem is not None:
-            stem = self.gated_cue_stem(stem)
+        stem = self._apply_gated_cues(self._stem_in(raw, surface))
         enc1 = self.enc1(stem)
         if surface is not None and self.new_surface_input is not None:
             enc1 = enc1 + self.new_surface_input(surface)
@@ -1588,6 +1684,42 @@ class NnUnet3dLcndz(nn.Module):
         if self._head_drop is not None:
             dec1 = F.dropout2d(dec1, p=self._head_drop.p, training=self.training)
         return bottleneck, dec1
+
+    def _encode_decode_overlapping_depth(
+        self,
+        x: torch.Tensor,
+        teacher_surface_depth: torch.Tensor | None,
+        teacher_surface_confidence: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.overlap_bottleneck_fuse is None or self.overlap_decoded_fuse is None:
+            raise RuntimeError("overlapping depth fusion is not initialized")
+        bottlenecks = []
+        decoded = []
+        for index in range(self._overlap_window_count):
+            start = index * self._overlap_window_stride
+            end = start + self._overlap_window_size
+            window_depth = None
+            window_confidence = None
+            if teacher_surface_depth is not None and teacher_surface_confidence is not None:
+                window_depth = teacher_surface_depth - float(start)
+                valid = (window_depth >= 0) & (window_depth <= self._overlap_window_size - 1)
+                window_depth = torch.where(valid, window_depth, torch.full_like(window_depth, -1.0))
+                window_confidence = torch.where(
+                    valid,
+                    teacher_surface_confidence,
+                    torch.zeros_like(teacher_surface_confidence),
+                )
+            bottleneck, features = self._encode_decode_mid_2d(
+                x[:, :, start:end],
+                window_depth,
+                window_confidence,
+            )
+            bottlenecks.append(bottleneck)
+            decoded.append(features)
+        return (
+            self.overlap_bottleneck_fuse(torch.cat(bottlenecks, dim=1)),
+            self.overlap_decoded_fuse(torch.cat(decoded, dim=1)),
+        )
 
     @staticmethod
     def _embedding(bottleneck: torch.Tensor) -> torch.Tensor:
@@ -2021,11 +2153,18 @@ class NnUnet3dLcndz(nn.Module):
             return score, embedding, domain_logits, supcon_z
 
         if self._mid_2d_unet:
-            bottleneck2d, decoded2d = self._encode_decode_mid_2d(
-                x,
-                teacher_surface_depth,
-                teacher_surface_confidence,
-            )
+            if self._overlapping_depth_windows:
+                bottleneck2d, decoded2d = self._encode_decode_overlapping_depth(
+                    x,
+                    teacher_surface_depth,
+                    teacher_surface_confidence,
+                )
+            else:
+                bottleneck2d, decoded2d = self._encode_decode_mid_2d(
+                    x,
+                    teacher_surface_depth,
+                    teacher_surface_confidence,
+                )
             voxel2d = self.mid2d_head(decoded2d)
             center2d = self._crop_center_feat(
                 voxel2d.unsqueeze(2),
@@ -2037,6 +2176,10 @@ class NnUnet3dLcndz(nn.Module):
             self.last_center_voxel_map = center2d
             self.last_clam_instance_logits = None
             embedding = F.adaptive_avg_pool2d(bottleneck2d, 1).flatten(1)
+            self.last_depth_shift_logits = (
+                self.depth_shift_head(embedding)
+                if self.depth_shift_head is not None else None
+            )
             self.last_embedding_detached = embedding.detach().clone()
             domain_logits = (
                 self.domain_head(embedding, grl_scale=grl_scale)
