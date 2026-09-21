@@ -101,7 +101,7 @@ Mask coverage below is measured from the current files in `masks/`. Surface area
 | `20260717193517` | PHerc0211 | `(28, 7181, 6501)` | 70.5% | ~28.60 cm² | five-patch merged surface |
 | `20260720090842` | PHerc1203 | `(28, 3421, 3821)` | 65.1% | 7.90 cm² | `auto_grown_20260720090842117` |
 | `20250703034159` | PHerc1447 | `(28, 7181, 9401)` | 70.0% | 51.27 cm² | `20250703034159` |
-| `20260723112922` | PHerc0826 | `(28, 9481, 4521)` | 27.1% | ~18.93 cm² | merged `auto_grown_20260723112922652` |
+| `20260723112922` | PHerc0826 | `(28, 5981, 3201)` | 60.0% | ~18.93 cm² | merged `auto_grown_20260723112922652` |
 
 PHerc1447 was rendered from an 8.640µm / 116keV scan. The other four use 9.362µm / 113keV scans. `assemble_test_segments.py` renders each surface from its tifxyz coordinates and raw CT volume.
 

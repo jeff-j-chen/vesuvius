@@ -149,6 +149,7 @@ def _pretrain_metadata(key: str) -> dict:
         "d_start": spec["d_start"],
         "d_end": spec["d_end"],
         "from_scratch": True,
+        "sampling": "physical_round_robin",
         "checkpoint": str(_pretrain_path(key).relative_to(ROOT)),
     }
 
@@ -372,6 +373,8 @@ def build_config(test: dict):
     config.model.depth_antialias = bool(test.get("depth_antialias", False))
     config.model.multitile_subtile = int(test.get("multitile_subtile", 16))
     config.model.multitile_grid = int(test.get("multitile_grid", 4))
+    config.model.surface_teacher_input = True
+    config.data.surface_relative_depth_window = True
     config.model.compile_model = bool(test.get("compile_model", True))
     config.model.require_architecture_init = True
     config.init_weights = str(_pretrain_path(str(test["pretrain_key"])).relative_to(ROOT))
@@ -446,6 +449,7 @@ def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:
                 "--batch-size", "24" if spec["depth"] > 8 else "32",
                 "--accum-steps", "1",
                 "--no-figures",
+                "--physical-round-robin",
                 *spec["args"],
             ]
             print(f"[campaign29] pretraining {key} from scratch", flush=True)

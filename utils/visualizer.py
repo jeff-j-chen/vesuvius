@@ -961,12 +961,26 @@ class TensorboardVisualizer:
                 ).astype(np.float32)
                 _D, _H, _W = map(int, _tv.shape)
                 _norm = self._get_or_compute_norm(_tv, _tm, str(_tf))
+                _surface_depth = _surface_confidence = None
+                if bool(getattr(self.c.model, "surface_teacher_input", False)):
+                    _surface_dir = os.path.join(
+                        str(getattr(self.c.data, "surface_label_dir", "./surface_labels")),
+                        str(_tf),
+                    )
+                    _surface_depth = np.load(
+                        os.path.join(_surface_dir, "depth.npy"), mmap_mode="r"
+                    )
+                    _surface_confidence = np.load(
+                        os.path.join(_surface_dir, "confidence.npy"), mmap_mode="r"
+                    )
                 self.testfrags.append({
                     'id': _tf, 'name': str(_tf), 'is_holdout': _is_hold,
                     'volume': _tv, 'mask': _tm,
                     'y_range': (0, _H), 'x_range': (0, _W),
                     'mean': _norm[0], 'std': _norm[1],
                     'min': _norm[2], 'max': _norm[3],
+                    'surface_depth': _surface_depth,
+                    'surface_confidence': _surface_confidence,
                 })
                 print(f'[testfrag] loaded {_tf}{" (holdout)" if _is_hold else ""} shape ({_D},{_H},{_W}) for test figures')
             except Exception as e:
@@ -2488,6 +2502,8 @@ class TensorboardVisualizer:
         raw = predict_tiles(
             self.c, model, vol, mask01, coords, y_range, x_range,
             d_start, f"Frag_{sid}", gm, gs, gmin, gmax,
+            surface_depth_map=frag.get("surface_depth"),
+            surface_confidence_map=frag.get("surface_confidence"),
         )
 
         cm    = getattr(self.c.data, "composite_method", "maxproj")

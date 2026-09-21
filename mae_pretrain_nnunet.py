@@ -46,7 +46,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from utils.config import Config, DEFAULT_SCROLLS, DEFAULT_TEST_SCROLL_IDS
+from utils.config import (
+    Config,
+    DEFAULT_SCROLLS,
+    DEFAULT_TEST_SCROLL_IDS,
+    DEFAULT_TRAIN_SCROLL_DICT,
+)
 from utils.norm import UNIFIED_CACHE_PATH, load_cached_norm, compute_norm
 
 MAE_TEST_SCROLL_IDS = list(DEFAULT_TEST_SCROLL_IDS)
@@ -71,10 +76,8 @@ class CropSampler:
     """
 
     def __init__(self, scroll_id, zarr_path, cfg, y0, y1, x0, x1,
-                 role="train", holdout_frac=0.1, block_px=512):
-        import zarr
+                 role="train", holdout_frac=0.1, block_px=512, shared=None):
         self.scroll_id = int(scroll_id)
-        self.vol = zarr.open(os.path.join(zarr_path, f"{scroll_id}.zarr"), mode="r")
         self.T = cfg.data.tile_size       # center tile size (for coord grid)
         self.ctx = int(getattr(cfg.data, "context_size", 48) or 48)
         self.D = cfg.data.depth
@@ -86,25 +89,90 @@ class CropSampler:
         self.holdout_mod = max(2, int(round(1.0 / max(holdout_frac, 1e-6))))
         self.block_px = int(block_px)
 
-        import cv2
-        mask_img = cv2.imread(f"./masks/{scroll_id}.png", cv2.IMREAD_GRAYSCALE)
-        H, W = int(self.vol.shape[1]), int(self.vol.shape[2])
-        if mask_img is None:
-            mask_img = np.full((H, W), 255, np.uint8)
-        if mask_img.shape != (H, W):
-            mask_img = cv2.resize(mask_img, (W, H), interpolation=cv2.INTER_NEAREST)
-        self.mask = (mask_img > 0).astype(np.uint8)
-        self.mask_integral = cv2.integral(self.mask)
+        if shared is None:
+            import cv2
+            import zarr
+            self.vol = zarr.open(os.path.join(zarr_path, f"{scroll_id}.zarr"), mode="r")
+            mask_img = cv2.imread(f"./masks/{scroll_id}.png", cv2.IMREAD_GRAYSCALE)
+            H, W = int(self.vol.shape[1]), int(self.vol.shape[2])
+            if mask_img is None:
+                mask_img = np.full((H, W), 255, np.uint8)
+            if mask_img.shape != (H, W):
+                mask_img = cv2.resize(mask_img, (W, H), interpolation=cv2.INTER_NEAREST)
+            self.mask = (mask_img > 0).astype(np.uint8)
+            self.mask_integral = cv2.integral(self.mask)
 
-        norm = load_cached_norm(str(scroll_id), UNIFIED_CACHE_PATH)
-        if norm is None:
-            print(f"[mae] computing norm for {scroll_id}...")
-            norm = compute_norm(str(scroll_id), zarr_path, UNIFIED_CACHE_PATH)
-        self.mean, self.std, self.g_min, self.g_max = norm
+            norm = load_cached_norm(str(scroll_id), UNIFIED_CACHE_PATH)
+            if norm is None:
+                print(f"[mae] computing norm for {scroll_id}...")
+                norm = compute_norm(str(scroll_id), zarr_path, UNIFIED_CACHE_PATH)
+            self.mean, self.std, self.g_min, self.g_max = norm
+            self._train_coords, self._monitor_coords = self._build_candidate_coords(
+                holdout_frac
+            )
+        else:
+            if self.scroll_id != shared.scroll_id:
+                raise ValueError("shared crop sampler must use the same scroll")
+            for name in (
+                "vol", "mask", "mask_integral", "mean", "std", "g_min", "g_max",
+                "_train_coords", "_monitor_coords",
+            ):
+                setattr(self, name, getattr(shared, name))
 
-    def _is_holdout(self, yy, xx):
-        by, bx = yy // self.block_px, xx // self.block_px
-        return ((by * 73856093) ^ (bx * 19349663)) % self.holdout_mod == 0
+    def _build_candidate_coords(self, holdout_frac):
+        stride = max(1, min(16, self.ctx // 8))
+        y_stop = self.y1 - self.ctx
+        x_stop = self.x1 - self.ctx
+        ys = np.arange(self.y0, y_stop + 1, stride, dtype=np.int32)
+        xs = np.arange(self.x0, x_stop + 1, stride, dtype=np.int32)
+        if ys.size == 0 or xs.size == 0:
+            raise RuntimeError(f"scroll {self.scroll_id} has no valid crop coordinates")
+        if ys[-1] != y_stop:
+            ys = np.append(ys, np.int32(y_stop))
+        if xs[-1] != x_stop:
+            xs = np.append(xs, np.int32(x_stop))
+
+        integral = self.mask_integral
+        coverage = (
+            integral[np.ix_(ys + self.ctx, xs + self.ctx)]
+            - integral[np.ix_(ys, xs + self.ctx)]
+            - integral[np.ix_(ys + self.ctx, xs)]
+            + integral[np.ix_(ys, xs)]
+        )
+        positions = np.argwhere(coverage >= 0.30 * self.ctx * self.ctx)
+        if positions.size == 0:
+            raise RuntimeError(f"scroll {self.scroll_id} has no crops with 30% mask coverage")
+        coords = np.column_stack((ys[positions[:, 0]], xs[positions[:, 1]])).astype(
+            np.int32,
+            copy=False,
+        )
+
+        blocks = np.unique(coords // self.block_px, axis=0)
+        if len(blocks) == 1:
+            holdout_count = max(1, min(len(coords) - 1, round(len(coords) * holdout_frac)))
+            order = np.lexsort((coords[:, 1], coords[:, 0]))
+            monitor_mask = np.zeros(len(coords), dtype=bool)
+            monitor_mask[order[::max(1, len(coords) // holdout_count)][:holdout_count]] = True
+        else:
+            holdout_count = max(1, min(len(blocks) - 1, round(len(blocks) * holdout_frac)))
+            scores = np.array([
+                ((int(by) * 73856093) ^ (int(bx) * 19349663) ^ self.scroll_id)
+                for by, bx in blocks
+            ], dtype=np.int64)
+            holdout_blocks = blocks[np.argsort(scores, kind="stable")[:holdout_count]]
+            block_width = int(blocks[:, 1].max()) + 1
+            holdout_keys = holdout_blocks[:, 0] * block_width + holdout_blocks[:, 1]
+            coord_blocks = coords // self.block_px
+            coord_keys = coord_blocks[:, 0] * block_width + coord_blocks[:, 1]
+            monitor_mask = np.isin(coord_keys, holdout_keys)
+
+        train_coords = coords[~monitor_mask]
+        monitor_coords = coords[monitor_mask]
+        if len(train_coords) == 0 or len(monitor_coords) == 0:
+            raise RuntimeError(
+                f"scroll {self.scroll_id} cannot form non-empty train and monitor splits"
+            )
+        return train_coords, monitor_coords
 
     def _norm(self, blk):
         b = (blk - self.mean) / self.std
@@ -114,29 +182,11 @@ class CropSampler:
         """return (n, 1, D, ctx, ctx) float32 tensor or None if too few valid tiles."""
         ctx, D = self.ctx, self.D
         z_range = max(0, self.z1 - self.z0 - D)
-        want_hold = (self.role == "monitor")
-        out, tries = [], 0
-        # Sparse fragments can have <1% monitor acceptance after the scattered
-        # holdout and papyrus-coverage gates. Integral-mask checks make a generous
-        # retry budget cheap while avoiding probabilistic monitor failures.
-        max_tries = max(10_000, n * 2_000)
-        min_valid = 0.30 * ctx * ctx
-        while len(out) < n and tries < max_tries:
-            tries += 1
-            yy = int(rng.integers(self.y0, max(self.y0 + 1, self.y1 - ctx)))
-            xx = int(rng.integers(self.x0, max(self.x0 + 1, self.x1 - ctx)))
-            if self._is_holdout(yy, xx) != want_hold:
-                continue
-            # require at least 30% mask coverage inside the crop
-            integral = self.mask_integral
-            valid_pixels = (
-                integral[yy + ctx, xx + ctx]
-                - integral[yy, xx + ctx]
-                - integral[yy + ctx, xx]
-                + integral[yy, xx]
-            )
-            if valid_pixels < min_valid:
-                continue
+        coords = self._monitor_coords if self.role == "monitor" else self._train_coords
+        out = []
+        indices = rng.integers(0, len(coords), size=n)
+        for index in indices:
+            yy, xx = (int(value) for value in coords[index])
             z = self.z0 if z_range == 0 else int(rng.integers(self.z0, self.z0 + z_range + 1))
             try:
                 blk = np.array(self.vol[z:z + D, yy:yy + ctx, xx:xx + ctx], dtype=np.float32)
@@ -152,11 +202,12 @@ class CropSampler:
 
 
 class MultiSampler:
-    """round-robins over per-scroll samplers."""
+    """round-robins over child samplers."""
 
-    def __init__(self, samplers):
+    def __init__(self, samplers, name="sampler group"):
         self.samplers = [s for s in samplers if s is not None]
         self.cursor = 0
+        self.name = str(name)
 
     def sample(self, n, rng):
         if not self.samplers:
@@ -172,11 +223,30 @@ class MultiSampler:
             part = sampler.sample(count, rng)
             got = 0 if part is None else int(part.shape[0])
             if got != count:
+                child_name = getattr(sampler, "name", None)
+                if child_name is None:
+                    child_name = f"scroll {sampler.scroll_id}"
                 raise RuntimeError(
-                    f"scroll {sampler.scroll_id} supplied {got}/{count} requested crops"
+                    f"{child_name} supplied {got}/{count} requested crops"
                 )
             parts.append(part)
         return torch.cat(parts, dim=0)
+
+
+def make_physical_sampler(samplers):
+    """balance physical scrolls first, then their component segments."""
+    by_id = {sampler.scroll_id: sampler for sampler in samplers}
+    assigned = set()
+    groups = []
+    for name, scroll_ids in DEFAULT_TRAIN_SCROLL_DICT.items():
+        members = [by_id[scroll_id] for scroll_id in scroll_ids if scroll_id in by_id]
+        if members:
+            groups.append(MultiSampler(members, name=name))
+            assigned.update(sampler.scroll_id for sampler in members)
+    for sampler in samplers:
+        if sampler.scroll_id not in assigned:
+            groups.append(MultiSampler([sampler], name=str(sampler.scroll_id)))
+    return MultiSampler(groups, name="physical scrolls"), len(groups)
 
 
 # ── spatial block mask ────────────────────────────────────────────────────────
@@ -295,6 +365,8 @@ def main():
                     help="abort rather than silently skipping any requested scroll")
     ap.add_argument("--include-test-scrolls", action="store_true",
                     help="append the five configured unseen test zarrs to the sampler")
+    ap.add_argument("--physical-round-robin", action="store_true",
+                    help="balance physical scrolls before their component segments")
     ap.add_argument("--init-weights", default=None,
                     help="warm-start the backbone from a prior MAE checkpoint")
     ap.add_argument("--freeze-loaded-backbone", action="store_true",
@@ -438,7 +510,7 @@ def main():
         sc = CropSampler(sid, zarr_path, cfg, y0, y1, x0, x1, "train",
                          holdout_frac=args.holdout_frac)
         mc = CropSampler(sid, zarr_path, cfg, y0, y1, x0, x1, "monitor",
-                         holdout_frac=args.holdout_frac)
+                 holdout_frac=args.holdout_frac, shared=sc)
         train_samplers.append(sc)
         mon_samplers.append(mc)
 
@@ -450,10 +522,22 @@ def main():
     if not train_samplers:
         raise RuntimeError("no usable scrolls")
 
-    print(f"[mae] balanced round-robin across {len(train_samplers)}/{len(scroll_ids)} scrolls")
-
-    train_s = MultiSampler(train_samplers)
-    mon_s = MultiSampler(mon_samplers)
+    if args.physical_round_robin:
+        train_s, physical_count = make_physical_sampler(train_samplers)
+        mon_s, monitor_physical_count = make_physical_sampler(mon_samplers)
+        if physical_count != monitor_physical_count:
+            raise RuntimeError("train and monitor physical groups do not match")
+        print(
+            f"[mae] balanced round-robin across {physical_count} physical scrolls "
+            f"and {len(train_samplers)}/{len(scroll_ids)} surfaces"
+        )
+    else:
+        train_s = MultiSampler(train_samplers)
+        mon_s = MultiSampler(mon_samplers)
+        print(
+            f"[mae] balanced round-robin across "
+            f"{len(train_samplers)}/{len(scroll_ids)} surfaces"
+        )
 
     if args.dry_run:
         xb = train_s.sample(args.batch_size, rng)
