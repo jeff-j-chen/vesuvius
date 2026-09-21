@@ -78,7 +78,7 @@ Run a model on every single test scroll. 5 test patches correspond to 5 test scr
 | `20231210121321` | Paris4 | PHercParis4 | x 75% | 78keV surface pooled to 28 layers |
 | `20230301213755` | Fr143 | PHercParis2 | x 75% | 54keV surface TIFF stack resampled from 3.24µm |
 | `20231205222200` | Cr4 Fr8 | PHerc51 | x 75% | 53keV surface TIFF stack resampled from 3.24µm |
-| `20230301213423` | Fr34 | PHercParis1 | x 75% | 54keV surface TIFF stack resampled from 3.24µm |
+| `t20230301213423` | Fr34 | PHercParis1 | x 75% | 54keV surface TIFF stack resampled from 3.24µm |
 | `20250511003658` | tifxyz segment | PHerc0343P | x 75% | 8.64µm / 116keV surface resampled to 28 layers |
 | `20231201215900` | Cr1 Fr3 | PHerc1667 | x 75% | 70keV flattened TIFF stack resampled from 3.24µm |
 | `20260221022814` | auto-grown 405 | PHerc0841 | x 75% | 9.366µm / 113keV surface cropped to `y=14656:21560, x=0:5248` |

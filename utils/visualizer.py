@@ -63,6 +63,20 @@ except Exception:
 # single knob for all scroll prediction colormaps. high score (ink) = bright yellow.
 SCROLL_CMAP = 'inferno_nan'
 
+
+def _patch_character_f1_layout(scrolls):
+    """build one train/valid multiline chart for each individual patch."""
+    return {
+        f"patch_{patch_id}": [
+            "Multiline",
+            [
+                f"Character/Patch/{patch_id}/F1/Train",
+                f"Character/Patch/{patch_id}/F1/Valid",
+            ],
+        ]
+        for patch_id in dict.fromkeys(int(scroll.scroll_id) for scroll in scrolls)
+    }
+
 def group_by_depth(coords):
     """group tile coordinates by their depth offset"""
     grouped = defaultdict(list)
@@ -113,86 +127,10 @@ class _RegionCache:
         return self.vol[idx]   # outside the cached box (shouldn't happen for a probe)
 
 
-def _process_chunk(valid, pmap, pmap_tta, model, device, tile, h_small, w_small, 
-                   transforms, collapse_fn, infer_bs, also_tta, tta):
-    """helper for predict_tiles: run inference on a chunk of tiles and update pmaps.
-    extracted to enable chunked processing that prevents OOM from loading all tiles at once."""
-    import torch
-    from tqdm import tqdm
-
-    # use the EAGER forward for inference. the figure/probe predict path feeds variable batch/
-    # tile shapes that make the compiled model recompile every chunk -- dynamo/inductor runs on
-    # the CPU while the GPU sits at ~0% (the "predict chunk is crawling" symptom). training uses
-    # one fixed shape, so it keeps the compiled hot path.
-    _fwx = getattr(model, "_eager_forward_with_extras", None)
-    def _infer(t, surface_depth=None, surface_confidence=None):
-        kwargs = {
-            "teacher_surface_depth": surface_depth,
-            "teacher_surface_confidence": surface_confidence,
-        }
-        return _fwx(t, **kwargs)[0] if _fwx is not None else model(t, **kwargs)
-
-    # match training precision (train.py forwards under autocast): fp32 eval inference is
-    # 2-4x slower on Ampere for no benefit and drifts from the fp16 the model trained under.
-    with torch.no_grad(), autocast(device, enabled=device == "cuda"):
-        for i in tqdm(range(0, len(valid), infer_bs), desc="Predict chunk", leave=False):
-            chunk   = valid[i:i + infer_bs]
-            b_blocks = [item[0] for item in chunk]
-            b_idx = [(item[1], item[2]) for item in chunk]
-            bt = torch.from_numpy(np.stack(b_blocks)).float().unsqueeze(1).to(device)
-            has_teacher = len(chunk[0]) == 5
-            if has_teacher:
-                b_depth = torch.from_numpy(np.stack([item[3] for item in chunk])).float().unsqueeze(1).to(device)
-                b_confidence = torch.from_numpy(np.stack([item[4] for item in chunk])).float().unsqueeze(1).to(device)
-            else:
-                b_depth = b_confidence = None
-
-            if also_tta:
-                # ONE read of the blocks -> BOTH the regular (identity) and TTA-averaged maps.
-                # TTA re-augments the already-loaded tiles in-memory; it does NOT re-read disk.
-                prob_sum = None; id_probs = None
-                for j, op in enumerate(transforms):
-                    p = torch.sigmoid(collapse_fn(_infer(
-                        op(bt).contiguous(),
-                        op(b_depth).contiguous() if b_depth is not None else None,
-                        op(b_confidence).contiguous() if b_confidence is not None else None,
-                    )))
-                    if j == 0:
-                        id_probs = p
-                    prob_sum = p if prob_sum is None else prob_sum + p
-                reg_preds = id_probs.cpu().numpy().flatten()
-                tta_preds = (prob_sum / len(transforms)).cpu().numpy().flatten()
-                for (y_off, x_off), rp, tp in zip(b_idx, reg_preds, tta_preds):
-                    yi = y_off // tile; xi = x_off // tile
-                    if 0 <= yi < h_small and 0 <= xi < w_small:
-                        pmap[yi, xi] = float(rp); pmap_tta[yi, xi] = float(tp)
-            elif tta:
-                prob_sum = None
-                for op in transforms:
-                    p = torch.sigmoid(collapse_fn(_infer(
-                        op(bt).contiguous(),
-                        op(b_depth).contiguous() if b_depth is not None else None,
-                        op(b_confidence).contiguous() if b_confidence is not None else None,
-                    )))
-                    prob_sum = p if prob_sum is None else prob_sum + p
-                preds = (prob_sum / len(transforms)).cpu().numpy().flatten()
-                for (y_off, x_off), pred in zip(b_idx, preds):
-                    yi = y_off // tile; xi = x_off // tile
-                    if 0 <= yi < h_small and 0 <= xi < w_small:
-                        pmap[yi, xi] = float(pred)
-            else:
-                preds = torch.sigmoid(collapse_fn(_infer(bt, b_depth, b_confidence))).cpu().numpy().flatten()
-                for (y_off, x_off), pred in zip(b_idx, preds):
-                    yi = y_off // tile; xi = x_off // tile
-                    if 0 <= yi < h_small and 0 <= xi < w_small:
-                        pmap[yi, xi] = float(pred)
-            del bt
-
-
-def _process_chunk_mt(valid, pm_sum, pm_cnt, pm_sum_t, pm_cnt_t, model, device,
-                      tile, out_tile, mt_n, h_small, w_small, tf, tf_inv,
-                      infer_bs, also_tta, tta):
-    """multitile variant of _process_chunk: each window emits an (n,n) sub-tile grid that is
+def _process_chunk(valid, pm_sum, pm_cnt, pm_sum_t, pm_cnt_t, model, device,
+                   tile, out_tile, mt_n, h_small, w_small, tf, tf_inv,
+                   infer_bs, also_tta, tta):
+    """process windows that each emit an (n,n) sub-tile grid that is
     scattered into the out_tile-resolution map with sum/count accumulators (windows overlap, so
     a cell gets several contributions that are averaged later). tta undoes each input transform
     on the grid before accumulating so orientations stay aligned."""
@@ -273,10 +211,8 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     per tile. for a scroll ~8000px wide at tile=16 this is ~500 fewer zarr calls
     per row, cutting read time by ~10-100x while producing identical results.
 
-    tta: when True, average the model output over the 6 spatial dihedral transforms
-    (identity, h/v flip, 180, +/-90 rot) of each tile. the model emits a tile scalar
-    (or a 4D map collapsed via max), so the transforms need no inverse -- we just mean
-    the sigmoid. suppresses hallucinations that are inconsistent across orientations.
+    tta: when True, average the model output over spatial transforms after undoing
+    each transform on the multitile output grid.
     """
     from collections import defaultdict
 
@@ -284,15 +220,12 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     depth = config.data.depth
     H = y_range[1] - y_range[0]
     W = x_range[1] - x_range[0]
-    # multitile emits a grid of sub-tile logits per window, so its output map is at sub-tile
-    # (e.g. 8px) resolution; single-tile emits one logit per window -> tile-resolution map.
-    # out_tile == tile in single mode, so h_small/w_small are unchanged there.
-    mt = bool(getattr(config.model, "multitile", False))
-    mt_n = int(getattr(config.model, "multitile_grid", 4)) if mt else 1
-    out_tile = int(getattr(config.model, "multitile_subtile", 8)) if mt else tile
+    if not bool(getattr(config.model, "multitile", True)):
+        raise ValueError("predict_tiles requires multitile model outputs")
+    mt_n = int(getattr(config.model, "multitile_grid", 4))
+    out_tile = int(getattr(config.model, "multitile_subtile", 8))
     h_small = H // out_tile
     w_small = W // out_tile
-    pmap = np.full((h_small, w_small), np.nan, dtype=np.float32)
 
     tile_scale = (32.0 / tile) ** 2 * (8.0 / max(depth, 1))
     infer_bs = max(1, min(int(256 * tile_scale), 256))
@@ -391,36 +324,31 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     else:
         _tf = _flips                             # id + h + v + 180 -> 4 forwards (default)
 
-
-    def _collapse(lg):
-        return lg.flatten(1).max(dim=1, keepdim=True).values if lg.dim() == 4 else lg
-
     pmap_tta = np.full((h_small, w_small), np.nan, dtype=np.float32) if also_tta else None
 
     # multitile: the model output is a (B, n*n) spatial grid, so a flipped/rotated INPUT yields a
     # flipped/rotated OUTPUT grid. to average tta consistently we undo the transform on the grid
     # (dims 1=y,2=x) before scattering. also allocate sum/count accumulators for overlap averaging
     # (32px windows at 16px stride overlap 4x per sub-tile cell).
-    if mt:
-        _inv_flips = (
-            lambda g: g,
-            lambda g: torch.flip(g, dims=[2]),        # undo h-flip (x)
-            lambda g: torch.flip(g, dims=[1]),        # undo v-flip (y)
-            lambda g: torch.flip(g, dims=[1, 2]),     # undo 180
+    _inv_flips = (
+        lambda g: g,
+        lambda g: torch.flip(g, dims=[2]),        # undo h-flip (x)
+        lambda g: torch.flip(g, dims=[1]),        # undo v-flip (y)
+        lambda g: torch.flip(g, dims=[1, 2]),     # undo 180
+    )
+    if _mode == "dihedral":
+        _tf_inv = _inv_flips + (
+            lambda g: torch.rot90(g, -1, dims=[1, 2]),  # undo +90
+            lambda g: torch.rot90(g, 1, dims=[1, 2]),   # undo -90
         )
-        if _mode == "dihedral":
-            _tf_inv = _inv_flips + (
-                lambda g: torch.rot90(g, -1, dims=[1, 2]),  # undo +90
-                lambda g: torch.rot90(g, 1, dims=[1, 2]),   # undo -90
-            )
-        elif _mode in ("light", "hflip", "2"):
-            _tf_inv = _inv_flips[:2]
-        else:
-            _tf_inv = _inv_flips
-        pm_sum = np.zeros((h_small, w_small), dtype=np.float32)
-        pm_cnt = np.zeros((h_small, w_small), dtype=np.float32)
-        pm_sum_t = np.zeros((h_small, w_small), dtype=np.float32) if also_tta else None
-        pm_cnt_t = np.zeros((h_small, w_small), dtype=np.float32) if also_tta else None
+    elif _mode in ("light", "hflip", "2"):
+        _tf_inv = _inv_flips[:2]
+    else:
+        _tf_inv = _inv_flips
+    pm_sum = np.zeros((h_small, w_small), dtype=np.float32)
+    pm_cnt = np.zeros((h_small, w_small), dtype=np.float32)
+    pm_sum_t = np.zeros((h_small, w_small), dtype=np.float32) if also_tta else None
+    pm_cnt_t = np.zeros((h_small, w_small), dtype=np.float32) if also_tta else None
 
     def _read_row(y_off):
         """read + normalize + slice ONE y-row into a list of (blk, y_off, x_off) tiles.
@@ -441,9 +369,9 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
                 x_abs = x_range[0] + x_off
                 sy0 = y_abs - pad
                 sx0 = x_abs - pad
-                target_size = min(mt_n * out_tile if mt else tile, sp)
-                target_y = y_abs + (tile - target_size) // 2 if mt else y_abs
-                target_x = x_abs + (tile - target_size) // 2 if mt else x_abs
+                target_size = min(mt_n * out_tile, sp)
+                target_y = y_abs + (tile - target_size) // 2
+                target_x = x_abs + (tile - target_size) // 2
                 tys, tye = max(0, target_y), min(map_h, target_y + target_size)
                 txs, txe = max(0, target_x), min(map_w, target_x + target_size)
                 selected_start = depth_start
@@ -591,13 +519,9 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         t0 = time.perf_counter()
-        if mt:
-            _process_chunk_mt(valid, pm_sum, pm_cnt, pm_sum_t, pm_cnt_t, model, device,
-                              tile, out_tile, mt_n, h_small, w_small, _tf, _tf_inv,
-                              infer_bs, also_tta, tta)
-        else:
-            _process_chunk(valid, pmap, pmap_tta, model, device, tile, h_small, w_small,
-                           _tf, _collapse, infer_bs, also_tta, tta)
+        _process_chunk(valid, pm_sum, pm_cnt, pm_sum_t, pm_cnt_t, model, device,
+                   tile, out_tile, mt_n, h_small, w_small, _tf, _tf_inv,
+                   infer_bs, also_tta, tta)
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         pred_secs += time.perf_counter() - t0
@@ -655,12 +579,11 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # multitile: average the overlapping window contributions per sub-tile cell
-    if mt:
-        with np.errstate(invalid="ignore"):
-            pmap = np.where(pm_cnt > 0, pm_sum / pm_cnt, np.nan).astype(np.float32)
-            if also_tta:
-                pmap_tta = np.where(pm_cnt_t > 0, pm_sum_t / pm_cnt_t, np.nan).astype(np.float32)
+    # average the overlapping window contributions per sub-tile cell
+    with np.errstate(invalid="ignore"):
+        pmap = np.where(pm_cnt > 0, pm_sum / pm_cnt, np.nan).astype(np.float32)
+        if also_tta:
+            pmap_tta = np.where(pm_cnt_t > 0, pm_sum_t / pm_cnt_t, np.nan).astype(np.float32)
 
     _tot = read_secs + pred_secs
     if _tot > 0:
@@ -861,6 +784,7 @@ class TensorboardVisualizer:
                     ]
                 ],
             },
+            "Patch_Character_F1": _patch_character_f1_layout(config.data.scrolls),
         }
 
         # training mode preloads training and evaluation assets
@@ -1626,6 +1550,8 @@ class TensorboardVisualizer:
                     epoch,
                 )
 
+        self.log_patch_character_f1(epoch, train_metrics, val_metrics)
+
         self.writer.add_scalar('Learning_Rate', learning_rate, epoch)
         self.writer.add_scalar('Time_Elapsed', time_elapsed, epoch)
 
@@ -1679,6 +1605,25 @@ class TensorboardVisualizer:
                 import traceback; traceback.print_exc()
 
         self.writer.flush()
+
+    def log_patch_character_f1(self, epoch, train_metrics, val_metrics):
+        """log paired character f1 series for each individual patch."""
+        train_values = train_metrics.get("per_patch_character_f1", {})
+        valid_values = val_metrics.get("per_patch_character_f1", {})
+        patch_ids = dict.fromkeys([*train_values, *valid_values])
+        for patch_id in patch_ids:
+            if patch_id in train_values:
+                self.writer.add_scalar(
+                    f"Character/Patch/{patch_id}/F1/Train",
+                    float(train_values[patch_id]),
+                    epoch,
+                )
+            if patch_id in valid_values:
+                self.writer.add_scalar(
+                    f"Character/Patch/{patch_id}/F1/Valid",
+                    float(valid_values[patch_id]),
+                    epoch,
+                )
 
     def log_confusion_matrix(self, train_metrics, val_metrics, epoch):
         """create and log confusion matrix visualization"""
@@ -1984,10 +1929,8 @@ class TensorboardVisualizer:
         if all_pred_data:
             # label map spans the full split extent along the split axis, shared range on the other
             # when fast_eval_figure is enabled, use the cropped full_y/full_x instead
-            # multitile predicts at sub-tile (8px) resolution, so label maps + split indices must
-            # use the sub-tile stride too; single-tile keeps tile_size.
-            _mt = bool(getattr(self.c.model, "multitile", False))
-            _out_tile = int(getattr(self.c.model, "multitile_subtile", 8)) if _mt else self.c.data.tile_size
+            # label maps and split indices use the multitile output stride
+            _out_tile = int(getattr(self.c.model, "multitile_subtile", 8))
             if getattr(self.c.tra, "fast_eval_figure", False) or self.manual_split:
                 # full_y and full_x were already cropped above
                 full_y_range = full_y
@@ -3110,9 +3053,8 @@ class TensorboardVisualizer:
 
         grouped = group_by_depth(coords)
         depth_offsets = sorted(grouped.keys())
-        # multitile predicts at sub-tile resolution -> build label maps at the same stride
-        _mt = bool(getattr(self.c.model, "multitile", False))
-        _out_tile = int(getattr(self.c.model, "multitile_subtile", 8)) if _mt else self.c.data.tile_size
+        # build label maps at the multitile output stride
+        _out_tile = int(getattr(self.c.model, "multitile_subtile", 8))
         label_binary, label_fraction, valid_tiles = self._compute_tile_maps(labels, mask, y_range, x_range, tile=_out_tile)
 
         depth_rows = []

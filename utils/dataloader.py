@@ -81,6 +81,11 @@ def needs_domain_ids(config: Config) -> bool:
     ])
 
 
+def needs_patch_ids(config: Config) -> bool:
+    """whether dataset samples must carry their individual patch identifier."""
+    return bool(getattr(config.tra, "per_scroll_metrics", False))
+
+
 def imread_gray(path):
     """grayscale PNG reader that survives huge (>1 Gpx) images. cv2.imread enforces a
     ~1.07 Gpx cap (and this build ignores CV_IO_MAX_IMAGE_PIXELS), raising on native 2.4um
@@ -1960,6 +1965,8 @@ class InkVolumeDataset(IterableDataset):
         result = [block_tensor, label, mask]
         if with_domain:
             result.append(torch.tensor(self.domain_id, dtype=torch.long))
+        if needs_patch_ids(self.c):
+            result.append(torch.tensor(self.scroll_id, dtype=torch.long))
         if component_ids is not None:
             result.append(component_ids)
         if target_offset_tensor is not None:
@@ -2154,12 +2161,8 @@ class DotPositiveDataset(IterableDataset):
         pad = (ctx - T) // 2 if use_ctx else 0
         mean, std, g_min, g_max = self._dm.norm_stats
         domain_id = self._dm.domain_id
-        mask_arr = np.asarray(self._dm.mask)
-        with_dann = bool(getattr(c.tra, "dann", False)) or bool(getattr(c.tra, "supcon_cross_frag", False))
-        # multitile mode: dot labels/masks must match InkVolumeDataset's [grid²] shape
-        mt = bool(getattr(c.model, "multitile", False))
-        mt_grid = max(1, int(getattr(c.model, "multitile_grid", 4))) if mt else 1
-        mt_sub  = max(1, int(getattr(c.model, "multitile_subtile", 8))) if mt else T
+        with_domain = needs_domain_ids(c)
+        mt_grid = max(1, int(getattr(c.model, "multitile_grid", 4)))
 
         for y0, x0 in coords:
             vol = self._dm.vol
@@ -2185,21 +2188,17 @@ class DotPositiveDataset(IterableDataset):
             block = (block - mean) / max(std, 1e-8)
             block = np.clip((block - g_min) / max(g_max - g_min, 1e-8), 0.0, 1.0)
             block_t = torch.from_numpy(np.ascontiguousarray(block, dtype=np.float32)).unsqueeze(0)
-            if mt:
-                # multitile: label = all-1 [grid²] (dot = confirmed ink); mask = all-1 [grid²]
-                # (all sub-tiles are fully positive; no boundary ambiguity at a dot location)
-                n2 = mt_grid * mt_grid
-                label_t = torch.ones(n2, dtype=torch.float32)
-                mask_t  = torch.ones(n2, dtype=torch.float32)
-            else:
-                mask_tile = mask_arr[y0:y0 + T, x0:x0 + T].astype(np.float32)
-                label_t = torch.tensor([1.0])
-                mask_t  = torch.from_numpy(mask_tile)
+            # dots are confirmed ink, so every multitile target is positive and valid
+            n2 = mt_grid * mt_grid
+            label_t = torch.ones(n2, dtype=torch.float32)
+            mask_t = torch.ones(n2, dtype=torch.float32)
             with_characters = bool(getattr(c.tra, "character_macro_metrics", False))
             with_offset = bool(getattr(c.data, "target_aware_ctx_jitter", False))
             extras = []
-            if with_dann:
+            if with_domain:
                 extras.append(torch.tensor(domain_id, dtype=torch.long))
+            if needs_patch_ids(c):
+                extras.append(torch.tensor(self._dm.scroll_id, dtype=torch.long))
             if with_characters:
                 extras.append(torch.zeros_like(label_t, dtype=torch.long))
             if with_offset:

@@ -14,7 +14,7 @@ from torch.cuda.amp.grad_scaler import GradScaler
 from tqdm import tqdm
 
 from utils.config import Config
-from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray, get_tile_pos_weight, needs_domain_ids
+from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray, get_tile_pos_weight, needs_domain_ids, needs_patch_ids
 from utils.hard_mining import HardMiningInjector, HardMiningManager
 from utils.model import create_model, supcon_loss
 from utils.surface import make_surface_targets_from_depth, surface_supervision_loss
@@ -113,6 +113,55 @@ def _per_domain_pr_auc(labels, scores, domains) -> dict[int, float]:
                 scores[selected],
             )["pr_auc"]
         )
+    return values
+
+
+def _metric_patch_ids(patch_ids, labels, mask) -> np.ndarray:
+    """expand sample patch ids to the valid multitile targets used by metrics."""
+    if patch_ids is None:
+        return np.empty(0, dtype=np.int64)
+    batch_size = int(labels.shape[0])
+    label_targets = labels.reshape(batch_size, -1)
+    valid_targets = mask.reshape(batch_size, -1)
+    if valid_targets.shape != label_targets.shape:
+        raise RuntimeError(
+            "multitile patch metrics require mask and label grids with matching shapes"
+        )
+    expanded = (
+        patch_ids.detach().cpu().reshape(-1, 1)
+        .expand(-1, label_targets.shape[1])
+        .numpy()
+        .flatten()
+    )
+    keep = (valid_targets > 0).detach().cpu().numpy().flatten()
+    return expanded[keep].astype(np.int64)
+
+
+def _per_patch_character_f1(
+    labels,
+    scores,
+    character_ids,
+    patch_ids,
+    score_threshold=0.5,
+) -> dict[int, float]:
+    """calculate character macro f1 independently for every represented patch."""
+    labels = np.asarray(labels).reshape(-1)
+    scores = np.asarray(scores).reshape(-1)
+    character_ids = np.asarray(character_ids).reshape(-1)
+    patch_ids = np.asarray(patch_ids).reshape(-1)
+    if not (labels.size == scores.size == character_ids.size == patch_ids.size):
+        raise ValueError("per-patch character metric arrays must have equal lengths")
+
+    values = {}
+    for patch_id in np.unique(patch_ids[patch_ids >= 0]):
+        selected = patch_ids == patch_id
+        metrics = calculate_character_metrics(
+            labels[selected],
+            scores[selected],
+            character_ids[selected],
+            score_threshold=score_threshold,
+        )
+        values[int(patch_id)] = float(metrics["character_f1_macro"])
     return values
 
 
@@ -2210,6 +2259,7 @@ class Trainer:
         scores = []
         character_ids_all = []
         domain_ids_all = []
+        patch_ids_all = []
         total_injected = 0
         dann_accuracy_total = 0.0
         grl_scale_total = 0.0
@@ -2241,6 +2291,9 @@ class Trainer:
             optional_index = 3
             domain_ids = batch[optional_index] if with_domain and len(batch) > optional_index else None
             optional_index += int(with_domain)
+            with_patch = needs_patch_ids(self.c)
+            batch_patch_ids = batch[optional_index] if with_patch and len(batch) > optional_index else None
+            optional_index += int(with_patch)
             batch_character_ids = (
                 batch[optional_index]
                 if bool(getattr(self.c.tra, "character_macro_metrics", False))
@@ -2306,6 +2359,9 @@ class Trainer:
                 len(self.train_loader) - batch_index,
             )
             total_injected += injected
+            if batch_patch_ids is not None and injected_indices:
+                batch_patch_ids = batch_patch_ids.clone()
+                batch_patch_ids[injected_indices] = -1
             if batch_surface_confidence is not None and injected_indices:
                 batch_surface_confidence[injected_indices] = 0
             if batch_depth_pair_active is not None and injected_indices:
@@ -2364,6 +2420,9 @@ class Trainer:
             scores.extend(batch_scores)
             character_ids_all.extend(batch_character_ids_out)
             domain_ids_all.extend(self._last_metric_domains.tolist())
+            patch_ids_all.extend(
+                _metric_patch_ids(batch_patch_ids, batch_labels, mask).tolist()
+            )
             context_value, bag_value, groupdro_value, cvar_value = self._last_character_objectives
             context_loss_total += context_value
             depth_consistency_loss_total += self._last_depth_consistency
@@ -2444,6 +2503,14 @@ class Trainer:
                 scores,
                 domain_ids_all,
             )
+            if bool(getattr(self.c.tra, "character_macro_metrics", False)):
+                metrics["per_patch_character_f1"] = _per_patch_character_f1(
+                    labels,
+                    scores,
+                    character_ids_all,
+                    patch_ids_all,
+                    score_threshold=float(getattr(self.c.tra, "character_score_threshold", 0.5)),
+                )
         metrics["scores"] = scores
         metrics["hard_injected"] = total_injected
 
@@ -2469,6 +2536,7 @@ class Trainer:
         scores = []
         character_ids_all = []
         domain_ids_all = []
+        patch_ids_all = []
 
         with torch.no_grad(), autocast(self.c.device, enabled=self.c.device == "cuda"):
             for batch in tqdm(
@@ -2482,6 +2550,9 @@ class Trainer:
                 with_domain = needs_domain_ids(self.c)
                 batch_domain_ids = batch[3] if with_domain and len(batch) > 3 else None
                 optional_index = 3 + int(with_domain)
+                with_patch = needs_patch_ids(self.c)
+                batch_patch_ids = batch[optional_index] if with_patch and len(batch) > optional_index else None
+                optional_index += int(with_patch)
                 batch_character_ids = (
                     batch[optional_index]
                     if bool(getattr(self.c.tra, "character_macro_metrics", False))
@@ -2558,6 +2629,9 @@ class Trainer:
                 preds.extend((batch_scores > 0.5).astype(int))
                 scores.extend(batch_scores)
                 character_ids_all.extend(batch_chars)
+                patch_ids_all.extend(
+                    _metric_patch_ids(batch_patch_ids, batch_labels, mask).tolist()
+                )
                 if batch_domain_ids is not None:
                     batch_domains = batch_domain_ids.view(-1, 1).expand_as(batch_labels).numpy().flatten()
                     domain_ids_all.extend(
@@ -2581,6 +2655,14 @@ class Trainer:
                 scores,
                 domain_ids_all,
             )
+            if bool(getattr(self.c.tra, "character_macro_metrics", False)):
+                metrics["per_patch_character_f1"] = _per_patch_character_f1(
+                    labels,
+                    scores,
+                    character_ids_all,
+                    patch_ids_all,
+                    score_threshold=float(getattr(self.c.tra, "character_score_threshold", 0.5)),
+                )
         metrics["scores"] = scores
         return metrics
 
