@@ -39,6 +39,14 @@ def _depth_quantiles_linear(x: np.ndarray, quantiles: tuple[float, ...]) -> list
     return out
 
 
+def _unit_intensity(raw: np.ndarray) -> np.ndarray:
+    """convert integer reconstruction values to a stable [0, 1] scale."""
+    if np.issubdtype(raw.dtype, np.integer):
+        scale = float(np.iinfo(raw.dtype).max)
+        return raw.astype(np.float32) / max(scale, 1.0)
+    return np.clip(raw.astype(np.float32), 0.0, 1.0)
+
+
 def _detect_strip(
     raw: np.ndarray,
     threshold_frac: float,
@@ -50,7 +58,7 @@ def _detect_strip(
     coarse_weight: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """return relative depth, confidence, and validity for one DHW strip."""
-    x = raw.astype(np.float32) / 255.0
+    x = _unit_intensity(raw)
     padded = np.pad(x, ((1, 1), (0, 0), (0, 0)), mode="edge")
     smooth = (padded[:-2] + 2.0 * padded[1:-1] + padded[2:]) * 0.25
 
@@ -114,27 +122,33 @@ def _write_overlays(
     z_start: int,
     z_end: int,
     output_dir: Path,
-    max_side: int,
-) -> None:
-    """write one downscaled red surface overlay for every input depth layer."""
+    output_height: int = 900,
+    overlay_alpha: float = 0.25,
+) -> list[Path]:
+    """write fixed-height layer views with the guessed surface marked in red."""
     height, width = depth_map.shape
-    scale = min(1.0, float(max_side) / max(height, width))
-    out_size = (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+    if output_height <= 0:
+        raise ValueError("output_height must be positive")
+    if not 0.0 <= overlay_alpha <= 1.0:
+        raise ValueError("overlay_alpha must be in [0, 1]")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_size = (max(1, int(round(width * output_height / height))), output_height)
     valid = confidence > 0
+    paths = []
 
     for depth in range(z_start, z_end):
-        layer = np.asarray(volume[depth], dtype=np.uint8)
+        layer = (_unit_intensity(np.asarray(volume[depth])) * 255.0).astype(np.uint8)
         gray = cv2.resize(layer, out_size, interpolation=cv2.INTER_AREA)
         selected = ((depth_map == depth) & valid).astype(np.uint8)
         selected = cv2.resize(selected, out_size, interpolation=cv2.INTER_NEAREST) > 0
         rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
         rgb[selected] = (
-            0.20 * rgb[selected].astype(np.float32)
-            + 0.80 * np.array([0.0, 0.0, 255.0], dtype=np.float32)
+            (1.0 - overlay_alpha) * rgb[selected].astype(np.float32)
+            + overlay_alpha * np.array([0.0, 0.0, 255.0], dtype=np.float32)
         ).astype(np.uint8)
         cv2.putText(
             rgb,
-            f"depth {depth:02d}  red=predicted papyrus-to-air surface",
+            f"depth {depth:02d}  red=guessed surface ({100.0 * overlay_alpha:.0f}%)",
             (24, 46),
             cv2.FONT_HERSHEY_SIMPLEX,
             1.0,
@@ -152,7 +166,48 @@ def _write_overlays(
             2,
             cv2.LINE_AA,
         )
-        cv2.imwrite(str(output_dir / f"depth_{depth:02d}.jpg"), rgb, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        path = output_dir / f"depth_{depth:02d}.jpg"
+        if not cv2.imwrite(str(path), rgb, [cv2.IMWRITE_JPEG_QUALITY, 94]):
+            raise RuntimeError(f"failed to write layer view: {path}")
+        paths.append(path)
+    return paths
+
+
+def _review_layer_views(paths: list[Path], start_index: int = 0) -> None:
+    """review pre-rendered layers in one persistent OpenCV window."""
+    if not paths:
+        raise ValueError("no layer views were provided")
+    if os.name == "posix" and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    ):
+        raise RuntimeError(
+            "OpenCV review requires DISPLAY or WAYLAND_DISPLAY; run --review-only "
+            "from a graphical shell"
+        )
+    frames = []
+    for path in paths:
+        frame = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        if frame is None:
+            raise FileNotFoundError(f"could not load layer view: {path}")
+        frames.append(frame)
+
+    index = min(max(int(start_index), 0), len(frames) - 1)
+    window = "surface layer review | up/down: layer | q/esc: close"
+    up_keys = {82, 2490368, 65362}
+    down_keys = {84, 2621440, 65364}
+    cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
+    try:
+        while True:
+            cv2.imshow(window, frames[index])
+            key = cv2.waitKeyEx(0)
+            if key in (27, ord("q"), ord("Q")):
+                break
+            if key in up_keys:
+                index = min(index + 1, len(frames) - 1)
+            elif key in down_keys:
+                index = max(index - 1, 0)
+    finally:
+        cv2.destroyWindow(window)
 
 
 def _regularize_surface_map(
@@ -563,9 +618,22 @@ def main() -> None:
     parser.add_argument("--elastic-fill-radius", type=int, default=8)
     parser.add_argument("--prefetch-blocks", type=int, default=2,
                         help="bounded background zarr reads to overlap I/O with detection")
+    parser.add_argument("--review", action="store_true",
+                        help="open generated layer views in a persistent OpenCV window")
+    parser.add_argument("--review-only", action="store_true",
+                        help="open existing layer views without rebuilding supervision")
+    parser.add_argument("--review-height", type=int, default=900)
+    parser.add_argument("--overlay-alpha", type=float, default=0.25)
     args = parser.parse_args()
 
     scroll_id = str(args.scroll_id)
+    review_root = Path(args.review_dir)
+    if args.review_only:
+        direct_paths = sorted(review_root.glob("depth_*.jpg"))
+        nested_paths = sorted((review_root / scroll_id).glob("depth_*.jpg"))
+        _review_layer_views(direct_paths or nested_paths)
+        return
+
     volume = zarr.open(os.path.join(args.zarr_dir, f"{scroll_id}.zarr"), mode="r")
     depth, height, width = map(int, volume.shape)
     if not (0 <= args.z_start < args.z_end <= depth):
@@ -577,7 +645,7 @@ def main() -> None:
     mask = mask > 0
 
     output_dir = Path(args.output_dir) / scroll_id
-    review_dir = Path(args.review_dir) / scroll_id
+    review_dir = review_root / scroll_id
     output_dir.mkdir(parents=True, exist_ok=True)
     review_dir.mkdir(parents=True, exist_ok=True)
     for stale_overlay in review_dir.glob("depth_*.jpg"):
@@ -705,6 +773,16 @@ def main() -> None:
     with open(output_dir / "metadata.json", "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)
 
+    overlay_paths = _write_overlays(
+        volume,
+        depth_map,
+        confidence,
+        args.z_start,
+        args.z_end,
+        review_dir,
+        output_height=args.review_height,
+        overlay_alpha=args.overlay_alpha,
+    )
     _write_depth_overview(
         depth_map,
         confidence,
@@ -716,8 +794,15 @@ def main() -> None:
     )
     print(f"[surface] depth labels -> {depth_path}")
     print(f"[surface] confidence -> {confidence_path}")
+    print(f"[surface] layer views -> {review_dir / 'depth_*.jpg'}")
     print(f"[surface] depth overview -> {review_dir / 'surface_depth_overview.jpg'}")
     print(f"[surface] valid inside mask: {100.0 * metadata['valid_fraction_inside_mask']:.2f}%")
+    if args.review:
+        mode_depth = max(histogram, key=histogram.get)
+        _review_layer_views(
+            overlay_paths,
+            start_index=int(mode_depth) - args.z_start,
+        )
 
 
 if __name__ == "__main__":

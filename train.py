@@ -304,6 +304,23 @@ def _physical_domain_group_losses(
     return group_ids, group_losses
 
 
+def _physical_patch_group_losses(
+    per_target_loss: torch.Tensor,
+    mask: torch.Tensor,
+    patch_ids: torch.Tensor,
+) -> tuple[list[int], list[torch.Tensor]]:
+    """reduce supervised target losses separately for each source patch."""
+    valid_patch_ids = patch_ids[patch_ids >= 0]
+    group_ids = []
+    group_losses = []
+    for patch_id in torch.unique(valid_patch_ids):
+        selected = (patch_ids == patch_id).unsqueeze(1) & (mask > 0)
+        if selected.any():
+            group_ids.append(int(patch_id.item()))
+            group_losses.append(per_target_loss[selected].mean())
+    return group_ids, group_losses
+
+
 def _connected_domain_clusters(
     domain_ids: list[int],
     similarities: dict[tuple[int, int], float],
@@ -394,14 +411,15 @@ class Trainer:
         domain_robust_modes = [
             bool(domain_gradient_mode),
             bool(getattr(config.tra, "physical_domain_groupdro", False)),
+            bool(getattr(config.tra, "physical_patch_groupdro", False)),
             bool(getattr(config.tra, "domain_vrex", False)),
             bool(getattr(config.tra, "domain_cvar", False)),
             bool(getattr(config.tra, "pcgrad", False)),
         ]
         if sum(domain_robust_modes) > 1:
             raise ValueError(
-                "domain-gradient, physical GroupDRO, V-REx, domain CVaR, and PCGrad "
-                "are mutually exclusive"
+                "domain-gradient, physical-domain GroupDRO, physical-patch GroupDRO, "
+                "V-REx, domain CVaR, and PCGrad are mutually exclusive"
             )
         if not 0.0 <= float(getattr(config.tra, "domain_gradient_blend", 1.0)) <= 1.0:
             raise ValueError("domain_gradient_blend must be in [0, 1]")
@@ -468,12 +486,14 @@ class Trainer:
         self.best_val_character = -1.0
         self._character_groupdro_log_weights: dict[int, float] = {}
         self._physical_domain_groupdro_log_weights: dict[int, float] = {}
+        self._physical_patch_groupdro_log_weights: dict[int, float] = {}
         self._domain_gradient_ema: dict[tuple[int, int], float] = {}
         self._last_character_objectives = (0.0, 0.0, 0.0, 0.0)
         self._last_depth_consistency = 0.0
         self._last_clam_loss = 0.0
         self._last_elr_loss = 0.0
         self._last_physical_domain_groupdro_loss = 0.0
+        self._last_physical_patch_groupdro_loss = 0.0
         self._last_deep_supervision_loss = 0.0
         self._last_dual_scale_gate = 0.0
         self._last_domain_gradient_cosines: dict[tuple[int, int], float] = {}
@@ -1201,7 +1221,8 @@ class Trainer:
             *zeros,
         )
 
-    def _train_batch(self, images, labels, mask, domain_ids=None, character_ids=None,
+    def _train_batch(self, images, labels, mask, domain_ids=None, patch_ids=None,
+                     character_ids=None,
                      target_offsets=None, epoch: int = 0, unlabeled_images=None,
                      surface_depth=None, surface_confidence=None,
                      depth_shift=None,
@@ -1212,6 +1233,7 @@ class Trainer:
         self._last_clam_loss = 0.0
         self._last_elr_loss = 0.0
         self._last_physical_domain_groupdro_loss = 0.0
+        self._last_physical_patch_groupdro_loss = 0.0
         self._last_deep_supervision_loss = 0.0
         self._last_dual_scale_gate = 0.0
         self._last_domain_gradient_cosines = {}
@@ -1244,6 +1266,8 @@ class Trainer:
         sample_pos = ((labels * mask).amax(dim=1) > 0.5).float()
         if domain_ids is not None:
             domain_ids = domain_ids.to(self.c.device, non_blocking=True).view(-1)
+        if patch_ids is not None:
+            patch_ids = patch_ids.to(self.c.device, non_blocking=True).view(-1)
         if target_offsets is not None:
             target_offsets = target_offsets.to(self.c.device, non_blocking=True).view(B, 2)
         if depth_shift is not None:
@@ -1498,6 +1522,28 @@ class Trainer:
                 if robust_loss is not None:
                     primary_loss = robust_loss
                     self._last_physical_domain_groupdro_loss = float(
+                        robust_loss.detach()
+                    )
+            if bool(getattr(self.c.tra, "physical_patch_groupdro", False)):
+                if patch_ids is None:
+                    raise RuntimeError("physical-patch GroupDRO requires patch IDs")
+                patch_group_ids, patch_group_losses = _physical_patch_group_losses(
+                    per_target_loss,
+                    mask,
+                    patch_ids,
+                )
+                robust_loss, _ = character_groupdro_loss(
+                    patch_group_ids,
+                    patch_group_losses,
+                    self._physical_patch_groupdro_log_weights,
+                    eta=float(getattr(self.c.tra, "physical_patch_groupdro_eta", 0.05)),
+                    max_ratio=float(
+                        getattr(self.c.tra, "physical_patch_groupdro_max_ratio", 3.0)
+                    ),
+                )
+                if robust_loss is not None:
+                    primary_loss = robust_loss
+                    self._last_physical_patch_groupdro_loss = float(
                         robust_loss.detach()
                     )
             if bool(getattr(self.c.tra, "domain_vrex", False)) and domain_group_losses:
@@ -2268,6 +2314,7 @@ class Trainer:
         bag_rank_loss_total = 0.0
         groupdro_loss_total = 0.0
         physical_domain_groupdro_loss_total = 0.0
+        physical_patch_groupdro_loss_total = 0.0
         deep_supervision_loss_total = 0.0
         dual_scale_gate_total = 0.0
         dual_scale_gate_batches = 0
@@ -2386,6 +2433,7 @@ class Trainer:
                 batch_labels,
                 mask,
                 domain_ids=domain_ids,
+                patch_ids=batch_patch_ids,
                 character_ids=batch_character_ids,
                 target_offsets=batch_target_offsets,
                 epoch=epoch,
@@ -2429,6 +2477,7 @@ class Trainer:
             bag_rank_loss_total += bag_value
             groupdro_loss_total += groupdro_value
             physical_domain_groupdro_loss_total += self._last_physical_domain_groupdro_loss
+            physical_patch_groupdro_loss_total += self._last_physical_patch_groupdro_loss
             deep_supervision_loss_total += self._last_deep_supervision_loss
             if self._last_dual_scale_gate > 0:
                 dual_scale_gate_total += self._last_dual_scale_gate
@@ -2480,6 +2529,9 @@ class Trainer:
         metrics["character_groupdro_loss"] = groupdro_loss_total / len(self.train_loader)
         metrics["physical_domain_groupdro_loss"] = (
             physical_domain_groupdro_loss_total / len(self.train_loader)
+        )
+        metrics["physical_patch_groupdro_loss"] = (
+            physical_patch_groupdro_loss_total / len(self.train_loader)
         )
         metrics["deep_supervision_loss"] = deep_supervision_loss_total / len(self.train_loader)
         metrics["dual_scale_gate"] = (
@@ -2798,6 +2850,7 @@ class Trainer:
             ("character_bag_ranking_loss", "Aux/CharacterBagRanking"),
             ("character_groupdro_loss", "Aux/CharacterGroupDRO"),
             ("physical_domain_groupdro_loss", "Aux/PhysicalDomainGroupDRO"),
+            ("physical_patch_groupdro_loss", "Aux/PhysicalPatchGroupDRO"),
             ("deep_supervision_loss", "Aux/SparseDeepSupervision"),
             ("dual_scale_gate", "Architecture/DualScaleGate"),
             ("character_cvar_loss", "Aux/CharacterCVaR"),

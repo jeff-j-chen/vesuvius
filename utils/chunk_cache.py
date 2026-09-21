@@ -52,6 +52,9 @@ class SelectiveChunkVolume:
                 array = np.clip(array, 0.0, 1.0)
         return np.ascontiguousarray(array, dtype=self.dtype)
 
+    def _prepare_cached_array(self, array) -> np.ndarray:
+        return np.ascontiguousarray(array, dtype=self.source_dtype)
+
     def preload(self, spatial_chunks: Iterable[tuple[int, int]], source, workers: int = 8) -> None:
         requested = sorted(set(spatial_chunks))
         missing = [key for key in requested if key not in self._cache]
@@ -70,7 +73,7 @@ class SelectiveChunkVolume:
             cy, cx = key
             y0, x0 = cy * chunk_y, cx * chunk_x
             y1, x1 = min(y0 + chunk_y, height), min(x0 + chunk_x, width)
-            array = self._prepare_array(source[:, y0:y1, x0:x1])
+            array = self._prepare_cached_array(source[:, y0:y1, x0:x1])
             array.setflags(write=False)
             return key, array
 
@@ -138,7 +141,7 @@ class SelectiveChunkVolume:
             source = self._open_source()
             return self._prepare_array(source[z_slice, y_slice, x_slice])
 
-        output = np.empty(out_shape, dtype=self.dtype)
+        output = np.empty(out_shape, dtype=self.source_dtype)
         for cy, cx in required:
             cached = self._cache[(cy, cx)]
             global_y0, global_x0 = cy * chunk_y, cx * chunk_x
@@ -153,7 +156,7 @@ class SelectiveChunkVolume:
                 ys - global_y0:ye - global_y0,
                 xs - global_x0:xe - global_x0,
             ]
-        return output
+        return self._prepare_array(output)
 
 
 _CACHE_REGISTRY: dict[str, SelectiveChunkVolume] = {}

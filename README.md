@@ -31,7 +31,7 @@ and test zarr before the selected arms and intentionally produces no evaluation 
 
 ```bash
 python3 campaign_archs_29.py --dry-run
-python3 campaign_archs_29.py --only baseline
+python3 campaign_archs_29.py --only physical_groupdro
 python3 campaign_archs_29.py --from domain_vrex
 ```
 

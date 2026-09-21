@@ -5,7 +5,7 @@ of the two explicitly fragment-only controls. No arm renders evaluation figures.
 
 Usage:
     python3 campaign_archs_29.py --dry-run
-    python3 campaign_archs_29.py --only baseline
+    python3 campaign_archs_29.py --only physical_groupdro
     python3 campaign_archs_29.py --from domain_vrex
 """
 from __future__ import annotations
@@ -179,7 +179,7 @@ def _test(tid: str, **overrides) -> dict:
         "mid_2d_unet": True,
         "gated_stems": True,
         "norm_mode": "ibn_full",
-        "compile_model": True,
+        "compile_model": False,
     }
     test.update(overrides)
     return test
@@ -188,32 +188,45 @@ def _test(tid: str, **overrides) -> dict:
 TESTS = [
     # Campaign 28 lock-in and attempts to retain conflict weighting without
     # sacrificing the new-domain gains of mid-3D/2D plus gated stems.
-    _test("baseline"),
-    _test(
-        "gradient_conflict",
-        domain_gradient_mode="conflict_weighted",
-        domain_gradient_threshold=0.8,
-        domain_gradient_strength=8.0,
-        compile_model=False,
-    ),
-    _test(
-        "gradient_conflict_blend",
-        domain_gradient_mode="conflict_weighted",
-        domain_gradient_threshold=0.8,
-        domain_gradient_strength=8.0,
-        domain_gradient_blend=0.5,
-        compile_model=False,
-    ),
+    # Completed: baseline, gradient_conflict, gradient_conflict_blend.
+    # _test("baseline"),
+    # _test(
+    #     "gradient_conflict",
+    #     domain_gradient_mode="conflict_weighted",
+    #     domain_gradient_threshold=0.8,
+    #     domain_gradient_strength=8.0,
+    # ),
+    # _test(
+    #     "gradient_conflict_blend",
+    #     domain_gradient_mode="conflict_weighted",
+    #     domain_gradient_threshold=0.8,
+    #     domain_gradient_strength=8.0,
+    #     domain_gradient_blend=0.5,
+    # ),
     _test(
         "physical_groupdro",
         physical_domain_groupdro=True,
         physical_domain_groupdro_eta=0.05,
         physical_domain_groupdro_max_ratio=3.0,
     ),
+    _test(
+        "physical_patch_groupdro",
+        physical_patch_groupdro=True,
+        physical_patch_groupdro_eta=0.05,
+        physical_patch_groupdro_max_ratio=3.0,
+    ),
+    _test(
+        "coordinate_hash_split",
+        coordinate_hash_split=True,
+        coordinate_hash_block_size=512,
+        coordinate_hash_valid_fraction=0.25,
+        coordinate_hash_seed=29,
+    ),
 
     # New optimization and preservation mechanisms.
     _test("domain_vrex", domain_vrex=True, domain_vrex_lambda=1.0),
-    _test("domain_cvar", domain_cvar=True, domain_cvar_alpha=0.35),
+    # Completed: domain_cvar.
+    # _test("domain_cvar", domain_cvar=True, domain_cvar_alpha=0.35),
     _test("pcgrad", pcgrad=True, compile_model=False),
     _test("cue_dropout", cue_dropout=0.33),
     _test("model_ema", model_ema=True, model_ema_decay=0.995),
@@ -334,11 +347,37 @@ def build_config(test: dict):
     config.data.ring_shell_r = int(test.get("ring_shell_r", 4))
     config.data.multitile_pos_only = bool(test.get("multitile_pos_only", True))
     config.data.depth = int(test.get("depth", 8))
+    config.data.coordinate_hash_split = bool(test.get("coordinate_hash_split", False))
+    config.data.coordinate_hash_block_size = int(
+        test.get("coordinate_hash_block_size", 512)
+    )
+    config.data.coordinate_hash_valid_fraction = float(
+        test.get("coordinate_hash_valid_fraction", 0.25)
+    )
+    config.data.coordinate_hash_seed = int(test.get("coordinate_hash_seed", 29))
 
     config.tra.domain_gradient_mode = str(test.get("domain_gradient_mode", ""))
     config.tra.domain_gradient_threshold = float(test.get("domain_gradient_threshold", 0.0))
     config.tra.domain_gradient_strength = float(test.get("domain_gradient_strength", 4.0))
     config.tra.domain_gradient_blend = float(test.get("domain_gradient_blend", 1.0))
+    config.tra.physical_domain_groupdro = bool(
+        test.get("physical_domain_groupdro", False)
+    )
+    config.tra.physical_domain_groupdro_eta = float(
+        test.get("physical_domain_groupdro_eta", 0.05)
+    )
+    config.tra.physical_domain_groupdro_max_ratio = float(
+        test.get("physical_domain_groupdro_max_ratio", 3.0)
+    )
+    config.tra.physical_patch_groupdro = bool(
+        test.get("physical_patch_groupdro", False)
+    )
+    config.tra.physical_patch_groupdro_eta = float(
+        test.get("physical_patch_groupdro_eta", 0.05)
+    )
+    config.tra.physical_patch_groupdro_max_ratio = float(
+        test.get("physical_patch_groupdro_max_ratio", 3.0)
+    )
     config.tra.domain_vrex = bool(test.get("domain_vrex", False))
     config.tra.domain_vrex_lambda = float(test.get("domain_vrex_lambda", 1.0))
     config.tra.domain_vrex_warmup_epochs = int(test.get("domain_vrex_warmup_epochs", 2))
@@ -375,7 +414,7 @@ def build_config(test: dict):
     config.model.multitile_grid = int(test.get("multitile_grid", 4))
     config.model.surface_teacher_input = True
     config.data.surface_relative_depth_window = True
-    config.model.compile_model = bool(test.get("compile_model", True))
+    config.model.compile_model = False
     config.model.require_architecture_init = True
     config.init_weights = str(_pretrain_path(str(test["pretrain_key"])).relative_to(ROOT))
 
@@ -473,8 +512,15 @@ def run_test(config, dry_run: bool) -> bool:
     print(
         f"  robust=gradient:{config.tra.domain_gradient_mode}:"
         f"blend{config.tra.domain_gradient_blend} groupdro:{config.tra.physical_domain_groupdro} "
+        f"patchdro:{config.tra.physical_patch_groupdro} "
         f"vrex:{config.tra.domain_vrex} cvar:{config.tra.domain_cvar} "
         f"pcgrad:{config.tra.pcgrad}",
+        flush=True,
+    )
+    print(
+        f"  split={'coordinate_hash' if config.data.coordinate_hash_split else 'manual'} "
+        f"block={config.data.coordinate_hash_block_size} "
+        f"valid={config.data.coordinate_hash_valid_fraction}",
         flush=True,
     )
     if dry_run:

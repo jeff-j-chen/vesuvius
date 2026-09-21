@@ -144,6 +144,10 @@ class DataConfig:
     ring_gap_r: int = 2
     ring_shell_r: int = 4
     simple_split: bool = False  # true: axis/fraction split; false: train_masks/<scroll_id>.png
+    coordinate_hash_split: bool = False
+    coordinate_hash_block_size: int = 256
+    coordinate_hash_valid_fraction: float = 0.25
+    coordinate_hash_seed: int = 29
     train_mask_dir: str = "./train_masks"
     surface_label_dir: str = "./surface_labels"
     context_size: int = 192
@@ -334,6 +338,9 @@ class TrainingConfig:
     physical_domain_groupdro: bool = False
     physical_domain_groupdro_eta: float = 0.05
     physical_domain_groupdro_max_ratio: float = 3.0
+    physical_patch_groupdro: bool = False
+    physical_patch_groupdro_eta: float = 0.05
+    physical_patch_groupdro_max_ratio: float = 3.0
     domain_vrex: bool = False
     domain_vrex_lambda: float = 1.0
     domain_vrex_warmup_epochs: int = 2

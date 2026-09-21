@@ -83,7 +83,10 @@ def needs_domain_ids(config: Config) -> bool:
 
 def needs_patch_ids(config: Config) -> bool:
     """whether dataset samples must carry their individual patch identifier."""
-    return bool(getattr(config.tra, "per_scroll_metrics", False))
+    return any([
+        bool(getattr(config.tra, "per_scroll_metrics", False)),
+        bool(getattr(config.tra, "physical_patch_groupdro", False)),
+    ])
 
 
 def imread_gray(path):
@@ -2265,7 +2268,9 @@ class DataManager:
             "zarr_path", "tile_size", "depth", "d_start", "d_end", "train_d_start",
             "train_d_end", "mask_memmap", "mask_bitpack", "preload_volumes",
             "ring_negatives", "ring_label_source", "ring_close_r", "ring_gap_r",
-            "ring_shell_r", "simple_split", "train_mask_dir", "surface_label_dir",
+            "ring_shell_r", "simple_split", "coordinate_hash_split",
+            "coordinate_hash_block_size", "coordinate_hash_valid_fraction",
+            "coordinate_hash_seed", "train_mask_dir", "surface_label_dir",
             "inklabel_dir", "label_dilate_r", "context_size", "context_downsample", "ctx_jitter",
             "target_aware_ctx_jitter", "depth_jitter", "surface_relative_depth_window",
             "multitile_train_step", "multitile_pos_only", "character_balanced_sampling",
@@ -2502,9 +2507,15 @@ class DataManager:
                     f"manual mask has {int(conflict.sum()):,} pixels marked both positive and negative"
                 )
             labels[explicit_positive] = 1.0
-            self.manual_train_mask = (
-                normal_train | explicit_negative | explicit_positive
-            ).astype(np.uint8)
+            if bool(getattr(self.c.data, "coordinate_hash_split", False)):
+                self.manual_train_mask = self._coordinate_hash_assignment(
+                    labels.shape,
+                    explicit_unit,
+                )
+            else:
+                self.manual_train_mask = (
+                    normal_train | explicit_negative | explicit_positive
+                ).astype(np.uint8)
             self.explicit_negative_mask = explicit_negative.astype(np.uint8)
             self.explicit_positive_mask = explicit_positive.astype(np.uint8)
             frac_train = float(self.manual_train_mask.mean())
@@ -2672,6 +2683,9 @@ class DataManager:
             return train_set, valid_set
         supervision_mask = self._make_ring_mask() if getattr(self.c.data, 'ring_negatives', False) else self.mask
         manual_split = not bool(getattr(self.c.data, "simple_split", True))
+        coordinate_hash_split = bool(
+            getattr(self.c.data, "coordinate_hash_split", False)
+        )
         character_aware = (
             bool(getattr(self.c.tra, "character_macro_metrics", False))
             or bool(getattr(self.c.data, "character_balanced_sampling", False))
@@ -2721,10 +2735,11 @@ class DataManager:
             eligible = np.asarray(supervision_mask) > 0.5
             if getattr(self.c.model, "multitile", False):
                 # preserve the legacy ring-window gate and partition only the emitted targets
-                train_mask = np.maximum.reduce(
+                combined_mask = np.maximum.reduce(
                     (supervision_mask, explicit_negative, explicit_positive)
                 )
-                valid_mask = supervision_mask
+                train_mask = combined_mask
+                valid_mask = combined_mask if coordinate_hash_split else supervision_mask
                 train_split_mask = assignment
                 valid_split_mask = (assignment == 0).astype(np.uint8)
             else:
@@ -2930,6 +2945,53 @@ class DataManager:
                 np.repeat(cells, unit, axis=0), unit, axis=1
             )
         return aligned
+
+    def _coordinate_hash_assignment(self, shape, unit):
+        """assign stable spatial blocks to train or validation without using labels."""
+        height, width = map(int, shape)
+        unit = max(1, int(unit))
+        requested_block = int(getattr(self.c.data, "coordinate_hash_block_size", 256))
+        block = max(unit, ((requested_block + unit - 1) // unit) * unit)
+        valid_fraction = float(
+            getattr(self.c.data, "coordinate_hash_valid_fraction", 0.25)
+        )
+        if not 0.0 < valid_fraction < 1.0:
+            raise ValueError("coordinate_hash_valid_fraction must be in (0, 1)")
+        seed = int(getattr(self.c.data, "coordinate_hash_seed", 29))
+        block_rows = (height + block - 1) // block
+        block_cols = (width + block - 1) // block
+        valid_blocks = np.zeros((block_rows, block_cols), dtype=bool)
+        mask64 = (1 << 64) - 1
+        threshold = int(valid_fraction * (1 << 64))
+
+        for block_y in range(block_rows):
+            for block_x in range(block_cols):
+                value = (
+                    seed
+                    ^ (int(self.scroll_id) * 0x9E3779B97F4A7C15)
+                    ^ (block_y * 0xBF58476D1CE4E5B9)
+                    ^ (block_x * 0x94D049BB133111EB)
+                ) & mask64
+                value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & mask64
+                value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & mask64
+                value = (value ^ (value >> 31)) & mask64
+                valid_blocks[block_y, block_x] = value < threshold
+
+        if valid_blocks.size > 1:
+            if valid_blocks.all():
+                valid_blocks[0, 0] = False
+            elif not valid_blocks.any():
+                valid_blocks[0, 0] = True
+        assignment = np.repeat(
+            np.repeat(~valid_blocks, block, axis=0),
+            block,
+            axis=1,
+        )[:height, :width].astype(np.uint8)
+        print(
+            f"[coordinate-hash-split] scroll {self.scroll_id}: block={block}px "
+            f"seed={seed} valid_blocks={int(valid_blocks.sum())}/{valid_blocks.size}"
+        )
+        return assignment
 
     def _make_ring_mask(self):
         """build training mask from ring around ink labels, computed at TILE level.
