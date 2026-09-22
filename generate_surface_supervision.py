@@ -124,8 +124,10 @@ def _write_overlays(
     output_dir: Path,
     output_height: int = 900,
     overlay_alpha: float = 0.25,
+    ink_volume: np.ndarray | None = None,
+    ink_alpha: float = 0.75,
 ) -> list[Path]:
-    """write fixed-height layer views with the guessed surface marked in red."""
+    """write fixed-height layer views: guessed surface in red, optional 3D ink in white."""
     height, width = depth_map.shape
     if output_height <= 0:
         raise ValueError("output_height must be positive")
@@ -137,7 +139,11 @@ def _write_overlays(
     paths = []
 
     for depth in range(z_start, z_end):
-        layer = (_unit_intensity(np.asarray(volume[depth])) * 255.0).astype(np.uint8)
+        raw_layer = np.asarray(volume[depth]).astype(np.float32)
+        # display-only stretch: some uint16 zarrs hold 0..255 values and render black
+        nonzero = raw_layer[::8, ::8][raw_layer[::8, ::8] > 0]
+        display_max = float(np.percentile(nonzero, 99.5)) if nonzero.size else 1.0
+        layer = np.clip(raw_layer * (255.0 / max(display_max, 1.0)), 0, 255).astype(np.uint8)
         gray = cv2.resize(layer, out_size, interpolation=cv2.INTER_AREA)
         selected = ((depth_map == depth) & valid).astype(np.uint8)
         selected = cv2.resize(selected, out_size, interpolation=cv2.INTER_NEAREST) > 0
@@ -146,31 +152,65 @@ def _write_overlays(
             (1.0 - overlay_alpha) * rgb[selected].astype(np.float32)
             + overlay_alpha * np.array([0.0, 0.0, 255.0], dtype=np.float32)
         ).astype(np.uint8)
-        cv2.putText(
-            rgb,
-            f"depth {depth:02d}  red=guessed surface ({100.0 * overlay_alpha:.0f}%)",
-            (24, 46),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1.0,
-            (255, 255, 255),
-            3,
-            cv2.LINE_AA,
-        )
-        cv2.putText(
-            rgb,
-            f"valid surface pixels: {int(selected.sum()):,}",
-            (24, 86),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
+        lines = [f"depth {depth:02d}  red=guessed surface ({100.0 * overlay_alpha:.0f}%)"]
+        if ink_volume is not None:
+            # alpha scales with ink probability, reaching ink_alpha at full confidence
+            ink = cv2.resize(ink_volume[depth], out_size, interpolation=cv2.INTER_AREA)
+            alpha = (ink_alpha * ink.astype(np.float32) / 255.0)[..., None]
+            rgb = (rgb.astype(np.float32) * (1.0 - alpha) + 255.0 * alpha).astype(np.uint8)
+            lines.append(f"white=3D ink ({100.0 * ink_alpha:.0f}%)")
+        lines.append(f"valid surface pixels: {int(selected.sum()):,}")
+        for index, text in enumerate(lines):
+            cv2.putText(
+                rgb,
+                text,
+                (24, 46 + 40 * index),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0 if index == 0 else 0.8,
+                (255, 255, 255),
+                3 if index == 0 else 2,
+                cv2.LINE_AA,
+            )
         path = output_dir / f"depth_{depth:02d}.jpg"
         if not cv2.imwrite(str(path), rgb, [cv2.IMWRITE_JPEG_QUALITY, 94]):
             raise RuntimeError(f"failed to write layer view: {path}")
         paths.append(path)
     return paths
+
+
+def _ink_surface_alignment(
+    ink_volume: np.ndarray,
+    depth_map: np.ndarray,
+    confidence: np.ndarray,
+    mask: np.ndarray,
+) -> dict:
+    """ink mass as a function of layer offset from the guessed surface."""
+    depth = ink_volume.shape[0]
+    valid = (confidence > 0) & mask & (depth_map != 255)
+    surface = depth_map[valid].astype(np.int16)
+    mass = np.zeros(2 * depth - 1, dtype=np.float64)
+    for layer in range(depth):
+        values = ink_volume[layer][valid].astype(np.float64)
+        mass += np.bincount(layer - surface + depth - 1, weights=values, minlength=2 * depth - 1)
+    total = float(mass.sum())
+    offsets = np.arange(-(depth - 1), depth)
+    share = mass / max(total, 1e-12)
+    peak = int(offsets[int(mass.argmax())]) if total > 0 else 0
+    absolute = np.array([float(ink_volume[layer][valid].astype(np.float64).sum()) for layer in range(depth)])
+    return {
+        "offset_semantics": "ink layer minus guessed surface layer",
+        "total_ink_mass": total,
+        "peak_offset": peak,
+        "share_at_surface": float(share[depth - 1]),
+        "share_within_1": float(share[depth - 2:depth + 1].sum()),
+        "share_within_2": float(share[depth - 3:depth + 2].sum()),
+        "share_below_surface": float(share[:depth - 1].sum()),
+        "share_above_surface": float(share[depth:].sum()),
+        "share_by_offset": {str(int(o)): float(s) for o, s in zip(offsets, share) if s > 0},
+        "share_by_absolute_layer": {
+            str(layer): float(value / max(absolute.sum(), 1e-12)) for layer, value in enumerate(absolute)
+        },
+    }
 
 
 def _review_layer_views(paths: list[Path], start_index: int = 0) -> None:
@@ -624,6 +664,11 @@ def main() -> None:
                         help="open existing layer views without rebuilding supervision")
     parser.add_argument("--review-height", type=int, default=900)
     parser.add_argument("--overlay-alpha", type=float, default=0.25)
+    parser.add_argument("--ink3d-zarr", default=None,
+                        help="28-layer 3D ink zarr (extract_ink3d_patch.py) drawn in white")
+    parser.add_argument("--ink-alpha", type=float, default=0.75)
+    parser.add_argument("--overlays-only", action="store_true",
+                        help="re-render layer views from existing depth.npy/confidence.npy")
     args = parser.parse_args()
 
     scroll_id = str(args.scroll_id)
@@ -646,6 +691,35 @@ def main() -> None:
 
     output_dir = Path(args.output_dir) / scroll_id
     review_dir = review_root / scroll_id
+    ink_volume = None
+    if args.ink3d_zarr:
+        ink_array = zarr.open(args.ink3d_zarr, mode="r")
+        if tuple(ink_array.shape) != (depth, height, width):
+            raise ValueError(f"ink zarr shape {ink_array.shape} != volume {(depth, height, width)}")
+        ink_volume = np.asarray(ink_array[:])
+
+    if args.overlays_only:
+        depth_map = np.load(output_dir / "depth.npy", mmap_mode="r")
+        confidence = np.load(output_dir / "confidence.npy", mmap_mode="r")
+        review_dir.mkdir(parents=True, exist_ok=True)
+        for stale_overlay in review_dir.glob("depth_*.jpg"):
+            stale_overlay.unlink()
+        overlay_paths = _write_overlays(
+            volume, depth_map, confidence, args.z_start, args.z_end, review_dir,
+            output_height=args.review_height, overlay_alpha=args.overlay_alpha,
+            ink_volume=ink_volume, ink_alpha=args.ink_alpha,
+        )
+        if ink_volume is not None:
+            alignment = _ink_surface_alignment(ink_volume, depth_map, confidence, mask)
+            with open(review_dir / "ink_surface_alignment.json", "w", encoding="utf-8") as handle:
+                json.dump(alignment, handle, indent=2)
+            print("[surface] ink vs surface: " + json.dumps(
+                {k: v for k, v in alignment.items() if not isinstance(v, dict)}))
+        print(f"[surface] layer views -> {review_dir / 'depth_*.jpg'}")
+        if args.review:
+            _review_layer_views(overlay_paths)
+        return
+
     output_dir.mkdir(parents=True, exist_ok=True)
     review_dir.mkdir(parents=True, exist_ok=True)
     for stale_overlay in review_dir.glob("depth_*.jpg"):
@@ -782,7 +856,13 @@ def main() -> None:
         review_dir,
         output_height=args.review_height,
         overlay_alpha=args.overlay_alpha,
+        ink_volume=ink_volume,
+        ink_alpha=args.ink_alpha,
     )
+    if ink_volume is not None:
+        alignment = _ink_surface_alignment(ink_volume, depth_map, confidence, mask)
+        with open(review_dir / "ink_surface_alignment.json", "w", encoding="utf-8") as handle:
+            json.dump(alignment, handle, indent=2)
     _write_depth_overview(
         depth_map,
         confidence,

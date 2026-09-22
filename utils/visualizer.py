@@ -1535,6 +1535,11 @@ class TensorboardVisualizer:
             "APMacro": "character_ap_macro",
             "SuccessFraction": "character_success_fraction",
             "Count": "character_count",
+            "Calibrated/Threshold": "character_calibrated_threshold",
+            "Calibrated/F1Macro": "character_calibrated_f1_macro",
+            "Calibrated/RecallMacro": "character_calibrated_recall_macro",
+            "Calibrated/RingFPRMacro": "character_calibrated_ring_fpr_macro",
+            "Calibrated/SuccessFraction": "character_calibrated_success_fraction",
         }
         for display_name, metric_name in character_tags.items():
             if metric_name in train_metrics:

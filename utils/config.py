@@ -315,6 +315,10 @@ class TrainingConfig:
     entropy_min_batch_size: int = 8  # unlabeled samples per step; kept small to avoid OOM
     character_macro_metrics: bool = True
     character_score_threshold: float = 0.5
+    character_calibrate_threshold: bool = False
+    character_threshold_min: float = 0.1
+    character_threshold_max: float = 0.9
+    character_threshold_steps: int = 33
     character_recall_target: float = 0.5
     character_max_ring_fpr: float = 0.1
     character_checkpoint_metric: str = "character_ap_macro"
@@ -350,6 +354,9 @@ class TrainingConfig:
     pcgrad_lite: bool = False
     pcgrad_lite_max_domains: int = 4
     pcgrad_lite_scope: str = "head"
+    pcgrad_gram: bool = False
+    pcgrad_gram_interval: int = 1  # 0 never measures conflicts: equal domain weights only
+    pcgrad_gram_ema: float = 0.0
     model_ema: bool = False
     model_ema_decay: float = 0.999
     model_ema_start_epoch: int = 0

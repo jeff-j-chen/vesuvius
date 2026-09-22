@@ -311,18 +311,14 @@ class NnUnetMAE(nn.Module):
         nn.init.zeros_(self.recon_head.bias)
 
     def forward(self, x_masked):
+        if self.backbone._overlapping_depth_windows and (self.early_2d or self.mid_2d):
+            _, dec1 = self.backbone._encode_decode_overlapping_depth(x_masked, None, None)
+            return self.recon_head(dec1).unsqueeze(1)
         if self.early_2d:
             _, dec1 = self.backbone._encode_decode_early_2d(x_masked, None, None)
             return self.recon_head(dec1).unsqueeze(1)
         if self.mid_2d:
-            if self.backbone._overlapping_depth_windows:
-                _, dec1 = self.backbone._encode_decode_overlapping_depth(
-                    x_masked,
-                    None,
-                    None,
-                )
-            else:
-                _, dec1 = self.backbone._encode_decode_mid_2d(x_masked, None, None)
+            _, dec1 = self.backbone._encode_decode_mid_2d(x_masked, None, None)
             return self.recon_head(dec1).unsqueeze(1)
         _, dec1 = self.backbone._encode_decode(x_masked)
         return self.recon_head(dec1)   # (B, 1, D, H/ds, W/ds)
@@ -435,8 +431,8 @@ def main():
         ap.error("--divided-attention-spatial requires --divided-attention")
     if args.early_2d_unet and args.mid_2d_unet:
         ap.error("--early-2d-unet and --mid-2d-unet are mutually exclusive")
-    if args.overlapping_depth_windows and not args.mid_2d_unet:
-        ap.error("--overlapping-depth-windows requires --mid-2d-unet")
+    if args.overlapping_depth_windows and not (args.mid_2d_unet or args.early_2d_unet):
+        ap.error("--overlapping-depth-windows requires --mid-2d-unet or --early-2d-unet")
     if args.early_2d_channels_mult <= 0:
         ap.error("--early-2d-channels-mult must be positive")
     if args.mid_2d_channels_mult <= 0 or args.channels_mult <= 0:

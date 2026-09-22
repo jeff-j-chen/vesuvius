@@ -236,6 +236,76 @@ def calculate_character_metrics(
         "character_success_fraction": float(np.mean(successes)),
     }
 
+
+def calibrate_character_threshold(
+    y_true,
+    y_scores,
+    character_ids,
+    threshold_min=0.1,
+    threshold_max=0.9,
+    threshold_steps=33,
+    recall_target=0.5,
+    max_ring_fpr=0.1,
+):
+    """select one validation threshold that maximizes character macro f1."""
+    if threshold_steps < 2 or not 0.0 <= threshold_min < threshold_max <= 1.0:
+        raise ValueError("character threshold sweep bounds are invalid")
+    labels = np.asarray(y_true).reshape(-1).astype(int)
+    scores = np.asarray(y_scores).reshape(-1)
+    component_ids = np.asarray(character_ids).reshape(-1).astype(np.int64)
+    keep = (component_ids > 0) & np.isfinite(scores)
+    labels, scores, component_ids = labels[keep], scores[keep], component_ids[keep]
+    thresholds = np.linspace(
+        float(threshold_min),
+        float(threshold_max),
+        int(threshold_steps),
+        dtype=np.float64,
+    )
+    component_f1 = []
+    for component_id in np.unique(component_ids):
+        selected = component_ids == component_id
+        component_labels = labels[selected]
+        positive = component_labels == 1
+        negative = component_labels == 0
+        if not positive.any() or not negative.any():
+            continue
+        predicted = scores[selected, None] >= thresholds[None, :]
+        true_positive = (predicted & positive[:, None]).sum(axis=0)
+        false_positive = (predicted & negative[:, None]).sum(axis=0)
+        false_negative = ((~predicted) & positive[:, None]).sum(axis=0)
+        component_f1.append(
+            2.0 * true_positive
+            / np.maximum(2.0 * true_positive + false_positive + false_negative, 1)
+        )
+    if not component_f1:
+        return {
+            "character_calibrated_threshold": 0.5,
+            "character_calibrated_f1_macro": 0.0,
+            "character_calibrated_recall_macro": 0.0,
+            "character_calibrated_ring_fpr_macro": 0.0,
+            "character_calibrated_success_fraction": 0.0,
+        }
+    macro_f1 = np.mean(np.stack(component_f1), axis=0)
+    best_value = float(macro_f1.max())
+    candidates = np.flatnonzero(np.isclose(macro_f1, best_value))
+    best_index = min(candidates, key=lambda index: abs(float(thresholds[index]) - 0.5))
+    threshold = float(thresholds[best_index])
+    metrics = calculate_character_metrics(
+        labels,
+        scores,
+        component_ids,
+        score_threshold=threshold,
+        recall_target=recall_target,
+        max_ring_fpr=max_ring_fpr,
+    )
+    return {
+        "character_calibrated_threshold": threshold,
+        "character_calibrated_f1_macro": metrics["character_f1_macro"],
+        "character_calibrated_recall_macro": metrics["character_recall_macro"],
+        "character_calibrated_ring_fpr_macro": metrics["character_ring_fpr_macro"],
+        "character_calibrated_success_fraction": metrics["character_success_fraction"],
+    }
+
 def save_model(model, path):
     """saves the model state dictionary to a file"""
     # create directory if it doesn't exist

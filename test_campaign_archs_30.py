@@ -78,6 +78,31 @@ class Campaign30Test(unittest.TestCase):
             torch.tensor([0.25, 0.75]),
         )
 
+    def test_mae_reuse_is_limited_to_high_coverage_variants(self):
+        reused = {
+            test["tid"]
+            for test in campaign.TESTS
+            if campaign.PRETRAIN_SPECS[test["pretrain_key"]].get("reuse_campaign29")
+        }
+        self.assertEqual(reused, {
+            "current_mid_control",
+            "pcgrad_lite_head4",
+            "mid_residual2d",
+            "mid_pure_instance",
+            "mid_raw_only",
+        })
+        partial_reuse = {
+            "mid_residual2d",
+            "mid_pure_instance",
+            "mid_raw_only",
+        }
+        for test in campaign.TESTS:
+            config = campaign.build_config(test)
+            self.assertEqual(
+                config.model.require_architecture_init,
+                test["tid"] not in partial_reuse,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -37,6 +37,8 @@ ROOT = Path(__file__).resolve().parent
 LOG_DIR = "./runs_archs29"
 MODEL_DIR = "models/archs30"
 PRETRAIN_STEPS = 2_000
+MIN_TRANSFER_COVERAGE = 0.85
+_MATCHED_PRETRAIN_OVERRIDES: set[str] = set()
 ALL_PRETRAIN_SCROLL_IDS = tuple(dict.fromkeys(
     [int(scroll.scroll_id) for scroll in DEFAULT_SCROLLS]
     + [int(scroll_id) for scroll_id in DEFAULT_TEST_SCROLL_IDS]
@@ -131,6 +133,9 @@ PRETRAIN_SPECS = {
         accum_steps=8,
     ),
 }
+
+for _reuse_key in ("mid_residual2d", "mid_pure_instance", "mid_raw_only"):
+    PRETRAIN_SPECS[_reuse_key]["reuse_campaign29"] = "mid_gated_all"
 
 
 def _test(tid: str, pretrain_key: str, **overrides) -> dict:
@@ -237,7 +242,7 @@ def _pretrain_name(key: str) -> str:
 def _pretrain_path(key: str) -> Path:
     spec = PRETRAIN_SPECS[key]
     reused = spec.get("reuse_campaign29")
-    if reused:
+    if reused and key not in _MATCHED_PRETRAIN_OVERRIDES:
         return campaign29._pretrain_path(str(reused))
     return ROOT / "models" / f"{_pretrain_name(key)}.pth"
 
@@ -268,7 +273,7 @@ def _pretrain_metadata(key: str) -> dict:
 def _pretraining_complete(key: str) -> bool:
     spec = PRETRAIN_SPECS[key]
     reused = spec.get("reuse_campaign29")
-    if reused:
+    if reused and key not in _MATCHED_PRETRAIN_OVERRIDES:
         return campaign29._pretraining_complete(str(reused))
     checkpoint = _pretrain_path(key)
     marker = _pretrain_marker(key)
@@ -282,6 +287,48 @@ def _pretraining_complete(key: str) -> bool:
     return metadata == _pretrain_metadata(key) and all(
         any(name.startswith(prefix) for name in state)
         for prefix in spec["required"]
+    )
+
+
+def _transfer_coverage(test: dict, checkpoint: Path) -> tuple[float, int, int, int, int]:
+    from utils.model import create_model
+
+    config = build_config(test)
+    config.device = "cpu"
+    config.model.compile_model = False
+    model, _ = create_model(config)
+    if config.model.early_2d_unet:
+        prefixes = ["enc1.", "early_depth_attn.", "early_depth_fuse.", "early2d_"]
+    else:
+        prefixes = [
+            "enc1.", "enc2.", "mid_depth_attn.", "mid_depth_fuse.",
+            "mid_skip1_fuse.", "mid2d_",
+        ]
+    if config.model.gated_stems:
+        prefixes.append("gated_cue_stem.")
+    excluded = ("early2d_head.", "mid2d_head.", "new_surface_input.")
+    active = {
+        name: parameter
+        for name, parameter in model.named_parameters()
+        if any(name.startswith(prefix) for prefix in prefixes)
+        and not name.startswith(excluded)
+    }
+    state = torch.load(checkpoint, map_location="cpu", weights_only=True)
+    compatible = {
+        name: parameter
+        for name, parameter in active.items()
+        if name in state and tuple(state[name].shape) == tuple(parameter.shape)
+    }
+    compatible_parameters = sum(parameter.numel() for parameter in compatible.values())
+    active_parameters = sum(parameter.numel() for parameter in active.values())
+    del state, model
+    gc.collect()
+    return (
+        compatible_parameters / max(active_parameters, 1),
+        compatible_parameters,
+        active_parameters,
+        len(compatible),
+        len(active),
     )
 
 
@@ -317,7 +364,12 @@ def build_config(test: dict):
     config.model.two_d_extra_channels = tuple(test["two_d_extra_channels"])
     config.model.two_d_bottleneck_channels = 0
     config.model.compile_model = False
-    config.model.require_architecture_init = True
+    pretrain_key = str(test["pretrain_key"])
+    config.model.require_architecture_init = not (
+        pretrain_key != "mid_gated_c29"
+        and PRETRAIN_SPECS[pretrain_key].get("reuse_campaign29")
+        and pretrain_key not in _MATCHED_PRETRAIN_OVERRIDES
+    )
     config.tra.pcgrad = False
     config.tra.pcgrad_lite = bool(test["pcgrad_lite"])
     config.tra.pcgrad_lite_max_domains = int(test["pcgrad_lite_max_domains"])
@@ -342,6 +394,33 @@ def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:
             raise FileNotFoundError(message)
         print(f"[campaign30] WARNING {message}", flush=True)
 
+    source_key = "mid_gated_all"
+    if not campaign29._pretraining_complete(source_key):
+        campaign29.preflight_pretraining(
+            [{"pretrain_key": source_key}],
+            dry_run,
+        )
+    source_path = campaign29._pretrain_path(source_key)
+    tests_by_key = {
+        str(test["pretrain_key"]): test
+        for test in selected
+    }
+    if source_path.is_file():
+        for test in selected:
+            key = str(test["pretrain_key"])
+            fraction, matched, total, tensor_matched, tensor_total = _transfer_coverage(
+                test,
+                source_path,
+            )
+            print(
+                f"[campaign30] transfer {test['tid']}: "
+                f"params={100.0 * fraction:.2f}% ({matched}/{total}) "
+                f"tensors={tensor_matched}/{tensor_total}",
+                flush=True,
+            )
+            if fraction < MIN_TRANSFER_COVERAGE:
+                _MATCHED_PRETRAIN_OVERRIDES.add(key)
+
     keys = list(dict.fromkeys(str(test["pretrain_key"]) for test in selected))
     for key in keys:
         if key not in PRETRAIN_SPECS:
@@ -349,15 +428,6 @@ def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:
         if _pretraining_complete(key):
             continue
         spec = PRETRAIN_SPECS[key]
-        reused = spec.get("reuse_campaign29")
-        if reused:
-            campaign29.preflight_pretraining(
-                [{"pretrain_key": str(reused)}],
-                dry_run,
-            )
-            if not dry_run and not _pretraining_complete(key):
-                raise RuntimeError(f"Campaign 30 reused pretraining is invalid: {key}")
-            continue
         if dry_run:
             print(
                 f"[campaign30] would pretrain {key}: {PRETRAIN_STEPS} steps, "
@@ -391,6 +461,13 @@ def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:
         )
         if not _pretraining_complete(key):
             raise RuntimeError(f"Campaign 30 MAE pretraining failed validation: {key}")
+        test = tests_by_key[key]
+        fraction, matched, total, _, _ = _transfer_coverage(test, _pretrain_path(key))
+        if fraction < MIN_TRANSFER_COVERAGE:
+            raise RuntimeError(
+                f"Campaign 30 MAE transfer below {MIN_TRANSFER_COVERAGE:.0%} for {key}: "
+                f"{matched}/{total} ({fraction:.2%})"
+            )
 
 
 def run_test(config, dry_run: bool) -> bool:

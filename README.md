@@ -140,6 +140,18 @@ Manual train masks use exact grayscale values: `255` for the normal training reg
 
 Literal surface maps are stored under `surface_labels/<id>/` as `depth.npy`, `confidence.npy`, and `metadata.json`.
 
+Published whole-scroll 3D ink predictions can be sampled onto a patch's 28-layer grid. Only the
+ink chunks intersected by the patch are downloaded, and they are deleted after resampling:
+
+```bash
+python3 extract_ink3d_patch.py            # Paris4 defaults -> ink3d_labels/20231210121321.zarr
+python3 generate_surface_supervision.py --scroll-id 20231210121321 --overlays-only \
+	--ink3d-zarr ink3d_labels/20231210121321.zarr
+```
+
+The layer views show the guessed surface in red and 3D ink in white. The ink-to-surface offset
+histogram is written to `output/surface_review/<id>/ink_surface_alignment.json`.
+
 ## Labels and sampling
 
 ### Eroded labels
@@ -195,6 +207,7 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 | `assemble_training_segments.py` | Builds training zarrs, masks, aligned labels, eroded labels, and norms |
 | `assemble_test_segments.py` | Renders the five unlabeled test surfaces |
 | `generate_surface_supervision.py` | Builds literal depth and confidence maps |
+| `extract_ink3d_patch.py` | Samples whole-scroll 3D ink predictions onto one patch's 28-layer grid |
 | `precompute_norm.py` | Populates `norm_cache.json` without starting training |
 | `mae_pretrain_nnunet.py` | Architecture-matched masked-autoencoder pretraining |
 | `jepa_pretrain_nnunet.py` | Optional feature-predictive pretraining |

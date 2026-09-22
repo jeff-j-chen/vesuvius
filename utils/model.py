@@ -1021,6 +1021,7 @@ class NnUnet3dLcndz(nn.Module):
                 block2d(in_channels * 2, in_channels)
                 for in_channels in encoder_channels[:-1]
             ])
+            overlap_channels = (encoder_channels[-1], e1)
         else:
             self.early_depth_attn = None
             self.early_depth_fuse = None
@@ -1076,32 +1077,7 @@ class NnUnet3dLcndz(nn.Module):
                 block2d(in_channels * 2, in_channels)
                 for in_channels in encoder_channels[:-1]
             ])
-            if self._overlapping_depth_windows:
-                if self._overlap_window_size < 2 or self._overlap_window_stride < 1:
-                    raise ValueError("overlapping depth window size/stride must be positive")
-                if input_depth < self._overlap_window_size:
-                    raise ValueError("input depth is smaller than the overlapping window")
-                self._overlap_window_count = (
-                    (input_depth - self._overlap_window_size)
-                    // self._overlap_window_stride
-                    + 1
-                )
-                self.overlap_bottleneck_fuse = nn.Conv2d(
-                    self._overlap_window_count * c4,
-                    c4,
-                    kernel_size=1,
-                    bias=False,
-                )
-                self.overlap_decoded_fuse = nn.Conv2d(
-                    self._overlap_window_count * c1,
-                    c1,
-                    kernel_size=1,
-                    bias=False,
-                )
-            else:
-                self._overlap_window_count = 0
-                self.overlap_bottleneck_fuse = None
-                self.overlap_decoded_fuse = None
+            overlap_channels = (c4, c1)
         else:
             self.mid_depth_attn = None
             self.mid_depth_fuse = None
@@ -1118,6 +1094,31 @@ class NnUnet3dLcndz(nn.Module):
             self.mid2d_extra_encoders = nn.ModuleList()
             self.mid2d_extra_ups = nn.ModuleList()
             self.mid2d_extra_decoders = nn.ModuleList()
+
+        if self._overlapping_depth_windows and (self._early_2d_unet or self._mid_2d_unet):
+            if self._overlap_window_size < 2 or self._overlap_window_stride < 1:
+                raise ValueError("overlapping depth window size/stride must be positive")
+            if input_depth < self._overlap_window_size:
+                raise ValueError("input depth is smaller than the overlapping window")
+            self._overlap_window_count = (
+                (input_depth - self._overlap_window_size)
+                // self._overlap_window_stride
+                + 1
+            )
+            bottleneck_channels, decoded_channels = overlap_channels
+            self.overlap_bottleneck_fuse = nn.Conv2d(
+                self._overlap_window_count * bottleneck_channels,
+                bottleneck_channels,
+                kernel_size=1,
+                bias=False,
+            )
+            self.overlap_decoded_fuse = nn.Conv2d(
+                self._overlap_window_count * decoded_channels,
+                decoded_channels,
+                kernel_size=1,
+                bias=False,
+            )
+        else:
             self._overlap_window_count = 0
             self.overlap_bottleneck_fuse = None
             self.overlap_decoded_fuse = None
@@ -1833,6 +1834,9 @@ class NnUnet3dLcndz(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if self.overlap_bottleneck_fuse is None or self.overlap_decoded_fuse is None:
             raise RuntimeError("overlapping depth fusion is not initialized")
+        encode = (
+            self._encode_decode_early_2d if self._early_2d_unet else self._encode_decode_mid_2d
+        )
         bottlenecks = []
         decoded = []
         for index in range(self._overlap_window_count):
@@ -1849,7 +1853,7 @@ class NnUnet3dLcndz(nn.Module):
                     teacher_surface_confidence,
                     torch.zeros_like(teacher_surface_confidence),
                 )
-            bottleneck, features = self._encode_decode_mid_2d(
+            bottleneck, features = encode(
                 x[:, :, start:end],
                 window_depth,
                 window_confidence,
@@ -2261,7 +2265,11 @@ class NnUnet3dLcndz(nn.Module):
         sagnet_grl_scale: float = 0.0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         if self._early_2d_unet:
-            bottleneck2d, decoded2d = self._encode_decode_early_2d(
+            encode = (
+                self._encode_decode_overlapping_depth
+                if self._overlapping_depth_windows else self._encode_decode_early_2d
+            )
+            bottleneck2d, decoded2d = encode(
                 x,
                 teacher_surface_depth,
                 teacher_surface_confidence,

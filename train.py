@@ -19,6 +19,7 @@ from utils.hard_mining import HardMiningInjector, HardMiningManager
 from utils.model import create_model, supcon_loss
 from utils.surface import make_surface_targets_from_depth, surface_supervision_loss
 from utils.training_utils import (
+    calibrate_character_threshold,
     calculate_character_metrics,
     calculate_metrics,
     create_loss_function,
@@ -288,6 +289,26 @@ def character_groupdro_loss(
     return objective, ratio
 
 
+def pcgrad_coefficients(gram: list[list[float]]) -> list[float]:
+    """pcgrad in coefficient space: sum_k w_k g_k equals the mean projected gradient.
+
+    each projected g_i stays in span{g_k}, so projections only need the gram matrix
+    """
+    count = len(gram)
+    coefficients = [[1.0 if i == k else 0.0 for k in range(count)] for i in range(count)]
+    for task in range(count):
+        for other in torch.randperm(count).tolist():
+            if other == task:
+                continue
+            dot = sum(coefficients[task][k] * gram[k][other] for k in range(count))
+            if dot < 0:
+                coefficients[task][other] -= dot / max(gram[other][other], 1e-30)
+    return [
+        sum(coefficients[task][k] for task in range(count)) / count
+        for k in range(count)
+    ]
+
+
 def _physical_domain_group_losses(
     per_target_loss: torch.Tensor,
     mask: torch.Tensor,
@@ -416,12 +437,17 @@ class Trainer:
             bool(getattr(config.tra, "domain_cvar", False)),
             bool(getattr(config.tra, "pcgrad", False)),
             bool(getattr(config.tra, "pcgrad_lite", False)),
+            bool(getattr(config.tra, "pcgrad_gram", False)),
         ]
         if sum(domain_robust_modes) > 1:
             raise ValueError(
                 "domain-gradient, physical-domain GroupDRO, physical-patch GroupDRO, "
-                "V-REx, domain CVaR, PCGrad, and PCGrad-lite are mutually exclusive"
+                "V-REx, domain CVaR, PCGrad, PCGrad-lite, and PCGrad-Gram are mutually exclusive"
             )
+        if int(getattr(config.tra, "pcgrad_gram_interval", 1)) < 0:
+            raise ValueError("pcgrad_gram_interval must be non-negative")
+        if not 0.0 <= float(getattr(config.tra, "pcgrad_gram_ema", 0.0)) < 1.0:
+            raise ValueError("pcgrad_gram_ema must be in [0, 1)")
         if int(getattr(config.tra, "pcgrad_lite_max_domains", 4)) < 2:
             raise ValueError("pcgrad_lite_max_domains must be at least 2")
         if str(getattr(config.tra, "pcgrad_lite_scope", "head")) not in ("head", "all"):
@@ -493,6 +519,9 @@ class Trainer:
         self._physical_domain_groupdro_log_weights: dict[int, float] = {}
         self._physical_patch_groupdro_log_weights: dict[int, float] = {}
         self._domain_gradient_ema: dict[tuple[int, int], float] = {}
+        self._pcgrad_gram_cosines: dict[tuple[int, int], float] = {}
+        self._pcgrad_gram_log_norms: dict[int, float] = {}
+        self._pcgrad_gram_step = 0
         self._last_character_objectives = (0.0, 0.0, 0.0, 0.0)
         self._last_depth_consistency = 0.0
         self._last_clam_loss = 0.0
@@ -519,6 +548,8 @@ class Trainer:
             "domain_cvar_loss": 0.0,
             "depth_shift_aux_loss": 0.0,
             "mae_anchor_loss": 0.0,
+            "pcgrad_gram_weight_sum": 0.0,
+            "pcgrad_gram_conflict_frac": 0.0,
         }
         self._closed = False
 
@@ -933,6 +964,112 @@ class Trainer:
                 count = parameter.numel()
                 parameter.grad.add_(correction[offset:offset + count].view_as(parameter))
                 offset += count
+
+    def _refresh_pcgrad_geometry(
+        self,
+        images,
+        labels,
+        mask,
+        domain_ids,
+        target_offsets,
+        surface_depth,
+        surface_confidence,
+    ) -> None:
+        """measure full-parameter per-domain gradients from disjoint domain sub-batches.
+
+        sub-batches sum to one batch of forward/backward work, unlike one full-graph
+        backward per domain; eval mode (running-stat bn, no dropout) keeps samples
+        independent so the sub-batch gradients equal the full-batch domain gradients
+        """
+        parameters = [p for p in self.model.parameters() if p.requires_grad]
+        training_states = [(module, module.training) for module in self.model.modules()]
+        scale = float(self.scaler.get_scale()) if self.scaler.is_enabled() else 1.0
+        ids: list[int] = []
+        vectors: list[torch.Tensor] = []
+        self.model.eval()
+        try:
+            for domain_id in torch.unique(domain_ids).tolist():
+                selected = domain_ids == domain_id
+                if not (mask[selected] > 0).any():
+                    continue
+                with autocast(self.c.device, enabled=self.c.device == "cuda"):
+                    domain_loss, _ = self._mldg_forward_loss(
+                        images[selected],
+                        labels[selected],
+                        mask[selected],
+                        self._slice_optional(target_offsets, selected),
+                        self._slice_optional(surface_depth, selected),
+                        self._slice_optional(surface_confidence, selected),
+                    )
+                gradients = torch.autograd.grad(
+                    domain_loss * scale,
+                    parameters,
+                    allow_unused=True,
+                )
+                vector = torch.cat([
+                    (
+                        torch.zeros(parameter.numel(), device=parameter.device)
+                        if gradient is None else gradient.float().reshape(-1)
+                    )
+                    for parameter, gradient in zip(parameters, gradients)
+                ])
+                # amp overflow: keep the previous geometry rather than a corrupted one
+                if not torch.isfinite(vector).all():
+                    return
+                ids.append(int(domain_id))
+                vectors.append(vector)
+        finally:
+            for module, training in training_states:
+                module.training = training
+        if len(ids) < 2:
+            return
+        stacked = torch.stack(vectors)
+        gram = (stacked @ stacked.T).double().cpu()
+        del stacked, vectors
+        diagonal = gram.diagonal().clamp(min=1e-30)
+        # norms are stored relative to this refresh so only domain ratios persist
+        log_norms = 0.5 * diagonal.log()
+        log_norms = log_norms - log_norms.mean()
+        ema = float(getattr(self.c.tra, "pcgrad_gram_ema", 0.0))
+        for index, domain_id in enumerate(ids):
+            value = float(log_norms[index])
+            previous = self._pcgrad_gram_log_norms.get(domain_id)
+            self._pcgrad_gram_log_norms[domain_id] = (
+                value if previous is None else ema * previous + (1.0 - ema) * value
+            )
+            for other in range(index + 1, len(ids)):
+                pair = tuple(sorted((domain_id, ids[other])))
+                cosine = float(
+                    gram[index, other] / (diagonal[index] * diagonal[other]).sqrt()
+                )
+                previous = self._pcgrad_gram_cosines.get(pair)
+                self._pcgrad_gram_cosines[pair] = (
+                    cosine if previous is None else ema * previous + (1.0 - ema) * cosine
+                )
+
+    def _pcgrad_gram_weights(self, domain_ids: list[int]) -> list[float]:
+        """pcgrad loss weights for the represented domains from the cached geometry."""
+        count = len(domain_ids)
+        if count < 2 or not self._pcgrad_gram_log_norms:
+            self._last_dg_losses["pcgrad_gram_weight_sum"] = 1.0
+            return [1.0 / max(count, 1)] * count
+        norms = [math.exp(self._pcgrad_gram_log_norms.get(d, 0.0)) for d in domain_ids]
+        cosines = {}
+        gram = [[0.0] * count for _ in range(count)]
+        for i in range(count):
+            gram[i][i] = norms[i] * norms[i]
+            for j in range(i + 1, count):
+                pair = tuple(sorted((domain_ids[i], domain_ids[j])))
+                cosine = self._pcgrad_gram_cosines.get(pair, 0.0)
+                cosines[pair] = cosine
+                gram[i][j] = gram[j][i] = cosine * norms[i] * norms[j]
+        weights = pcgrad_coefficients(gram)
+        self._last_domain_gradient_cosines = cosines
+        self._last_dg_losses["pcgrad_gram_weight_sum"] = float(sum(weights))
+        self._last_dg_losses["pcgrad_gram_conflict_frac"] = (
+            sum(value < 0 for value in cosines.values()) / max(len(cosines), 1)
+        )
+        return weights
 
     def _init_visualizers(self) -> None:
         scroll_ids = self._scroll_ids
@@ -1389,6 +1526,22 @@ class Trainer:
                 surface_confidence,
             )
 
+        if bool(getattr(self.c.tra, "pcgrad_gram", False)):
+            if domain_ids is None:
+                raise RuntimeError("PCGrad-Gram requires physical-domain IDs")
+            interval = int(getattr(self.c.tra, "pcgrad_gram_interval", 1))
+            if interval > 0 and self._pcgrad_gram_step % interval == 0:
+                self._refresh_pcgrad_geometry(
+                    images,
+                    labels,
+                    mask,
+                    domain_ids,
+                    target_offsets,
+                    surface_depth,
+                    surface_confidence,
+                )
+            self._pcgrad_gram_step += 1
+
         self.optimizer.zero_grad(set_to_none=True)
         with autocast(self.c.device, enabled=self.c.device == "cuda"):
             use_extras = hasattr(self.model, "forward_with_extras") and any([
@@ -1470,6 +1623,7 @@ class Trainer:
                 bool(getattr(self.c.tra, "domain_cvar", False)),
                 bool(getattr(self.c.tra, "pcgrad", False)),
                 bool(getattr(self.c.tra, "pcgrad_lite", False)),
+                bool(getattr(self.c.tra, "pcgrad_gram", False)),
             ])
             if needs_domain_losses:
                 if domain_ids is None:
@@ -1648,6 +1802,12 @@ class Trainer:
                 pcgrad_domain_losses = domain_group_losses
                 if domain_group_losses:
                     primary_loss = torch.stack(domain_group_losses).mean()
+            if bool(getattr(self.c.tra, "pcgrad_gram", False)) and domain_group_losses:
+                weights = self._pcgrad_gram_weights(domain_group_ids)
+                primary_loss = sum(
+                    weight * domain_loss
+                    for weight, domain_loss in zip(weights, domain_group_losses)
+                )
             group_ids: list[int] = []
             group_losses: list[torch.Tensor] = []
             if character_ids_device is not None and any([
@@ -2783,6 +2943,17 @@ class Trainer:
                 recall_target=float(getattr(self.c.tra, "character_recall_target", 0.5)),
                 max_ring_fpr=float(getattr(self.c.tra, "character_max_ring_fpr", 0.1)),
             ))
+            if bool(getattr(self.c.tra, "character_calibrate_threshold", False)):
+                metrics.update(calibrate_character_threshold(
+                    labels,
+                    scores,
+                    character_ids_all,
+                    threshold_min=float(getattr(self.c.tra, "character_threshold_min", 0.1)),
+                    threshold_max=float(getattr(self.c.tra, "character_threshold_max", 0.9)),
+                    threshold_steps=int(getattr(self.c.tra, "character_threshold_steps", 33)),
+                    recall_target=float(getattr(self.c.tra, "character_recall_target", 0.5)),
+                    max_ring_fpr=float(getattr(self.c.tra, "character_max_ring_fpr", 0.1)),
+                ))
         metrics["loss"] = loss_total / max(1, processed_batches)
         if bool(getattr(self.c.tra, "per_scroll_metrics", False)):
             metrics["per_scroll_pr_auc"] = _per_domain_pr_auc(
