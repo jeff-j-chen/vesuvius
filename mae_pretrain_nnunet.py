@@ -381,6 +381,14 @@ def main():
     ap.add_argument("--early-2d-unet", action="store_true")
     ap.add_argument("--early-2d-channels-mult", type=float, default=1.0)
     ap.add_argument("--mid-2d-unet", action="store_true")
+    ap.add_argument("--mid-2d-channels-mult", type=float, default=1.0)
+    ap.add_argument("--residual-2d-unet", action="store_true")
+    ap.add_argument("--two-d-block-depth", type=int, default=2)
+    ap.add_argument("--two-d-bottleneck-channels", type=int, default=0)
+    ap.add_argument("--two-d-extra-levels", type=int, default=0)
+    ap.add_argument("--two-d-extra-channels", type=int, nargs="*", default=())
+    ap.add_argument("--channels-mult", type=float, default=1.0)
+    ap.add_argument("--raw-only-stem", action="store_true")
     ap.add_argument("--gated-stems", action="store_true")
     ap.add_argument("--explicit-depth-channels", action="store_true")
     ap.add_argument("--overlapping-depth-windows", action="store_true")
@@ -431,6 +439,13 @@ def main():
         ap.error("--overlapping-depth-windows requires --mid-2d-unet")
     if args.early_2d_channels_mult <= 0:
         ap.error("--early-2d-channels-mult must be positive")
+    if args.mid_2d_channels_mult <= 0 or args.channels_mult <= 0:
+        ap.error("--mid-2d-channels-mult and --channels-mult must be positive")
+    if min(args.two_d_bottleneck_channels, args.two_d_extra_levels) < 0 \
+            or args.two_d_block_depth <= 0:
+        ap.error("2D block depth must be positive and extra levels/channels non-negative")
+    if args.raw_only_stem and args.gated_stems:
+        ap.error("--raw-only-stem and --gated-stems are mutually exclusive")
     if args.mednext_kernel < 3 or args.mednext_kernel % 2 == 0:
         ap.error("--mednext-kernel must be an odd integer >= 3")
     if args.freeze_loaded_backbone and not args.init_weights:
@@ -448,6 +463,14 @@ def main():
     cfg.model.early_2d_unet = bool(args.early_2d_unet)
     cfg.model.early_2d_channels_mult = float(args.early_2d_channels_mult)
     cfg.model.mid_2d_unet = bool(args.mid_2d_unet)
+    cfg.model.mid_2d_channels_mult = float(args.mid_2d_channels_mult)
+    cfg.model.residual_2d_unet = bool(args.residual_2d_unet)
+    cfg.model.two_d_block_depth = int(args.two_d_block_depth)
+    cfg.model.two_d_bottleneck_channels = int(args.two_d_bottleneck_channels)
+    cfg.model.two_d_extra_levels = int(args.two_d_extra_levels)
+    cfg.model.two_d_extra_channels = tuple(args.two_d_extra_channels)
+    cfg.model.channels_mult = float(args.channels_mult)
+    cfg.model.raw_only_stem = bool(args.raw_only_stem)
     cfg.model.gated_stems = bool(args.gated_stems)
     cfg.model.explicit_depth_channels = bool(args.explicit_depth_channels)
     cfg.model.overlapping_depth_windows = bool(args.overlapping_depth_windows)

@@ -555,19 +555,57 @@ class FactorizedConvBlock3d(nn.Module):
 class ConvBlock2d(nn.Module):
     """two-conv 2D U-Net block used after early surface-normal fusion."""
 
-    def __init__(self, in_channels: int, out_channels: int):
+    def __init__(self, in_channels: int, out_channels: int, depth: int = 2):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.InstanceNorm2d(out_channels, affine=True),
-            nn.LeakyReLU(0.01, inplace=False),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.InstanceNorm2d(out_channels, affine=True),
-            nn.LeakyReLU(0.01, inplace=False),
-        )
+        if depth < 1:
+            raise ValueError("2D block depth must be positive")
+        layers = []
+        for index in range(depth):
+            layers.extend((
+                nn.Conv2d(
+                    in_channels if index == 0 else out_channels,
+                    out_channels,
+                    kernel_size=3,
+                    padding=1,
+                    bias=False,
+                ),
+                nn.InstanceNorm2d(out_channels, affine=True),
+                nn.LeakyReLU(0.01, inplace=False),
+            ))
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
+
+
+class ResidualConvBlock2d(nn.Module):
+    """configurable-depth residual block for the collapsed 2D U-Net."""
+
+    def __init__(self, in_channels: int, out_channels: int, depth: int = 2):
+        super().__init__()
+        if depth < 1:
+            raise ValueError("2D block depth must be positive")
+        layers = []
+        for index in range(depth):
+            layers.append(nn.Conv2d(
+                in_channels if index == 0 else out_channels,
+                out_channels,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ))
+            layers.append(nn.InstanceNorm2d(out_channels, affine=True))
+            if index + 1 < depth:
+                layers.append(nn.LeakyReLU(0.01, inplace=False))
+        self.net = nn.Sequential(*layers)
+        self.shortcut = (
+            nn.Identity()
+            if in_channels == out_channels
+            else nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.leaky_relu(self.net(x) + self.shortcut(x), 0.01, inplace=False)
 
 
 class DividedSpaceDepthAttention3d(nn.Module):
@@ -751,6 +789,7 @@ class NnUnet3dLcndz(nn.Module):
         )
         self._residual_unet = bool(getattr(config.model, "residual_unet", False))
         self._cue_dropout = float(getattr(config.model, "cue_dropout", 0.0))
+        self._raw_only_stem = bool(getattr(config.model, "raw_only_stem", False))
         self._explicit_depth_channels = bool(
             getattr(config.model, "explicit_depth_channels", False)
         )
@@ -766,6 +805,10 @@ class NnUnet3dLcndz(nn.Module):
         )
         if not 0.0 <= self._cue_dropout <= 1.0:
             raise ValueError("cue_dropout must be in [0, 1]")
+        if self._raw_only_stem and bool(getattr(config.model, "gated_stems", False)):
+            raise ValueError("raw_only_stem and gated_stems are mutually exclusive")
+        if self._raw_only_stem and self._explicit_depth_channels:
+            raise ValueError("raw_only_stem and explicit_depth_channels are mutually exclusive")
         if self._factorized_2plus1d and self._residual_unet:
             raise ValueError("factorized_2plus1d and residual_unet are mutually exclusive")
         # width multiplier on the 32/64/128/256 channel ladder (0.5 = half -> ~4x fewer conv FLOPs)
@@ -794,7 +837,7 @@ class NnUnet3dLcndz(nn.Module):
                 norm_mode=norm_mode,
             )
 
-        stem_channels = 5 if self._explicit_depth_channels else 3
+        stem_channels = 1 if self._raw_only_stem else (5 if self._explicit_depth_channels else 3)
         self.enc1 = block3d(stem_channels, c1, shallow=True)
         self.gated_cue_stem = (
             GatedCueStem3d()
@@ -912,6 +955,34 @@ class NnUnet3dLcndz(nn.Module):
 
         self._early_2d_unet = bool(getattr(config.model, "early_2d_unet", False))
         self._mid_2d_unet = bool(getattr(config.model, "mid_2d_unet", False))
+        self._residual_2d_unet = bool(
+            getattr(config.model, "residual_2d_unet", False)
+        )
+        self._two_d_block_depth = int(getattr(config.model, "two_d_block_depth", 2))
+        self._two_d_bottleneck_channels = int(
+            getattr(config.model, "two_d_bottleneck_channels", 0)
+        )
+        self._two_d_extra_levels = int(getattr(config.model, "two_d_extra_levels", 0))
+        self._two_d_extra_channels = tuple(
+            int(value) for value in getattr(config.model, "two_d_extra_channels", ())
+        )
+        if self._two_d_block_depth < 1:
+            raise ValueError("two_d_block_depth must be positive")
+        if self._two_d_bottleneck_channels < 0:
+            raise ValueError("two_d_bottleneck_channels must be non-negative")
+        if self._two_d_extra_levels < 0:
+            raise ValueError("two_d_extra_levels must be non-negative")
+        if any(value <= 0 for value in self._two_d_extra_channels):
+            raise ValueError("two_d_extra_channels must contain positive values")
+        if self._two_d_extra_channels:
+            if self._two_d_extra_levels not in (0, len(self._two_d_extra_channels)):
+                raise ValueError("two_d_extra_levels must match two_d_extra_channels")
+            self._two_d_extra_levels = len(self._two_d_extra_channels)
+
+        def block2d(in_channels: int, out_channels: int):
+            block_type = ResidualConvBlock2d if self._residual_2d_unet else ConvBlock2d
+            return block_type(in_channels, out_channels, self._two_d_block_depth)
+
         if self._early_2d_unet and self._mid_2d_unet:
             raise ValueError("early_2d_unet and mid_2d_unet are mutually exclusive")
         if self._early_2d_unet:
@@ -922,18 +993,34 @@ class NnUnet3dLcndz(nn.Module):
                 max(1, int(round(ch * early_mult)))
                 for ch in (c1, c2, c3, c4)
             )
+            if self._two_d_bottleneck_channels:
+                e4 = self._two_d_bottleneck_channels
             self.early_depth_attn = nn.Conv3d(c1, 1, kernel_size=1)
             self.early_depth_fuse = nn.Conv2d(c1 * 2, e1, kernel_size=1, bias=False)
-            self.early2d_enc2 = ConvBlock2d(e1, e2)
-            self.early2d_enc3 = ConvBlock2d(e2, e3)
-            self.early2d_bottleneck = ConvBlock2d(e3, e4)
+            self.early2d_enc2 = block2d(e1, e2)
+            self.early2d_enc3 = block2d(e2, e3)
+            self.early2d_bottleneck = block2d(e3, e4)
             self.early2d_up3 = nn.ConvTranspose2d(e4, e3, kernel_size=2, stride=2)
-            self.early2d_dec3 = ConvBlock2d(e3 * 2, e3)
+            self.early2d_dec3 = block2d(e3 * 2, e3)
             self.early2d_up2 = nn.ConvTranspose2d(e3, e2, kernel_size=2, stride=2)
-            self.early2d_dec2 = ConvBlock2d(e2 * 2, e2)
+            self.early2d_dec2 = block2d(e2 * 2, e2)
             self.early2d_up1 = nn.ConvTranspose2d(e2, e1, kernel_size=2, stride=2)
-            self.early2d_dec1 = ConvBlock2d(e1 * 2, e1)
+            self.early2d_dec1 = block2d(e1 * 2, e1)
             self.early2d_head = nn.Conv2d(e1, 1, kernel_size=1)
+            extra_channels = self._two_d_extra_channels or (e4,) * self._two_d_extra_levels
+            encoder_channels = (e4,) + extra_channels
+            self.early2d_extra_encoders = nn.ModuleList([
+                block2d(in_channels, out_channels)
+                for in_channels, out_channels in zip(encoder_channels, extra_channels)
+            ])
+            self.early2d_extra_ups = nn.ModuleList([
+                nn.ConvTranspose2d(out_channels, in_channels, kernel_size=2, stride=2)
+                for in_channels, out_channels in zip(encoder_channels, extra_channels)
+            ])
+            self.early2d_extra_decoders = nn.ModuleList([
+                block2d(in_channels * 2, in_channels)
+                for in_channels in encoder_channels[:-1]
+            ])
         else:
             self.early_depth_attn = None
             self.early_depth_fuse = None
@@ -947,22 +1034,48 @@ class NnUnet3dLcndz(nn.Module):
             self.early2d_up1 = None
             self.early2d_dec1 = None
             self.early2d_head = None
+            self.early2d_extra_encoders = nn.ModuleList()
+            self.early2d_extra_ups = nn.ModuleList()
+            self.early2d_extra_decoders = nn.ModuleList()
 
         if self._mid_2d_unet:
             if not bool(getattr(config.model, "multitile", False)):
                 raise ValueError("mid_2d_unet requires multitile=True")
+            mid_mult = float(getattr(config.model, "mid_2d_channels_mult", 1.0))
+            if mid_mult <= 0:
+                raise ValueError("mid_2d_channels_mult must be positive")
+            m1, m2, m3, m4 = (
+                max(1, int(round(ch * mid_mult)))
+                for ch in (c1, c2, c3, c4)
+            )
+            if self._two_d_bottleneck_channels:
+                m4 = self._two_d_bottleneck_channels
             self.mid_depth_attn = nn.Conv3d(c2, 1, kernel_size=1)
-            self.mid_depth_fuse = nn.Conv2d(c2 * 2, c2, kernel_size=1, bias=False)
-            self.mid_skip1_fuse = nn.Conv2d(c1 * 2, c1, kernel_size=1, bias=False)
-            self.mid2d_enc3 = ConvBlock2d(c2, c3)
-            self.mid2d_bottleneck = ConvBlock2d(c3, c4)
-            self.mid2d_up3 = nn.ConvTranspose2d(c4, c3, kernel_size=2, stride=2)
-            self.mid2d_dec3 = ConvBlock2d(c3 * 2, c3)
-            self.mid2d_up2 = nn.ConvTranspose2d(c3, c2, kernel_size=2, stride=2)
-            self.mid2d_dec2 = ConvBlock2d(c2 * 2, c2)
-            self.mid2d_up1 = nn.ConvTranspose2d(c2, c1, kernel_size=2, stride=2)
-            self.mid2d_dec1 = ConvBlock2d(c1 * 2, c1)
-            self.mid2d_head = nn.Conv2d(c1, 1, kernel_size=1)
+            self.mid_depth_fuse = nn.Conv2d(c2 * 2, m2, kernel_size=1, bias=False)
+            self.mid_skip1_fuse = nn.Conv2d(c1 * 2, m1, kernel_size=1, bias=False)
+            self.mid2d_enc3 = block2d(m2, m3)
+            self.mid2d_bottleneck = block2d(m3, m4)
+            self.mid2d_up3 = nn.ConvTranspose2d(m4, m3, kernel_size=2, stride=2)
+            self.mid2d_dec3 = block2d(m3 * 2, m3)
+            self.mid2d_up2 = nn.ConvTranspose2d(m3, m2, kernel_size=2, stride=2)
+            self.mid2d_dec2 = block2d(m2 * 2, m2)
+            self.mid2d_up1 = nn.ConvTranspose2d(m2, m1, kernel_size=2, stride=2)
+            self.mid2d_dec1 = block2d(m1 * 2, m1)
+            self.mid2d_head = nn.Conv2d(m1, 1, kernel_size=1)
+            extra_channels = self._two_d_extra_channels or (m4,) * self._two_d_extra_levels
+            encoder_channels = (m4,) + extra_channels
+            self.mid2d_extra_encoders = nn.ModuleList([
+                block2d(in_channels, out_channels)
+                for in_channels, out_channels in zip(encoder_channels, extra_channels)
+            ])
+            self.mid2d_extra_ups = nn.ModuleList([
+                nn.ConvTranspose2d(out_channels, in_channels, kernel_size=2, stride=2)
+                for in_channels, out_channels in zip(encoder_channels, extra_channels)
+            ])
+            self.mid2d_extra_decoders = nn.ModuleList([
+                block2d(in_channels * 2, in_channels)
+                for in_channels in encoder_channels[:-1]
+            ])
             if self._overlapping_depth_windows:
                 if self._overlap_window_size < 2 or self._overlap_window_stride < 1:
                     raise ValueError("overlapping depth window size/stride must be positive")
@@ -1002,6 +1115,9 @@ class NnUnet3dLcndz(nn.Module):
             self.mid2d_up1 = None
             self.mid2d_dec1 = None
             self.mid2d_head = None
+            self.mid2d_extra_encoders = nn.ModuleList()
+            self.mid2d_extra_ups = nn.ModuleList()
+            self.mid2d_extra_decoders = nn.ModuleList()
             self._overlap_window_count = 0
             self.overlap_bottleneck_fuse = None
             self.overlap_decoded_fuse = None
@@ -1133,8 +1249,6 @@ class NnUnet3dLcndz(nn.Module):
             bypassed = []
             if self._dual_scale and self._early_2d_unet:
                 bypassed.append("dual_scale")
-            if self.gated_cue_stem is not None and self._early_2d_unet:
-                bypassed.append("gated_stems")
             if self.style_film is not None:
                 bypassed.append("style_film")
             if self._mixstyle:
@@ -1301,6 +1415,8 @@ class NnUnet3dLcndz(nn.Module):
                 + 2.0 * padded[:, :, 1:-1]
                 + padded[:, :, 2:]
             ) * 0.25
+        if self._raw_only_stem:
+            return raw
         dz = torch.zeros_like(raw)
         if not self._no_dz:
             dz[:, :, 1:] = raw[:, :, 1:] - raw[:, :, :-1]
@@ -1619,12 +1735,24 @@ class NnUnet3dLcndz(nn.Module):
             enc2 = F.dropout2d(enc2, p=self._enc2_drop.p, training=self.training)
         enc3 = self.early2d_enc3(F.max_pool2d(enc2, 2))
         bottleneck = self.early2d_bottleneck(F.max_pool2d(enc3, 2))
-        dec3 = self.early2d_dec3(self._merge_skip_2d(self.early2d_up3(bottleneck), enc3))
+        deepest = bottleneck
+        extra_skips = []
+        for encoder in self.early2d_extra_encoders:
+            extra_skips.append(deepest)
+            deepest = encoder(F.max_pool2d(deepest, 2))
+        decoded = deepest
+        for upsample, decoder, skip in zip(
+            reversed(self.early2d_extra_ups),
+            reversed(self.early2d_extra_decoders),
+            reversed(extra_skips),
+        ):
+            decoded = decoder(self._merge_skip_2d(upsample(decoded), skip))
+        dec3 = self.early2d_dec3(self._merge_skip_2d(self.early2d_up3(decoded), enc3))
         dec2 = self.early2d_dec2(self._merge_skip_2d(self.early2d_up2(dec3), enc2))
         dec1 = self.early2d_dec1(self._merge_skip_2d(self.early2d_up1(dec2), enc1))
         if self._head_drop is not None:
             dec1 = F.dropout2d(dec1, p=self._head_drop.p, training=self.training)
-        return bottleneck, dec1
+        return deepest, dec1
 
     def _encode_decode_mid_2d(
         self,
@@ -1678,12 +1806,24 @@ class NnUnet3dLcndz(nn.Module):
 
         enc3 = self.mid2d_enc3(F.max_pool2d(enc2_2d, 2))
         bottleneck = self.mid2d_bottleneck(F.max_pool2d(enc3, 2))
-        dec3 = self.mid2d_dec3(self._merge_skip_2d(self.mid2d_up3(bottleneck), enc3))
+        deepest = bottleneck
+        extra_skips = []
+        for encoder in self.mid2d_extra_encoders:
+            extra_skips.append(deepest)
+            deepest = encoder(F.max_pool2d(deepest, 2))
+        decoded = deepest
+        for upsample, decoder, skip in zip(
+            reversed(self.mid2d_extra_ups),
+            reversed(self.mid2d_extra_decoders),
+            reversed(extra_skips),
+        ):
+            decoded = decoder(self._merge_skip_2d(upsample(decoded), skip))
+        dec3 = self.mid2d_dec3(self._merge_skip_2d(self.mid2d_up3(decoded), enc3))
         dec2 = self.mid2d_dec2(self._merge_skip_2d(self.mid2d_up2(dec3), enc2_2d))
         dec1 = self.mid2d_dec1(self._merge_skip_2d(self.mid2d_up1(dec2), enc1_2d))
         if self._head_drop is not None:
             dec1 = F.dropout2d(dec1, p=self._head_drop.p, training=self.training)
-        return bottleneck, dec1
+        return deepest, dec1
 
     def _encode_decode_overlapping_depth(
         self,

@@ -147,7 +147,7 @@ class DataConfig:
     coordinate_hash_split: bool = False
     coordinate_hash_block_size: int = 256
     coordinate_hash_valid_fraction: float = 0.25
-    coordinate_hash_seed: int = 29
+    coordinate_hash_seed: int = 41
     train_mask_dir: str = "./train_masks"
     surface_label_dir: str = "./surface_labels"
     context_size: int = 192
@@ -347,6 +347,9 @@ class TrainingConfig:
     domain_cvar: bool = False
     domain_cvar_alpha: float = 0.25
     pcgrad: bool = False
+    pcgrad_lite: bool = False
+    pcgrad_lite_max_domains: int = 4
+    pcgrad_lite_scope: str = "head"
     model_ema: bool = False
     model_ema_decay: float = 0.999
     model_ema_start_epoch: int = 0
@@ -397,9 +400,16 @@ class ModelConfig:
     early_2d_unet: bool = False
     early_2d_channels_mult: float = 1.0
     mid_2d_unet: bool = True
+    mid_2d_channels_mult: float = 1.0
+    residual_2d_unet: bool = False
+    two_d_block_depth: int = 2
+    two_d_bottleneck_channels: int = 0
+    two_d_extra_levels: int = 0
+    two_d_extra_channels: tuple[int, ...] = ()
     factorized_2plus1d: bool = False
     residual_unet: bool = False
     gated_stems: bool = True
+    raw_only_stem: bool = False
     cue_dropout: float = 0.0
     explicit_depth_channels: bool = False
     overlapping_depth_windows: bool = False

@@ -415,12 +415,17 @@ class Trainer:
             bool(getattr(config.tra, "domain_vrex", False)),
             bool(getattr(config.tra, "domain_cvar", False)),
             bool(getattr(config.tra, "pcgrad", False)),
+            bool(getattr(config.tra, "pcgrad_lite", False)),
         ]
         if sum(domain_robust_modes) > 1:
             raise ValueError(
                 "domain-gradient, physical-domain GroupDRO, physical-patch GroupDRO, "
-                "V-REx, domain CVaR, and PCGrad are mutually exclusive"
+                "V-REx, domain CVaR, PCGrad, and PCGrad-lite are mutually exclusive"
             )
+        if int(getattr(config.tra, "pcgrad_lite_max_domains", 4)) < 2:
+            raise ValueError("pcgrad_lite_max_domains must be at least 2")
+        if str(getattr(config.tra, "pcgrad_lite_scope", "head")) not in ("head", "all"):
+            raise ValueError("pcgrad_lite_scope must be 'head' or 'all'")
         if not 0.0 <= float(getattr(config.tra, "domain_gradient_blend", 1.0)) <= 1.0:
             raise ValueError("domain_gradient_blend must be in [0, 1]")
         if not 0.0 < float(getattr(config.tra, "domain_cvar_alpha", 0.25)) <= 1.0:
@@ -855,6 +860,79 @@ class Trainer:
                     parameter.grad = gradient
                 else:
                     parameter.grad.add_(gradient)
+
+    def _pcgrad_lite_backward(
+        self,
+        loss: torch.Tensor,
+        domain_losses: list[torch.Tensor],
+    ) -> None:
+        max_domains = int(getattr(self.c.tra, "pcgrad_lite_max_domains", 4))
+        if len(domain_losses) < 2:
+            self.scaler.scale(loss).backward()
+            return
+        if len(domain_losses) > max_domains:
+            indices = torch.randperm(len(domain_losses))[:max_domains].tolist()
+            domain_losses = [domain_losses[index] for index in indices]
+
+        scope = str(getattr(self.c.tra, "pcgrad_lite_scope", "head"))
+        head_prefixes = (
+            "dec1.", "out_head.",
+            "early2d_dec1.", "early2d_head.",
+            "mid2d_dec1.", "mid2d_head.",
+        )
+        candidate_parameters = [
+            parameter
+            for name, parameter in self.model.named_parameters()
+            if parameter.requires_grad and (
+                scope == "all" or any(name.startswith(prefix) for prefix in head_prefixes)
+            )
+        ]
+        if not candidate_parameters:
+            raise RuntimeError(f"PCGrad-lite found no parameters for scope={scope!r}")
+
+        self.scaler.scale(loss).backward(retain_graph=True)
+        parameters = [
+            parameter for parameter in candidate_parameters
+            if parameter.grad is not None
+        ]
+        if not parameters:
+            raise RuntimeError(f"PCGrad-lite found no active parameters for scope={scope!r}")
+        task_vectors = []
+        for index, domain_loss in enumerate(domain_losses):
+            gradients = torch.autograd.grad(
+                self.scaler.scale(domain_loss),
+                parameters,
+                retain_graph=index + 1 < len(domain_losses),
+                allow_unused=True,
+            )
+            task_vectors.append(torch.cat([
+                (
+                    torch.zeros_like(parameter).reshape(-1)
+                    if gradient is None else gradient.reshape(-1)
+                )
+                for parameter, gradient in zip(parameters, gradients)
+            ]))
+
+        original = torch.stack(task_vectors)
+        projected = original.clone()
+        norms = original.square().sum(dim=1).clamp(min=1e-12)
+        for task_index in range(len(task_vectors)):
+            for other_index in torch.randperm(len(task_vectors)).tolist():
+                if other_index == task_index:
+                    continue
+                dot = torch.dot(projected[task_index], original[other_index])
+                coefficient = torch.minimum(dot, dot.new_zeros(())) / norms[other_index]
+                projected[task_index] = (
+                    projected[task_index] - coefficient * original[other_index]
+                )
+
+        correction = projected.mean(dim=0) - original.mean(dim=0)
+        offset = 0
+        with torch.no_grad():
+            for parameter in parameters:
+                count = parameter.numel()
+                parameter.grad.add_(correction[offset:offset + count].view_as(parameter))
+                offset += count
 
     def _init_visualizers(self) -> None:
         scroll_ids = self._scroll_ids
@@ -1391,6 +1469,7 @@ class Trainer:
                 bool(getattr(self.c.tra, "domain_vrex", False)),
                 bool(getattr(self.c.tra, "domain_cvar", False)),
                 bool(getattr(self.c.tra, "pcgrad", False)),
+                bool(getattr(self.c.tra, "pcgrad_lite", False)),
             ])
             if needs_domain_losses:
                 if domain_ids is None:
@@ -1563,7 +1642,9 @@ class Trainer:
                     float(getattr(self.c.tra, "domain_cvar_alpha", 0.25)),
                 )
                 self._last_dg_losses["domain_cvar_loss"] = float(primary_loss.detach())
-            if bool(getattr(self.c.tra, "pcgrad", False)):
+            if bool(getattr(self.c.tra, "pcgrad", False)) or bool(
+                getattr(self.c.tra, "pcgrad_lite", False)
+            ):
                 pcgrad_domain_losses = domain_group_losses
                 if domain_group_losses:
                     primary_loss = torch.stack(domain_group_losses).mean()
@@ -2068,6 +2149,8 @@ class Trainer:
 
         if bool(getattr(self.c.tra, "pcgrad", False)):
             self._pcgrad_backward(loss, primary_loss, pcgrad_domain_losses)
+        elif bool(getattr(self.c.tra, "pcgrad_lite", False)):
+            self._pcgrad_lite_backward(loss, pcgrad_domain_losses)
         else:
             self.scaler.scale(loss).backward()
         if (

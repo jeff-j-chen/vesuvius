@@ -75,6 +75,7 @@ def needs_domain_ids(config: Config) -> bool:
         bool(getattr(config.tra, "domain_vrex", False)),
         bool(getattr(config.tra, "domain_cvar", False)),
         bool(getattr(config.tra, "pcgrad", False)),
+        bool(getattr(config.tra, "pcgrad_lite", False)),
         bool(getattr(config.tra, "domain_gradient_mode", "")),
         bool(getattr(config.model, "mixstyle", False)),
         bool(getattr(config.model, "sagnet", False)),

@@ -14,6 +14,7 @@ import argparse
 import gc
 import json
 import os
+import signal
 import subprocess
 import sys
 import traceback
@@ -215,13 +216,6 @@ TESTS = [
         physical_patch_groupdro_eta=0.05,
         physical_patch_groupdro_max_ratio=3.0,
     ),
-    _test(
-        "coordinate_hash_split",
-        coordinate_hash_split=True,
-        coordinate_hash_block_size=512,
-        coordinate_hash_valid_fraction=0.25,
-        coordinate_hash_seed=29,
-    ),
 
     # New optimization and preservation mechanisms.
     _test("domain_vrex", domain_vrex=True, domain_vrex_lambda=1.0),
@@ -280,7 +274,19 @@ TESTS = [
         ring_gap_r=1,
         ring_shell_r=4,
         multitile_pos_only=False,
-        seed=97,
+    ),
+    _test(
+        "fixed_depth_8_16",
+        train_d_start=8,
+        train_d_end=16,
+        depth_jitter=0,
+        surface_relative_depth_window=False,
+    ),
+    _test(
+        "coordinate_hash_split",
+        coordinate_hash_split=True,
+        coordinate_hash_block_size=512,
+        coordinate_hash_valid_fraction=0.25,
     ),
 ]
 
@@ -347,6 +353,15 @@ def build_config(test: dict):
     config.data.ring_shell_r = int(test.get("ring_shell_r", 4))
     config.data.multitile_pos_only = bool(test.get("multitile_pos_only", True))
     config.data.depth = int(test.get("depth", 8))
+    config.data.train_d_start = int(test.get("train_d_start", config.data.train_d_start))
+    config.data.train_d_end = int(test.get("train_d_end", config.data.train_d_end))
+    config.data.depth_jitter = int(test.get("depth_jitter", config.data.depth_jitter))
+    config.data.surface_relative_depth_window = bool(
+        test.get(
+            "surface_relative_depth_window",
+            config.data.surface_relative_depth_window,
+        )
+    )
     config.data.coordinate_hash_split = bool(test.get("coordinate_hash_split", False))
     config.data.coordinate_hash_block_size = int(
         test.get("coordinate_hash_block_size", 512)
@@ -413,7 +428,6 @@ def build_config(test: dict):
     config.model.multitile_subtile = int(test.get("multitile_subtile", 16))
     config.model.multitile_grid = int(test.get("multitile_grid", 4))
     config.model.surface_teacher_input = True
-    config.data.surface_relative_depth_window = True
     config.model.compile_model = False
     config.model.require_architecture_init = True
     config.init_weights = str(_pretrain_path(str(test["pretrain_key"])).relative_to(ROOT))
@@ -559,13 +573,59 @@ def _open_fd_count() -> int:
         return -1
 
 
+def _cgroup_oom_kill_count() -> int:
+    try:
+        entries = dict(
+            line.split(maxsplit=1)
+            for line in Path("/sys/fs/cgroup/memory.events").read_text().splitlines()
+        )
+        return int(entries.get("oom_kill", 0))
+    except (OSError, TypeError, ValueError):
+        return -1
+
+
+def _expected_prepared_cache_keys(config) -> set[tuple]:
+    from utils.dataloader import DataManager
+
+    scroll_ids = [int(scroll.scroll_id) for scroll in config.data.scrolls]
+    domain_by_scroll = {scroll_id: index for index, scroll_id in enumerate(scroll_ids)}
+    scroll_dict = getattr(config.data, "train_scroll_dict", None)
+    if scroll_dict:
+        domain_by_scroll = {
+            int(scroll_id): domain_id
+            for domain_id, group in enumerate(scroll_dict.values())
+            for scroll_id in group
+        }
+    keys = set()
+    for segment_index, scroll_id in enumerate(scroll_ids):
+        manager = DataManager.__new__(DataManager)
+        manager.c = config
+        manager.scroll_id = scroll_id
+        manager.domain_id = domain_by_scroll[scroll_id]
+        manager.character_namespace = segment_index
+        keys.add(manager._make_prepared_cache_key())
+    return keys
+
+
 def prewarm_data_cache(config) -> None:
     from train import Trainer
     from utils.chunk_cache import _CACHE_REGISTRY
-    from utils.dataloader import _PREPARED_DATASET_CACHE
+    from utils.dataloader import _PREPARED_DATASET_CACHE, _PREPARED_DATASET_CACHE_LOCK
 
     if torch.cuda.is_initialized():
         raise RuntimeError("Campaign 29 controller initialized CUDA before cache warmup")
+    expected_keys = _expected_prepared_cache_keys(config)
+    with _PREPARED_DATASET_CACHE_LOCK:
+        current_keys = set(_PREPARED_DATASET_CACHE)
+        if current_keys != expected_keys:
+            print(
+                f"[campaign29] rotating prepared RAM cache: "
+                f"{len(current_keys)} -> {len(expected_keys)} dataset(s)",
+                flush=True,
+            )
+            _PREPARED_DATASET_CACHE.clear()
+    if current_keys != expected_keys:
+        gc.collect()
     warmup = Trainer.__new__(Trainer)
     warmup.c = config
     train_dataset = train_loader = valid_loader = None
@@ -574,7 +634,9 @@ def prewarm_data_cache(config) -> None:
     finally:
         del train_dataset, train_loader, valid_loader, warmup
         gc.collect()
-    if not _PREPARED_DATASET_CACHE or not _CACHE_REGISTRY:
+    with _PREPARED_DATASET_CACHE_LOCK:
+        prepared_keys = set(_PREPARED_DATASET_CACHE)
+    if prepared_keys != expected_keys or not _CACHE_REGISTRY:
         raise RuntimeError("Campaign 29 RAM cache warmup did not populate global caches")
     if torch.cuda.is_initialized():
         raise RuntimeError("Campaign 29 cache warmup unexpectedly initialized CUDA")
@@ -591,6 +653,7 @@ def run_test_isolated(config) -> bool:
     if not hasattr(os, "fork"):
         return run_test(config, False)
     before = _open_fd_count()
+    oom_kills_before = _cgroup_oom_kill_count()
     pid = os.fork()
     if pid == 0:
         try:
@@ -605,8 +668,21 @@ def run_test_isolated(config) -> bool:
             os._exit(1)
     _, status = os.waitpid(pid, 0)
     after = _open_fd_count()
+    oom_kills_after = _cgroup_oom_kill_count()
+    status_detail = "unknown"
+    if os.WIFEXITED(status):
+        status_detail = f"exit={os.WEXITSTATUS(status)}"
+    elif os.WIFSIGNALED(status):
+        signal_number = os.WTERMSIG(status)
+        try:
+            signal_name = signal.Signals(signal_number).name
+        except ValueError:
+            signal_name = str(signal_number)
+        status_detail = f"signal={signal_name}"
+        if oom_kills_after > oom_kills_before >= 0:
+            status_detail += f" cgroup_oom_kill={oom_kills_before}->{oom_kills_after}"
     print(
-        f"[campaign29] isolated arm pid={pid} status={status} "
+        f"[campaign29] isolated arm pid={pid} status={status} {status_detail} "
         f"controller_fds={before}->{after}",
         flush=True,
     )
@@ -654,13 +730,14 @@ def main() -> None:
     preflight_pretraining(selected, args.dry_run)
     print(f"[campaign29] {len(selected)} run(s) queued (log -> {LOG_DIR})")
 
-    if not args.dry_run and selected:
-        prewarm_data_cache(build_config(selected[0]))
-
     results = {}
     for test in selected:
         config = build_config(test)
-        success = run_test(config, True) if args.dry_run else run_test_isolated(config)
+        if args.dry_run:
+            success = run_test(config, True)
+        else:
+            prewarm_data_cache(config)
+            success = run_test_isolated(config)
         results[test["tid"]] = "OK" if success else "FAIL"
         if not args.dry_run:
             del config
