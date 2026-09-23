@@ -263,6 +263,9 @@ class Transform:
         self.cutout_n_patches = int(getattr(config.dl, "cutout_n_patches", 1))
         self.cutout_protect_center = bool(getattr(config.dl, "cutout_protect_center", False))
         self.depth_mask_prob  = float(getattr(config.dl, "depth_mask_prob", 0.0))
+        self.depth_mask_mode  = str(getattr(config.dl, "depth_mask_mode", "zero"))
+        if self.depth_mask_mode not in ("zero", "interp"):
+            raise ValueError("depth_mask_mode must be 'zero' or 'interp'")
         self.elastic_prob     = float(getattr(config.dl, "elastic_prob", 0.0))
         self.elastic_alpha    = float(getattr(config.dl, "elastic_alpha", 15.0))
         self.elastic_sigma    = float(getattr(config.dl, "elastic_sigma", 5.0))
@@ -608,9 +611,14 @@ class Transform:
         return out
 
     def _apply_depth_mask(self, block):
-        """independently zero out depth slices with depth_mask_prob each.
-        forces robustness to missing depth planes."""
+        """remove depth information from slices; interp avoids zeros that fake an air edge."""
         out = block.copy()
+        if self.depth_mask_mode == "interp":
+            if random.random() < self.depth_mask_prob:
+                index = random.randrange(out.shape[0])
+                neighbours = [k for k in (index - 1, index + 1) if 0 <= k < out.shape[0]]
+                out[index] = block[neighbours].mean(axis=0)
+            return out
         for d in range(out.shape[0]):
             if random.random() < self.depth_mask_prob:
                 out[d] = 0.0
@@ -701,7 +709,12 @@ class InkVolumeDataset(IterableDataset):
         self._surface_relative_depth_window = bool(
             getattr(config.data, "surface_relative_depth_window", False)
         )
-        self._surface_window_offset = int(getattr(config.data, "surface_window_offset", 0))
+        self._surface_window_offset = int(
+            (getattr(config.data, "surface_window_offset_by_scroll", None) or {}).get(
+                self.scroll_id,
+                getattr(config.data, "surface_window_offset", 0),
+            )
+        )
         if self._surface_window_offset and not self._surface_relative_depth_window:
             raise ValueError("surface_window_offset requires surface_relative_depth_window")
         if self._surface_relative_depth_window and not self._use_surface_teacher:
@@ -2310,7 +2323,7 @@ class DataManager:
         data_fields = (
             "zarr_path", "tile_size", "depth", "d_start", "d_end", "train_d_start",
             "train_d_end", "mask_memmap", "mask_bitpack", "preload_volumes",
-            "ring_negatives", "ring_label_source", "ring_close_r", "ring_gap_r",
+            "ring_negatives", "ring_label_source", "ring_from_inklabel_dir", "ring_close_r", "ring_gap_r",
             "ring_shell_r", "simple_split", "coordinate_hash_split",
             "coordinate_hash_block_size", "coordinate_hash_valid_fraction",
             "coordinate_hash_seed", "train_mask_dir", "surface_label_dir",
@@ -2920,26 +2933,35 @@ class DataManager:
         return character_grid
 
     @staticmethod
-    def _exclude_characters_crossing_split(character_grid, assignment, unit):
-        """exclude components crossing the fixed manual split from character-aware analysis."""
+    def _exclude_characters_crossing_split(character_grid, assignment, unit, max_minority=0.05):
+        """assign split-crossing components to their majority side; exclude large crossings."""
         unit = max(1, int(unit))
         grid_h, grid_w = character_grid.shape
         cells = assignment[:grid_h * unit, :grid_w * unit].reshape(
             grid_h, unit, grid_w, unit
         ).all(axis=(1, 3))
         crossing = []
+        trimmed = 0
+        out = character_grid.copy()
         for component_id in np.unique(character_grid):
             if component_id <= 0:
                 continue
             member = character_grid == component_id
             values = cells[member]
             if values.any() and not values.all():
-                crossing.append(int(component_id))
-        out = character_grid.copy()
+                train_fraction = float(values.mean())
+                if min(train_fraction, 1.0 - train_fraction) > max_minority:
+                    crossing.append(int(component_id))
+                else:
+                    # minority cells lose their character id so no character spans both splits
+                    out[member & (cells != (train_fraction > 0.5))] = 0
+                    trimmed += 1
         if crossing:
             out[np.isin(out, crossing)] = 0
+        if crossing or trimmed:
             print(
-                f"[character-split] excluded {len(crossing)} character(s) crossing the fixed split"
+                f"[character-split] excluded {len(crossing)} character(s) crossing the fixed split; "
+                f"assigned {trimmed} to their majority side (minority <= {max_minority:.0%})"
             )
         return out
 
@@ -3055,7 +3077,13 @@ class DataManager:
 
         # determine which labels to use for ring boundary computation
         ring_source = getattr(self.c.data, 'ring_label_source', 'original')
-        if ring_source in {'original', 'closed'}:
+        if ring_source == 'closed' and bool(getattr(self.c.data, 'ring_from_inklabel_dir', False)):
+            # forced positives/negatives from train_masks never seed a ring
+            ring_labels = np.array(labels_crop, dtype=np.float32)
+            for forced in (self.explicit_positive_mask, self.explicit_negative_mask):
+                if forced is not None:
+                    ring_labels[np.asarray(forced)[:h, :w] > 0] = 0.0
+        elif ring_source in {'original', 'closed'}:
             orig_path = f"./inklabels/{self.scroll_id}.png"
             orig_img = imread_gray(orig_path)
             if orig_img is not None:
@@ -3355,6 +3383,8 @@ def get_tile_pos_weight(train_children, config, cache_path=UNIFIED_CACHE_PATH, c
         ink = os.path.basename(str(getattr(config.data, "inklabel_dir", "")).rstrip("/"))
         if mt:
             gate = "_ringgate" if ds._mt_ring_gate and not ds._mt_pos_only else ""
+            if bool(getattr(config.data, "ring_from_inklabel_dir", False)):
+                gate += "_ringsrc"
             sig = f"mt_ringtargets_v2_s{ds._mt_sub}_g{ds._mt_grid}_pos{int(ds._mt_pos_only)}{gate}_{ink}"
             key = f"class_weight_multitile_s{ds._mt_sub}_g{ds._mt_grid}_pos{int(ds._mt_pos_only)}{gate}"
         else:

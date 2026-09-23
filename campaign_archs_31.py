@@ -532,8 +532,48 @@ def _pretrain_metadata(key: str) -> dict:
     }
 
 
+def _existing_pretraining_reusable(key: str) -> bool:
+    """keep an existing checkpoint whose scroll list predates newly added test scrolls."""
+    checkpoint = _pretrain_path(key)
+    marker = _pretrain_marker(key)
+    if not checkpoint.is_file() or checkpoint.stat().st_size == 0 or not marker.is_file():
+        return False
+    try:
+        metadata = json.loads(marker.read_text(encoding="utf-8"))
+        state = torch.load(checkpoint, map_location="cpu", weights_only=True)
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return False
+    trained_ids = {int(value) for value in metadata.get("scroll_ids", ())}
+    added_ids = set(ALL_PRETRAIN_SCROLL_IDS) - trained_ids
+    spec = PRETRAIN_SPECS[key]
+    if spec.get("reuse_campaign29"):
+        expected = campaign29._pretrain_metadata(str(spec["reuse_campaign29"]))
+    elif spec.get("reuse_campaign30"):
+        key30 = str(spec["reuse_campaign30"])
+        spec30 = campaign30.PRETRAIN_SPECS[key30]
+        if spec30.get("reuse_campaign29") and key30 not in campaign30._MATCHED_PRETRAIN_OVERRIDES:
+            expected = campaign29._pretrain_metadata(str(spec30["reuse_campaign29"]))
+        else:
+            expected = campaign30._pretrain_metadata(key30)
+    else:
+        expected = _pretrain_metadata(key)
+    strip = lambda values: {k: v for k, v in values.items() if k != "scroll_ids"}
+    return (
+        bool(trained_ids)
+        and strip(metadata) == strip(expected)
+        and trained_ids <= set(ALL_PRETRAIN_SCROLL_IDS)
+        and added_ids <= {int(value) for value in DEFAULT_TEST_SCROLL_IDS}
+        and all(
+            any(name.startswith(prefix) for name in state)
+            for prefix in PRETRAIN_SPECS[key]["required"]
+        )
+    )
+
+
 def _pretraining_complete(key: str) -> bool:
     spec = PRETRAIN_SPECS[key]
+    if _existing_pretraining_reusable(key):
+        return True
     if spec.get("reuse_campaign29"):
         return campaign29._pretraining_complete(str(spec["reuse_campaign29"]))
     reused = spec.get("reuse_campaign30")
@@ -690,7 +730,10 @@ def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:
     ]
     if missing:
         message = f"Campaign 31 requires every training and test zarr; missing={missing}"
-        if not dry_run:
+        needs_pretraining = any(
+            not _pretraining_complete(str(test["pretrain_key"])) for test in selected
+        )
+        if not dry_run and needs_pretraining:
             raise FileNotFoundError(message)
         print(f"[campaign31] WARNING {message}", flush=True)
 

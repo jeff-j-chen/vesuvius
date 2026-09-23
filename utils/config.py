@@ -97,6 +97,7 @@ DEFAULT_TEST_SCROLL_IDS = (
     20260921094413,  # PHerc0846A
     20260918132724,  # PHerc0175A
     20260922073234,  # PHerc0306B
+    20260922161631,  # PHerc0800
 )
 
 
@@ -156,8 +157,8 @@ class DataConfig:
     context_size: int = 192
     context_downsample: int = 2
     eval_infer_bs: int = 192
-    eval_prefetch: int = 0   # >0 reads eval rows in N background threads to overlap disk i/o with gpu inference (0=serial)
-    eval_chunk_gb: float = 0.25  # bounded host-RAM target for the final W044 figure
+    eval_prefetch: int = 3   # >0 reads eval rows in N background threads to overlap disk i/o with gpu inference (0=serial)
+    eval_chunk_gb: float = 3.0  # bounded host-RAM target for the final W044 figure
     tta_mode: str = "light"  # eval TTA view set: "light"=id+hflip (2x), "flips"=id+h+v+180 (4x), "dihedral"=+/-90 too (6x)
     probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
     vis_scroll_ids: Optional[List[int]] = field(default_factory=lambda: [20260115000000])
@@ -170,10 +171,13 @@ class DataConfig:
     depth_jitter: int = 1  # max slice jitter for depth window start; attacks depth-profile position memorization
     surface_relative_depth_window: bool = True  # center the source window on the literal map
     surface_window_offset: int = 0  # constant slice shift of the surface-centered window (train and eval)
+    surface_window_offset_by_scroll: dict = field(default_factory=dict)  # scroll id -> offset; overrides the constant
+    holdout_domains: List[str] = field(default_factory=list)  # train_scroll_dict names excluded from training only
     explicit_negative_share: float = 0.0  # fraction of character negative draws taken from hand-drawn explicit negatives
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
     multitile_pos_only: bool = True  # in ink-containing windows, supervise ONLY ink sub-tiles (mask out non-ink ones to avoid labelling unlabelled-ink neighbours as negatives); ink-free ring windows still give negatives
     multitile_ring_gate: bool = True  # with pos_only=False, still emit only sub-tiles inside the ring/supervision mask (False = legacy all-in-window targets)
+    ring_from_inklabel_dir: bool = True  # closed ring seeds from inklabel_dir minus train_mask forced pixels (False = legacy ./inklabels/<id>.png)
     character_balanced_sampling: bool = True
     character_balance_scrolls: bool = True
     character_min_pixels: int = 8
@@ -203,6 +207,7 @@ class DataloaderConfig:
     cutout_max_frac: float = 0.16
     cutout_n_patches: int = 3
     depth_mask_prob: float = 0.0
+    depth_mask_mode: str = "zero"  # zero: each slice zeroed independently; interp: one slice per sample -> neighbour mean
     fda_prob: float = 0.0
     fda_beta: float = 0.05  # fraction of low-freq spectrum to swap
     elastic_prob: float = 0.0
@@ -437,6 +442,7 @@ class ModelConfig:
     mid_depth_max_mode: str = "amax"  # amax or topk peak branch at the mid depth collapse
     mid_depth_topk_frac: float = 0.5
     mt_lse_r_max: float = 10.0  # upper clamp on the multitile lse temperature (2d heads)
+    planar_early_convs: bool = False  # early-2d only: stem and enc1 convs never mix slices
     depth_antialias: bool = False
     sparse_deep_supervision: bool = False
     sparse_deep_supervision_dec2_weight: float = 0.3

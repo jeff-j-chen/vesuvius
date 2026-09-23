@@ -456,6 +456,24 @@ class ResidualConvBlock3d(nn.Module):
         return F.leaky_relu(self.net(x) + self.shortcut(x), 0.01, inplace=False)
 
 
+def _planarize_depth_convs(module: nn.Module) -> None:
+    """swap depth-spanning conv kernels for per-slice (1,k,k) kernels."""
+    for name, child in module.named_children():
+        if isinstance(child, nn.Conv3d) and child.kernel_size[0] > 1:
+            setattr(module, name, nn.Conv3d(
+                child.in_channels,
+                child.out_channels,
+                kernel_size=(1, *child.kernel_size[1:]),
+                stride=(1, *child.stride[1:]),
+                padding=(0, *child.padding[1:]),
+                dilation=(1, *child.dilation[1:]),
+                groups=child.groups,
+                bias=child.bias is not None,
+            ))
+        else:
+            _planarize_depth_convs(child)
+
+
 class GatedCueStem3d(nn.Module):
     """independently refine raw, LCN, and dZ cues before content-adaptive fusion."""
 
@@ -843,6 +861,12 @@ class NnUnet3dLcndz(nn.Module):
             GatedCueStem3d()
             if bool(getattr(config.model, "gated_stems", False)) else None
         )
+        if bool(getattr(config.model, "planar_early_convs", False)):
+            if not bool(getattr(config.model, "early_2d_unet", False)):
+                raise ValueError("planar_early_convs requires early_2d_unet")
+            _planarize_depth_convs(self.enc1)
+            if self.gated_cue_stem is not None:
+                _planarize_depth_convs(self.gated_cue_stem)
         self.enc2 = block3d(c1, c2, shallow=True)
         self.enc3 = block3d(c2, c3)
         self.bottleneck = block3d(c3, c4)

@@ -118,6 +118,25 @@ def _per_domain_pr_auc(labels, scores, domains) -> dict[int, float]:
     return values
 
 
+def _per_domain_character_ap(labels, scores, character_ids, domains) -> dict[int, float]:
+    """character macro AP separately for every represented physical domain."""
+    labels = np.asarray(labels).reshape(-1)
+    scores = np.asarray(scores).reshape(-1)
+    character_ids = np.asarray(character_ids).reshape(-1)
+    domains = np.asarray(domains).reshape(-1)
+    values = {}
+    for domain in np.unique(domains):
+        selected = domains == domain
+        if not np.any(labels[selected] > 0):
+            continue
+        values[int(domain)] = float(calculate_character_metrics(
+            labels[selected].tolist(),
+            scores[selected].tolist(),
+            character_ids[selected].tolist(),
+        )["character_ap_macro"])
+    return values
+
+
 def _metric_patch_ids(patch_ids, labels, mask) -> np.ndarray:
     """expand sample patch ids to the valid multitile targets used by metrics."""
     if patch_ids is None:
@@ -680,6 +699,29 @@ class Trainer:
                     f"[multi-scroll] scroll {scroll_id}: "
                     f"train_tiles={len(train_set)} valid_tiles={len(valid_set)}"
                 )
+
+            holdout = [str(name) for name in (getattr(self.c.data, "holdout_domains", ()) or ())]
+            if holdout:
+                if not scroll_dict:
+                    raise ValueError("holdout_domains requires train_scroll_dict")
+                unknown = sorted(set(holdout) - set(scroll_dict))
+                if unknown:
+                    raise ValueError(f"unknown holdout_domains: {unknown}")
+                held_ids = {int(sid) for name in holdout for sid in scroll_dict[name]}
+                kept = [i for i, sid in enumerate(scroll_ids) if sid not in held_ids]
+                remap = {old: new for new, old in enumerate(kept)}
+                train_sets = [train_sets[i] for i in kept]
+                if sampling_groups is not None:
+                    pairs = [
+                        ([remap[i] for i in group if i in remap], weight)
+                        for group, weight in zip(sampling_groups, sampling_weights)
+                    ]
+                    sampling_groups = [group for group, _ in pairs if group]
+                    sampling_weights = [weight for group, weight in pairs if group]
+                for sid in held_ids:
+                    self._scroll_train_sets.pop(sid, None)
+                # held-out scrolls keep their validation sets and domain ids
+                print(f"[holdout] training excludes {holdout}: scrolls={sorted(held_ids)}")
 
             dot_dir = str(getattr(self.c.data, "dot_inklabel_dir", "") or "")
             # when a whitelist is set, only these scrolls have processed dots; the rest
@@ -3093,6 +3135,12 @@ class Trainer:
                 domain_ids_all,
             )
             if bool(getattr(self.c.tra, "character_macro_metrics", False)):
+                metrics["per_domain_character_ap"] = _per_domain_character_ap(
+                    labels,
+                    scores,
+                    character_ids_all,
+                    domain_ids_all,
+                )
                 metrics["per_patch_character_f1"] = _per_patch_character_f1(
                     labels,
                     scores,
@@ -3273,6 +3321,9 @@ class Trainer:
                         value,
                         epoch,
                     )
+            for domain, value in val_metrics.get("per_domain_character_ap", {}).items():
+                name = domain_names[domain] if domain < len(domain_names) else f"domain_{domain}"
+                self.vis.writer.add_scalar(f"Per_Scroll/CharacterAP_Valid/{name}", value, epoch)
         for (left, right), value in train_metrics.get(
             "domain_gradient_cosines", {}
         ).items():

@@ -233,8 +233,8 @@ def build_config(test: dict):
         config.tra.eval_int_scrolls = len(CAMPAIGN28_SCROLLS)
         config.tra.save_vis = True
         config.data.ram_safe_vis = True
-        config.data.eval_chunk_gb = 0.25
-        config.data.eval_prefetch = 0
+        config.data.eval_chunk_gb = 3.0
+        config.data.eval_prefetch = 3
         config.data.vis_scroll_ids = list(CAMPAIGN28_SCROLL_IDS)
     else:
         config.tra.eval_int = 999

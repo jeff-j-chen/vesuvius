@@ -509,6 +509,7 @@ def build_config(test: dict):
         test.get("multitile_pos_only", config.data.multitile_pos_only)
     )
     config.data.multitile_ring_gate = False  # reproduce campaign-26 legacy pos_only=False targets
+    config.data.ring_from_inklabel_dir = False  # campaign 26 built rings from ./inklabels
 
     config.model.norm_mode = str(test.get("norm_mode", "ibn"))
     config.model.use_ibn = config.model.norm_mode == "ibn"
