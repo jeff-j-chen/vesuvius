@@ -352,6 +352,7 @@ def build_config(test: dict):
     config.data.ring_gap_r = int(test.get("ring_gap_r", 2))
     config.data.ring_shell_r = int(test.get("ring_shell_r", 4))
     config.data.multitile_pos_only = bool(test.get("multitile_pos_only", True))
+    config.data.multitile_ring_gate = False  # reproduce campaign-29 legacy pos_only=False targets
     config.data.depth = int(test.get("depth", 8))
     config.data.train_d_start = int(test.get("train_d_start", config.data.train_d_start))
     config.data.train_d_end = int(test.get("train_d_end", config.data.train_d_end))

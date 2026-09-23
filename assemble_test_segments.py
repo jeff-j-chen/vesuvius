@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""assemble_test_segments.py -- render the 5 competition test-segment zarrs from their tifxyz meshes
-(PHerc0813, PHerc0211, PHerc1203, PHerc1447, PHerc0826). the w055 HOLDOUT is a PHerc0139 segment and is
+"""assemble_test_segments.py -- render the 8 competition test-segment zarrs from their tifxyz meshes
+(PHerc0813, PHerc0211, PHerc1203, PHerc1447, PHerc0826, PHerc0846A, PHerc0175A, PHerc0306B). the w055 HOLDOUT is a PHerc0139 segment and is
 assembled by assemble_training_segments.py (download path), not here.
 
 the exact tifxyz mesh directory and source volume for each patch are listed in FRAGMENTS below.
@@ -287,6 +287,15 @@ FRAGMENTS = [
     ("20260723112922", "auto_grown_20260723112922652_merged",
      f"{BUCKET}/PHerc0826/volumes/20250821151701-9.362um-1.2m-113keV-masked.zarr/0",
      "16920,8169,8169"),
+    ("20260921094413", "auto_grown_20260921094413486",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    ("20260918132724", "auto_grown_20260918132724424",
+     f"{BUCKET}/PHerc0175A/volumes/20250521115057-8.640um-1.2m-116keV-masked.zarr/0",
+     "12748,9363,9363"),
+    ("20260922073234", "auto_grown_20260922073234974",
+     f"{BUCKET}/PHerc0306B/volumes/20250521133212-8.640um-1.2m-116keV-masked.zarr/0",
+     "15898,8849,8849"),
 ]
 
 

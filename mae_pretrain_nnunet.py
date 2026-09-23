@@ -360,7 +360,7 @@ def main():
     ap.add_argument("--require-all-scrolls", action="store_true",
                     help="abort rather than silently skipping any requested scroll")
     ap.add_argument("--include-test-scrolls", action="store_true",
-                    help="append the five configured unseen test zarrs to the sampler")
+                    help="append the configured unseen test zarrs to the sampler")
     ap.add_argument("--physical-round-robin", action="store_true",
                     help="balance physical scrolls before their component segments")
     ap.add_argument("--init-weights", default=None,

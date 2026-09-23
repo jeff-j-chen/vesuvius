@@ -94,6 +94,9 @@ DEFAULT_TEST_SCROLL_IDS = (
     20260720090842,
     20250703034159,
     20260723112922,
+    20260921094413,  # PHerc0846A
+    20260918132724,  # PHerc0175A
+    20260922073234,  # PHerc0306B
 )
 
 
@@ -170,6 +173,7 @@ class DataConfig:
     explicit_negative_share: float = 0.0  # fraction of character negative draws taken from hand-drawn explicit negatives
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
     multitile_pos_only: bool = True  # in ink-containing windows, supervise ONLY ink sub-tiles (mask out non-ink ones to avoid labelling unlabelled-ink neighbours as negatives); ink-free ring windows still give negatives
+    multitile_ring_gate: bool = True  # with pos_only=False, still emit only sub-tiles inside the ring/supervision mask (False = legacy all-in-window targets)
     character_balanced_sampling: bool = True
     character_balance_scrolls: bool = True
     character_min_pixels: int = 8

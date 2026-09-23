@@ -895,6 +895,9 @@ class InkVolumeDataset(IterableDataset):
         self._mt_sub = max(1, int(getattr(config.model, "multitile_subtile", 8)))
         # pos-only: in ink windows, supervise only ink sub-tiles (mask out non-ink ones)
         self._mt_pos_only = bool(getattr(config.data, "multitile_pos_only", False))
+        self._mt_ring_gate = self._mt_pos_only or bool(
+            getattr(config.data, "multitile_ring_gate", False)
+        )
         self._manual_split = not bool(getattr(config.data, "simple_split", True))
         self._character_metrics = bool(getattr(config.tra, "character_macro_metrics", False))
         self._character_balanced = bool(
@@ -1746,7 +1749,7 @@ class InkVolumeDataset(IterableDataset):
         y0, _, x0, _ = self._mt_center_bounds(y_off, x_off)
         m = self.scroll_mask
         target_mask = self.split_mask
-        supervision_mask = self.mask if self._mt_pos_only else None
+        supervision_mask = self.mask if self._mt_ring_gate else None
         explicit_mask = self.explicit_negative_mask
         explicit_positive_mask = self.explicit_positive_mask
         lbl = self._fetch_label_mt(y_off, x_off).numpy()
@@ -2313,7 +2316,8 @@ class DataManager:
             "coordinate_hash_seed", "train_mask_dir", "surface_label_dir",
             "inklabel_dir", "label_dilate_r", "context_size", "context_downsample", "ctx_jitter",
             "target_aware_ctx_jitter", "depth_jitter", "surface_relative_depth_window",
-            "multitile_train_step", "multitile_pos_only", "character_balanced_sampling",
+            "multitile_train_step", "multitile_pos_only", "multitile_ring_gate",
+            "character_balanced_sampling",
             "character_min_pixels", "max_samples_per_epoch",
         )
         dataloader_fields = (
@@ -3350,8 +3354,9 @@ def get_tile_pos_weight(train_children, config, cache_path=UNIFIED_CACHE_PATH, c
         mt = bool(getattr(ds, "_mt", False))
         ink = os.path.basename(str(getattr(config.data, "inklabel_dir", "")).rstrip("/"))
         if mt:
-            sig = f"mt_ringtargets_v2_s{ds._mt_sub}_g{ds._mt_grid}_pos{int(ds._mt_pos_only)}_{ink}"
-            key = f"class_weight_multitile_s{ds._mt_sub}_g{ds._mt_grid}_pos{int(ds._mt_pos_only)}"
+            gate = "_ringgate" if ds._mt_ring_gate and not ds._mt_pos_only else ""
+            sig = f"mt_ringtargets_v2_s{ds._mt_sub}_g{ds._mt_grid}_pos{int(ds._mt_pos_only)}{gate}_{ink}"
+            key = f"class_weight_multitile_s{ds._mt_sub}_g{ds._mt_grid}_pos{int(ds._mt_pos_only)}{gate}"
         else:
             sig = f"single_{ink}"
             key = "class_weight"

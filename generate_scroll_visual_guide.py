@@ -15,7 +15,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent
 IMAGE_HEIGHT = 176
-TEST_VIEW_WIDTH = 500
+TEST_VIEW_WIDTH = 340
 CARD_GAP = 10
 GROUP_GAP = 14
 GROUP_PAD = 10
@@ -99,6 +99,18 @@ TEST_GROUPS = [
         "20260723112922", "test surface", "mask", "~18.93 cm^2",
         "merged auto_grown_20260723112922652",
     )]),
+    ("PHerc0846A", [Patch(
+        "20260921094413", "test surface", "mask", "22.88 cm^2",
+        "auto_grown_20260921094413486",
+    )]),
+    ("PHerc0175A", [Patch(
+        "20260918132724", "test surface", "mask", "11.95 cm^2",
+        "auto_grown_20260918132724424",
+    )]),
+    ("PHerc0306B", [Patch(
+        "20260922073234", "test surface", "mask", "14.13 cm^2",
+        "auto_grown_20260922073234974",
+    )]),
 ]
 
 
@@ -166,6 +178,23 @@ def _test_area_value(patch: Patch) -> float:
     return float(patch.area.replace("~", "").replace("cm^2", "").strip())
 
 
+def _test_mask(patch: Patch) -> np.ndarray:
+    """rendered mask, or the cropped tifxyz valid grid for surfaces not yet assembled."""
+    mask_path = ROOT / "masks" / f"{patch.patch_id}.png"
+    if mask_path.exists():
+        return _read_gray(mask_path)
+    from assemble_test_segments import FRAGMENTS
+
+    mesh = next(mesh for out_id, mesh, _, _ in FRAGMENTS if out_id == patch.patch_id)
+    x = cv2.imread(str(ROOT / "tifxyz" / mesh / "x.tif"), cv2.IMREAD_UNCHANGED)
+    if x is None:
+        raise FileNotFoundError(mask_path)
+    valid = x != -1
+    ys, xs = np.where(valid)
+    valid = valid[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    return valid.astype(np.uint8) * 255
+
+
 def _test_preview_size(patch: Patch, shape: tuple[int, int]) -> tuple[int, int]:
     """preserve source aspect while making displayed bounds proportional to surface area."""
     height, width = shape
@@ -173,7 +202,7 @@ def _test_preview_size(patch: Patch, shape: tuple[int, int]) -> tuple[int, int]:
     areas_and_aspects = []
     for _, patches in TEST_GROUPS:
         candidate = patches[0]
-        candidate_mask = _read_gray(ROOT / "masks" / f"{candidate.patch_id}.png")
+        candidate_mask = _test_mask(candidate)
         candidate_aspect = candidate_mask.shape[1] / max(candidate_mask.shape[0], 1)
         areas_and_aspects.append((_test_area_value(candidate), candidate_aspect))
     scale = min(
@@ -190,7 +219,7 @@ def _test_preview_size(patch: Patch, shape: tuple[int, int]) -> tuple[int, int]:
 
 
 def _mask_preview(patch: Patch) -> tuple[np.ndarray, str]:
-    source = _read_gray(ROOT / "masks" / f"{patch.patch_id}.png")
+    source = _test_mask(patch)
     preview_width, preview_height = _test_preview_size(patch, source.shape)
     mask = cv2.resize(source, (preview_width, preview_height), interpolation=cv2.INTER_AREA)
     inside = mask > 127
@@ -413,7 +442,7 @@ def generate_guide(output_path: Path) -> Path:
         *_section("TRAINING", "29 labeled fragments grouped by physical scroll", TRAINING_GROUPS),
         *_section(
             "TEST",
-            "five unlabeled discovery surfaces; papyrus masks, areas, and source patches shown",
+            "eight unlabeled discovery surfaces; papyrus masks, areas, and source patches shown",
             TEST_GROUPS,
         ),
     ]

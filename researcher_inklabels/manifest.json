@@ -1,0 +1,141 @@
+{
+ "20260226000000": {
+  "affine_src_level2_to_ours": [
+   [
+    1.030734,
+    -0.000146,
+    -7.951715
+   ],
+   [
+    0.000447,
+    1.023744,
+    -8.648223
+   ]
+  ],
+  "sift_inliers": 1024,
+  "flow_nodes": 840,
+  "tile_ncc_affine": 0.8101,
+  "tile_ncc_final": 0.8116,
+  "coverage_of_our_surface": 0.9973,
+  "name": "seg46527",
+  "mode": "register",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0814/segments/20260226000000-46527_2um_try2/ink-labels/2.399um-volume-20260309142202/20260918/inklabels.zarr/0",
+  "shape": [
+   2180,
+   3560
+  ],
+  "positive_frac": 0.02506,
+  "dice_vs_inklabels": 0.6736
+ },
+ "20250919125754": {
+  "affine_src_level2_to_ours": [
+   [
+    1.025645,
+    0.000393,
+    -8.911909
+   ],
+   [
+    -0.000433,
+    1.024465,
+    -2.497765
+   ]
+  ],
+  "sift_inliers": 733,
+  "flow_nodes": 5145,
+  "tile_ncc_affine": 0.5328,
+  "tile_ncc_final": 0.5811,
+  "coverage_of_our_surface": 0.9929,
+  "name": "p9b_487",
+  "mode": "register",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0009B/segments/20250919125754-auto_grown_20250919055754487_inp_hr/ink-labels/2.401um-volume-20250820154339/20260918/inklabels.zarr/0",
+  "shape": [
+   6497,
+   5260
+  ],
+  "positive_frac": 0.01901,
+  "dice_vs_inklabels": 0.6753
+ },
+ "20260221022814": {
+  "affine_src_level2_to_ours": [
+   [
+    1.024235,
+    0.005214,
+    -17.772321
+   ],
+   [
+    -0.012312,
+    1.02597,
+    3156.323878
+   ]
+  ],
+  "sift_inliers": 303,
+  "flow_nodes": 2331,
+  "tile_ncc_affine": 0.3136,
+  "tile_ncc_final": 0.7123,
+  "coverage_of_our_surface": 0.756,
+  "name": "p841",
+  "mode": "register",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0841/segments/20260221022814-auto_grown_20260220174252405/ink-labels/2.403um-volume-20260319124803/20260918/inklabels.zarr/0",
+  "shape": [
+   6904,
+   5248
+  ],
+  "positive_frac": 0.00816,
+  "dice_vs_inklabels": 0.3351
+ },
+ "20260115000000": {
+  "name": "w044",
+  "mode": "direct",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0139/segments/20260115000000-w044_2026011522/ink-labels/9.362um-volume-20250728140407/20260918/inklabels.zarr/0",
+  "shape": [
+   6040,
+   8160
+  ],
+  "positive_frac": 0.00924,
+  "dice_vs_inklabels": 0.6524
+ },
+ "20260317000000": {
+  "name": "w035",
+  "mode": "direct",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0139/segments/20260317000000-w035_2026031718/ink-labels/9.362um-volume-20250728140407/20260918/inklabels.zarr/0",
+  "shape": [
+   5820,
+   5240
+  ],
+  "positive_frac": 0.01299,
+  "dice_vs_inklabels": 0.5673
+ },
+ "20240304141531": {
+  "name": "w013",
+  "mode": "pool4",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc1667/segments/20240304141531-w013_20240304141531_flatboi/ink-labels/2.399um-volume-20251217075048/20260918/inklabels.zarr/0",
+  "shape": [
+   10400,
+   4975
+  ],
+  "positive_frac": 0.01933,
+  "dice_vs_inklabels": 0.2964
+ },
+ "20240304144031": {
+  "name": "w018",
+  "mode": "pool4",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc1667/segments/20240304144031-w018_20240304144031_flatboi/ink-labels/2.399um-volume-20251217075048/20260918/inklabels.zarr/0",
+  "shape": [
+   10595,
+   24525
+  ],
+  "positive_frac": 0.01369,
+  "dice_vs_inklabels": 0.0807
+ },
+ "20231210121321": {
+  "name": "paris4",
+  "mode": "pool4",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHercParis4/segments/20231210121321/ink-labels/2.4um-volume-20260411134726/20260918/inklabels.zarr/0",
+  "shape": [
+   12750,
+   9995
+  ],
+  "positive_frac": 0.02757,
+  "dice_vs_inklabels": 0.2354
+ }
+}
