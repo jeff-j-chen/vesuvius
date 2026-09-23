@@ -39,8 +39,11 @@ EXTRA_DILATE_PASSES = {
 DRAWN_ONLY_IDS = {
     "20251111010954", "20251112000002", "20250511003658", "20250628074500",
 }
-# researcher-labelled segments (w030, w043, w045): copied unchanged, never dilated
-COPY_IDS = {"20250108000005", "20260112000000", "20260126000000"}
+# researcher-labelled PHerc0139 segments (w030, w043, w045, w040, w041, w039): copied, never dilated
+COPY_IDS = {
+    "20250108000005", "20260112000000", "20260126000000",
+    "20250831000000", "20260108000000", "20260302000000",
+}
 
 
 def _read_gray(path: Path) -> np.ndarray | None:

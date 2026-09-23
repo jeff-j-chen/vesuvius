@@ -251,9 +251,9 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
         store[li] = sample_layer(off).astype(np.uint16)
         print(f"[zarr] layer {li+1}/{D}", flush=True)
 
-        # the rendered zarr is the source of truth for its usable footprint
-        # derive the mask from the center layer rather than mesh validity alone
-        midslice_mask = (np.asarray(store[D // 2]) > 0).astype(np.uint8) * 255
+    # the rendered zarr is the source of truth for its usable footprint
+    # derive the mask from the center layer rather than mesh validity alone
+    midslice_mask = (np.asarray(store[D // 2]) > 0).astype(np.uint8) * 255
     os.makedirs(MASK_DIR, exist_ok=True)
     mask_path = os.path.join(MASK_DIR, f"{out_id}.png")
     Image.fromarray(midslice_mask).save(mask_path)

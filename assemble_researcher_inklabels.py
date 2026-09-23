@@ -54,10 +54,19 @@ SOURCES = {
     "20260126000000": ("w045", "PHerc0139/segments/20260126000000-w045_2026012619",
                        "2.399um-volume-20260102150214", "register",
                        {"surface": P0139_SURFACE_24}),
+    "20250831000000": ("w040", "PHerc0139/segments/20250831000000-w040_2025083102",
+                       "9.362um-volume-20250728140407", "direct", {}),
+    "20260108000000": ("w041", "PHerc0139/segments/20260108000000-w041_2026010816",
+                       "9.362um-volume-20250728140407", "direct", {}),
+    "20260302000000": ("w039", "PHerc0139/segments/20260302000000-w039_2026030210",
+                       "9.362um-volume-20250728140407", "direct", {}),
 }
 # segments first added with their researcher labels: the label is also copied (undilated)
 # into inklabels/ and dilated_inklabels/, and their detection maps are fetched once
-NEW_SEGMENT_IDS = ("20250108000005", "20260112000000", "20260126000000")
+NEW_SEGMENT_IDS = (
+    "20250108000005", "20260112000000", "20260126000000",
+    "20250831000000", "20260108000000", "20260302000000",
+)
 # detection output dir -> (surface-volume zarr, pyramid level near 9.4um, detection tif suffix)
 DETECTIONS = {
     "inklabels/1_1um": (

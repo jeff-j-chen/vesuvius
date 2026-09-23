@@ -14,6 +14,7 @@ C. `early_planar*` makes the stem and enc1 convs per-slice so no learned convolu
    mixes depth before the early collapse.
 D. `early_patchdro_native196` runs the c31 winner at 196px without XY downsampling;
    `mid_pcgrad_groups4` is c29 full PCGrad over four random domain groups per step.
+E. early deep residual (EDR) and residual block-depth-3 heads with patch GroupDRO.
 
 Usage:
     python3 campaign_archs_33.py --dry-run
@@ -42,7 +43,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 import campaign_archs_29 as campaign29
 import campaign_archs_30 as campaign30
 import campaign_archs_31 as campaign31
-from utils.config import startup_output
+from utils.config import ScrollConfig, startup_output
 
 
 ROOT = Path(__file__).resolve().parent
@@ -50,6 +51,13 @@ LOG_DIR = "./runs_archs33"
 MODEL_DIR = "models/archs33"
 # characters are counted from ./inklabels when the label dir is dilated_inklabels
 INKLABEL_DIR = "./dilated_inklabels"
+# PHerc0139 w030, w043, w045: researcher-labelled patches added to the pherc0139 domain
+NEW_PHERC0139_IDS = (20250108000005, 20260112000000, 20260126000000)
+CAMPAIGN33_SCROLLS = list(campaign29.CAMPAIGN28_SCROLLS) + [
+    ScrollConfig(scroll_id, split_axis="x", train_split_frac=0.75)
+    for scroll_id in NEW_PHERC0139_IDS
+]
+PHERC0139_WEIGHT = 2
 PRETRAIN_SPECS = {
     "early_gated_planar": campaign31._spec(
         "--early-2d-unet", "--gated-stems", "--norm-mode", "ibn_full",
@@ -146,6 +154,13 @@ TESTS = [
     # c29 full pcgrad (train-mode, one forward, exact per-parameter projection) over four
     # random domain groups per step instead of ~12 domains: ~3.3x instead of ~12x
     _test("mid_pcgrad_groups4", "mid_gated_c30", pcgrad_groups=4),
+
+    # E: deeper residual early heads under the c31 winner's objective; compare to early_patchdro_seed42
+    _test("early_deep_residual_patchdro", "early_deep_residual_c30", **EARLY,
+          residual_2d_unet=True, two_d_block_depth=3, two_d_extra_channels=(320,),
+          physical_patch_groupdro=True),
+    _test("early_residual_depth3_patchdro", "early_residual_depth3", **EARLY,
+          residual_2d_unet=True, two_d_block_depth=3, physical_patch_groupdro=True),
 ]
 
 
@@ -247,6 +262,13 @@ def build_config(test: dict):
     config.data.multitile_ring_gate = True
     config.data.ring_close_r = 0
     config.data.ring_gap_r = 0
+    config.data.scrolls = list(CAMPAIGN33_SCROLLS)
+    scroll_dict = {domain: list(ids) for domain, ids in config.data.train_scroll_dict.items()}
+    scroll_dict["pherc0139"] += [sid for sid in NEW_PHERC0139_IDS if sid not in scroll_dict["pherc0139"]]
+    config.data.train_scroll_dict = scroll_dict
+    weights = list(config.data.train_scroll_weights)
+    weights[list(scroll_dict).index("pherc0139")] = PHERC0139_WEIGHT
+    config.data.train_scroll_weights = weights
     return config
 
 
@@ -322,7 +344,7 @@ def main() -> None:
 
     with startup_output():
         campaign29.preflight_train_masks(
-            campaign29.CAMPAIGN28_SCROLLS,
+            CAMPAIGN33_SCROLLS,
             inklabel_dir=ROOT / INKLABEL_DIR,
             strict=not args.dry_run,
         )
