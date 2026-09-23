@@ -17,6 +17,10 @@ Depth arms decompose Campaign 29 `overlap_depth12` (12 slices, five 4-slice wind
 and `mid_overlap12` replicates the bundle with threshold calibration. `early_overlap12`
 applies the same 12-slice five-window bundle to the early_gated architecture.
 
+Depth-latching arms: the window can shift toward the air side, a minimum-entropy
+floor keeps mid depth attention from collapsing onto one or two slices, top-k
+replaces amax at the collapse, and a low lse cap stops single voxels deciding a cell.
+
 Usage:
     python3 campaign_archs_31.py --dry-run
     python3 campaign_archs_31.py --only mid_groupdro_anchor_ema
@@ -226,6 +230,14 @@ def _test(tid: str, pretrain_key: str, **overrides) -> dict:
         "overlapping_depth_windows": False,
         "overlapping_depth_window_size": 4,
         "overlapping_depth_window_stride": 2,
+        "surface_window_offset": 0,
+        "mid_depth_entropy_floor": 0.0,
+        "mid_depth_entropy_lambda": 0.0,
+        "mid_depth_max_mode": "amax",
+        "mt_lse_r_max": 10.0,
+        "topk_positive_fraction": 0.0,
+        "explicit_negative_share": 0.0,
+        "character_forgetting": False,
     }
     test.update(overrides)
     return test
@@ -257,6 +269,9 @@ TESTS = [
         pcgrad_gram=True,
         pcgrad_gram_interval=0,
     ),
+    _test("mid_depth12", "mid_depth12", depth=12),
+
+
     _test(
         "mid_pcgrad_gram_exact",
         "mid_gated_c30",
@@ -272,7 +287,6 @@ TESTS = [
     ),
 
     # overlap_depth12 decomposition: extra slices vs windowed architecture
-    _test("mid_depth12", "mid_depth12", depth=12),
     _test("mid_overlap8", "mid_overlap8", overlapping_depth_windows=True),
     _test(
         "mid_overlap12",
@@ -287,6 +301,59 @@ TESTS = [
         mid_2d_unet=False,
         depth=12,
         overlapping_depth_windows=True,
+    ),
+
+    # window shifted toward the air side; + matches the pherc0841 jitter that helped
+    _test("mid_air_offset2", "mid_gated_c30", surface_window_offset=2),
+    _test("mid_air_offset3", "mid_gated_c30", surface_window_offset=3),
+
+    # depth latching at the mid collapse; floors are fractions of log(enc2 depth)
+    _test(
+        "mid_depth_entropy_weak",
+        "mid_gated_c30",
+        mid_depth_entropy_floor=0.5,
+        mid_depth_entropy_lambda=0.03,
+    ),
+    _test(
+        "mid_depth_entropy_strong",
+        "mid_gated_c30",
+        mid_depth_entropy_floor=0.8,
+        mid_depth_entropy_lambda=0.1,
+    ),
+    _test(
+        "mid_depth_entropy_strong_topk",
+        "mid_gated_c30",
+        mid_depth_entropy_floor=0.8,
+        mid_depth_entropy_lambda=0.1,
+        mid_depth_max_mode="topk",
+    ),
+    _test("mid_lse_capped", "mid_gated_c30", mt_lse_r_max=1.0),
+    # deliberately overstrong upper bracket
+    _test(
+        "mid_depth_entropy_overstrong_lse",
+        "mid_gated_c30",
+        mid_depth_entropy_floor=0.95,
+        mid_depth_entropy_lambda=0.3,
+        mt_lse_r_max=1.0,
+    ),
+
+    # confirm the only arm above seed noise
+    _test(
+        "triple_seed42",
+        "mid_gated_c30",
+        physical_domain_groupdro=True,
+        mae_anchor_lambda=0.001,
+        model_ema=True,
+        seed=42,
+    ),
+
+    # label-uncertainty-safe supervision and mining
+    _test("mid_topk_bag_positive", "mid_gated_c30", topk_positive_fraction=0.5),
+    _test(
+        "mid_trusted_negative_mining",
+        "mid_gated_c30",
+        explicit_negative_share=0.2,
+        character_forgetting=True,
     ),
 
     # architecture and robust-objective combinations
@@ -414,6 +481,17 @@ TESTS = [
         residual_2d_unet=True,
         two_d_extra_channels=(256, 320),
     ),
+
+    
+    # pcgrad-gram weights multiplied by physical groupdro weights
+    _test(
+        "mid_pcgrad_gram_groupdro",
+        "mid_gated_c30",
+        pcgrad_gram=True,
+        pcgrad_gram_interval=4,
+        pcgrad_gram_ema=0.8,
+        physical_domain_groupdro=True,
+    ),
 ]
 
 
@@ -490,6 +568,11 @@ def build_config(test: dict):
     config.data.context_size = 192
     config.data.context_downsample = int(test["context_downsample"])
     config.data.depth = int(test["depth"])
+    config.data.surface_window_offset = int(test["surface_window_offset"])
+    config.data.explicit_negative_share = float(test["explicit_negative_share"])
+    config.model.mid_depth_entropy_floor = float(test["mid_depth_entropy_floor"])
+    config.model.mid_depth_max_mode = str(test["mid_depth_max_mode"])
+    config.model.mt_lse_r_max = float(test["mt_lse_r_max"])
     config.model.overlapping_depth_windows = bool(test["overlapping_depth_windows"])
     config.model.overlapping_depth_window_size = int(test["overlapping_depth_window_size"])
     config.model.overlapping_depth_window_stride = int(
@@ -535,12 +618,19 @@ def build_config(test: dict):
     config.tra.model_ema_decay = float(test["model_ema_decay"])
     config.tra.character_calibrate_threshold = bool(test["calibrate_character_threshold"])
     config.tra.seed = int(test["seed"])
+    config.tra.mid_depth_entropy_lambda = float(test["mid_depth_entropy_lambda"])
+    config.tra.topk_positive_fraction = float(test["topk_positive_fraction"])
+    config.tra.character_forgetting = bool(test["character_forgetting"])
     config.init_weights = str(_pretrain_path(str(test["pretrain_key"])).relative_to(ROOT))
 
     checkpoint_dir = os.path.join(MODEL_DIR, test["tid"])
     os.makedirs(checkpoint_dir, exist_ok=True)
     config.model_dir = checkpoint_dir
     config.save_final = os.path.join(checkpoint_dir, "final.pth")
+    config.tra.character_forgetting_path = (
+        os.path.join(checkpoint_dir, "character_forgetting.json")
+        if config.tra.character_forgetting else ""
+    )
     return config
 
 
@@ -692,6 +782,15 @@ def run_test(config, dry_run: bool) -> bool:
         f"ema={config.tra.model_ema}:{config.tra.model_ema_decay} "
         f"pcgrad_gram={config.tra.pcgrad_gram}:"
         f"every{config.tra.pcgrad_gram_interval}:ema{config.tra.pcgrad_gram_ema}",
+        flush=True,
+    )
+    print(
+        f"  window_offset={config.data.surface_window_offset} "
+        f"depth_entropy={config.model.mid_depth_entropy_floor}"
+        f"x{config.tra.mid_depth_entropy_lambda}:{config.model.mid_depth_max_mode} "
+        f"lse_r_max={config.model.mt_lse_r_max} topk_pos={config.tra.topk_positive_fraction} "
+        f"explicit_neg={config.data.explicit_negative_share} "
+        f"forgetting={config.tra.character_forgetting} seed={config.tra.seed}",
         flush=True,
     )
     if dry_run:

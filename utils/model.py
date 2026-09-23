@@ -955,6 +955,22 @@ class NnUnet3dLcndz(nn.Module):
 
         self._early_2d_unet = bool(getattr(config.model, "early_2d_unet", False))
         self._mid_2d_unet = bool(getattr(config.model, "mid_2d_unet", False))
+        self._mid_depth_entropy_floor = float(
+            getattr(config.model, "mid_depth_entropy_floor", 0.0)
+        )
+        self._mid_depth_max_mode = str(getattr(config.model, "mid_depth_max_mode", "amax"))
+        self._mid_depth_topk_frac = float(getattr(config.model, "mid_depth_topk_frac", 0.5))
+        self._mt_lse_r_max = float(getattr(config.model, "mt_lse_r_max", 10.0))
+        if not 0.0 <= self._mid_depth_entropy_floor <= 1.0:
+            raise ValueError("mid_depth_entropy_floor must be a fraction of log(depth) in [0, 1]")
+        if self._mid_depth_max_mode not in ("amax", "topk"):
+            raise ValueError("mid_depth_max_mode must be 'amax' or 'topk'")
+        if not 0.0 < self._mid_depth_topk_frac <= 1.0:
+            raise ValueError("mid_depth_topk_frac must be in (0, 1]")
+        if self._mt_lse_r_max < 0.5:
+            raise ValueError("mt_lse_r_max must be at least the 0.5 lse floor")
+        self.last_mid_depth_entropy_penalty: torch.Tensor | None = None
+        self.last_mid_depth_entropy: torch.Tensor | None = None
         self._residual_2d_unet = bool(
             getattr(config.model, "residual_2d_unet", False)
         )
@@ -1789,8 +1805,9 @@ class NnUnet3dLcndz(nn.Module):
             enc2 = self._enc2_drop(enc2)
 
         depth_weights = torch.softmax(self.mid_depth_attn(enc2), dim=2)
+        self._record_mid_depth_entropy(depth_weights)
         enc2_2d = self.mid_depth_fuse(torch.cat(
-            ((enc2 * depth_weights).sum(dim=2), enc2.amax(dim=2)),
+            ((enc2 * depth_weights).sum(dim=2), self._mid_depth_peak(enc2)),
             dim=1,
         ))
         enc1_weights = F.interpolate(
@@ -1801,7 +1818,7 @@ class NnUnet3dLcndz(nn.Module):
         )
         enc1_weights = enc1_weights / enc1_weights.sum(dim=2, keepdim=True).clamp(min=1e-6)
         enc1_2d = self.mid_skip1_fuse(torch.cat(
-            ((enc1 * enc1_weights).sum(dim=2), enc1.amax(dim=2)),
+            ((enc1 * enc1_weights).sum(dim=2), self._mid_depth_peak(enc1)),
             dim=1,
         ))
 
@@ -1826,6 +1843,22 @@ class NnUnet3dLcndz(nn.Module):
             dec1 = F.dropout2d(dec1, p=self._head_drop.p, training=self.training)
         return deepest, dec1
 
+    def _mid_depth_peak(self, features: torch.Tensor) -> torch.Tensor:
+        if self._mid_depth_max_mode == "amax":
+            return features.amax(dim=2)
+        k = max(1, int(round(features.shape[2] * self._mid_depth_topk_frac)))
+        return features.topk(k, dim=2).values.mean(dim=2)
+
+    def _record_mid_depth_entropy(self, depth_weights: torch.Tensor) -> None:
+        weights = depth_weights.float().clamp(min=1e-8)
+        entropy = -(weights * weights.log()).sum(dim=2)
+        self.last_mid_depth_entropy = entropy.mean()
+        if self._mid_depth_entropy_floor > 0:
+            target = self._mid_depth_entropy_floor * math.log(max(depth_weights.shape[2], 2))
+            self.last_mid_depth_entropy_penalty = F.relu(target - entropy).mean()
+        else:
+            self.last_mid_depth_entropy_penalty = None
+
     def _encode_decode_overlapping_depth(
         self,
         x: torch.Tensor,
@@ -1839,6 +1872,7 @@ class NnUnet3dLcndz(nn.Module):
         )
         bottlenecks = []
         decoded = []
+        penalties = []
         for index in range(self._overlap_window_count):
             start = index * self._overlap_window_stride
             end = start + self._overlap_window_size
@@ -1860,6 +1894,10 @@ class NnUnet3dLcndz(nn.Module):
             )
             bottlenecks.append(bottleneck)
             decoded.append(features)
+            if self.last_mid_depth_entropy_penalty is not None:
+                penalties.append(self.last_mid_depth_entropy_penalty)
+        if penalties:
+            self.last_mid_depth_entropy_penalty = torch.stack(penalties).mean()
         return (
             self.overlap_bottleneck_fuse(torch.cat(bottlenecks, dim=1)),
             self.overlap_decoded_fuse(torch.cat(decoded, dim=1)),
@@ -2132,7 +2170,7 @@ class NnUnet3dLcndz(nn.Module):
         cells = center.reshape(batch, n, sub, n, sub).permute(
             0, 1, 3, 2, 4
         ).reshape(batch, n * n, sub * sub)
-        r = self.lse_r.clamp(min=0.5, max=10.0)
+        r = self.lse_r.clamp(min=0.5, max=self._mt_lse_r_max)
         count = cells.new_tensor(float(cells.shape[-1]))
         return (torch.logsumexp(r * cells, dim=-1) - torch.log(count)) / r
 

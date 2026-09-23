@@ -21,6 +21,17 @@ class Campaign31Test(unittest.TestCase):
                 "mid_overlap8",
                 "mid_overlap12",
                 "early_overlap12",
+                "mid_air_offset2",
+                "mid_air_offset3",
+                "mid_depth_entropy_weak",
+                "mid_depth_entropy_strong",
+                "mid_depth_entropy_strong_topk",
+                "mid_lse_capped",
+                "mid_depth_entropy_overstrong_lse",
+                "triple_seed42",
+                "mid_topk_bag_positive",
+                "mid_trusted_negative_mining",
+                "mid_pcgrad_gram_groupdro",
                 "early_deep_residual_groupdro_anchor",
                 "early_raw_instance_groupdro",
                 "early_raw_instance_groupdro_anchor",
@@ -198,6 +209,120 @@ class Campaign31Test(unittest.TestCase):
 
         gram = [[1.0, 0.2, 0.0], [0.2, 2.0, 0.1], [0.0, 0.1, 0.5]]
         self.assertEqual(pcgrad_coefficients(gram), [1.0 / 3] * 3)
+
+    def test_depth_latching_arms(self):
+        import torch
+
+        expected = {
+            "mid_depth_entropy_weak": (0.5, 0.03, "amax", 10.0),
+            "mid_depth_entropy_strong": (0.8, 0.1, "amax", 10.0),
+            "mid_depth_entropy_strong_topk": (0.8, 0.1, "topk", 10.0),
+            "mid_lse_capped": (0.0, 0.0, "amax", 1.0),
+            "mid_depth_entropy_overstrong_lse": (0.95, 0.3, "amax", 1.0),
+        }
+        x = torch.rand(1, 1, 8, 192, 192)
+        depth = torch.full((1, 192, 192), 3.5)
+        confidence = torch.ones(1, 192, 192)
+        for tid, (floor, weight, mode, r_max) in expected.items():
+            config = campaign.build_config(next(t for t in campaign.TESTS if t["tid"] == tid))
+            self.assertEqual(
+                (
+                    config.model.mid_depth_entropy_floor,
+                    config.tra.mid_depth_entropy_lambda,
+                    config.model.mid_depth_max_mode,
+                    config.model.mt_lse_r_max,
+                ),
+                (floor, weight, mode, r_max),
+            )
+            config.device = "cpu"
+            model, _ = create_model(config)
+            model.eval()
+            with torch.no_grad():
+                out = model(x, teacher_surface_depth=depth, teacher_surface_confidence=confidence)
+            self.assertEqual(tuple(out.shape), (1, 16))
+            if floor > 0:
+                self.assertIsNotNone(model.last_mid_depth_entropy_penalty)
+                self.assertGreaterEqual(float(model.last_mid_depth_entropy_penalty), 0.0)
+            else:
+                self.assertIsNone(model.last_mid_depth_entropy_penalty)
+
+    def test_new_arm_wiring(self):
+        def config_for(tid):
+            return campaign.build_config(next(t for t in campaign.TESTS if t["tid"] == tid))
+
+        self.assertEqual(config_for("mid_air_offset2").data.surface_window_offset, 2)
+        self.assertEqual(config_for("mid_air_offset3").data.surface_window_offset, 3)
+        triple = config_for("triple_seed42")
+        self.assertEqual(
+            (
+                triple.tra.physical_domain_groupdro,
+                triple.tra.mae_anchor_lambda,
+                triple.tra.model_ema,
+                triple.tra.seed,
+            ),
+            (True, 0.001, True, 42),
+        )
+        self.assertEqual(config_for("mid_topk_bag_positive").tra.topk_positive_fraction, 0.5)
+        mining = config_for("mid_trusted_negative_mining")
+        self.assertEqual(mining.data.explicit_negative_share, 0.2)
+        self.assertTrue(mining.tra.character_forgetting)
+        self.assertTrue(mining.tra.character_forgetting_path.endswith("character_forgetting.json"))
+        combo = config_for("mid_pcgrad_gram_groupdro")
+        self.assertTrue(combo.tra.pcgrad_gram and combo.tra.physical_domain_groupdro)
+        self.assertEqual(config_for("mid_control_seed42").data.surface_window_offset, 0)
+
+    def test_surface_window_offset_shifts_start(self):
+        import numpy as np
+        from types import SimpleNamespace
+        from utils.dataloader import InkVolumeDataset
+
+        fake = SimpleNamespace(
+            surface_depth=np.full((64, 64), 12, dtype=np.uint8),
+            surface_confidence=np.full((64, 64), 200, dtype=np.uint8),
+            _mt=True, _mt_grid=4, _mt_sub=16, tile_size=16, depth=8, z_start=0,
+            _surface_window_offset=0,
+        )
+        base = InkVolumeDataset._surface_centered_start(fake, 0, 0, 64, 28, 0, 0)
+        fake._surface_window_offset = 2
+        shifted = InkVolumeDataset._surface_centered_start(fake, 0, 0, 64, 28, 0, 0)
+        self.assertEqual((base, shifted), (9, 11))
+
+    def test_topk_positive_mask_keeps_negatives(self):
+        import torch
+        from train import topk_positive_mask
+
+        logits = torch.tensor([[3.0, 1.0, 2.0, 0.0, -1.0, 5.0]])
+        targets = torch.tensor([[1.0, 1.0, 1.0, 1.0, 0.0, 0.0]])
+        mask = torch.ones_like(targets)
+        groups = torch.tensor([[7, 7, 7, 7, 7, 7]])
+        keep = topk_positive_mask(logits, targets, mask, groups, 0.5)
+        self.assertEqual(keep.tolist(), [[1.0, 0.0, 1.0, 0.0, 1.0, 1.0]])
+
+    def test_character_forgetting_weights_round_trip(self):
+        import os
+        from types import SimpleNamespace
+        from train import Trainer
+        from utils.dataloader import InkVolumeDataset
+
+        path = "/data/extra/tmp/test_character_forgetting.json"
+        if os.path.exists(path):
+            os.remove(path)
+        tra = SimpleNamespace(
+            character_forgetting=True,
+            character_forgetting_path=path,
+            character_forgetting_max_weight=4.0,
+        )
+        trainer = Trainer.__new__(Trainer)
+        trainer.c = SimpleNamespace(tra=tra)
+        trainer._character_learned = {}
+        trainer._character_forgets = {}
+        trainer._update_character_forgetting([1, 1, 1], [0.9, 0.8, 0.1], [5, 6, 7])
+        trainer._update_character_forgetting([1, 1, 1], [0.2, 0.8, 0.1], [5, 6, 7])
+        fake = SimpleNamespace(c=SimpleNamespace(tra=tra))
+        weights = InkVolumeDataset._character_sampling_weights(fake, [5, 6, 7])
+        self.assertAlmostEqual(float(weights[0]), 0.5)
+        self.assertAlmostEqual(float(weights[1]), 0.25)
+        os.remove(path)
 
     def test_early_depth_decomposition(self):
         cases = {

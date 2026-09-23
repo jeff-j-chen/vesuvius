@@ -701,6 +701,9 @@ class InkVolumeDataset(IterableDataset):
         self._surface_relative_depth_window = bool(
             getattr(config.data, "surface_relative_depth_window", False)
         )
+        self._surface_window_offset = int(getattr(config.data, "surface_window_offset", 0))
+        if self._surface_window_offset and not self._surface_relative_depth_window:
+            raise ValueError("surface_window_offset requires surface_relative_depth_window")
         if self._surface_relative_depth_window and not self._use_surface_teacher:
             raise ValueError("surface_relative_depth_window requires pre-generated surface maps")
         if self._use_surface_teacher:
@@ -901,6 +904,10 @@ class InkVolumeDataset(IterableDataset):
         self._character_nearest = None
         self._character_pos_coords = {}
         self._character_neg_coords = {}
+        self._explicit_neg_coords = []
+        self._explicit_negative_share = float(
+            getattr(config.data, "explicit_negative_share", 0.0)
+        )
         self._context_replace_prob = float(getattr(config.dl, "context_replace_prob", 0.0))
         self._context_consistency = bool(
             getattr(config.tra, "context_consistency", False)
@@ -953,6 +960,7 @@ class InkVolumeDataset(IterableDataset):
             self._character_pos_coords = prepared_state["character_pos_coords"]
             self._character_neg_coords = prepared_state["character_neg_coords"]
             self._character_ids = prepared_state["character_ids"]
+            self._explicit_neg_coords = prepared_state.get("explicit_neg_coords", [])
             self._context_donor_coords = prepared_state["context_donor_coords"]
         elif self._character_metrics or self._character_balanced:
             if not self._mt or self._character_grid is None:
@@ -969,6 +977,7 @@ class InkVolumeDataset(IterableDataset):
             "character_pos_coords": self._character_pos_coords,
             "character_neg_coords": self._character_neg_coords,
             "character_ids": getattr(self, "_character_ids", ()),
+            "explicit_neg_coords": self._explicit_neg_coords,
             "context_donor_coords": self._context_donor_coords,
         }
 
@@ -1043,6 +1052,8 @@ class InkVolumeDataset(IterableDataset):
                 continue
             negative_ids = np.unique(component_ids[(labels <= 0) & valid])
             negative_ids = negative_ids[negative_ids > 0]
+            if np.any((labels < 0) & valid):
+                self._explicit_neg_coords.append(coord)
             if negative_ids.size == 1:
                 self._character_neg_coords.setdefault(int(negative_ids[0]), []).append(coord)
 
@@ -1081,20 +1092,46 @@ class InkVolumeDataset(IterableDataset):
                     out[index] += int(self.character_namespace) * 1_000_000
         return out
 
+    def _character_sampling_weights(self, character_ids):
+        """per-character draw weights written by the trainer after each epoch."""
+        path = str(getattr(self.c.tra, "character_forgetting_path", "") or "")
+        if not bool(getattr(self.c.tra, "character_forgetting", False)) or not path:
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                stored = json.load(handle)
+        except (OSError, ValueError):
+            return None
+        weights = np.array(
+            [float(stored.get(str(component_id), 1.0)) for component_id in character_ids],
+            dtype=np.float64,
+        )
+        return weights / weights.sum()
+
     def _character_balanced_coords(self):
-        """pair one positive and one local-ring window per uniformly sampled character."""
+        """pair one positive and one local-ring window per sampled character."""
         target = self.samples_per_epoch
         coords = []
+        character_ids = list(self._character_ids)
+        weights = self._character_sampling_weights(character_ids)
+        explicit_share = self._explicit_negative_share if self._explicit_neg_coords else 0.0
         while len(coords) < target:
-            character_ids = list(self._character_ids)
-            np.random.shuffle(character_ids)
-            for component_id in character_ids:
+            if weights is None:
+                cycle = list(character_ids)
+                np.random.shuffle(cycle)
+            else:
+                cycle = list(np.random.choice(character_ids, size=len(character_ids), p=weights))
+            for component_id in cycle:
                 positive = self._character_pos_coords[component_id]
                 negative = self._character_neg_coords[component_id]
                 coords.append(positive[np.random.randint(len(positive))])
                 if len(coords) >= target:
                     break
-                coords.append(negative[np.random.randint(len(negative))])
+                if explicit_share > 0 and np.random.random() < explicit_share:
+                    explicit = self._explicit_neg_coords
+                    coords.append(explicit[np.random.randint(len(explicit))])
+                else:
+                    coords.append(negative[np.random.randint(len(negative))])
                 if len(coords) >= target:
                     break
         return coords
@@ -1579,9 +1616,10 @@ class InkVolumeDataset(IterableDataset):
         center_x = min(max(int(target_x + target_size // 2), 0), width - 1)
         center_depth = int(self.surface_depth[center_y, center_x])
         center_confidence = int(self.surface_confidence[center_y, center_x])
+        offset = self._surface_window_offset
         if center_depth != 255 and center_confidence > 0:
             return min(
-                max(center_depth - (self.depth - 1) // 2, 0),
+                max(center_depth - (self.depth - 1) // 2 + offset, 0),
                 max(int(volume_depth) - self.depth, 0),
             )
         if ys < ye and xs < xe:
@@ -1591,7 +1629,7 @@ class InkVolumeDataset(IterableDataset):
             if valid.any():
                 center = int(np.rint(np.median(depth[valid].astype(np.float32))))
                 return min(
-                    max(center - (self.depth - 1) // 2, 0),
+                    max(center - (self.depth - 1) // 2 + offset, 0),
                     max(int(volume_depth) - self.depth, 0),
                 )
         return min(max(int(self.z_start), 0), max(int(volume_depth) - self.depth, 0))

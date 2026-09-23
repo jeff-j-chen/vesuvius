@@ -166,6 +166,8 @@ class DataConfig:
     target_aware_ctx_jitter: bool = True
     depth_jitter: int = 1  # max slice jitter for depth window start; attacks depth-profile position memorization
     surface_relative_depth_window: bool = True  # center the source window on the literal map
+    surface_window_offset: int = 0  # constant slice shift of the surface-centered window (train and eval)
+    explicit_negative_share: float = 0.0  # fraction of character negative draws taken from hand-drawn explicit negatives
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
     multitile_pos_only: bool = True  # in ink-containing windows, supervise ONLY ink sub-tiles (mask out non-ink ones to avoid labelling unlabelled-ink neighbours as negatives); ink-free ring windows still give negatives
     character_balanced_sampling: bool = True
@@ -357,6 +359,11 @@ class TrainingConfig:
     pcgrad_gram: bool = False
     pcgrad_gram_interval: int = 1  # 0 never measures conflicts: equal domain weights only
     pcgrad_gram_ema: float = 0.0
+    mid_depth_entropy_lambda: float = 0.0
+    topk_positive_fraction: float = 0.0  # 0 disables; else supervise only each character's top positives
+    character_forgetting: bool = False
+    character_forgetting_path: str = ""
+    character_forgetting_max_weight: float = 4.0
     model_ema: bool = False
     model_ema_decay: float = 0.999
     model_ema_start_epoch: int = 0
@@ -422,6 +429,10 @@ class ModelConfig:
     overlapping_depth_windows: bool = False
     overlapping_depth_window_size: int = 4
     overlapping_depth_window_stride: int = 2
+    mid_depth_entropy_floor: float = 0.0  # fraction of log(depth) below which mid depth attention is penalized
+    mid_depth_max_mode: str = "amax"  # amax or topk peak branch at the mid depth collapse
+    mid_depth_topk_frac: float = 0.5
+    mt_lse_r_max: float = 10.0  # upper clamp on the multitile lse temperature (2d heads)
     depth_antialias: bool = False
     sparse_deep_supervision: bool = False
     sparse_deep_supervision_dec2_weight: float = 0.3

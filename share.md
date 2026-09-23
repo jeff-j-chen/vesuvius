@@ -73,6 +73,19 @@ Contrary to the researchers, I've found it extremely detrimental to train with a
 8. *Augment* - synchronized flips and rotations handle exact geometric symmetries. Three small cutouts, target-aware context jitter, feathered replacement of distant context with real negative papyrus, and +/-1 depth jitter attack the shortcuts that actually appeared in validation. Photometric noise, FDA and elastic warps are off.
 9. *Train* - the current baseline is a full-IBN 3D nnU-Net initialized from MAE, using hard-label BCE, AdamW, mixed precision, gradient clipping and a warmup/plateau learning-rate schedule. The best balanced variant collapses depth midway through the network and uses learned gates over the raw/LCN/depth-gradient stems. DANN, SupCon, soft labels and GCE are disabled.
 
+**PHerc1667 Surface Ink Verification**
+The question: is ink truly on the predicted surface, and is our surface accurate? I tested this with the 3D ink predictions provided by the Paris4 scroll.
+
+**What the numbers show** (ink voxels with confidence ≥128, as a share by offset from the guessed surface)
+
+| offset | −14 | −3 | −2 | **−1** | **0** | +1 | +2 | +5 to +12 |
+|---|---|---|---|---|---|---|---|---|
+| share | 4.4% | 4.8% | 5.5% | **6.0%** | **5.7%** | 4.8% | 3.7% | ~1.8% each |
+
+- **Ink is on the surface, but only partly.** It peaks at offset −1 to 0, about 1.7 times the background level. Only about 17% of ink is within ±1 layer and about 26% within ±2.
+- **The surface guess looks right.** There is very little ink on the air side (+5 and beyond). The peak sitting one layer below the guess fits its definition as the last papyrus layer before air.
+- **The 3D ink model also marks ink on neighbouring wraps.** There is a second peak at about −13 to −14 layers (about 120 µm, a plausible wrap spacing), and 3–4% of voxels are flagged in every layer. So much of the ink is on the wrap underneath, not scattered around our surface.
+
 
 **Reproduce My (Shoddy) Results**:
 1. On Runpod: Select template `jeffchen23/vesuvius`, or manually clone from dockerhub. Use all default values. `cd /vesuvius` (the working directory)

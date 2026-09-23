@@ -1,3 +1,4 @@
+import json
 import math
 import os
 import random
@@ -309,6 +310,30 @@ def pcgrad_coefficients(gram: list[list[float]]) -> list[float]:
     ]
 
 
+def topk_positive_mask(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    mask: torch.Tensor,
+    group_ids: torch.Tensor,
+    fraction: float,
+) -> torch.Tensor:
+    """keep only each group's highest-scoring positive targets; negatives are untouched."""
+    positive = (targets > 0.5) & (mask > 0)
+    keep = mask.clone()
+    if not positive.any():
+        return keep
+    scores = logits.detach().float()
+    for group_id in torch.unique(group_ids[positive]):
+        selected = positive & (group_ids == group_id)
+        count = int(selected.sum().item())
+        k = max(1, int(math.ceil(float(fraction) * count)))
+        if k >= count:
+            continue
+        threshold = torch.topk(scores[selected], k).values[-1]
+        keep[selected & (scores < threshold)] = 0
+    return keep
+
+
 def _physical_domain_group_losses(
     per_target_loss: torch.Tensor,
     mask: torch.Tensor,
@@ -439,11 +464,23 @@ class Trainer:
             bool(getattr(config.tra, "pcgrad_lite", False)),
             bool(getattr(config.tra, "pcgrad_gram", False)),
         ]
-        if sum(domain_robust_modes) > 1:
+        if sum(domain_robust_modes) - int(
+            bool(getattr(config.tra, "pcgrad_gram", False))
+            and bool(getattr(config.tra, "physical_domain_groupdro", False))
+        ) > 1:
             raise ValueError(
                 "domain-gradient, physical-domain GroupDRO, physical-patch GroupDRO, "
-                "V-REx, domain CVaR, PCGrad, PCGrad-lite, and PCGrad-Gram are mutually exclusive"
+                "V-REx, domain CVaR, PCGrad, PCGrad-lite, and PCGrad-Gram are mutually exclusive "
+                "(PCGrad-Gram may only be combined with physical-domain GroupDRO)"
             )
+        if not 0.0 <= float(getattr(config.tra, "topk_positive_fraction", 0.0)) <= 1.0:
+            raise ValueError("topk_positive_fraction must be in [0, 1]")
+        if not 0.0 <= float(getattr(config.data, "explicit_negative_share", 0.0)) <= 1.0:
+            raise ValueError("explicit_negative_share must be in [0, 1]")
+        if bool(getattr(config.tra, "character_forgetting", False)) and not str(
+            getattr(config.tra, "character_forgetting_path", "") or ""
+        ):
+            raise ValueError("character_forgetting requires character_forgetting_path")
         if int(getattr(config.tra, "pcgrad_gram_interval", 1)) < 0:
             raise ValueError("pcgrad_gram_interval must be non-negative")
         if not 0.0 <= float(getattr(config.tra, "pcgrad_gram_ema", 0.0)) < 1.0:
@@ -522,6 +559,13 @@ class Trainer:
         self._pcgrad_gram_cosines: dict[tuple[int, int], float] = {}
         self._pcgrad_gram_log_norms: dict[int, float] = {}
         self._pcgrad_gram_step = 0
+        self._character_learned: dict[int, bool] = {}
+        self._character_forgets: dict[int, int] = {}
+        forgetting_path = str(getattr(config.tra, "character_forgetting_path", "") or "")
+        if bool(getattr(config.tra, "character_forgetting", False)) and os.path.exists(
+            forgetting_path
+        ):
+            os.remove(forgetting_path)
         self._last_character_objectives = (0.0, 0.0, 0.0, 0.0)
         self._last_depth_consistency = 0.0
         self._last_clam_loss = 0.0
@@ -550,6 +594,9 @@ class Trainer:
             "mae_anchor_loss": 0.0,
             "pcgrad_gram_weight_sum": 0.0,
             "pcgrad_gram_conflict_frac": 0.0,
+            "mid_depth_entropy": 0.0,
+            "mid_depth_entropy_penalty": 0.0,
+            "topk_positive_kept_frac": 0.0,
         }
         self._closed = False
 
@@ -1070,6 +1117,45 @@ class Trainer:
             sum(value < 0 for value in cosines.values()) / max(len(cosines), 1)
         )
         return weights
+
+    def _update_character_forgetting(self, labels, scores, character_ids) -> None:
+        """upweight characters learned in one epoch and forgotten in the next.
+
+        never-learned characters keep weight 1: they are the likeliest mislabeled ones
+        """
+        label_array = np.asarray(labels, dtype=np.int64)
+        score_array = np.asarray(scores, dtype=np.float64)
+        id_array = np.asarray(character_ids, dtype=np.int64)
+        positive = (label_array > 0) & (id_array > 0)
+        if not positive.any():
+            return
+        ids = id_array[positive]
+        values = score_array[positive]
+        unique, inverse = np.unique(ids, return_inverse=True)
+        means = np.bincount(inverse, weights=values) / np.bincount(inverse)
+        for component_id, mean in zip(unique.tolist(), means.tolist()):
+            learned = mean >= 0.5
+            if self._character_learned.get(component_id, False) and not learned:
+                self._character_forgets[component_id] = (
+                    self._character_forgets.get(component_id, 0) + 1
+                )
+            self._character_learned[component_id] = learned
+        cap = float(getattr(self.c.tra, "character_forgetting_max_weight", 4.0))
+        weights = {
+            str(component_id): min(1.0 + float(count), cap)
+            for component_id, count in self._character_forgets.items()
+        }
+        path = str(self.c.tra.character_forgetting_path)
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        temporary = f"{path}.tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(weights, handle)
+        os.replace(temporary, path)
+        print(
+            f"[forgetting] learned={sum(self._character_learned.values())}/"
+            f"{len(self._character_learned)} upweighted={len(weights)}",
+            flush=True,
+        )
 
     def _init_visualizers(self) -> None:
         scroll_ids = self._scroll_ids
@@ -1612,8 +1698,28 @@ class Trainer:
                 targets = torch.where(explicit_negative, torch.zeros_like(targets), targets)
 
             per_target_loss = self.criterion(outputs, targets)
-            raw_loss = per_target_loss * mask
-            denom = mask.sum()
+            loss_mask = mask
+            topk_fraction = float(getattr(self.c.tra, "topk_positive_fraction", 0.0))
+            if 0.0 < topk_fraction < 1.0 and outputs.shape == mask.shape:
+                group_ids_for_topk = (
+                    character_ids_device
+                    if character_ids_device is not None
+                    and character_ids_device.shape == mask.shape
+                    else torch.arange(B, device=mask.device).unsqueeze(1).expand_as(mask)
+                )
+                loss_mask = topk_positive_mask(
+                    outputs,
+                    targets,
+                    mask,
+                    group_ids_for_topk,
+                    topk_fraction,
+                )
+                positives = ((targets > 0.5) & (mask > 0)).sum().clamp(min=1)
+                self._last_dg_losses["topk_positive_kept_frac"] = float(
+                    (((targets > 0.5) & (loss_mask > 0)).sum() / positives).item()
+                )
+            raw_loss = per_target_loss * loss_mask
+            denom = loss_mask.sum()
             raw_loss_value = raw_loss.sum() / denom
             primary_loss = raw_loss.sum() / denom
             needs_domain_losses = any([
@@ -1630,7 +1736,7 @@ class Trainer:
                     raise RuntimeError("physical-domain objectives require domain IDs")
                 domain_group_ids, domain_group_losses = _physical_domain_group_losses(
                     per_target_loss,
-                    mask,
+                    loss_mask,
                     domain_ids,
                 )
             else:
@@ -1762,7 +1868,7 @@ class Trainer:
                     raise RuntimeError("physical-patch GroupDRO requires patch IDs")
                 patch_group_ids, patch_group_losses = _physical_patch_group_losses(
                     per_target_loss,
-                    mask,
+                    loss_mask,
                     patch_ids,
                 )
                 robust_loss, _ = character_groupdro_loss(
@@ -1804,6 +1910,17 @@ class Trainer:
                     primary_loss = torch.stack(domain_group_losses).mean()
             if bool(getattr(self.c.tra, "pcgrad_gram", False)) and domain_group_losses:
                 weights = self._pcgrad_gram_weights(domain_group_ids)
+                if bool(getattr(self.c.tra, "physical_domain_groupdro", False)):
+                    # scale by D so uniform dro weights reduce to plain pcgrad-gram
+                    dro = [
+                        math.exp(self._physical_domain_groupdro_log_weights.get(domain, 0.0))
+                        for domain in domain_group_ids
+                    ]
+                    total = sum(dro)
+                    weights = [
+                        weight * len(dro) * value / total
+                        for weight, value in zip(weights, dro)
+                    ]
                 primary_loss = sum(
                     weight * domain_loss
                     for weight, domain_loss in zip(weights, domain_group_losses)
@@ -1848,6 +1965,18 @@ class Trainer:
                 )
                 loss = loss + anchor_lambda * anchor_loss
                 self._last_dg_losses["mae_anchor_loss"] = float(anchor_loss.detach())
+            depth_entropy_lambda = float(getattr(self.c.tra, "mid_depth_entropy_lambda", 0.0))
+            if depth_entropy_lambda > 0:
+                depth_penalty = getattr(self.model, "last_mid_depth_entropy_penalty", None)
+                if depth_penalty is None:
+                    raise RuntimeError(
+                        "mid_depth_entropy_lambda requires mid_2d_unet and mid_depth_entropy_floor > 0"
+                    )
+                loss = loss + depth_entropy_lambda * depth_penalty
+                self._last_dg_losses["mid_depth_entropy_penalty"] = float(depth_penalty.detach())
+                self._last_dg_losses["mid_depth_entropy"] = float(
+                    self.model.last_mid_depth_entropy.detach()
+                )
             if bool(getattr(self.c.tra, "depth_shift_aux", False)):
                 depth_shift_logits = getattr(self.model, "last_depth_shift_logits", None)
                 if depth_shift_logits is None or depth_shift is None:
@@ -2741,6 +2870,8 @@ class Trainer:
                 domain_gradient_cluster_total += len(self._last_domain_gradient_clusters)
                 domain_gradient_cluster_batches += 1
 
+        if bool(getattr(self.c.tra, "character_forgetting", False)):
+            self._update_character_forgetting(labels, scores, character_ids_all)
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
         if bool(getattr(self.c.tra, "character_macro_metrics", False)):
             metrics.update(calculate_character_metrics(
@@ -3121,6 +3252,11 @@ class Trainer:
             ("domain_cvar_loss", "Aux/DomainCVaR"),
             ("depth_shift_aux_loss", "Aux/DepthShiftClassification"),
             ("mae_anchor_loss", "Aux/MAEAnchor"),
+            ("pcgrad_gram_weight_sum", "PCGradGram/WeightSum"),
+            ("pcgrad_gram_conflict_frac", "PCGradGram/ConflictFraction"),
+            ("mid_depth_entropy", "DepthLatching/MidDepthEntropy"),
+            ("mid_depth_entropy_penalty", "DepthLatching/EntropyPenalty"),
+            ("topk_positive_kept_frac", "Aux/TopKPositiveKept"),
         ):
             if key in train_metrics:
                 self.vis.writer.add_scalar(tag, train_metrics[key], epoch)
