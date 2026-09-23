@@ -674,10 +674,12 @@ def build_config(test: dict):
     return config
 
 
-def _transfer_coverage(test: dict, checkpoint: Path) -> tuple[float, int, int, int, int]:
+def _transfer_coverage(
+    test: dict, checkpoint: Path, config=None
+) -> tuple[float, int, int, int, int]:
     from utils.model import create_model
 
-    config = build_config(test)
+    config = build_config(test) if config is None else config
     config.device = "cpu"
     config.model.compile_model = False
     model, _ = create_model(config)

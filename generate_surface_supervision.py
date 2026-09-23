@@ -39,10 +39,8 @@ def _depth_quantiles_linear(x: np.ndarray, quantiles: tuple[float, ...]) -> list
     return out
 
 
-def _unit_intensity(raw: np.ndarray, intensity_max: float | None = None) -> np.ndarray:
+def _unit_intensity(raw: np.ndarray) -> np.ndarray:
     """convert integer reconstruction values to a stable [0, 1] scale."""
-    if intensity_max is not None:
-        return np.clip(raw.astype(np.float32) / max(float(intensity_max), 1.0), 0.0, 1.0)
     if np.issubdtype(raw.dtype, np.integer):
         scale = float(np.iinfo(raw.dtype).max)
         return raw.astype(np.float32) / max(scale, 1.0)
@@ -58,10 +56,9 @@ def _detect_strip(
     spatial_sigma: float,
     coarse_sigma: float,
     coarse_weight: float,
-    intensity_max: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """return relative depth, confidence, and validity for one DHW strip."""
-    x = _unit_intensity(raw, intensity_max)
+    x = _unit_intensity(raw)
     padded = np.pad(x, ((1, 1), (0, 0), (0, 0)), mode="edge")
     smooth = (padded[:-2] + 2.0 * padded[1:-1] + padded[2:]) * 0.25
 
@@ -672,9 +669,6 @@ def main() -> None:
     parser.add_argument("--ink-alpha", type=float, default=0.75)
     parser.add_argument("--overlays-only", action="store_true",
                         help="re-render layer views from existing depth.npy/confidence.npy")
-    parser.add_argument("--reverse", action="store_true",
-                        help="detect the opposite face: first papyrus slice after an air-to-papyrus "
-                             "transition with increasing depth")
     args = parser.parse_args()
 
     scroll_id = str(args.scroll_id)
@@ -694,12 +688,6 @@ def main() -> None:
     if mask is None or mask.shape != (height, width):
         raise ValueError(f"missing or mismatched scroll mask for {scroll_id}")
     mask = mask > 0
-
-    # uint16 zarrs assembled from uint8 sources hold 0..255; dtype max would crush contrast
-    intensity_max = None
-    if np.issubdtype(volume.dtype, np.integer):
-        probe = np.asarray(volume[depth // 2, ::max(1, height // 64), ::max(1, width // 64)])
-        intensity_max = 255.0 if int(probe.max()) <= 255 else float(np.iinfo(volume.dtype).max)
 
     output_dir = Path(args.output_dir) / scroll_id
     review_dir = review_root / scroll_id
@@ -784,7 +772,7 @@ def main() -> None:
     detection_started = time.perf_counter()
     for (y0, y1, ys, ye), raw in prefetched_blocks():
         rel_depth, conf, valid = _detect_strip(
-            raw[::-1] if args.reverse else raw,
+            raw,
             threshold_frac=args.threshold_frac,
             min_contrast=args.min_contrast,
             min_peak=args.min_peak,
@@ -792,12 +780,8 @@ def main() -> None:
             spatial_sigma=args.spatial_sigma,
             coarse_sigma=args.coarse_sigma,
             coarse_weight=args.coarse_weight,
-            intensity_max=intensity_max,
         )
         keep = slice(y0 - ys, y1 - ys)
-        if args.reverse:
-            # flipped index j is the papyrus slice; map it back to original depth order
-            rel_depth = (raw.shape[0] - 1 - rel_depth.astype(np.int16)).astype(np.uint8)
         valid = valid[keep] & mask[y0:y1]
         absolute_depth = rel_depth[keep].astype(np.uint16) + args.z_start
         depth_map[y0:y1] = np.where(valid, absolute_depth, 255).astype(np.uint8)
@@ -844,13 +828,7 @@ def main() -> None:
         "volume_shape": [depth, height, width],
         "z_start": args.z_start,
         "z_end": args.z_end,
-        "depth_semantics": (
-            "first papyrus-like slice after strongest air-to-papyrus transition"
-            if args.reverse
-            else "last papyrus-like slice before strongest papyrus-to-air transition"
-        ),
-        "reverse": bool(args.reverse),
-        "intensity_max": intensity_max,
+        "depth_semantics": "last papyrus-like slice before strongest papyrus-to-air transition",
         "invalid_depth_value": 255,
         "valid_pixels": valid_count,
         "mask_pixels": mask_count,

@@ -221,5 +221,38 @@
    8240
   ],
   "positive_frac": 0.00308
+ },
+ "20250831000000": {
+  "name": "w040",
+  "mode": "direct",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0139/segments/20250831000000-w040_2025083102/ink-labels/9.362um-volume-20250728140407/20260918/inklabels.zarr/0",
+  "shape": [
+   6400,
+   7980
+  ],
+  "positive_frac": 0.0146,
+  "dice_vs_inklabels": 0.574
+ },
+ "20260108000000": {
+  "name": "w041",
+  "mode": "direct",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0139/segments/20260108000000-w041_2026010816/ink-labels/9.362um-volume-20250728140407/20260918/inklabels.zarr/0",
+  "shape": [
+   6200,
+   8020
+  ],
+  "positive_frac": 0.00465,
+  "dice_vs_inklabels": 0.2132
+ },
+ "20260302000000": {
+  "name": "w039",
+  "mode": "direct",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0139/segments/20260302000000-w039_2026030210/ink-labels/9.362um-volume-20250728140407/20260918/inklabels.zarr/0",
+  "shape": [
+   8560,
+   7720
+  ],
+  "positive_frac": 0.0028,
+  "dice_vs_inklabels": 0.1644
  }
 }

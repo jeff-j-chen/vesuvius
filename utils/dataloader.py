@@ -2538,9 +2538,9 @@ class DataManager:
                     f"{mask.shape} and labels {labels.shape} for scroll {self.scroll_id}"
                 )
             normal_train = manual_mask >= 240
-            # current masks use exact paint-tool palette values: 119, 185, and 255
-            explicit_negative = (manual_mask >= 112) & (manual_mask <= 143)
-            explicit_positive = manual_mask == 185
+            # paint-tool palette targets (119 negative, 185 positive, 255 train); brushes drift a few levels
+            explicit_negative = (manual_mask >= 100) & (manual_mask <= 143)
+            explicit_positive = np.abs(manual_mask.astype(np.int16) - 185) <= 6
             explicit_unit = (
                 int(getattr(self.c.model, "multitile_subtile", T))
                 if getattr(self.c.model, "multitile", False)
