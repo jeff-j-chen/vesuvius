@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
-from utils.config import Config, DEFAULT_SCROLLS, DEFAULT_TEST_SCROLL_IDS
+from utils.config import Config, DEFAULT_SCROLLS, DEFAULT_TEST_SCROLL_IDS, startup_output
 
 
 ROOT = Path(__file__).resolve().parent
@@ -610,6 +610,11 @@ def _expected_prepared_cache_keys(config) -> set[tuple]:
 
 
 def prewarm_data_cache(config) -> None:
+    with startup_output():
+        _prewarm_data_cache(config)
+
+
+def _prewarm_data_cache(config) -> None:
     from train import Trainer
     from utils.chunk_cache import _CACHE_REGISTRY
     from utils.dataloader import _PREPARED_DATASET_CACHE, _PREPARED_DATASET_CACHE_LOCK

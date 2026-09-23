@@ -14,7 +14,7 @@ from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 from tqdm import tqdm
 
-from utils.config import Config
+from utils.config import Config, startup_output
 from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray, get_tile_pos_weight, needs_domain_ids, needs_patch_ids
 from utils.hard_mining import HardMiningInjector, HardMiningManager
 from utils.model import create_model, supcon_loss
@@ -549,14 +549,15 @@ class Trainer:
         if bool(getattr(config.tra, "context_consistency", False)):
             torch.backends.cudnn.benchmark = False
             print("[seed] context consistency uses variable batch sizes -- cudnn benchmark off")
-        self._print_config()
+        with startup_output():
+            self._print_config()
 
-        self.train_dataset, self.train_loader, self.valid_loader = self._setup_data()
-        self.model, self.params, self.optimizer, self.scheduler, self.criterion = self._setup_model_optim()
+            self.train_dataset, self.train_loader, self.valid_loader = self._setup_data()
+            self.model, self.params, self.optimizer, self.scheduler, self.criterion = self._setup_model_optim()
 
-        print("Initializing Tensorboard...")
-        self._init_visualizers()
-        self._dump_run_config()
+            print("Initializing Tensorboard...")
+            self._init_visualizers()
+            self._dump_run_config()
 
         self.scaler = GradScaler(enabled=self.c.device == "cuda")
         self._ema_state = (
@@ -936,13 +937,24 @@ class Trainer:
         if len(domain_losses) < 2:
             self.scaler.scale(loss).backward()
             return
+        groups = int(getattr(self.c.tra, "pcgrad_groups", 0))
+        if groups >= 2 and len(domain_losses) > groups:
+            # random partition each step; scaling keeps the mean task loss equal to the domain mean
+            order = torch.randperm(len(domain_losses)).tolist()
+            scale = groups / len(domain_losses)
+            domain_losses = [
+                scale * sum(domain_losses[index] for index in order[group::groups])
+                for group in range(groups)
+            ]
         parameters = [
             parameter for parameter in self.model.parameters()
             if parameter.requires_grad
         ]
         auxiliary_loss = loss - primary_loss
-        self.scaler.scale(auxiliary_loss).backward(retain_graph=True)
-        task_gradients = []
+        # an all-zero auxiliary (no active aux terms) still costs a full backward pass
+        if float(auxiliary_loss.detach()) != 0.0:
+            self.scaler.scale(auxiliary_loss).backward(retain_graph=True)
+        task_vectors = []
         for index, domain_loss in enumerate(domain_losses):
             gradients = torch.autograd.grad(
                 self.scaler.scale(domain_loss),
@@ -950,34 +962,27 @@ class Trainer:
                 retain_graph=index + 1 < len(domain_losses),
                 allow_unused=True,
             )
-            task_gradients.append([
-                torch.zeros_like(parameter) if gradient is None else gradient
+            task_vectors.append(torch.cat([
+                (
+                    torch.zeros(parameter.numel(), device=parameter.device)
+                    if gradient is None else gradient.float().reshape(-1)
+                )
                 for parameter, gradient in zip(parameters, gradients)
-            ])
-        projected = []
-        for task_index, gradients in enumerate(task_gradients):
-            adjusted = [gradient.clone() for gradient in gradients]
-            order = torch.randperm(len(task_gradients), device=loss.device).tolist()
-            for other_index in order:
-                if other_index == task_index:
-                    continue
-                other = task_gradients[other_index]
-                dot = sum((left * right).sum() for left, right in zip(adjusted, other))
-                norm = sum((gradient * gradient).sum() for gradient in other).clamp(min=1e-12)
-                if dot < 0:
-                    scale = dot / norm
-                    adjusted = [
-                        left - scale * right
-                        for left, right in zip(adjusted, other)
-                    ]
-            projected.append(adjusted)
+            ]))
+        stacked = torch.stack(task_vectors)
+        del task_vectors
+        # exact sequential projection expressed in the span of the task gradients
+        weights = pcgrad_coefficients((stacked @ stacked.T).double().cpu().tolist())
+        combined = torch.tensor(weights, device=stacked.device, dtype=stacked.dtype) @ stacked
+        del stacked
+        offset = 0
         with torch.no_grad():
-            for parameter_index, parameter in enumerate(parameters):
-                gradient = torch.stack([
-                    task[parameter_index] for task in projected
-                ]).mean(dim=0)
+            for parameter in parameters:
+                count = parameter.numel()
+                gradient = combined[offset:offset + count].view_as(parameter).to(parameter.dtype)
+                offset += count
                 if parameter.grad is None:
-                    parameter.grad = gradient
+                    parameter.grad = gradient.clone()
                 else:
                     parameter.grad.add_(gradient)
 

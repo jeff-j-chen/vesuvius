@@ -137,5 +137,89 @@
   ],
   "positive_frac": 0.02757,
   "dice_vs_inklabels": 0.2354
+ },
+ "20250108000005": {
+  "affine_src_to_ours": [
+   [
+    1.027811,
+    0.000188,
+    -8.713246
+   ],
+   [
+    9.6e-05,
+    1.028652,
+    -7.276331
+   ]
+  ],
+  "src_level": 2,
+  "sift_inliers": 1081,
+  "flow_nodes": 7825,
+  "tile_ncc_affine": 0.6475,
+  "tile_ncc_final": 0.6843,
+  "coverage_of_our_surface": 0.9961,
+  "name": "w030",
+  "mode": "register",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0139/segments/20250108000005-w030_2025010818/ink-labels/2.399um-volume-20260102150214/20260918/inklabels.zarr/0",
+  "shape": [
+   7140,
+   7460
+  ],
+  "positive_frac": 0.00479
+ },
+ "20260112000000": {
+  "affine_src_to_ours": [
+   [
+    1.02779,
+    -9.9e-05,
+    -6.604774
+   ],
+   [
+    -0.000101,
+    1.030155,
+    -6.735179
+   ]
+  ],
+  "src_level": 2,
+  "sift_inliers": 1239,
+  "flow_nodes": 7092,
+  "tile_ncc_affine": 0.6292,
+  "tile_ncc_final": 0.6597,
+  "coverage_of_our_surface": 0.9958,
+  "name": "w043",
+  "mode": "register",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0139/segments/20260112000000-w043_2026011217/ink-labels/2.399um-volume-20260102150214/20260918/inklabels.zarr/0",
+  "shape": [
+   6120,
+   8120
+  ],
+  "positive_frac": 0.00412
+ },
+ "20260126000000": {
+  "affine_src_to_ours": [
+   [
+    1.027352,
+    2.9e-05,
+    -7.165276
+   ],
+   [
+    -0.000117,
+    1.027341,
+    -6.680456
+   ]
+  ],
+  "src_level": 2,
+  "sift_inliers": 1072,
+  "flow_nodes": 7058,
+  "tile_ncc_affine": 0.6186,
+  "tile_ncc_final": 0.6499,
+  "coverage_of_our_surface": 0.9957,
+  "name": "w045",
+  "mode": "register",
+  "source": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0139/segments/20260126000000-w045_2026012619/ink-labels/2.399um-volume-20260102150214/20260918/inklabels.zarr/0",
+  "shape": [
+   5980,
+   8240
+  ],
+  "positive_frac": 0.00308
  }
 }

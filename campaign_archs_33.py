@@ -12,6 +12,8 @@ A. `mid_air_offset_m1` completes the +2/+3 window dose-response toward the papyr
 B. replicate the best Campaign 31 arm, stack EMA on it, and isolate EMA from anchor.
 C. `early_planar*` makes the stem and enc1 convs per-slice so no learned convolution
    mixes depth before the early collapse.
+D. `early_patchdro_native196` runs the c31 winner at 196px without XY downsampling;
+   `mid_pcgrad_groups4` is c29 full PCGrad over four random domain groups per step.
 
 Usage:
     python3 campaign_archs_33.py --dry-run
@@ -40,16 +42,25 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 import campaign_archs_29 as campaign29
 import campaign_archs_30 as campaign30
 import campaign_archs_31 as campaign31
+from utils.config import startup_output
 
 
 ROOT = Path(__file__).resolve().parent
 LOG_DIR = "./runs_archs33"
 MODEL_DIR = "models/archs33"
+# characters are counted from ./inklabels when the label dir is dilated_inklabels
+INKLABEL_DIR = "./dilated_inklabels"
 PRETRAIN_SPECS = {
     "early_gated_planar": campaign31._spec(
         "--early-2d-unet", "--gated-stems", "--norm-mode", "ibn_full",
         "--planar-early-convs",
         required=("gated_cue_stem.", "early_depth_attn.", "early2d_"),
+    ),
+    "early_gated_native196": campaign31._spec(
+        "--early-2d-unet", "--gated-stems", "--norm-mode", "ibn_full",
+        required=("gated_cue_stem.", "early_depth_attn.", "early2d_"),
+        ctx=196,
+        ds=1,
     ),
 }
 EARLY = {"early_2d_unet": True, "mid_2d_unet": False}
@@ -84,6 +95,8 @@ def _test(tid: str, pretrain_key: str, **overrides) -> dict:
         "depth_mask_prob": float(overrides.pop("depth_mask_prob", 0.0)),
         "depth_mask_mode": str(overrides.pop("depth_mask_mode", "zero")),
         "window_offset_by_scroll": dict(overrides.pop("window_offset_by_scroll", {})),
+        "context_size": int(overrides.pop("context_size", 192)),
+        "pcgrad_groups": int(overrides.pop("pcgrad_groups", 0)),
     }
     test = campaign31._test(tid, pretrain_key, **overrides)
     test.update(extra)
@@ -125,6 +138,14 @@ TESTS = [
     # window centred per domain on the occlusion-measured ink band (train and eval)
     _test("early_patchdro_ink_band", "early_gated_c30", **EARLY,
           physical_patch_groupdro=True, window_offset_by_scroll=INK_BAND_OFFSET_BY_SCROLL),
+
+    # c31 winner at native resolution: 196x196 context, no XY downsampling, matched pretrain
+    _test("early_patchdro_native196", "early_gated_native196", **EARLY,
+          physical_patch_groupdro=True, context_size=196, context_downsample=1),
+
+    # c29 full pcgrad (train-mode, one forward, exact per-parameter projection) over four
+    # random domain groups per step instead of ~12 domains: ~3.3x instead of ~12x
+    _test("mid_pcgrad_groups4", "mid_gated_c30", pcgrad_groups=4),
 ]
 
 
@@ -216,8 +237,16 @@ def build_config(test: dict):
     config.dl.depth_mask_prob = float(test["depth_mask_prob"])
     config.dl.depth_mask_mode = str(test["depth_mask_mode"])
     config.data.surface_window_offset_by_scroll = dict(test["window_offset_by_scroll"])
+    config.data.context_size = int(test["context_size"])
+    config.tra.pcgrad = int(test["pcgrad_groups"]) > 0
+    config.tra.pcgrad_groups = int(test["pcgrad_groups"])
     config.data.eval_chunk_gb = 3.0
     config.data.eval_prefetch = 3
+    config.data.inklabel_dir = INKLABEL_DIR
+    config.data.ring_from_inklabel_dir = True
+    config.data.multitile_ring_gate = True
+    config.data.ring_close_r = 0
+    config.data.ring_gap_r = 0
     return config
 
 
@@ -291,24 +320,26 @@ def main() -> None:
             raise ValueError(f"unknown --from {args.from_id!r}; valid={ids}")
         selected = TESTS[ids.index(args.from_id):]
 
-    campaign29.preflight_train_masks(
-        campaign29.CAMPAIGN28_SCROLLS,
-        inklabel_dir=ROOT / "inklabels",
-        strict=not args.dry_run,
-    )
-    preflight_pretraining(selected, args.dry_run)
-    print(f"[campaign33] {len(selected)} run(s) queued (log -> {LOG_DIR})")
+    with startup_output():
+        campaign29.preflight_train_masks(
+            campaign29.CAMPAIGN28_SCROLLS,
+            inklabel_dir=ROOT / INKLABEL_DIR,
+            strict=not args.dry_run,
+        )
+        preflight_pretraining(selected, args.dry_run)
+        print(f"[campaign33] {len(selected)} run(s) queued (log -> {LOG_DIR})")
 
     results = {}
     for test in selected:
         config = build_config(test)
-        print(
-            f"[campaign33] {test['tid']}: holdout={config.data.holdout_domains} "
-            f"planar={config.model.planar_early_convs} "
-            f"depth_mask={config.dl.depth_mask_prob}:{config.dl.depth_mask_mode} "
-            f"offsets_by_scroll={config.data.surface_window_offset_by_scroll or '-'}",
-            flush=True,
-        )
+        with startup_output():
+            print(
+                f"[campaign33] {test['tid']}: holdout={config.data.holdout_domains} "
+                f"planar={config.model.planar_early_convs} "
+                f"depth_mask={config.dl.depth_mask_prob}:{config.dl.depth_mask_mode} "
+                f"offsets_by_scroll={config.data.surface_window_offset_by_scroll or '-'}",
+                flush=True,
+            )
         if args.dry_run:
             success = campaign31.run_test(config, True)
         else:

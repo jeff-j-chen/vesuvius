@@ -1,12 +1,46 @@
 """config.py -- current training configuration for the nnunet3d_lcndz path."""
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 import torch
+
+# "INFO": print the full config, dataset building, and cache progress at the start of a run.
+# "ERROR": start-of-run output is silenced except lines containing ERROR (exceptions still raise).
+LOG_LEVEL = "ERROR"
+
+
+class _ErrorLinesOnly(io.TextIOBase):
+    def __init__(self, target):
+        self._target = target
+        self._pending = ""
+
+    def write(self, text):
+        self._pending += text
+        *lines, self._pending = self._pending.split("\n")
+        for line in lines:
+            if "ERROR" in line:
+                self._target.write(line + "\n")
+        return len(text)
+
+    def flush(self):
+        self._target.flush()
+
+
+@contextlib.contextmanager
+def startup_output():
+    """silence start-of-run stdout unless LOG_LEVEL is INFO."""
+    if str(LOG_LEVEL).upper() == "INFO":
+        yield
+        return
+    with contextlib.redirect_stdout(_ErrorLinesOnly(sys.stdout)):
+        yield
 
 
 @dataclass
@@ -365,6 +399,7 @@ class TrainingConfig:
     pcgrad_lite: bool = False
     pcgrad_lite_max_domains: int = 4
     pcgrad_lite_scope: str = "head"
+    pcgrad_groups: int = 0  # full pcgrad over this many random domain groups per step; 0 = one task per domain
     pcgrad_gram: bool = False
     pcgrad_gram_interval: int = 1  # 0 never measures conflicts: equal domain weights only
     pcgrad_gram_ema: float = 0.0

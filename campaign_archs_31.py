@@ -48,7 +48,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 import campaign_archs_29 as campaign29
 import campaign_archs_30 as campaign30
-from utils.config import DEFAULT_SCROLLS, DEFAULT_TEST_SCROLL_IDS
+from utils.config import DEFAULT_SCROLLS, DEFAULT_TEST_SCROLL_IDS, startup_output
 
 
 ROOT = Path(__file__).resolve().parent
@@ -806,7 +806,7 @@ def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:
             )
 
 
-def run_test(config, dry_run: bool) -> bool:
+def _print_run_header(config) -> None:
     print(f"\n{'=' * 78}\n[campaign31] {config.exp_name}\n{'=' * 78}", flush=True)
     print(
         f"  pretrain={config.init_weights} batch={config.dl.batch_size} "
@@ -836,8 +836,13 @@ def run_test(config, dry_run: bool) -> bool:
         f"forgetting={config.tra.character_forgetting} seed={config.tra.seed}",
         flush=True,
     )
+
+
+def run_test(config, dry_run: bool) -> bool:
+    with startup_output():
+        _print_run_header(config)
     if dry_run:
-        print("  [DRY RUN] skipping", flush=True)
+        print(f"[DRY RUN] {config.exp_name}", flush=True)
         return True
 
     from train import Trainer

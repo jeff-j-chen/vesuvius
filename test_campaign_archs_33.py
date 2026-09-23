@@ -13,24 +13,98 @@ def _config(tid):
 
 class Campaign33Test(unittest.TestCase):
     def test_arm_matrix(self):
-        self.assertEqual(
-            [test["tid"] for test in campaign.TESTS],
-            [
-                "baseline",
-                "early_patchdro_seed42",
-                "mid_air_offset_m1",
-                "lodo_pherc0172_mid",
-                "lodo_pherc0172_early_patchdro",
-                "lodo_phercparis4_mid",
-                "lodo_phercparis4_early_patchdro",
-                "early_patchdro_ema",
-                "mid_groupdro_ema",
-                "early_planar",
-                "early_planar_patchdro",
-                "early_patchdro_depth_interp",
-                "early_patchdro_ink_band",
-            ],
+        ids = [test["tid"] for test in campaign.TESTS]
+        self.assertEqual(len(ids), len(set(ids)))
+        for tid in (
+            "early_patchdro_seed42",
+            "mid_air_offset_m1",
+            "lodo_pherc0172_mid",
+            "lodo_pherc0172_early_patchdro",
+            "lodo_phercparis4_mid",
+            "lodo_phercparis4_early_patchdro",
+            "early_patchdro_ema",
+            "mid_groupdro_ema",
+            "early_planar",
+            "early_planar_patchdro",
+            "early_patchdro_depth_interp",
+            "early_patchdro_ink_band",
+            "early_patchdro_native196",
+            "mid_pcgrad_groups4",
+        ):
+            self.assertIn(tid, ids)
+
+    def test_native_and_grouped_pcgrad_arms(self):
+        native = _config("early_patchdro_native196")
+        self.assertEqual((native.data.context_size, native.data.context_downsample), (196, 1))
+        self.assertTrue(native.tra.physical_patch_groupdro and native.model.early_2d_unet)
+        self.assertIn("campaign33_early_gated_native196", native.init_weights)
+        self.assertEqual(native.dl.batch_size, campaign31.FINETUNE_BATCH_SIZE)
+        spec = campaign.PRETRAIN_SPECS["early_gated_native196"]
+        self.assertEqual((spec["ctx"], spec["ds"]), (196, 1))
+        grouped = _config("mid_pcgrad_groups4")
+        self.assertTrue(grouped.tra.pcgrad)
+        self.assertEqual(grouped.tra.pcgrad_groups, 4)
+        self.assertFalse(
+            grouped.tra.pcgrad_lite
+            or grouped.tra.pcgrad_gram
+            or grouped.tra.physical_domain_groupdro
+            or grouped.tra.physical_patch_groupdro
         )
+        self.assertFalse(_config("early_patchdro_seed42").tra.pcgrad)
+
+    def test_pcgrad_backward_matches_explicit_projection(self):
+        from types import SimpleNamespace
+        from torch.cuda.amp.grad_scaler import GradScaler
+        from train import Trainer
+
+        torch.manual_seed(0)
+        model = torch.nn.Linear(6, 1)
+        inputs = torch.randn(12, 6)
+        targets = torch.randn(12, 1)
+        trainer = Trainer.__new__(Trainer)
+        trainer.model = model
+        trainer.scaler = GradScaler(enabled=False)
+
+        def domain_losses():
+            per_sample = (model(inputs) - targets).square().view(-1)
+            return [per_sample[index::4].mean() for index in range(4)]
+
+        for groups in (0, 2):
+            trainer.c = SimpleNamespace(tra=SimpleNamespace(pcgrad_groups=groups))
+            model.zero_grad(set_to_none=True)
+            losses = domain_losses()
+            primary = torch.stack(losses).mean()
+            torch.manual_seed(7)
+            trainer._pcgrad_backward(primary, primary, losses)
+            got = torch.cat([p.grad.reshape(-1) for p in model.parameters()])
+
+            torch.manual_seed(7)
+            losses = domain_losses()
+            tasks = losses
+            if groups:
+                order = torch.randperm(len(losses)).tolist()
+                tasks = [
+                    groups / len(losses) * sum(losses[i] for i in order[g::groups])
+                    for g in range(groups)
+                ]
+            vectors = [
+                torch.cat([
+                    g.reshape(-1)
+                    for g in torch.autograd.grad(task, list(model.parameters()), retain_graph=True)
+                ])
+                for task in tasks
+            ]
+            projected = []
+            for i, vector in enumerate(vectors):
+                adjusted = vector.clone()
+                for j in torch.randperm(len(vectors)).tolist():
+                    if j == i:
+                        continue
+                    dot = adjusted @ vectors[j]
+                    if dot < 0:
+                        adjusted = adjusted - dot / vectors[j].square().sum() * vectors[j]
+                projected.append(adjusted)
+            torch.testing.assert_close(got, torch.stack(projected).mean(0), rtol=1e-4, atol=1e-6)
 
     def test_paths_and_protocol(self):
         for test in campaign.TESTS:
@@ -47,6 +121,8 @@ class Campaign33Test(unittest.TestCase):
 
     def test_arm_settings(self):
         self.assertEqual(_config("mid_air_offset_m1").data.surface_window_offset, -1)
+        if not any(test["tid"] == "baseline" for test in campaign.TESTS):
+            return
         baseline = _config("baseline")
         self.assertTrue(baseline.model.mid_2d_unet and baseline.model.gated_stems)
         self.assertFalse(

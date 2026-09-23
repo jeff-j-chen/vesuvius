@@ -65,6 +65,10 @@ SEGMENTS = [
     ("w034", "PHerc0139/segments/20260303000000-w034_2026030317", "20260303000000"),
     # PHerc0139 w035 (2026-08-12). inklabels downloaded via download_w035_labels.py.
     ("w035", "PHerc0139/segments/20260317000000-w035_2026031718", "20260317000000"),
+    # PHerc0139 segments with official researcher ink labels (2026-09-18 release)
+    ("w030", "PHerc0139/segments/20250108000005-w030_2025010818", "20250108000005"),
+    ("w043", "PHerc0139/segments/20260112000000-w043_2026011217", "20260112000000"),
+    ("w045", "PHerc0139/segments/20260126000000-w045_2026012619", "20260126000000"),
     # HOLDOUT sanity fragment -- assembled but NOT added to DEFAULT_SCROLLS. exclusive
     # hallucination check: if inference on w055 doesn't match its 1.1um text, we hallucinated.
     ("w055", "PHerc0139/segments/20251226000000-w055_2025122611", "20251226000000"),

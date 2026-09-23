@@ -22,6 +22,7 @@ BUCKET = "https://vesuvius-challenge-open-data.s3.amazonaws.com"
 OUT_DIR = "researcher_inklabels"
 ZARR_DIR = os.getenv("VESUVIUS_ZARR_PATH", "ves_zarrs2")
 RELEASE = "20260918"
+P0139_SURFACE_24 = "2.399um-0.22m-78keV-volume-20260102150214.zarr"
 
 # zid -> (name, segment prefix, ink-labels volume dir, mode, extra)
 SOURCES = {
@@ -44,6 +45,29 @@ SOURCES = {
     "20260221022814": ("p841", "PHerc0841/segments/20260221022814-auto_grown_20260220174252405",
                        "2.403um-volume-20260319124803", "register",
                        {"surface": "2.403um-0.22m-77keV-volume-20260319124803.zarr"}),
+    "20250108000005": ("w030", "PHerc0139/segments/20250108000005-w030_2025010818",
+                       "2.399um-volume-20260102150214", "register",
+                       {"surface": P0139_SURFACE_24}),
+    "20260112000000": ("w043", "PHerc0139/segments/20260112000000-w043_2026011217",
+                       "2.399um-volume-20260102150214", "register",
+                       {"surface": P0139_SURFACE_24}),
+    "20260126000000": ("w045", "PHerc0139/segments/20260126000000-w045_2026012619",
+                       "2.399um-volume-20260102150214", "register",
+                       {"surface": P0139_SURFACE_24}),
+}
+# segments first added with their researcher labels: the label is also copied (undilated)
+# into inklabels/ and dilated_inklabels/, and their detection maps are fetched once
+NEW_SEGMENT_IDS = ("20250108000005", "20260112000000", "20260126000000")
+# detection output dir -> (surface-volume zarr, pyramid level near 9.4um, detection tif suffix)
+DETECTIONS = {
+    "inklabels/1_1um": (
+        "1.129um-0.22m-59keV-volume-20260413113053-L1.zarr", 3,
+        "1.129um-0.22m-59keV-volume-20260413113053-L1-20260709123958-mrg20736-1um-s1z2-tile256-stride128.tif",
+    ),
+    "inklabels/2_4um": (
+        P0139_SURFACE_24, 2,
+        "2.399um-0.22m-78keV-volume-20260102150214-20260417190342-new_canon_autoresearch_recipe-tile256-stride128.tif",
+    ),
 }
 
 
@@ -179,11 +203,12 @@ def displacement_field(warped, dst, step=64, patch=160, search=24, min_score=0.3
     return maps, int(valid.sum())
 
 
-def register_label(zid, seg, voldir, surface):
+def surface_maps(zid, seg, surface, level=2):
+    """remap grids taking our volume's pixels to a remote surface pyramid level's pixels."""
     ours = zarr.open(os.path.join(ZARR_DIR, f"{zid}.zarr"), mode="r")
     height, width = map(int, ours.shape[1:])
     dst = norm8(np.asarray(ours[int(ours.shape[0]) // 2]))
-    src_vol = open_remote(f"{BUCKET}/{seg}/surface-volumes/{surface}/2")
+    src_vol = open_remote(f"{BUCKET}/{seg}/surface-volumes/{surface}/{level}")
     src = norm8(read(src_vol, int(src_vol.shape[0]) // 2))
     affine, inliers = fit_affine(src, dst)
     inverse = cv2.invertAffineTransform(affine)
@@ -206,15 +231,50 @@ def register_label(zid, seg, voldir, surface):
         ncc_refined = tile_ncc(dst, refined)
         if ncc_refined > ncc_affine:
             mx, my, ncc_final = rx, ry, ncc_refined
-    label = pool4_label(seg, voldir)
-    if label.shape != src.shape:
-        raise RuntimeError(f"{zid}: pooled label {label.shape} != surface level-2 {src.shape}")
-    out = cv2.remap(label, mx, my, cv2.INTER_LINEAR, borderValue=0)
     coverage = float(((warped > 0) & (dst > 0)).sum() / max(int((dst > 0).sum()), 1))
-    info = {"affine_src_level2_to_ours": np.round(affine, 6).tolist(), "sift_inliers": inliers,
-            "flow_nodes": nodes, "tile_ncc_affine": round(ncc_affine, 4),
+    info = {"affine_src_to_ours": np.round(affine, 6).tolist(), "src_level": level,
+            "sift_inliers": inliers, "flow_nodes": nodes, "tile_ncc_affine": round(ncc_affine, 4),
             "tile_ncc_final": round(ncc_final, 4), "coverage_of_our_surface": round(coverage, 4)}
-    return out, info
+    return mx, my, src.shape, info
+
+
+def register_label(zid, seg, voldir, surface):
+    mx, my, src_shape, info = surface_maps(zid, seg, surface, 2)
+    label = pool4_label(seg, voldir)
+    if label.shape != src_shape:
+        raise RuntimeError(f"{zid}: pooled label {label.shape} != surface level-2 {src_shape}")
+    return cv2.remap(label, mx, my, cv2.INTER_LINEAR, borderValue=0), info
+
+
+def fetch_detections(zid, seg):
+    """one-time: register each ink-detection map onto our volume -> inklabels/<res>/<zid>.png."""
+    import subprocess
+    import tifffile
+
+    for out_dir, (surface, level, suffix) in DETECTIONS.items():
+        out_path = os.path.join(out_dir, f"{zid}.png")
+        if os.path.exists(out_path):
+            continue
+        name = f"{seg.split('/')[0]}-{zid}-{suffix}"
+        tif_path = os.path.join("_ves_tmp", "detect", name)
+        os.makedirs(os.path.dirname(tif_path), exist_ok=True)
+        if not os.path.exists(tif_path):
+            subprocess.run(["curl", "-s", "--fail", "--retry", "3", "-o", tif_path,
+                            f"{BUCKET}/{seg}/ink-detection/{name}"], check=True)
+        detection = tifffile.imread(tif_path)
+        level_shape = open_remote(f"{BUCKET}/{seg}/surface-volumes/{surface}/{level}").shape[1:]
+        small = cv2.resize(detection, (int(level_shape[1]), int(level_shape[0])),
+                           interpolation=cv2.INTER_AREA).astype(np.float32)
+        del detection
+        mx, my, src_shape, info = surface_maps(zid, seg, surface, level)
+        if tuple(small.shape) != tuple(src_shape):
+            raise RuntimeError(f"{zid}: detection {small.shape} != surface level-{level} {src_shape}")
+        warped = cv2.remap(small, mx, my, cv2.INTER_LINEAR, borderValue=0)
+        os.makedirs(out_dir, exist_ok=True)
+        cv2.imwrite(out_path, np.clip(np.rint(warped), 0, 255).astype(np.uint8))
+        os.remove(tif_path)
+        print(f"  [detection] {out_path} shape={warped.shape} ncc={info['tile_ncc_final']} "
+              f"coverage={info['coverage_of_our_surface']}", flush=True)
 
 
 def main():
@@ -229,7 +289,10 @@ def main():
         if zid not in want:
             continue
         ref = cv2.imread(f"inklabels/{zid}.png", cv2.IMREAD_GRAYSCALE)
-        print(f"== {name} ({zid}) mode={mode} target={ref.shape}", flush=True)
+        target_shape = ref.shape if ref is not None else tuple(
+            int(v) for v in zarr.open(os.path.join(ZARR_DIR, f"{zid}.zarr"), mode="r").shape[1:]
+        )
+        print(f"== {name} ({zid}) mode={mode} target={target_shape}", flush=True)
         info = {}
         if mode == "direct":
             prob = read(open_remote(label_url(seg, voldir, 0))).astype(np.float32) / 255.0
@@ -237,15 +300,20 @@ def main():
             prob = pool4_label(seg, voldir, extra.get("x1_level2"))
         else:
             prob, info = register_label(zid, seg, voldir, extra["surface"])
-        if prob.shape != ref.shape:
-            raise RuntimeError(f"{zid}: assembled {prob.shape} != inklabels {ref.shape}")
+        if prob.shape != target_shape:
+            raise RuntimeError(f"{zid}: assembled {prob.shape} != target {target_shape}")
         label = (prob >= 0.5).astype(np.uint8) * 255
         cv2.imwrite(os.path.join(OUT_DIR, f"{zid}.png"), label)
-        old, new = ref > 0, label > 0
-        dice = 2 * (old & new).sum() / max(int(old.sum() + new.sum()), 1)
+        new = label > 0
         info.update({"name": name, "mode": mode, "source": label_url(seg, voldir, 0),
-                     "shape": list(label.shape), "positive_frac": round(float(new.mean()), 5),
-                     "dice_vs_inklabels": round(float(dice), 4)})
+                     "shape": list(label.shape), "positive_frac": round(float(new.mean()), 5)})
+        if ref is not None:
+            old = ref > 0
+            info["dice_vs_inklabels"] = round(float(2 * (old & new).sum() / max(int(old.sum() + new.sum()), 1)), 4)
+        if zid in NEW_SEGMENT_IDS:
+            for directory in ("inklabels", "dilated_inklabels"):
+                cv2.imwrite(os.path.join(directory, f"{zid}.png"), label)
+            fetch_detections(zid, seg)
         manifest[zid] = info
         print("  ", json.dumps(info), flush=True)
     with open(manifest_path, "w") as handle:

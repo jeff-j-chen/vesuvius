@@ -31,6 +31,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 import campaign_archs_29 as campaign29
 import campaign_archs_31 as campaign31
+from utils.config import startup_output
 
 
 ROOT = Path(__file__).resolve().parent
@@ -159,25 +160,27 @@ def main() -> None:
             raise ValueError(f"unknown --from {args.from_id!r}; valid={ids}")
         selected = TESTS[ids.index(args.from_id):]
 
-    campaign29.preflight_train_masks(
-        CAMPAIGN32_SCROLLS,
-        inklabel_dir=ROOT / INKLABEL_DIR,
-        strict=not args.dry_run,
-    )
-    campaign31.preflight_pretraining(selected, args.dry_run)
-    print(f"[campaign32] {len(selected)} run(s) queued (log -> {LOG_DIR})")
+    with startup_output():
+        campaign29.preflight_train_masks(
+            CAMPAIGN32_SCROLLS,
+            inklabel_dir=ROOT / INKLABEL_DIR,
+            strict=not args.dry_run,
+        )
+        campaign31.preflight_pretraining(selected, args.dry_run)
+        print(f"[campaign32] {len(selected)} run(s) queued (log -> {LOG_DIR})")
 
     results = {}
     for test in selected:
         config = build_config(test)
-        print(
-            f"[campaign32] {config.exp_name}: scrolls={len(config.data.scrolls)} "
-            f"labels={config.data.inklabel_dir} ring=c{config.data.ring_close_r}"
-            f"/g{config.data.ring_gap_r}/s{config.data.ring_shell_r} "
-            f"pos_only={config.data.multitile_pos_only} "
-            f"target={config.model.multitile_subtile}px grid={config.model.multitile_grid}",
-            flush=True,
-        )
+        with startup_output():
+            print(
+                f"[campaign32] {config.exp_name}: scrolls={len(config.data.scrolls)} "
+                f"labels={config.data.inklabel_dir} ring=c{config.data.ring_close_r}"
+                f"/g{config.data.ring_gap_r}/s{config.data.ring_shell_r} "
+                f"pos_only={config.data.multitile_pos_only} "
+                f"target={config.model.multitile_subtile}px grid={config.model.multitile_grid}",
+                flush=True,
+            )
         if args.dry_run:
             success = campaign31.run_test(config, True)
         else:

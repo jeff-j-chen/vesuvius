@@ -2760,6 +2760,7 @@ class DataManager:
                 self.labels,
                 split_unit,
                 int(getattr(self.c.data, "character_min_pixels", 8)),
+                reference=self._character_reference_labels(),
             )
         if manual_split:
             if self.manual_train_mask is None:
@@ -2896,17 +2897,97 @@ class DataManager:
             self._store_prepared_datasets(train_set, valid_set)
         return train_set, valid_set
 
+    def _character_reference_labels(self):
+        """drawn ./inklabels (+ forced positives) defining characters for dilated_inklabels."""
+        label_dir = os.path.basename(str(getattr(self.c.data, "inklabel_dir", "")).rstrip("/"))
+        if label_dir != "dilated_inklabels":
+            return None
+        path = f"./inklabels/{self.scroll_id}.png"
+        drawn = imread_gray(path)
+        if drawn is None:
+            raise FileNotFoundError(f"character reference labels not found: {path}")
+        shape = np.asarray(self.labels).shape
+        reference = np.zeros(shape, dtype=np.uint8)
+        h, w = min(shape[0], drawn.shape[0]), min(shape[1], drawn.shape[1])
+        reference[:h, :w] = drawn[:h, :w] > 127
+        if self.explicit_positive_mask is not None:
+            reference |= (np.asarray(self.explicit_positive_mask)[:shape[0], :shape[1]] > 0).astype(np.uint8)
+        return reference
+
     @staticmethod
-    def _build_character_grid(labels, unit, min_pixels=8):
+    def _reference_matched_components(labels, reference, min_pixels=8, reach_px=16):
+        """label `labels` pixels by their nearest `reference` component.
+
+        any label component with a pixel within reach_px of a reference character is merged
+        into the reference characters (each pixel takes its nearest one), so gaps in the
+        thresholded labels never split a reference character. components entirely out of
+        reach keep their own ids.
+        """
+        binary = np.asarray(labels) > 0.5
+        ref_binary = (np.asarray(reference) > 0.5).astype(np.uint8)
+        ref_count, ref_components, ref_stats, _ = cv2.connectedComponentsWithStats(ref_binary, 8)
+        ref_keep = ref_stats[:, cv2.CC_STAT_AREA] >= max(1, int(min_pixels))
+        ref_keep[0] = False
+        ref_remap = np.zeros(ref_count, dtype=np.int32)
+        ref_kept = np.flatnonzero(ref_keep)
+        ref_remap[ref_kept] = np.arange(1, len(ref_kept) + 1, dtype=np.int32)
+        ref_ids = ref_remap[ref_components]
+        del ref_components
+
+        label_count, label_components, label_stats, _ = cv2.connectedComponentsWithStats(
+            binary.astype(np.uint8), 8
+        )
+        ys, xs = np.nonzero(binary)
+        pixel_components = label_components[ys, xs]
+        components = np.zeros(binary.shape, dtype=np.int32)
+        matched = np.zeros(label_count, dtype=bool)
+        seeds = ref_ids > 0
+        if seeds.any():
+            distance, nearest = cv2.distanceTransformWithLabels(
+                (~seeds).astype(np.uint8), cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL
+            )
+            seed_ids = ref_ids[seeds]  # raster order matches DIST_LABEL_PIXEL numbering
+            pixel_nearest = seed_ids[nearest[ys, xs] - 1]
+            matched[pixel_components[distance[ys, xs] <= reach_px]] = True
+            del distance, nearest
+            take = matched[pixel_components]
+            components[ys[take], xs[take]] = pixel_nearest[take]
+        matched[0] = True
+        unmatched = np.flatnonzero(
+            ~matched & (label_stats[:, cv2.CC_STAT_AREA] >= max(1, int(min_pixels)))
+        )
+        if unmatched.size:
+            new_ids = np.zeros(label_count, dtype=np.int32)
+            new_ids[unmatched] = len(ref_kept) + np.arange(1, len(unmatched) + 1)
+            take = new_ids[pixel_components] > 0
+            components[ys[take], xs[take]] = new_ids[pixel_components[take]]
+        characters = len(set(np.unique(components)) - {0})
+        print(
+            f"[character-components] reference-matched: {label_count - 1} label components -> "
+            f"{characters} characters ({len(ref_kept)} reference components, "
+            f"{len(unmatched)} unmatched label components)"
+        )
+        return components
+
+    @staticmethod
+    def _build_character_grid(labels, unit, min_pixels=8, reference=None):
         """map full-resolution connected ink components onto the multitile target grid."""
-        binary = (np.asarray(labels) > 0.5).astype(np.uint8)
-        count, components, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
-        keep = stats[:, cv2.CC_STAT_AREA] >= max(1, int(min_pixels))
-        keep[0] = False
-        remap = np.zeros(count, dtype=np.int32)
-        kept_ids = np.flatnonzero(keep)
-        remap[kept_ids] = np.arange(1, len(kept_ids) + 1, dtype=np.int32)
-        components = remap[components]
+        if reference is not None:
+            components = DataManager._reference_matched_components(labels, reference, min_pixels)
+            kept_ids = np.unique(components)
+            kept_ids = kept_ids[kept_ids > 0]
+            remap = np.zeros(int(components.max()) + 1, dtype=np.int32)
+            remap[kept_ids] = np.arange(1, len(kept_ids) + 1, dtype=np.int32)
+            components = remap[components]
+        else:
+            binary = (np.asarray(labels) > 0.5).astype(np.uint8)
+            count, components, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+            keep = stats[:, cv2.CC_STAT_AREA] >= max(1, int(min_pixels))
+            keep[0] = False
+            remap = np.zeros(count, dtype=np.int32)
+            kept_ids = np.flatnonzero(keep)
+            remap[kept_ids] = np.arange(1, len(kept_ids) + 1, dtype=np.int32)
+            components = remap[components]
 
         unit = max(1, int(unit))
         height = (components.shape[0] // unit) * unit
