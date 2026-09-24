@@ -1025,6 +1025,11 @@ class NnUnet3dLcndz(nn.Module):
 
         if self._early_2d_unet and self._mid_2d_unet:
             raise ValueError("early_2d_unet and mid_2d_unet are mutually exclusive")
+        text_region_gate = bool(getattr(config.model, "text_region_gate", False))
+        if text_region_gate and not self._early_2d_unet:
+            raise ValueError("text_region_gate requires early_2d_unet")
+        self.text_region_head = None
+        self.last_text_region_logits: torch.Tensor | None = None
         if self._early_2d_unet:
             if not bool(getattr(config.model, "multitile", False)):
                 raise ValueError("early_2d_unet requires multitile=True")
@@ -1062,6 +1067,8 @@ class NnUnet3dLcndz(nn.Module):
                 for in_channels in encoder_channels[:-1]
             ])
             overlap_channels = (encoder_channels[-1], e1)
+            if text_region_gate:
+                self.text_region_head = nn.Conv2d(encoder_channels[-1], 1, kernel_size=1)
         else:
             self.early_depth_attn = None
             self.early_depth_fuse = None
@@ -2198,6 +2205,20 @@ class NnUnet3dLcndz(nn.Module):
         count = cells.new_tensor(float(cells.shape[-1]))
         return (torch.logsumexp(r * cells, dim=-1) - torch.log(count)) / r
 
+    def _multitile_mean_2d(
+        self,
+        feature_map: torch.Tensor,
+        target_offsets: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """mean of a (B,1,H,W) map over each multitile cell, in iy*grid+ix order."""
+        center = self._crop_center_feat(
+            feature_map.unsqueeze(2),
+            self._mt_center_feat,
+            target_offsets,
+        ).squeeze(1).squeeze(1)
+        n, sub = self._mt_grid, self._mt_sub_feat
+        return center.reshape(center.shape[0], n, sub, n, sub).mean(dim=(2, 4)).flatten(1)
+
     def _multitile_embeddings_2d(
         self,
         decoded: torch.Tensor,
@@ -2337,6 +2358,15 @@ class NnUnet3dLcndz(nn.Module):
                 teacher_surface_confidence,
             )
             voxel2d = self.early2d_head(decoded2d)
+            if self.text_region_head is not None:
+                region = F.interpolate(
+                    self.text_region_head(bottleneck2d),
+                    size=voxel2d.shape[-2:],
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                self.last_text_region_logits = self._multitile_mean_2d(region, target_offsets)
+                voxel2d = voxel2d + F.logsigmoid(region)
             center2d = self._crop_center_feat(
                 voxel2d.unsqueeze(2),
                 self._mt_center_feat,
@@ -2599,6 +2629,10 @@ def create_model(config: Config):
     if model.dual_scale_deep_local is not None:
         nn.init.zeros_(model.dual_scale_deep_local.head.weight)
         nn.init.zeros_(model.dual_scale_deep_local.head.bias)
+    if model.text_region_head is not None:
+        # logsigmoid(4) ~ -0.02: the gate starts open so pretrained ink logits pass unchanged
+        nn.init.zeros_(model.text_region_head.weight)
+        nn.init.constant_(model.text_region_head.bias, 4.0)
     if model.gated_cue_stem is not None:
         model.gated_cue_stem.reset_identity()
     for module in model.modules():

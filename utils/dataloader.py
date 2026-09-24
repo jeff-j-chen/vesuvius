@@ -661,7 +661,7 @@ class Transform:
 
 class InkVolumeDataset(IterableDataset):
     """iterable dataset for ink volume data"""
-    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, character_namespace=None, scroll_mask=None, split_mask=None, character_grid=None, explicit_negative_mask=None, explicit_positive_mask=None, prepared_state=None):
+    def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, character_namespace=None, scroll_mask=None, split_mask=None, character_grid=None, explicit_negative_mask=None, explicit_positive_mask=None, prepared_state=None, far_negative_coords=None, far_negative_units=None):
         """initializes the dataset.
         scroll_mask: optional papyrus mask distinct from `mask` (which may be ring-restricted);
         multitile uses it to drop sub-tiles straddling the scroll boundary. defaults to `mask`.
@@ -924,6 +924,9 @@ class InkVolumeDataset(IterableDataset):
         self._explicit_negative_share = float(
             getattr(config.data, "explicit_negative_share", 0.0)
         )
+        self._far_neg_coords = list(far_negative_coords or [])
+        self._far_neg_units = far_negative_units
+        self._far_negative_share = float(getattr(config.data, "far_negative_share", 0.0))
         self._context_replace_prob = float(getattr(config.dl, "context_replace_prob", 0.0))
         self._context_consistency = bool(
             getattr(config.tra, "context_consistency", False)
@@ -977,6 +980,8 @@ class InkVolumeDataset(IterableDataset):
             self._character_neg_coords = prepared_state["character_neg_coords"]
             self._character_ids = prepared_state["character_ids"]
             self._explicit_neg_coords = prepared_state.get("explicit_neg_coords", [])
+            self._far_neg_coords = prepared_state.get("far_neg_coords", [])
+            self._far_neg_units = prepared_state.get("far_neg_units")
             self._context_donor_coords = prepared_state["context_donor_coords"]
         elif self._character_metrics or self._character_balanced:
             if not self._mt or self._character_grid is None:
@@ -994,6 +999,8 @@ class InkVolumeDataset(IterableDataset):
             "character_neg_coords": self._character_neg_coords,
             "character_ids": getattr(self, "_character_ids", ()),
             "explicit_neg_coords": self._explicit_neg_coords,
+            "far_neg_coords": self._far_neg_coords,
+            "far_neg_units": self._far_neg_units,
             "context_donor_coords": self._context_donor_coords,
         }
 
@@ -1131,6 +1138,11 @@ class InkVolumeDataset(IterableDataset):
         character_ids = list(self._character_ids)
         weights = self._character_sampling_weights(character_ids)
         explicit_share = self._explicit_negative_share if self._explicit_neg_coords else 0.0
+        far_share = self._far_negative_share if self._far_neg_coords else 0.0
+        if far_share > 0:
+            # never draw a far window more often than an average ring-negative window
+            ring_windows = sum(len(value) for value in self._character_neg_coords.values())
+            far_share *= min(1.0, len(self._far_neg_coords) / max(1, ring_windows))
         while len(coords) < target:
             if weights is None:
                 cycle = list(character_ids)
@@ -1143,7 +1155,10 @@ class InkVolumeDataset(IterableDataset):
                 coords.append(positive[np.random.randint(len(positive))])
                 if len(coords) >= target:
                     break
-                if explicit_share > 0 and np.random.random() < explicit_share:
+                if far_share > 0 and np.random.random() < far_share:
+                    far = self._far_neg_coords
+                    coords.append(far[np.random.randint(len(far))])
+                elif explicit_share > 0 and np.random.random() < explicit_share:
                     explicit = self._explicit_neg_coords
                     coords.append(explicit[np.random.randint(len(explicit))])
                 else:
@@ -1742,7 +1757,12 @@ class InkVolumeDataset(IterableDataset):
                 if self._has_explicit_negative_mask and np.any(
                     self.explicit_negative_mask[ysc:yec, xsc:xec] > 0
                 ):
-                    out[index] = -1.0
+                    # -2 marks negatives far from every ink label (outside the text region)
+                    far = self._far_neg_units is not None and bool(self._far_neg_units[
+                        min(((ysc + yec) // 2) // sub, self._far_neg_units.shape[0] - 1),
+                        min(((xsc + xec) // 2) // sub, self._far_neg_units.shape[1] - 1),
+                    ])
+                    out[index] = -2.0 if far else -1.0
                 elif self._has_explicit_positive_mask and np.any(
                     self.explicit_positive_mask[ysc:yec, xsc:xec] > 0
                 ):
@@ -2332,6 +2352,7 @@ class DataManager:
             "multitile_train_step", "multitile_pos_only", "multitile_ring_gate",
             "character_balanced_sampling",
             "character_min_pixels", "max_samples_per_epoch",
+            "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
         )
         dataloader_fields = (
             "context_replace_prob", "context_replace_min_mask_frac",
@@ -2848,6 +2869,24 @@ class DataManager:
                 valid_x,
                 valid_y,
             )
+        far_negative_coords = []
+        far_negative_units = None
+        explicit_negative_train = explicit_negative
+        if float(getattr(self.c.data, "far_negative_share", 0.0)) > 0:
+            if not (manual_split and getattr(self.c.model, "multitile", False)
+                    and getattr(self.c.data, "character_balanced_sampling", False)):
+                raise ValueError(
+                    "far_negative_share requires multitile, a manual split and character-balanced sampling"
+                )
+            far_negative_units, far_negative_coords = self._far_background_negatives(
+                supervision_mask, assignment, explicit_positive, split_unit, train_x, train_y,
+            )
+            far_mask = np.zeros(np.asarray(explicit_negative).shape, dtype=np.uint8)
+            h, w = (np.array(far_negative_units.shape) * split_unit).tolist()
+            far_mask[:h, :w] = np.repeat(
+                np.repeat(far_negative_units, split_unit, axis=0), split_unit, axis=1
+            )
+            explicit_negative_train = np.maximum(explicit_negative, far_mask)
         train_set = InkVolumeDataset(
             self.vol,
             train_mask,
@@ -2863,8 +2902,10 @@ class DataManager:
             scroll_mask=scroll_mask_arg,
             split_mask=train_split_mask,
             character_grid=character_grid,
-            explicit_negative_mask=explicit_negative,
+            explicit_negative_mask=explicit_negative_train,
             explicit_positive_mask=explicit_positive,
+            far_negative_coords=far_negative_coords,
+            far_negative_units=far_negative_units,
         )
         valid_set = InkVolumeDataset(
             self.vol,
@@ -3140,6 +3181,59 @@ class DataManager:
             f"seed={seed} valid_blocks={int(valid_blocks.sum())}/{valid_blocks.size}"
         )
         return assignment
+
+    def _far_background_negatives(self, supervision_mask, assignment, explicit_positive, unit, x_range, y_range):
+        """train-split papyrus units far from every ink label, and whole multitile windows on them."""
+        min_dist = float(getattr(self.c.data, "far_negative_min_dist", 160))
+        grid = int(getattr(self.c.model, "multitile_grid", 4))
+        center = grid * int(getattr(self.c.model, "multitile_subtile", unit))
+        if center % unit:
+            raise ValueError("far-background windows require the multitile center to span whole units")
+        arrays = [np.asarray(self.labels), np.asarray(self.mask), np.asarray(assignment),
+                  np.asarray(supervision_mask), np.asarray(explicit_positive)]
+        h = min(a.shape[0] for a in arrays) // unit * unit
+        w = min(a.shape[1] for a in arrays) // unit * unit
+
+        def units(array, reduce):
+            return reduce(array[:h, :w].reshape(h // unit, unit, w // unit, unit), axis=(1, 3))
+
+        ink = units(arrays[0] > 0.5, np.any) | units(arrays[4] > 0, np.any)
+        papyrus = units(arrays[1] > 0.5, np.all)
+        train = units(arrays[2] > 0, np.all)
+        supervised = units(arrays[3] > 0.5, np.any)
+        distance = cv2.distanceTransform((~ink).astype(np.uint8), cv2.DIST_L2, 5) * unit
+        far_units = papyrus & train & ~supervised & (distance > min_dist)
+        forced = units(arrays[4] > 0, np.any)
+        if forced.any():
+            forced_dist = float(getattr(self.c.data, "far_negative_forced_positive_dist", 200))
+            # unit-centre distances understate pixel gaps by up to one unit diagonal
+            forced_distance = cv2.distanceTransform((~forced).astype(np.uint8), cv2.DIST_L2, 5) * unit
+            far_units &= forced_distance > forced_dist + unit * math.sqrt(2.0)
+
+        # windows whose whole multitile center is far background, at one-unit stride
+        span = center // unit
+        integral = cv2.integral(far_units.astype(np.uint8))
+        uy = np.arange(0, far_units.shape[0] - span + 1)
+        ux = np.arange(0, far_units.shape[1] - span + 1)
+        yy, xx = np.meshgrid(uy, ux, indexing="ij")
+        filled = (
+            integral[yy + span, xx + span] - integral[yy, xx + span]
+            - integral[yy + span, xx] + integral[yy, xx]
+        ) == span * span
+        tile = int(self.c.data.tile_size)
+        shift = (tile - center) // 2
+        coords = []
+        for wy, wx in zip(yy[filled], xx[filled]):
+            y_off = int(wy) * unit - shift - int(y_range[0])
+            x_off = int(wx) * unit - shift - int(x_range[0])
+            if (0 <= y_off <= int(y_range[1]) - int(y_range[0]) - tile
+                    and 0 <= x_off <= int(x_range[1]) - int(x_range[0]) - tile):
+                coords.append((0, y_off, x_off))
+        print(
+            f"[far-negatives] scroll {self.scroll_id}: min_dist={min_dist:.0f}px "
+            f"far_units={int(far_units.sum())} windows={len(coords)}"
+        )
+        return far_units, coords
 
     def _make_ring_mask(self):
         """build training mask from ring around ink labels, computed at TILE level.

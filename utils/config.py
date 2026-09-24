@@ -196,6 +196,8 @@ class DataConfig:
     tta_mode: str = "light"  # eval TTA view set: "light"=id+hflip (2x), "flips"=id+h+v+180 (4x), "dihedral"=+/-90 too (6x)
     probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
     vis_scroll_ids: Optional[List[int]] = field(default_factory=lambda: [20260115000000])
+    vis_preload_persistent: bool = False  # keep each visualized scroll volume in RAM for the whole run
+    eval_stride: int = 32  # figure/inference window step in px; must not exceed the multitile center (grid*subtile)
     inklabel_dir: str = "./inklabels"
     label_dilate_r: int = 0
     dot_inklabel_dir: str = ""  # optional dir of binary dot labels; only positives are added to train
@@ -208,6 +210,9 @@ class DataConfig:
     surface_window_offset_by_scroll: dict = field(default_factory=dict)  # scroll id -> offset; overrides the constant
     holdout_domains: List[str] = field(default_factory=list)  # train_scroll_dict names excluded from training only
     explicit_negative_share: float = 0.0  # fraction of character negative draws taken from hand-drawn explicit negatives
+    far_negative_share: float = 0.0  # fraction of character negative draws taken from far-background papyrus windows
+    far_negative_min_dist: int = 160  # px from any ink label before unlabeled papyrus counts as far background
+    far_negative_forced_positive_dist: int = 200  # px far background must keep from any train-mask forced positive
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
     multitile_pos_only: bool = True  # in ink-containing windows, supervise ONLY ink sub-tiles (mask out non-ink ones to avoid labelling unlabelled-ink neighbours as negatives); ink-free ring windows still give negatives
     multitile_ring_gate: bool = True  # with pos_only=False, still emit only sub-tiles inside the ring/supervision mask (False = legacy all-in-window targets)
@@ -430,6 +435,7 @@ class TrainingConfig:
     depth_shift_aux: bool = False
     depth_shift_aux_lambda: float = 0.1
     depth_shift_aux_classes: int = 3
+    text_region_lambda: float = 0.5  # weight of the text-region auxiliary loss when the gate is enabled
 
 @dataclass
 class ModelConfig:
@@ -478,6 +484,7 @@ class ModelConfig:
     mid_depth_topk_frac: float = 0.5
     mt_lse_r_max: float = 10.0  # upper clamp on the multitile lse temperature (2d heads)
     planar_early_convs: bool = False  # early-2d only: stem and enc1 convs never mix slices
+    text_region_gate: bool = False  # early-2d only: coarse bottleneck head gates ink logits by text-region probability
     depth_antialias: bool = False
     sparse_deep_supervision: bool = False
     sparse_deep_supervision_dec2_weight: float = 0.3

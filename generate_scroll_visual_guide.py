@@ -40,43 +40,39 @@ class Patch:
     source_patch: str = ""
 
 
+# campaign 33 training patches, grouped as in campaign_archs_33.CAMPAIGN33_SCROLL_DICT
 TRAINING_GROUPS = [
     ("PHerc0139", [
         Patch("20260115000000", "w044"),
-        Patch("20250223000000", "w059"),
-        Patch("20260206000001", "w047"),
-        Patch("20260115000001", "w056"),
-        Patch("20260210000000", "w058"),
-        Patch("20260227000000", "w052"),
-        Patch("20260318000000", "w049"),
-        Patch("20260325000000", "w046"),
-        Patch("20260108000000", "w041"),
-        Patch("20250831000000", "w040"),
-        Patch("20260302000000", "w039"),
-        Patch("20260306000000", "w038"),
-        Patch("20260310000000", "w037"),
-        Patch("20260303000000", "w034"),
         Patch("20260317000000", "w035"),
+        Patch("20250223000000", "w059"),
+        Patch("20250108000005", "w030"),
+        Patch("20260112000000", "w043"),
+        Patch("20260126000000", "w045"),
+        Patch("20250831000000", "w040"),
+        Patch("20260108000000", "w041"),
+        Patch("20260302000000", "w039"),
     ]),
     ("PHerc0172", [
         Patch("20251111010954", "w068"),
         Patch("20251112000002", "w087"),
     ]),
     ("PHerc1667", [
-        Patch("20240304144031", "w018"),
         Patch("20240304141531", "w013"),
+        Patch("20240304144031", "w018"),
         Patch("20231201215900", "Cr1 Fr3", "mask_overlay"),
     ]),
-    ("PHerc0814", [Patch("20260226000000", "seg46527")]),
-    ("PHerc0500P2", [Patch("20250628074500", "500P2 front")]),
     ("PHerc0009B", [Patch("20250919125754", "patch 487")]),
     ("PHercParis4", [Patch("20231210121321", "Paris4")]),
+    ("PHerc0500P2", [Patch("20250628074500", "500P2 front")]),
+    ("PHerc0814", [Patch("20260226000000", "seg46527")]),
     ("PHercParis2", [Patch("20230301213755", "Fr143", "mask_overlay")]),
     ("PHerc51", [Patch("20231205222200", "Cr4 Fr8", "mask_overlay")]),
     ("PHercParis1", [Patch("20230301213423", "Fr34", "mask_overlay")]),
     ("PHerc0343P", [Patch("20250511003658", "tifxyz segment")]),
     ("PHerc0841", [Patch("20260221022814", "auto-grown 405")]),
 ]
+LABEL_DIR = ROOT / "dilated_inklabels"
 
 TEST_GROUPS = [
     ("PHerc0813", [Patch(
@@ -133,7 +129,7 @@ def _fit_height(image: np.ndarray, height: int = IMAGE_HEIGHT) -> np.ndarray:
 
 def _label_preview(patch: Patch) -> tuple[np.ndarray, str]:
     base_path = ROOT / "inklabels" / "2_4um" / f"{patch.patch_id}.png"
-    overlay_path = ROOT / "inklabels" / f"{patch.patch_id}.png"
+    overlay_path = LABEL_DIR / f"{patch.patch_id}.png"
     if patch.source == "native":
         base = _read_gray(overlay_path)
         overlay = None
@@ -141,7 +137,7 @@ def _label_preview(patch: Patch) -> tuple[np.ndarray, str]:
     else:
         base = _read_gray(base_path)
         overlay = _read_gray(overlay_path)
-        note = "2.4um + aligned"
+        note = "2.4um + dilated label"
 
     base = _fit_height(base)
     preview = cv2.cvtColor(255 - base, cv2.COLOR_GRAY2BGR).astype(np.float32)
@@ -166,7 +162,7 @@ def _mask_overlay_preview(patch: Patch) -> tuple[np.ndarray, str]:
     outline = cv2.morphologyEx(inside.astype(np.uint8), cv2.MORPH_GRADIENT, kernel) > 0
     preview[outline] = (35, 35, 35)
 
-    overlay = _read_gray(ROOT / "inklabels" / f"{patch.patch_id}.png")
+    overlay = _read_gray(LABEL_DIR / f"{patch.patch_id}.png")
     overlay = cv2.resize(
         overlay,
         (preview.shape[1], preview.shape[0]),
@@ -175,7 +171,7 @@ def _mask_overlay_preview(patch: Patch) -> tuple[np.ndarray, str]:
     alpha = (0.33 * overlay)[..., None]
     color = np.full_like(preview, ACCENT, dtype=np.float32)
     preview = preview.astype(np.float32) * (1.0 - alpha) + color * alpha
-    return np.clip(preview, 0, 255).astype(np.uint8), "mask + aligned overlay"
+    return np.clip(preview, 0, 255).astype(np.uint8), "mask + dilated label"
 
 
 def _test_area_value(patch: Patch) -> float:
@@ -428,7 +424,7 @@ def generate_guide(output_path: Path) -> Path:
     )
     cv2.putText(
         title,
-        "black: 2.4um label     red: aligned inklabel at 33% opacity     common preview height",
+        "black: 2.4um label     red: campaign 33 dilated label at 33% opacity     common preview height",
         (0, 68),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
@@ -439,11 +435,11 @@ def generate_guide(output_path: Path) -> Path:
     cv2.rectangle(title, (0, 80), (32, 96), (0, 0, 0), -1)
     cv2.rectangle(title, (192, 80), (224, 96), ACCENT, -1)
     cv2.putText(title, "2.4um", (42, 94), cv2.FONT_HERSHEY_SIMPLEX, 0.42, TEXT, 1, cv2.LINE_AA)
-    cv2.putText(title, "aligned overlay", (234, 94), cv2.FONT_HERSHEY_SIMPLEX, 0.42, TEXT, 1, cv2.LINE_AA)
+    cv2.putText(title, "dilated label", (234, 94), cv2.FONT_HERSHEY_SIMPLEX, 0.42, TEXT, 1, cv2.LINE_AA)
 
     bands = [
         title,
-        *_section("TRAINING", "29 labeled fragments grouped by physical scroll", TRAINING_GROUPS),
+        *_section("TRAINING", "23 campaign 33 fragments grouped by physical scroll", TRAINING_GROUPS),
         *_section(
             "TEST",
             "nine unlabeled discovery surfaces; papyrus masks, areas, and source patches shown",

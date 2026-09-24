@@ -2024,6 +2024,18 @@ class Trainer:
                 self._last_dg_losses["mid_depth_entropy"] = float(
                     self.model.last_mid_depth_entropy.detach()
                 )
+            region_logits = getattr(self.model, "last_text_region_logits", None)
+            region_lambda = float(getattr(self.c.tra, "text_region_lambda", 0.0))
+            if region_logits is not None and region_lambda > 0 and region_logits.shape == mask.shape:
+                # far-background negatives (-2) are outside the text region; every other supervised cell is inside
+                region_targets = (labels > -1.5).float()
+                region_loss = (
+                    F.binary_cross_entropy_with_logits(
+                        region_logits.float(), region_targets, reduction="none"
+                    ) * mask
+                ).sum() / mask.sum().clamp(min=1)
+                loss = loss + region_lambda * region_loss
+                self._last_dg_losses["text_region_loss"] = float(region_loss.detach())
             if bool(getattr(self.c.tra, "depth_shift_aux", False)):
                 depth_shift_logits = getattr(self.model, "last_depth_shift_logits", None)
                 if depth_shift_logits is None or depth_shift is None:

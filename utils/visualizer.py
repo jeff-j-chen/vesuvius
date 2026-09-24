@@ -915,6 +915,9 @@ class TensorboardVisualizer:
         self._segment_assets = {}
         self._probe_vol_cache = {}
         self.probe_specs = self._build_probe_specs()
+        self._persistent_vis_volume = False
+        if self.eval_enabled and bool(getattr(self.c.data, "vis_preload_persistent", False)):
+            self._persistent_vis_volume = self.load_visualization_volume()
 
     def load_visualization_volume(self) -> bool:
         """temporarily materialize this scroll for figure inference."""
@@ -944,6 +947,8 @@ class TensorboardVisualizer:
         return True
 
     def release_visualization_volume(self) -> None:
+        if getattr(self, "_persistent_vis_volume", False):
+            return
         streamed = getattr(self, "_streamed_volume", None)
         if streamed is None:
             return
@@ -975,7 +980,7 @@ class TensorboardVisualizer:
         # full eroded labels for the training scroll (pixel array, already loaded as float)
         # dm.labels is cast to uint8 after get_datasets(), so reload from file
         def _load_eroded(sid):
-            img = imread_gray(f"./eroded_inklabels/{sid}.png")
+            img = imread_gray(f"{getattr(self.c.data, 'inklabel_dir', './eroded_inklabels')}/{sid}.png")
             return (img / 255.0).astype(np.float32) if img is not None else None
 
         # named probes on the training scroll (scroll4 w023)
@@ -1070,13 +1075,21 @@ class TensorboardVisualizer:
     def _gen_tile_coords(self, z_range, y_range, x_range, mask, z_step=None):
         """generate valid tile coords within ranges filtered by mask.
         z_step defaults to depth//2 (overlapping windows, used for hard mining);
-        pass z_step=depth for non-overlapping eval figure passes (2x faster)."""
+        pass z_step=depth for non-overlapping eval figure passes (2x faster).
+        windows step by config.data.eval_stride in y and x."""
         z0, z1 = z_range
         y0, y1 = y_range
         x0, x1 = x_range
 
         depth = self.c.data.depth
         tile = self.c.data.tile_size
+        step = max(1, int(getattr(self.c.data, "eval_stride", tile) or tile))
+        if bool(getattr(self.c.model, "multitile", False)):
+            center = int(getattr(self.c.model, "multitile_grid", 4)) * int(
+                getattr(self.c.model, "multitile_subtile", 8)
+            )
+            if step > center:
+                raise ValueError(f"eval_stride={step} leaves gaps between {center}px multitile windows")
 
         z_span = max(0, z1 - z0 - depth + 1)
         y_span = max(0, y1 - y0 - tile + 1)
@@ -1091,11 +1104,21 @@ class TensorboardVisualizer:
         depth_offsets = [0] if bool(
             getattr(self.c.data, "surface_relative_depth_window", False)
         ) else range(0, z_span, z_step)
+        def _positions(span):
+            values = list(range(0, span, step))
+            # keep the last tile-aligned window so a coarse stride never drops the far edge
+            last = ((span - 1) // tile) * tile if span > 0 else None
+            if last is not None and values and values[-1] < last:
+                values.append(last)
+            return values
+
+        y_positions = _positions(y_span)
+        x_positions = _positions(x_span)
         for d in depth_offsets:
             if z0 + d + depth > z1:
                 continue
-            for y in range(0, y_span, tile):
-                for x in range(0, x_span, tile):
+            for y in y_positions:
+                for x in x_positions:
                     m_tile = mask[y0 + y:y0 + y + tile, x0 + x:x0 + x + tile]
                     if np.sum(m_tile) > 0:
                         coords.append((d, y, x))
@@ -3231,7 +3254,8 @@ class TensorboardVisualizer:
             return None
 
         seg_id = self.scroll1_id
-        label_path = f"./eroded_inklabels/{seg_id}.png"
+        lbl_dir = getattr(self.c.data, 'inklabel_dir', './eroded_inklabels')
+        label_path = f"{lbl_dir}/{seg_id}.png"
         if not os.path.exists(label_path):
             return None
 
