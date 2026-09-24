@@ -2785,7 +2785,7 @@ class DataManager:
                 (explicit_positive > 0) & (np.asarray(self.mask) > 0.5)
             ).astype(np.uint8)
             if character_grid is not None:
-                character_grid = self._exclude_characters_crossing_split(
+                character_grid, assignment = self._exclude_characters_crossing_split(
                     character_grid,
                     assignment,
                     split_unit,
@@ -3014,37 +3014,38 @@ class DataManager:
         return character_grid
 
     @staticmethod
-    def _exclude_characters_crossing_split(character_grid, assignment, unit, max_minority=0.05):
-        """assign split-crossing components to their majority side; exclude large crossings."""
+    def _exclude_characters_crossing_split(character_grid, assignment, unit):
+        """move each split-crossing character wholly to train only if most of its cells are train.
+
+        returns (character_grid, assignment) with the minority cells reassigned.
+        """
         unit = max(1, int(unit))
         grid_h, grid_w = character_grid.shape
         cells = assignment[:grid_h * unit, :grid_w * unit].reshape(
             grid_h, unit, grid_w, unit
         ).all(axis=(1, 3))
-        crossing = []
-        trimmed = 0
-        out = character_grid.copy()
+        new_cells = cells.copy()
+        to_train = to_valid = 0
         for component_id in np.unique(character_grid):
             if component_id <= 0:
                 continue
             member = character_grid == component_id
             values = cells[member]
             if values.any() and not values.all():
-                train_fraction = float(values.mean())
-                if min(train_fraction, 1.0 - train_fraction) > max_minority:
-                    crossing.append(int(component_id))
-                else:
-                    # minority cells lose their character id so no character spans both splits
-                    out[member & (cells != (train_fraction > 0.5))] = 0
-                    trimmed += 1
-        if crossing:
-            out[np.isin(out, crossing)] = 0
-        if crossing or trimmed:
+                is_train = float(values.mean()) > 0.5
+                new_cells[member] = is_train
+                to_train += int(is_train)
+                to_valid += int(not is_train)
+        assignment = assignment.copy()
+        assignment[:grid_h * unit, :grid_w * unit] = np.repeat(
+            np.repeat(new_cells, unit, axis=0), unit, axis=1
+        ).astype(assignment.dtype)
+        if to_train or to_valid:
             print(
-                f"[character-split] excluded {len(crossing)} character(s) crossing the fixed split; "
-                f"assigned {trimmed} to their majority side (minority <= {max_minority:.0%})"
+                f"[character-split] majority rule: {to_train} crossing character(s) -> train, "
+                f"{to_valid} -> valid"
             )
-        return out
+        return character_grid.copy(), assignment
 
     @staticmethod
     def _exclude_characters_crossing_ranges(
