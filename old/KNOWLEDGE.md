@@ -1245,10 +1245,6 @@ All active training code, zarr paths, and config have been updated to the new da
 
 **Zarr root:** `C:\Users\ChenJeff\Documents\ves_zarrs2\`
 
-**Test zarr:** `20260716083545` — PHerc0813, (28, 4421, 4421), VC3D-grown segment
-`auto_grown_20260716083545968`, 2.98 cm², max_gen=175 (restored snap 9, 2026-07-17).
-External backup: `Documents/vc3d_recovered_0211/RESTORED_auto_grown_20260716083545968_snap9_latest`
-
 **Config system:** `utils/config.py` — dataclass-based, no CLI args to `train.py` (only `-n`).
 Campaign runners instantiate `Config()`, mutate fields, pass to `Trainer(c).run()`.
 

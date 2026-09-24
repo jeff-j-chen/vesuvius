@@ -269,34 +269,34 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
 # mesh (verified against each mesh bbox). NOTE: 1447's only volume is 8.640um (not 9.362um) -- that
 # IS the volume its mesh was built on (vc3d folder 20250521151220_editable).
 FRAGMENTS = [
-    ("20260814140748", "auto_grown_20260814140748456",
+    ("20260814140748", "auto_grown_20260814140748456_flatboi",
      f"{BUCKET}/PHerc0813/volumes/20250821151723-9.362um-1.2m-113keV-masked.zarr/0",
      "16993,7947,7947"),
     # PHerc0211 large merged segment (replaces 20260717193517520 and 20260719202304218)
     # combines 5 patches into a significantly larger rectangular area
-    ("20260717193517", "auto_grown_20260717193517520_0_1_2_3_4_merged",
+    ("20260717193517", "auto_grown_20260717193517520_0_1_2_3_4_merged_flatboi",
      f"{BUCKET}/PHerc0211/volumes/20250821151803-9.362um-1.2m-113keV-masked.zarr/0",
      "19416,7948,7948"),
-    ("20260720090842", "auto_grown_20260720090842117",
+    ("20260720090842", "auto_grown_20260720090842117_flatboi",
      f"{BUCKET}/PHerc1203/volumes/20250820131727-9.362um-1.2m-113keV-masked.zarr/0",
      "18977,6844,6844"),
-    ("20250703034159", "20250703034159",
+    ("20250703034159", "20250703034159_flatboi",
      f"{BUCKET}/PHerc1447/volumes/20250521151220-8.640um-1.2m-116keV-masked.zarr/0",
      "24297,8343,8343"),
     # PHerc0826 merged patch (2026-08-08)
-    ("20260723112922", "auto_grown_20260723112922652_merged",
+    ("20260723112922", "auto_grown_20260723112922652_merged_flatboi",
      f"{BUCKET}/PHerc0826/volumes/20250821151701-9.362um-1.2m-113keV-masked.zarr/0",
      "16920,8169,8169"),
-    ("20260921094413", "auto_grown_20260921094413486",
+    ("20260921094413", "auto_grown_20260921094413486_flatboi",
      f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
      "14019,7726,7726"),
-    ("20260918132724", "auto_grown_20260918132724424",
+    ("20260918132724", "auto_grown_20260918132724424_flatboi",
      f"{BUCKET}/PHerc0175A/volumes/20250521115057-8.640um-1.2m-116keV-masked.zarr/0",
      "12748,9363,9363"),
-    ("20260922073234", "auto_grown_20260922073234974",
+    ("20260922073234", "auto_grown_20260922073234974_flatboi",
      f"{BUCKET}/PHerc0306B/volumes/20250521133212-8.640um-1.2m-116keV-masked.zarr/0",
      "15898,8849,8849"),
-    ("20260922161631", "auto_grown_20260922161631422_merged",
+    ("20260922161631", "auto_grown_20260922161631422_merged_flatboi",
      f"{BUCKET}/PHerc0800/volumes/20250521135224-8.640um-1.2m-116keV-masked.zarr/0",
      "24298,9867,9867"),
 ]

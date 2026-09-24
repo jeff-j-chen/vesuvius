@@ -658,8 +658,10 @@ def main() -> None:
     parser.add_argument("--elastic-fill-radius", type=int, default=8)
     parser.add_argument("--prefetch-blocks", type=int, default=2,
                         help="bounded background zarr reads to overlap I/O with detection")
+    parser.add_argument("--view-all-layers", action="store_true",
+                        help="also write per-depth layer jpgs (default: only the depth overview)")
     parser.add_argument("--review", action="store_true",
-                        help="open generated layer views in a persistent OpenCV window")
+                        help="open generated layer views in a persistent OpenCV window (implies --view-all-layers)")
     parser.add_argument("--review-only", action="store_true",
                         help="open existing layer views without rebuilding supervision")
     parser.add_argument("--review-height", type=int, default=900)
@@ -671,6 +673,8 @@ def main() -> None:
                         help="re-render layer views from existing depth.npy/confidence.npy")
     args = parser.parse_args()
 
+    # review needs the per-depth frames
+    args.view_all_layers = args.view_all_layers or args.review
     scroll_id = str(args.scroll_id)
     review_root = Path(args.review_dir)
     if args.review_only:
@@ -704,10 +708,16 @@ def main() -> None:
         review_dir.mkdir(parents=True, exist_ok=True)
         for stale_overlay in review_dir.glob("depth_*.jpg"):
             stale_overlay.unlink()
-        overlay_paths = _write_overlays(
-            volume, depth_map, confidence, args.z_start, args.z_end, review_dir,
-            output_height=args.review_height, overlay_alpha=args.overlay_alpha,
-            ink_volume=ink_volume, ink_alpha=args.ink_alpha,
+        overlay_paths = []
+        if args.view_all_layers:
+            overlay_paths = _write_overlays(
+                volume, depth_map, confidence, args.z_start, args.z_end, review_dir,
+                output_height=args.review_height, overlay_alpha=args.overlay_alpha,
+                ink_volume=ink_volume, ink_alpha=args.ink_alpha,
+            )
+        _write_depth_overview(
+            depth_map, confidence, mask, args.z_start, args.z_end,
+            review_dir / "surface_depth_overview.jpg", downscale=2,
         )
         if ink_volume is not None:
             alignment = _ink_surface_alignment(ink_volume, depth_map, confidence, mask)
@@ -715,7 +725,9 @@ def main() -> None:
                 json.dump(alignment, handle, indent=2)
             print("[surface] ink vs surface: " + json.dumps(
                 {k: v for k, v in alignment.items() if not isinstance(v, dict)}))
-        print(f"[surface] layer views -> {review_dir / 'depth_*.jpg'}")
+        print(f"[surface] depth overview -> {review_dir / 'surface_depth_overview.jpg'}")
+        if overlay_paths:
+            print(f"[surface] layer views -> {review_dir / 'depth_*.jpg'}")
         if args.review:
             _review_layer_views(overlay_paths)
         return
@@ -847,18 +859,20 @@ def main() -> None:
     with open(output_dir / "metadata.json", "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)
 
-    overlay_paths = _write_overlays(
-        volume,
-        depth_map,
-        confidence,
-        args.z_start,
-        args.z_end,
-        review_dir,
-        output_height=args.review_height,
-        overlay_alpha=args.overlay_alpha,
-        ink_volume=ink_volume,
-        ink_alpha=args.ink_alpha,
-    )
+    overlay_paths = []
+    if args.view_all_layers:
+        overlay_paths = _write_overlays(
+            volume,
+            depth_map,
+            confidence,
+            args.z_start,
+            args.z_end,
+            review_dir,
+            output_height=args.review_height,
+            overlay_alpha=args.overlay_alpha,
+            ink_volume=ink_volume,
+            ink_alpha=args.ink_alpha,
+        )
     if ink_volume is not None:
         alignment = _ink_surface_alignment(ink_volume, depth_map, confidence, mask)
         with open(review_dir / "ink_surface_alignment.json", "w", encoding="utf-8") as handle:
@@ -874,7 +888,8 @@ def main() -> None:
     )
     print(f"[surface] depth labels -> {depth_path}")
     print(f"[surface] confidence -> {confidence_path}")
-    print(f"[surface] layer views -> {review_dir / 'depth_*.jpg'}")
+    if overlay_paths:
+        print(f"[surface] layer views -> {review_dir / 'depth_*.jpg'}")
     print(f"[surface] depth overview -> {review_dir / 'surface_depth_overview.jpg'}")
     print(f"[surface] valid inside mask: {100.0 * metadata['valid_fraction_inside_mask']:.2f}%")
     if args.review:

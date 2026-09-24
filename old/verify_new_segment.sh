@@ -54,7 +54,7 @@ echo ""
 # Check config
 echo "[4/5] Checking config.py test_scroll_ids..."
 TEST_SCROLLS=$(python3 -c "from utils.config import Config; c=Config(); print(','.join(map(str, c.data.test_scroll_ids)))")
-if [[ "$TEST_SCROLLS" == "20260716083545,20260717193517,20260720090842,20250703034159" ]]; then
+if [[ "$TEST_SCROLLS" == "20260814140748,20260717193517,20260720090842,20250703034159,20260723112922,20260921094413,20260918132724,20260922073234,20260922161631" ]]; then
     echo "  ✓ Config correct: test_scroll_ids = [$TEST_SCROLLS]"
 else
     echo "  ✗ ERROR: Unexpected test_scroll_ids: [$TEST_SCROLLS]"

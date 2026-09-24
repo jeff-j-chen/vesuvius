@@ -1,0 +1,39 @@
+{
+    "area_cm2": 51.27398447802793,
+    "area_vx2": 68686214.63213187,
+    "bbox": [
+        [
+            1917.62646484375,
+            2400.764404296875,
+            2285.86669921875
+        ],
+        [
+            5792.685546875,
+            5926.53466796875,
+            8885.5791015625
+        ]
+    ],
+    "date_last_modified": "20260722160449399",
+    "elapsed_time_s": 551.091486067,
+    "format": "tifxyz",
+    "grid_offset": [
+        2,
+        2
+    ],
+    "max_gen": 638,
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "seed": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "seed_surface_id": "20250703034159-auto_grown_20250703034159599-derived-native-L0-07287aeb4d154fbe",
+    "type": "seg",
+    "uuid": "20250703034159_flatboi",
+    "vc3d_segment_display_id": "20250703034159-auto_grown_20250703034159599-derived-native-L0-07287aeb4d154fbe",
+    "vc3d_segment_folder": "20250521151220_editable",
+    "vc3d_segment_folder_default_palette": true
+}
