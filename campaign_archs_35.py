@@ -1,0 +1,295 @@
+"""campaign 35: extreme augmentation scored on held-out scrolls
+
+Every arm trains without pherc0841 and pherc0009b (few labels, closest in size and
+acquisition to the unlabeled test scrolls) and is judged on those two domains. Earlier
+augmentation tests scored only held-out regions of trained scrolls, which rewards per-scroll
+memorisation and cannot show a gain in cross-scroll invariance.
+
+Each family is pushed far past a mild setting so the model cannot absorb it; transforms run
+from epoch 0. The base recipe is early_gated + patch GroupDRO at 192 px / 2x downsampling
+(campaign 34 `early_patchdro_ds2`). The in-scroll augmentations (cutout, context
+replacement, context jitter, depth jitter) are off everywhere except `holdout_default_augs`,
+so each family is measured alone against a bare baseline. Rotation/flip stay on.
+
+| arm                     | what it randomises                                             |
+|-------------------------|----------------------------------------------------------------|
+| holdout_baseline        | nothing beyond rotation/flip                                   |
+| holdout_default_augs    | cutout, context replacement, context and depth jitter          |
+| holdout_photometric     | brightness, contrast, white noise                              |
+| holdout_acquisition     | PSF blur, correlated noise, coarse-scan resampling (fine scans)|
+| holdout_geometric       | depth undulation, depth stretch, surface-band contrast         |
+| holdout_fda             | cross-scroll low-frequency amplitude swap                      |
+| holdout_phase           | energy: propagation phase contrast (paganin smoothing/fringes) |
+| holdout_tone            | energy: nonlinear monotonic intensity transfer                 |
+| holdout_regime          | beamline regime swap: fine scans hazed/blurred, coarse dehazed |
+| holdout_soft_labels     | label smoothing 0.2/0.1 (every other arm uses 0.1/0.05)        |
+| holdout_gce             | noise-robust GCE loss, q=0.7                                   |
+| holdout_quality_norm    | fine scans filtered to the 9.36 um scanners' measured spectrum |
+| holdout_fiber           | structure-tensor fibre orientation/coherence/deviation inputs  |
+| holdout_randconv        | aggressive random convolution texture re-rendering             |
+| holdout_edge_soft       | positive cells grazing a stroke edge get soft targets          |
+| holdout_ema_0995        | weight EMA, decay 0.995 (~200-step horizon, as in c29/c31)     |
+| holdout_ema_0999        | weight EMA, decay 0.999 (~1k steps, about one epoch)           |
+| holdout_ema_long        | weight EMA, decay 0.9998 from epoch 3 (~5k steps, SWAD-like)   |
+| holdout_all             | photometric..regime families at once                           |
+
+`holdout_quality_norm` is not an augmentation: every train and validation crop of a fine
+scan gets that scroll's fixed filter. The filter is measured once (radial power spectra
+against pherc0139/0814/0500p2) and cached in quality_transfer.json. It only lowers gain.
+
+The final epoch renders both held-out scrolls at full extent; both volumes stay in RAM.
+
+Usage:
+    python3 campaign_archs_35.py --dry-run
+    python3 campaign_archs_35.py --only holdout_baseline,holdout_all
+"""
+from __future__ import annotations
+
+import argparse
+import contextlib
+import gc
+import json
+import os
+import sys
+from pathlib import Path
+
+os.environ["PYTORCH_NVML_BASED_CUDA_CHECK"] = "1"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+
+import campaign_archs_29 as campaign29
+import campaign_archs_31 as campaign31
+import campaign_archs_33 as campaign33
+import campaign_archs_34 as campaign34
+from utils.config import startup_output
+
+
+LOG_DIR = "./runs_archs35"
+MODEL_DIR = "models/archs35"
+HOLDOUT_DOMAINS = ("pherc0841", "pherc0009b")
+VIS_SCROLL_IDS = [20260221022814, 20250919125754]  # pherc0841, pherc0009b (both held out)
+# resampled down to the 9.36 um grid from 2.4 um (w013, w018, paris4) or 3.24 um (fragments)
+FINE_NATIVE_SCROLL_IDS = [
+    20240304141531, 20240304144031, 20231210121321,
+    20230301213755, 20231205222200, 20230301213423, 20231201215900,
+]
+# training scrolls scanned natively on the 9.36 um / 1.2 m beamline, like the test scrolls
+QUALITY_REFERENCE_DOMAINS = ("pherc0139", "pherc0814", "pherc0500p2")
+QUALITY_TRANSFER_PATH = Path(__file__).resolve().parent / "quality_transfer.json"
+QUALITY_BINS = 24
+
+PHOTOMETRIC = {
+    "dl.brightness_prob": 1.0, "dl.brightness_delta": 0.5,
+    "dl.contrast_prob": 1.0, "dl.contrast_delta": 0.6,
+    "dl.noise_prob": 1.0, "dl.noise_std_min": 0.02, "dl.noise_std_max": 0.10,
+}
+ACQUISITION = {
+    "dl.acquisition_blur_prob": 0.8, "dl.acquisition_blur_min": 1.0, "dl.acquisition_blur_max": 4.0,
+    "dl.correlated_noise_prob": 0.8, "dl.correlated_noise_min": 0.03,
+    "dl.correlated_noise_max": 0.12, "dl.correlated_noise_sigma": 1.5,
+    "dl.resolution_degrade_prob": 0.8, "dl.resolution_degrade_min": 2.0, "dl.resolution_degrade_max": 8.0,
+}
+# the input window is only 8 slices deep, so +-3 slices of undulation is severe
+GEOMETRIC = {
+    "dl.depth_warp_prob": 0.9, "dl.depth_warp_max": 3.0, "dl.depth_warp_sigma": 12.0,
+    "dl.depth_scale_prob": 0.8, "dl.depth_scale_min": 0.5, "dl.depth_scale_max": 2.0,
+    "dl.surface_atten_prob": 0.8, "dl.surface_atten_min": 0.6,
+    "dl.surface_atten_max": 0.95, "dl.surface_atten_sigma": 3.0,
+}
+FDA = {"dl.fda_prob": 1.0, "dl.fda_beta": 0.3}
+PHASE = {
+    "dl.phase_filter_prob": 0.9, "dl.phase_filter_min": 2.0,
+    "dl.phase_filter_max": 200.0, "dl.phase_filter_max_gain": 8.0,
+}
+TONE = {"dl.tone_curve_prob": 0.9, "dl.tone_curve_knots": 8, "dl.tone_curve_concentration": 0.2}
+REGIME = {"dl.scan_regime_prob": 0.9, "dl.scan_regime_min": 0.5, "dl.scan_regime_max": 1.0}
+RANDCONV = {
+    "dl.randconv_prob": 0.9, "dl.randconv_kernel_sizes": [3, 5, 7, 9, 11],
+    "dl.randconv_depth_kernel": 3, "dl.randconv_layers_max": 2, "dl.randconv_mix_min": 0.5,
+}
+NO_DEFAULT_AUGS = {
+    "dl.cutout_prob": 0.0, "dl.context_replace_prob": 0.0,
+    "data.ctx_jitter": 0, "data.depth_jitter": 0,
+}
+DEFAULT_AUGS = {
+    "dl.cutout_prob": 0.5, "dl.context_replace_prob": 0.35,
+    "data.ctx_jitter": 32, "data.depth_jitter": 1,
+}
+BASE = {
+    "tra.aug_start_epoch": 0,
+    "tra.fast_eval_figure": False,
+    "tra.eval_int_scrolls": len(VIS_SCROLL_IDS),
+    "data.vis_scroll_ids": VIS_SCROLL_IDS,
+    "data.vis_preload_persistent": True,
+    "dl.fine_native_scroll_ids": FINE_NATIVE_SCROLL_IDS,
+    **NO_DEFAULT_AUGS,
+}
+
+
+def _test(tid: str, augmentations: dict, **extra) -> dict:
+    test = campaign34._test(
+        tid, "early_gated", holdout_domains=HOLDOUT_DOMAINS, config={**BASE, **augmentations},
+    )
+    test["tag"] = f"35_{tid}"
+    test.update(extra)
+    return test
+
+
+TESTS = [
+    _test("holdout_baseline", {}),
+    _test("holdout_default_augs", DEFAULT_AUGS),
+    _test("holdout_photometric", PHOTOMETRIC),
+    _test("holdout_acquisition", ACQUISITION),
+    _test("holdout_geometric", GEOMETRIC),
+    _test("holdout_fda", FDA),
+    _test("holdout_phase", PHASE),
+    _test("holdout_tone", TONE),
+    _test("holdout_regime", REGIME),
+    _test("holdout_soft_labels", {"tra.label_smooth_pos": 0.2, "tra.label_smooth_neg": 0.1}),
+    _test("holdout_gce", {"tra.loss_type": "gce", "tra.gce_q": 0.7}),
+    _test("holdout_quality_norm", {}, quality_normalize=True),
+    # the zero-initialised fibre projection is absent from the MAE checkpoint by design
+    _test("holdout_fiber", {"model.fiber_coordinate_branch": True, "model.require_architecture_init": False}),
+    _test("holdout_randconv", RANDCONV),
+    _test("holdout_edge_soft", {"data.edge_soft_sigma": 4.0, "data.edge_soft_floor": 0.6}),
+    _test("holdout_ema_0995", {"tra.model_ema": True, "tra.model_ema_decay": 0.995}),
+    _test("holdout_ema_0999", {"tra.model_ema": True, "tra.model_ema_decay": 0.999}),
+    # before the start epoch the average just tracks the live weights
+    _test("holdout_ema_long", {
+        "tra.model_ema": True, "tra.model_ema_decay": 0.9998, "tra.model_ema_start_epoch": 3,
+    }),
+    _test("holdout_all", {**PHOTOMETRIC, **ACQUISITION, **GEOMETRIC, **FDA, **PHASE, **TONE, **REGIME}),
+]
+
+
+@contextlib.contextmanager
+def _campaign34_paths():
+    saved = campaign34.LOG_DIR, campaign34.MODEL_DIR
+    campaign34.LOG_DIR, campaign34.MODEL_DIR = LOG_DIR, MODEL_DIR
+    try:
+        yield
+    finally:
+        campaign34.LOG_DIR, campaign34.MODEL_DIR = saved
+
+
+def _radial_power(scroll_id: int, rng, samples: int = 64, size: int = 192):
+    import cv2
+    import numpy as np
+    import zarr
+    from utils.norm import UNIFIED_CACHE_PATH, load_cached_norm
+
+    root = Path(campaign33.ROOT)
+    volume = zarr.open(str(root / "ves_zarrs2" / f"{scroll_id}.zarr"), mode="r")
+    mask = cv2.imread(str(root / "masks" / f"{scroll_id}.png"), cv2.IMREAD_GRAYSCALE)
+    mean, std = load_cached_norm(str(scroll_id), UNIFIED_CACHE_PATH)[:2]
+    radius = np.sqrt(np.fft.fftfreq(size)[:, None] ** 2 + np.fft.rfftfreq(size)[None, :] ** 2)
+    bins = np.minimum((radius / 0.5 * QUALITY_BINS).astype(int), QUALITY_BINS)
+    counts = np.bincount(bins.ravel(), minlength=QUALITY_BINS + 1)[:QUALITY_BINS]
+    ys, xs = np.nonzero(mask[::32, ::32] > 0)
+    middle = volume.shape[0] // 2
+    total, used = np.zeros(QUALITY_BINS), 0
+    for index in rng.permutation(len(ys)):
+        y, x = int(ys[index]) * 32, int(xs[index]) * 32
+        if y + size > mask.shape[0] or x + size > mask.shape[1]:
+            continue
+        if (mask[y:y + size, x:x + size] > 0).mean() < 0.98:
+            continue
+        block = (np.asarray(volume[middle - 4:middle + 4, y:y + size, x:x + size], np.float32) - mean) / std
+        block -= block.mean(axis=(1, 2), keepdims=True)
+        power = (np.abs(np.fft.rfft2(block, axes=(1, 2))) ** 2).mean(axis=0)
+        total += np.bincount(bins.ravel(), weights=power.ravel(), minlength=QUALITY_BINS + 1)[:QUALITY_BINS]
+        used += 1
+        if used >= samples:
+            break
+    if used == 0:
+        raise RuntimeError(f"no fully masked {size}px crop found in scroll {scroll_id}")
+    spectrum = total / counts / used
+    return spectrum / spectrum[1:4].mean()
+
+
+def quality_transfer() -> dict:
+    """per fine scroll, the gain that makes its radial spectrum match the reference beamline."""
+    if QUALITY_TRANSFER_PATH.exists():
+        return json.loads(QUALITY_TRANSFER_PATH.read_text())
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    reference_ids = [
+        scroll_id for domain in QUALITY_REFERENCE_DOMAINS
+        for scroll_id in campaign33.CAMPAIGN33_SCROLL_DICT[domain]
+    ]
+    reference = np.exp(np.mean([np.log(_radial_power(s, rng)) for s in reference_ids], axis=0))
+    table = {}
+    for scroll_id in FINE_NATIVE_SCROLL_IDS:
+        ratio = np.sqrt(reference / _radial_power(scroll_id, rng))
+        smoothed = np.convolve(np.pad(ratio, 1, mode="edge"), np.ones(3) / 3.0, mode="valid")
+        gains = np.minimum.accumulate(np.clip(smoothed, 0.0, 1.0))
+        table[str(scroll_id)] = [round(float(g), 4) for g in gains]
+        print(f"[campaign35] quality transfer {scroll_id}: "
+              + " ".join(f"{g:.2f}" for g in gains[::3]), flush=True)
+    QUALITY_TRANSFER_PATH.write_text(json.dumps({"reference": reference_ids, **table}, indent=1))
+    return json.loads(QUALITY_TRANSFER_PATH.read_text())
+
+
+def build_config(test: dict):
+    with _campaign34_paths():
+        config = campaign34.build_config(test)
+    if test.get("quality_normalize"):
+        config.dl.quality_transfer = {
+            key: value for key, value in quality_transfer().items() if key != "reference"
+        }
+    return config
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="campaign 35: extreme augmentation on held-out scrolls")
+    parser.add_argument("--only", type=str, default=None)
+    parser.add_argument("--from", dest="from_id", type=str, default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    selected = TESTS
+    if args.only:
+        wanted = {value.strip() for value in args.only.split(",") if value.strip()}
+        selected = [test for test in TESTS if test["tid"] in wanted]
+        missing = wanted - {test["tid"] for test in selected}
+        if missing:
+            raise ValueError(f"unknown test ids: {sorted(missing)}")
+    elif args.from_id:
+        ids = [test["tid"] for test in TESTS]
+        if args.from_id not in ids:
+            raise ValueError(f"unknown --from {args.from_id!r}; valid={ids}")
+        selected = TESTS[ids.index(args.from_id):]
+
+    with startup_output():
+        campaign29.preflight_train_masks(
+            campaign33.CAMPAIGN33_SCROLLS,
+            inklabel_dir=Path(campaign33.ROOT) / campaign33.INKLABEL_DIR,
+            strict=not args.dry_run,
+        )
+        campaign34.preflight_pretraining(selected, args.dry_run)
+        print(f"[campaign35] {len(selected)} run(s) queued (log -> {LOG_DIR})")
+
+    results = {}
+    for test in selected:
+        config = build_config(test)
+        with startup_output():
+            print(f"[campaign35] {test['tid']}: holdout={config.data.holdout_domains} "
+                  f"aug_start={config.tra.aug_start_epoch} overrides={test['config']}", flush=True)
+        if args.dry_run:
+            success = campaign31.run_test(config, True)
+        else:
+            campaign29.prewarm_data_cache(config)
+            success = campaign31.run_test_isolated(config)
+        results[test["tid"]] = "OK" if success else "FAIL"
+        del config
+        gc.collect()
+
+    print(f"\n{'=' * 78}\n[campaign35] SUMMARY\n{'=' * 78}")
+    for tid, status in results.items():
+        print(f"  {tid}: {status}")
+
+
+if __name__ == "__main__":
+    main()

@@ -213,6 +213,10 @@ class DataConfig:
     far_negative_share: float = 0.0  # fraction of character negative draws taken from far-background papyrus windows
     far_negative_min_dist: int = 160  # px from any ink label before unlabeled papyrus counts as far background
     far_negative_forced_positive_dist: int = 200  # px far background must keep from any train-mask forced positive
+    # training-only soft positives: a positive cell's target is the max of its gaussian-blurred
+    # ink label, floored at edge_soft_floor (>0.5 so the cell still counts as positive). 0 = off
+    edge_soft_sigma: float = 0.0
+    edge_soft_floor: float = 0.6
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
     multitile_pos_only: bool = True  # in ink-containing windows, supervise ONLY ink sub-tiles (mask out non-ink ones to avoid labelling unlabelled-ink neighbours as negatives); ink-free ring windows still give negatives
     multitile_ring_gate: bool = True  # with pos_only=False, still emit only sub-tiles inside the ring/supervision mask (False = legacy all-in-window targets)
@@ -266,6 +270,38 @@ class DataloaderConfig:
     correlated_noise_min: float = 0.003
     correlated_noise_max: float = 0.015
     correlated_noise_sigma: float = 6.0
+    # propagation phase contrast: paganin-like low-pass or edge-enhancing fringes (gamma in px^2)
+    phase_filter_prob: float = 0.0
+    phase_filter_min: float = 0.5
+    phase_filter_max: float = 20.0
+    phase_filter_max_gain: float = 4.0
+    # random monotonic intensity transfer; low concentration gives extreme curves
+    tone_curve_prob: float = 0.0
+    tone_curve_knots: int = 6
+    tone_curve_concentration: float = 0.5
+    # area-downsample then linear-upsample in XY to mimic a coarser native scan
+    resolution_degrade_prob: float = 0.0
+    resolution_degrade_min: float = 1.5
+    resolution_degrade_max: float = 4.0
+    # stretch or compress the depth axis about the window centre (sheet/ink-layer thickness)
+    depth_scale_prob: float = 0.0
+    depth_scale_min: float = 0.6
+    depth_scale_max: float = 1.6
+    # scrolls resampled down from a finer native scan; None treats every scroll as fine
+    fine_native_scroll_ids: Optional[List[int]] = None
+    # push samples toward the other scan regime (2.4um/22cm/78keV <-> 9um/1.2m/110keV)
+    scan_regime_prob: float = 0.0
+    scan_regime_min: float = 0.5
+    scan_regime_max: float = 1.0
+    # deterministic per-scroll radial XY amplitude transfer (scroll id -> gains over |k| in
+    # [0, 0.5] cycles/px), applied to every train/valid crop to match a reference scan quality
+    quality_transfer: Optional[Dict[str, List[float]]] = None
+    # random convolution texture randomisation (RandConv)
+    randconv_prob: float = 0.0
+    randconv_kernel_sizes: List[int] = field(default_factory=lambda: [1, 3, 5, 7])
+    randconv_depth_kernel: int = 1
+    randconv_layers_max: int = 1
+    randconv_mix_min: float = 0.0
     cutout_protect_center: bool = True
     context_replace_prob: float = 0.35
     context_replace_keep_size: int = 0  # 0 = prediction center + 2*margin
@@ -278,6 +314,7 @@ class DataloaderConfig:
 @dataclass
 class TrainingConfig:
     n_epochs: int = 10
+    aug_start_epoch: int = 5  # dataset transforms switch on at this epoch
     lr: float = 1.5e-4
     encoder_lr_scale: float = 1.0
     encoder_freeze_epochs: int = 0

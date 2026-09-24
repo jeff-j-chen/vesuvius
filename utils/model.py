@@ -1198,7 +1198,7 @@ class NnUnet3dLcndz(nn.Module):
             getattr(config.model, "fiber_coordinate_branch", False)
         )
         self.fiber_coordinate_input = (
-            nn.Conv3d(3, c1, kernel_size=1, bias=False)
+            nn.Conv3d(4, c1, kernel_size=1, bias=False)
             if self._fiber_coordinate_branch else None
         )
 
@@ -1504,7 +1504,9 @@ class NnUnet3dLcndz(nn.Module):
 
     @staticmethod
     def _fiber_coordinates(x: torch.Tensor) -> torch.Tensor:
-        """local tangent orientation and anisotropy from a per-slice structure tensor."""
+        """local tangent orientation and anisotropy from a per-slice structure tensor, plus how
+        far the local orientation departs from the surrounding fibre direction (strokes cross
+        fibres; crackle and fibre texture follow them)."""
         lcn = _lcn2d(x, 5)
         batch, channels, depth, height, width = lcn.shape
         flat = lcn.reshape(batch * depth, channels, height, width)
@@ -1520,8 +1522,14 @@ class NnUnet3dLcndz(nn.Module):
         coherence = delta / trace
         cos2theta = (jxx - jyy) / delta
         sin2theta = 2.0 * jxy / delta
-        features = torch.cat((coherence, cos2theta, sin2theta), dim=1)
-        return features.reshape(batch, 3, depth, height, width)
+        wide_xx = F.avg_pool2d(jxx, 31, stride=1, padding=15, count_include_pad=False)
+        wide_yy = F.avg_pool2d(jyy, 31, stride=1, padding=15, count_include_pad=False)
+        wide_xy = F.avg_pool2d(jxy, 31, stride=1, padding=15, count_include_pad=False)
+        wide_delta = torch.sqrt((wide_xx - wide_yy).square() + 4.0 * wide_xy.square() + 1e-6)
+        alignment = (cos2theta * (wide_xx - wide_yy) + sin2theta * 2.0 * wide_xy) / wide_delta
+        deviation = coherence * (1.0 - alignment)
+        features = torch.cat((coherence, cos2theta, sin2theta, deviation), dim=1)
+        return features.reshape(batch, 4, depth, height, width)
 
     def _merge_skip(self, upsampled: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         if upsampled.shape[2:] != skip.shape[2:]:

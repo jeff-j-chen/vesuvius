@@ -1604,6 +1604,10 @@ class Trainer:
         images = self._apply_fda(images)
         B = images.size(0)
         labels = labels.to(self.c.device, non_blocking=True).view(B, -1)  # (B,1) single or (B,K) multitile
+        # edge-soft positives arrive as values in (0.5, 1); keep labels binary for every other consumer
+        soft_positive = (labels > 0.5) & (labels < 1.0)
+        positive_level = torch.where(soft_positive, labels, torch.ones_like(labels))
+        labels = torch.where(soft_positive, torch.ones_like(labels), labels)
         mask = mask.to(self.c.device, non_blocking=True).view(B, -1)
         if mask.shape[1] == labels.shape[1]:
             mask = (mask > 0).float()                          # per-sub-tile validity (multitile)
@@ -1743,6 +1747,8 @@ class Trainer:
                     torch.full_like(targets, neg_smooth),
                 )
                 targets = torch.where(explicit_negative, torch.zeros_like(targets), targets)
+            if positive_level.shape == targets.shape:
+                targets = torch.where(labels > 0.5, targets * positive_level, targets)
 
             per_target_loss = self.criterion(outputs, targets)
             loss_mask = mask
@@ -3462,7 +3468,9 @@ class Trainer:
             ])
             if figure_due:
                 self._shutdown_data_workers()
-            self._log_epoch(epoch, train_metrics, val_metrics, time.time() - start_time)
+            # figures and readability metrics must score the same weights as validation
+            with self._ema_weights():
+                self._log_epoch(epoch, train_metrics, val_metrics, time.time() - start_time)
 
             eval_cooldown = int(getattr(self.c.tra, "eval_cooldown_secs", 0))
             is_probe_epoch = (epoch + 1) % self.c.tra.probe_int == 0

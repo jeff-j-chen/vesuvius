@@ -246,7 +246,7 @@ def _save_unified_cache(cache, cache_path=UNIFIED_CACHE_PATH):
 
 class Transform:
     """handles data augmentation transforms"""
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, scroll_id=None):
         self.rotation_prob = float(getattr(config.dl, "rotation_prob", 0.25))
         self.flip_prob = float(getattr(config.dl, "flip_prob", 0.25))
         self.noise_prob = float(getattr(config.dl, "noise_prob", 0.30))
@@ -283,6 +283,34 @@ class Transform:
         self.correlated_noise_min = float(getattr(config.dl, "correlated_noise_min", 0.003))
         self.correlated_noise_max = float(getattr(config.dl, "correlated_noise_max", 0.015))
         self.correlated_noise_sigma = float(getattr(config.dl, "correlated_noise_sigma", 6.0))
+        self.phase_filter_prob = float(getattr(config.dl, "phase_filter_prob", 0.0))
+        self.phase_filter_min = float(getattr(config.dl, "phase_filter_min", 0.5))
+        self.phase_filter_max = float(getattr(config.dl, "phase_filter_max", 20.0))
+        self.phase_filter_max_gain = float(getattr(config.dl, "phase_filter_max_gain", 4.0))
+        self.tone_curve_prob = float(getattr(config.dl, "tone_curve_prob", 0.0))
+        self.tone_curve_knots = max(2, int(getattr(config.dl, "tone_curve_knots", 6)))
+        self.tone_curve_concentration = float(getattr(config.dl, "tone_curve_concentration", 0.5))
+        self.resolution_degrade_prob = float(getattr(config.dl, "resolution_degrade_prob", 0.0))
+        self.resolution_degrade_min = float(getattr(config.dl, "resolution_degrade_min", 1.5))
+        self.resolution_degrade_max = float(getattr(config.dl, "resolution_degrade_max", 4.0))
+        self.depth_scale_prob = float(getattr(config.dl, "depth_scale_prob", 0.0))
+        self.depth_scale_min = float(getattr(config.dl, "depth_scale_min", 0.6))
+        self.depth_scale_max = float(getattr(config.dl, "depth_scale_max", 1.6))
+        fine_ids = getattr(config.dl, "fine_native_scroll_ids", None)
+        self._native_known = fine_ids is not None and scroll_id is not None
+        self._fine_native = not self._native_known or int(scroll_id) in {int(s) for s in fine_ids}
+        self.scan_regime_prob = float(getattr(config.dl, "scan_regime_prob", 0.0))
+        self.scan_regime_min = float(getattr(config.dl, "scan_regime_min", 0.5))
+        self.scan_regime_max = float(getattr(config.dl, "scan_regime_max", 1.0))
+        transfer_table = getattr(config.dl, "quality_transfer", None) or {}
+        gains = transfer_table.get(str(scroll_id)) if scroll_id is not None else None
+        self._quality_gains = np.asarray(gains, dtype=np.float32) if gains else None
+        self._quality_filter_cache = {}
+        self.randconv_prob = float(getattr(config.dl, "randconv_prob", 0.0))
+        self.randconv_kernel_sizes = [int(k) for k in getattr(config.dl, "randconv_kernel_sizes", [1, 3, 5, 7])]
+        self.randconv_depth_kernel = max(1, int(getattr(config.dl, "randconv_depth_kernel", 1)))
+        self.randconv_layers_max = max(1, int(getattr(config.dl, "randconv_layers_max", 1)))
+        self.randconv_mix_min = float(getattr(config.dl, "randconv_mix_min", 0.0))
         self.context_replace_keep_size = int(getattr(config.dl, "context_replace_keep_size", 0))
         self.context_replace_margin = int(getattr(config.dl, "context_replace_margin", 16))
         self.context_replace_feather = int(getattr(config.dl, "context_replace_feather", 16))
@@ -328,12 +356,27 @@ class Transform:
         if self.depth_warp_prob > 0 and random.random() < self.depth_warp_prob:
             block = self._apply_smooth_depth_warp(block)
             self._last_geometry.append(("depth_warp", self._last_depth_warp_field))
+        if self.depth_scale_prob > 0 and random.random() < self.depth_scale_prob:
+            block = self._apply_depth_scale(block)
+            self._last_geometry.append(("depth_scale", self._last_depth_scale))
         if self.surface_atten_prob > 0 and random.random() < self.surface_atten_prob:
             block = self._apply_surface_attenuation(block)
+        if self.phase_filter_prob > 0 and random.random() < self.phase_filter_prob:
+            block = self._apply_phase_filter(block)
+        if self.scan_regime_prob > 0 and random.random() < self.scan_regime_prob:
+            block = self._apply_scan_regime(block)
+        # coarse-scan resampling only makes sense for scrolls that started finer than the grid
+        if (self.resolution_degrade_prob > 0 and self._fine_native
+                and random.random() < self.resolution_degrade_prob):
+            block = self._apply_resolution_degrade(block)
         if self.acquisition_blur_prob > 0 and random.random() < self.acquisition_blur_prob:
             block = self._apply_acquisition_blur(block)
+        if self.tone_curve_prob > 0 and random.random() < self.tone_curve_prob:
+            block = self._apply_tone_curve(block)
         if self.correlated_noise_prob > 0 and random.random() < self.correlated_noise_prob:
             block = self._apply_correlated_noise(block)
+        if self.randconv_prob > 0 and random.random() < self.randconv_prob:
+            block = self._apply_randconv(block)
         if self.elastic_prob > 0 and random.random() < self.elastic_prob:
             if self.multitile and label is not None:
                 if not self._warned_elastic_multitile:
@@ -373,6 +416,13 @@ class Transform:
             elif operation == "depth_warp":
                 valid = confidence > 0
                 depth = np.where(valid, depth - value, depth)
+            elif operation == "depth_scale":
+                center, scale = value
+                valid = confidence > 0
+                scaled = center + (depth - center) * scale
+                inside = valid & (scaled >= 0) & (scaled <= self._last_depth_count - 1)
+                depth = np.where(inside, scaled, np.where(valid, -1.0, depth))
+                confidence = np.where(valid & ~inside, 0.0, confidence)
             elif operation == "elastic":
                 from scipy.ndimage import map_coordinates
 
@@ -558,6 +608,135 @@ class Transform:
         noise = noise / max(float(noise.std()), 1e-6)
         strength = random.uniform(self.correlated_noise_min, self.correlated_noise_max)
         return np.clip(block + strength * noise, 0.0, 1.0)
+
+    @staticmethod
+    def _filter_xy(block, transfer_of_k2):
+        """apply a radially symmetric XY transfer function, given as a function of |k|^2."""
+        _, height, width = block.shape
+        ky = np.fft.fftfreq(height)[:, None]
+        kx = np.fft.rfftfreq(width)[None, :]
+        k2 = (2.0 * np.pi) ** 2 * (ky ** 2 + kx ** 2)
+        spectrum = np.fft.rfft2(block, axes=(1, 2)) * transfer_of_k2(k2)[None].astype(np.complex64)
+        return np.fft.irfft2(spectrum, s=(height, width), axes=(1, 2)).astype(np.float32)
+
+    def _apply_phase_filter(self, block):
+        """randomise propagation phase contrast, which depends on beam energy and distance.
+        half the draws smooth like paganin retrieval, half add bounded edge fringes."""
+        gamma = math.exp(random.uniform(math.log(self.phase_filter_min), math.log(self.phase_filter_max)))
+        if random.random() < 0.5:
+            out = self._filter_xy(block, lambda k2: 1.0 / (1.0 + gamma * k2))
+        else:
+            gain = max(self.phase_filter_max_gain, 1.0)
+            out = self._filter_xy(block, lambda k2: (1.0 + gamma * k2) / (1.0 + gamma * k2 / gain))
+        return np.clip(out, 0.0, 1.0)
+
+    def _apply_scan_regime(self, block):
+        """move a sample toward the other beamline regime. fine scans (short propagation, lower
+        energy) gain propagation blur, decohesion haze and weaker absorption contrast, like a
+        long-propagation high-energy scan; coarse scans are dehazed and edge-enhanced instead."""
+        from scipy.ndimage import gaussian_filter
+
+        strength = random.uniform(self.scan_regime_min, self.scan_regime_max)
+        to_coarse = self._fine_native if self._native_known else random.random() < 0.5
+        haze_sigma = random.uniform(6.0, 24.0)
+        veil = gaussian_filter(block, sigma=(0.0, haze_sigma, haze_sigma))
+        mean = float(block.mean())
+        if to_coarse:
+            gamma = 2.0 + 60.0 * strength
+            out = self._filter_xy(block, lambda k2: 1.0 / (1.0 + gamma * k2))
+            out = (1.0 - 0.6 * strength) * out + 0.6 * strength * veil
+            out = mean + (1.0 - 0.5 * strength) * (out - mean)
+        else:
+            out = block + 1.5 * strength * (block - veil)
+            gamma = 2.0 + 20.0 * strength
+            gain = 1.0 + 3.0 * strength
+            out = self._filter_xy(out, lambda k2: (1.0 + gamma * k2) / (1.0 + gamma * k2 / gain))
+        return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+    @property
+    def has_quality_transfer(self):
+        return self._quality_gains is not None
+
+    def normalize_quality(self, block):
+        """apply this scroll's fixed radial transfer so its spectrum matches the reference scans."""
+        _, height, width = block.shape
+        transfer = self._quality_filter_cache.get((height, width))
+        if transfer is None:
+            radius = np.sqrt(np.fft.fftfreq(height)[:, None] ** 2 + np.fft.rfftfreq(width)[None, :] ** 2)
+            bins = len(self._quality_gains)
+            centers = (np.arange(bins) + 0.5) * 0.5 / bins
+            transfer = np.interp(radius, centers, self._quality_gains).astype(np.float32)
+            transfer[0, 0] = 1.0
+            self._quality_filter_cache[(height, width)] = transfer
+        spectrum = np.fft.rfft2(block, axes=(1, 2)) * transfer[None]
+        out = np.fft.irfft2(spectrum, s=(height, width), axes=(1, 2))
+        return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+    def _apply_randconv(self, block):
+        """random convolution: a fresh random filter bank re-renders texture and contrast while
+        keeping shape; the result is mixed with the input and restored to its mean/std."""
+        mean, std = float(block.mean()), float(block.std())
+        if std < 1e-6:
+            return block
+        out = block.astype(np.float32)
+        for _ in range(random.randint(1, self.randconv_layers_max)):
+            size = random.choice(self.randconv_kernel_sizes)
+            depth_size = random.randrange(1, self.randconv_depth_kernel + 1, 2)
+            kernels = np.random.normal(
+                0.0, 1.0 / math.sqrt(size * size * depth_size), (depth_size, size, size),
+            ).astype(np.float32)
+            half = depth_size // 2
+            padded = np.pad(out, ((half, half), (0, 0), (0, 0)), mode="edge")
+            mixed = np.zeros_like(out)
+            for offset in range(depth_size):
+                for depth_index in range(out.shape[0]):
+                    mixed[depth_index] += cv2.filter2D(
+                        padded[depth_index + offset], -1, kernels[offset], borderType=cv2.BORDER_REFLECT,
+                    )
+            # a bounded nonlinearity between stacked layers keeps them from collapsing into one linear filter
+            out = np.tanh(mixed / max(float(mixed.std()), 1e-6)) if self.randconv_layers_max > 1 else mixed
+        out = (out - out.mean()) / max(float(out.std()), 1e-6) * std + mean
+        alpha = random.uniform(self.randconv_mix_min, 1.0)
+        return np.clip(alpha * out + (1.0 - alpha) * block, 0.0, 1.0).astype(np.float32)
+
+    def _apply_tone_curve(self, block):
+        """random monotonic intensity transfer over the block's own range: energy changes the
+        relative attenuation of ink, papyrus and air nonlinearly, not by a linear gain."""
+        low, high = np.percentile(block, (1.0, 99.0))
+        if high - low < 1e-6:
+            return block
+        increments = np.random.dirichlet(np.full(self.tone_curve_knots, self.tone_curve_concentration))
+        knots_y = np.concatenate(([0.0], np.cumsum(increments)))
+        knots_x = np.linspace(0.0, 1.0, self.tone_curve_knots + 1)
+        normalized = np.clip((block - low) / (high - low), 0.0, 1.0)
+        mapped = np.interp(normalized, knots_x, knots_y) * (high - low) + low
+        return np.clip(mapped, 0.0, 1.0).astype(np.float32)
+
+    def _apply_resolution_degrade(self, block):
+        """area-downsample and linearly upsample each slice, like a coarse scan resampled onto
+        a finer grid; unlike a gaussian blur this leaves interpolation texture and aliasing."""
+        _, height, width = block.shape
+        factor = random.uniform(self.resolution_degrade_min, self.resolution_degrade_max)
+        small = (max(2, int(round(width / factor))), max(2, int(round(height / factor))))
+        out = np.empty_like(block)
+        for depth_index in range(block.shape[0]):
+            reduced = cv2.resize(block[depth_index], small, interpolation=cv2.INTER_AREA)
+            out[depth_index] = cv2.resize(reduced, (width, height), interpolation=cv2.INTER_LINEAR)
+        return out
+
+    def _apply_depth_scale(self, block):
+        """stretch or compress depth about the window centre: sheet and ink-layer thickness in
+        slices differs between scrolls even at matched voxel size."""
+        depth = block.shape[0]
+        scale = math.exp(random.uniform(math.log(self.depth_scale_min), math.log(self.depth_scale_max)))
+        center = (depth - 1) / 2.0
+        source = np.clip(center + (np.arange(depth, dtype=np.float32) - center) / scale, 0, depth - 1)
+        lower = np.floor(source).astype(np.int64)
+        upper = np.minimum(lower + 1, depth - 1)
+        weight = (source - lower)[:, None, None].astype(np.float32)
+        self._last_depth_scale = (center, scale)
+        self._last_depth_count = depth
+        return (block[lower] * (1.0 - weight) + block[upper] * weight).astype(np.float32)
 
     def apply_context_replacement(self, block, donor, target_offset=None):
         """replace outer context with surface-aligned real papyrus from another window."""
@@ -901,7 +1080,11 @@ class InkVolumeDataset(IterableDataset):
         self.apply_transforms = False # controlled by trainer
         self.shuffle = shuffle
         self.norm_stats = norm_stats
-        self.transform = Transform(config)
+        self.transform = Transform(config, scroll_id=self.scroll_id)
+        self._edge_soft_sigma = float(getattr(config.data, "edge_soft_sigma", 0.0)) if shuffle else 0.0
+        self._edge_soft_floor = float(getattr(config.data, "edge_soft_floor", 0.6))
+        if self._edge_soft_sigma > 0 and not 0.5 < self._edge_soft_floor <= 1.0:
+            raise ValueError("edge_soft_floor must be in (0.5, 1] so soft cells stay positive")
         # multitile: emit a grid x grid map of per-sub-tile labels (papyrus unless .any() ink)
         self._mt = bool(getattr(config.model, "multitile", False))
         self._mt_grid = max(1, int(getattr(config.model, "multitile_grid", 4)))
@@ -1618,7 +1801,10 @@ class InkVolumeDataset(IterableDataset):
         if block.shape != (self.depth, sp, sp):
             block = np.zeros((self.depth, sp, sp), dtype=np.float32)
 
-        return self._normalize_block(block), target_offset, dj, augmentation_depth_shift
+        block = self._normalize_block(block)
+        if self.transform.has_quality_transfer:
+            block = self.transform.normalize_quality(block)
+        return block, target_offset, dj, augmentation_depth_shift
 
     def _surface_centered_start(
         self,
@@ -1771,6 +1957,37 @@ class InkVolumeDataset(IterableDataset):
                     out[index] = 1.0
         return torch.from_numpy(out)
 
+    def _soften_edge_positives(self, label, y_off, x_off):
+        """lower the target of positive cells that only graze a stroke edge."""
+        values = label.numpy().copy()
+        positive = values > 0.5
+        if not positive.any():
+            return label
+        n, sub = self._mt_grid, self._mt_sub
+        y0, _, x0, _ = self._mt_center_bounds(y_off, x_off)
+        pad = int(math.ceil(3.0 * self._edge_soft_sigma))
+        height, width = int(self.labels.shape[0]), int(self.labels.shape[1])
+        ys, ye = max(0, y0 - pad), min(height, y0 + n * sub + pad)
+        xs, xe = max(0, x0 - pad), min(width, x0 + n * sub + pad)
+        if ys >= ye or xs >= xe:
+            return label
+        ink = (np.asarray(self.labels[ys:ye, xs:xe]) > 0.5).astype(np.float32)
+        blurred = cv2.GaussianBlur(ink, (0, 0), self._edge_soft_sigma, borderType=cv2.BORDER_REPLICATE)
+        for index in np.flatnonzero(positive):
+            cy0, cx0 = y0 + (index // n) * sub, x0 + (index % n) * sub
+            cy, cx = max(cy0, ys), max(cx0, xs)
+            cye, cxe = min(cy0 + sub, ye), min(cx0 + sub, xe)
+            if cy >= cye or cx >= cxe:
+                continue
+            if self._has_explicit_positive_mask and np.any(
+                self.explicit_positive_mask[cy:cye, cx:cxe] > 0
+            ):
+                continue
+            peak = float(blurred[cy - ys:cye - ys, cx - xs:cxe - xs].max())
+            if peak < 0.98:
+                values[index] = max(self._edge_soft_floor, peak)
+        return torch.from_numpy(values)
+
     def _fetch_mask_mt(self, y_off, x_off):
         """per-sub-tile validity over the grid in row-major order.
 
@@ -1892,6 +2109,8 @@ class InkVolumeDataset(IterableDataset):
                 depth_shift,
             )
         label = self._fetch_label(y_off, x_off)
+        if self._edge_soft_sigma > 0 and self._mt:
+            label = self._soften_edge_positives(label, y_off, x_off)
         component_ids = None
         if self._character_metrics or self._character_balanced:
             component_ids = torch.from_numpy(self._fetch_character_ids(
