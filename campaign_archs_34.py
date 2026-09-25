@@ -10,22 +10,16 @@ network grid is context_size / context_downsample pixels wide:
 | early_patchdro_ds2           | 192 px    | 2          | 96           | 96 / 1.5e-4    |
 | early_patchdro_native128     | 128 px    | 1          | 128          | 96 / 1.5e-4    |
 | early_patchdro_native196     | 196 px    | 1          | 196          | 48 / 1.2e-4    |
-| early_patchdro_ctx384_ds2    | 384 px    | 2          | 192          | 48 / 1.2e-4    |
-| early_patchdro_ds2_b48       | 192 px    | 2          | 96           | 48 / 1.2e-4    |
 
-Background false-positive arms (all at the ds2 reference settings):
-`early_patchdro_far_neg` draws 15% of negatives from whole windows >=160 px from any ink;
-`early_patchdro_shell6` thickens the ring-negative shell from 4 to 6 tiles;
-`early_patchdro_far_neg_region_gate` adds a coarse text-region head that gates ink logits,
-trained to separate far background from ink-adjacent cells; `early_patchdro_pos_weight05`
-halves the positive BCE weight.
+The 384 px field, its batch-matched reference and the background false-positive arms moved
+to campaign 35, where they are scored on held-out scrolls.
 
 Every arm renders one evaluation figure, for w035 (pherc0139), after the final epoch; that
 volume stays in RAM for the whole run.
 
 native128 halves the surround, so cutout, context replacement and context jitter are
-weakened for it. The 196/192-grid arms run at batch 48 because the 196-grid EDR arm in
-Campaign 33 died before its first epoch; `early_patchdro_ds2_b48` is their matched reference.
+weakened for it. native196 runs at batch 48 because the 196-grid EDR arm in Campaign 33
+died before its first epoch.
 
 Usage:
     python3 campaign_archs_34.py --dry-run
@@ -82,8 +76,6 @@ NATIVE128_AUG = {
     "ctx_jitter": 20,
 }
 LARGE = {"batch_size": LARGE_BATCH_SIZE, "lr": LARGE_LR}
-# 15% of negative draws come from whole windows at least 160 px from any ink label
-FAR_NEGATIVES = {"data.far_negative_share": 0.15, "data.far_negative_min_dist": 160}
 
 
 def _test(tid: str, pretrain_key: str, **overrides) -> dict:
@@ -108,18 +100,6 @@ TESTS = [
           context_size=128, context_downsample=1, **NATIVE128_AUG),
     _test("early_patchdro_native196", "early_gated_native196",
           context_size=196, context_downsample=1, **LARGE),
-    _test("early_patchdro_ctx384_ds2", "early_gated_ctx384_ds2",
-          context_size=384, context_downsample=2, **LARGE),
-    _test("early_patchdro_ds2_b48", "early_gated", **LARGE),
-
-    # background false positives; each compares with early_patchdro_ds2
-    _test("early_patchdro_far_neg", "early_gated", config=FAR_NEGATIVES),
-    _test("early_patchdro_shell6", "early_gated", config={"data.ring_shell_r": 6}),
-    _test("early_patchdro_far_neg_region_gate", "early_gated", config={
-        **FAR_NEGATIVES, "model.text_region_gate": True, "tra.text_region_lambda": 0.5,
-    }),
-    # BCE pos_weight 0.5: the training-time equivalent of a -0.69 logit shift
-    _test("early_patchdro_pos_weight05", "early_gated", config={"tra.tile_pos_weight": 0.5}),
 ]
 
 

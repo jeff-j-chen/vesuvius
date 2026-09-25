@@ -6,14 +6,25 @@ augmentation tests scored only held-out regions of trained scrolls, which reward
 memorisation and cannot show a gain in cross-scroll invariance.
 
 Each family is pushed far past a mild setting so the model cannot absorb it; transforms run
-from epoch 0. The base recipe is early_gated + patch GroupDRO at 192 px / 2x downsampling
-(campaign 34 `early_patchdro_ds2`). The in-scroll augmentations (cutout, context
+from epoch 0. The base recipe for every arm is early_gated + patch GroupDRO on a native
+128 px field (campaign 34 `early_patchdro_native128`, batch 96 / lr 1.5e-4); only the arms
+marked (arch) change the field or resolution. The in-scroll augmentations (cutout, context
 replacement, context jitter, depth jitter) are off everywhere except `holdout_default_augs`,
 so each family is measured alone against a bare baseline. Rotation/flip stay on.
 
-| arm                     | what it randomises                                             |
+| arm                     | what it changes                                                |
 |-------------------------|----------------------------------------------------------------|
+| holdout_ctx384_ds2      | (arch) 384 px field at 2x downsampling, batch 32 / lr 1e-4     |
+| holdout_ds2_b32         | (arch) 192 px field at 2x downsampling, batch 32 / lr 1e-4     |
+| holdout_far_neg         | 15% of negatives from windows >=160 px from any ink            |
+| holdout_shell6          | ring-negative shell 6 tiles instead of 4                       |
+| holdout_far_neg_region_gate | far negatives + coarse text-region head gating ink logits  |
+| holdout_pos_weight05    | positive BCE weight 0.5                                        |
 | holdout_baseline        | nothing beyond rotation/flip                                   |
+| holdout_dice_bce        | paper loss: 0.5 soft Dice + 0.5 BCE, label smoothing 0.25      |
+| holdout_multi_collapse  | volumetric enc2/enc3 max-collapsed into the 2D stages too      |
+| holdout_seven_stage     | three extra 320-ch 2D stages (7 stages, 2x2 bottleneck)        |
+| holdout_dual_scale      | independent local-64 expert added to the score (mix 0.5)       |
 | holdout_default_augs    | cutout, context replacement, context and depth jitter          |
 | holdout_photometric     | brightness, contrast, white noise                              |
 | holdout_acquisition     | PSF blur, correlated noise, coarse-scan resampling (fine scans)|
@@ -41,6 +52,7 @@ The final epoch renders both held-out scrolls at full extent; both volumes stay 
 
 Usage:
     python3 campaign_archs_35.py --dry-run
+    python3 campaign_archs_35.py --smoke --only holdout_baseline
     python3 campaign_archs_35.py --only holdout_baseline,holdout_all
 """
 from __future__ import annotations
@@ -112,10 +124,21 @@ NO_DEFAULT_AUGS = {
     "dl.cutout_prob": 0.0, "dl.context_replace_prob": 0.0,
     "data.ctx_jitter": 0, "data.depth_jitter": 0,
 }
+# campaign 34 native128 strengths: the surround is 2/3 of a 192 px field
 DEFAULT_AUGS = {
-    "dl.cutout_prob": 0.5, "dl.context_replace_prob": 0.35,
-    "data.ctx_jitter": 32, "data.depth_jitter": 1,
+    "dl.cutout_prob": 0.30, "dl.context_replace_prob": 0.25,
+    "dl.context_replace_margin": 13, "dl.context_replace_feather": 26,
+    "data.ctx_jitter": 20, "data.depth_jitter": 1,
 }
+NATIVE128 = {"pretrain_key": "early_gated_native128", "context_size": 128, "context_downsample": 1}
+DS2_B32 = {"pretrain_key": "early_gated", "context_size": 192, "context_downsample": 2,
+           "batch_size": 32, "lr": 1e-4}
+# 384 px OOMed host RAM at batch 48 in campaign 34
+CTX384_B32 = {"pretrain_key": "early_gated_ctx384_ds2", "context_size": 384, "context_downsample": 2,
+              "batch_size": 32, "lr": 1e-4}
+FAR_NEGATIVES = {"data.far_negative_share": 0.15, "data.far_negative_min_dist": 160}
+# the extra modules are absent from the MAE checkpoint and start from initialisation
+NEW_MODULES = {"model.require_architecture_init": False}
 BASE = {
     "tra.aug_start_epoch": 0,
     "tra.fast_eval_figure": False,
@@ -127,9 +150,11 @@ BASE = {
 }
 
 
-def _test(tid: str, augmentations: dict, **extra) -> dict:
+def _test(tid: str, augmentations: dict, arch: dict | None = None, **extra) -> dict:
+    arch = dict(arch or NATIVE128)
     test = campaign34._test(
-        tid, "early_gated", holdout_domains=HOLDOUT_DOMAINS, config={**BASE, **augmentations},
+        tid, arch.pop("pretrain_key"), holdout_domains=HOLDOUT_DOMAINS,
+        config={**BASE, **augmentations}, **arch,
     )
     test["tag"] = f"35_{tid}"
     test.update(extra)
@@ -137,7 +162,26 @@ def _test(tid: str, augmentations: dict, **extra) -> dict:
 
 
 TESTS = [
+    # moved from campaign 34
+    _test("holdout_ctx384_ds2", {}, arch=CTX384_B32),
+    _test("holdout_ds2_b32", {}, arch=DS2_B32),
+    _test("holdout_far_neg", FAR_NEGATIVES),
+    _test("holdout_shell6", {"data.ring_shell_r": 6}),
+    _test("holdout_far_neg_region_gate", {
+        **FAR_NEGATIVES, "model.text_region_gate": True, "tra.text_region_lambda": 0.5,
+    }),
+    _test("holdout_pos_weight05", {"tra.tile_pos_weight": 0.5}),
+
     _test("holdout_baseline", {}),
+    # smp SoftBCE smooth=0.25 maps targets to 0.75 / 0.25
+    _test("holdout_dice_bce", {
+        "tra.dice_weight": 0.5, "tra.label_smooth_pos": 0.25, "tra.label_smooth_neg": 0.25,
+    }),
+    _test("holdout_multi_collapse", {"model.multi_depth_collapse": True}),
+    _test("holdout_seven_stage", {"model.two_d_extra_channels": (320, 320, 320), **NEW_MODULES}),
+    _test("holdout_dual_scale", {
+        "model.dual_scale": True, "model.dual_scale_local_size": 64, "model.dual_scale_mix": 0.5,
+    }),
     _test("holdout_default_augs", DEFAULT_AUGS),
     _test("holdout_photometric", PHOTOMETRIC),
     _test("holdout_acquisition", ACQUISITION),
@@ -149,8 +193,7 @@ TESTS = [
     _test("holdout_soft_labels", {"tra.label_smooth_pos": 0.2, "tra.label_smooth_neg": 0.1}),
     _test("holdout_gce", {"tra.loss_type": "gce", "tra.gce_q": 0.7}),
     _test("holdout_quality_norm", {}, quality_normalize=True),
-    # the zero-initialised fibre projection is absent from the MAE checkpoint by design
-    _test("holdout_fiber", {"model.fiber_coordinate_branch": True, "model.require_architecture_init": False}),
+    _test("holdout_fiber", {"model.fiber_coordinate_branch": True, **NEW_MODULES}),
     _test("holdout_randconv", RANDCONV),
     _test("holdout_edge_soft", {"data.edge_soft_sigma": 4.0, "data.edge_soft_floor": 0.6}),
     _test("holdout_ema_0995", {"tra.model_ema": True, "tra.model_ema_decay": 0.995}),
@@ -247,7 +290,12 @@ def main() -> None:
     parser.add_argument("--only", type=str, default=None)
     parser.add_argument("--from", dest="from_id", type=str, default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--smoke", action="store_true",
+                        help="one short epoch per arm, cropped figures, separate log/model dirs")
     args = parser.parse_args()
+    if args.smoke:
+        global LOG_DIR, MODEL_DIR
+        LOG_DIR, MODEL_DIR = "./runs_archs35_smoke", "models/archs35_smoke"
 
     selected = TESTS
     if args.only:
@@ -274,8 +322,15 @@ def main() -> None:
     results = {}
     for test in selected:
         config = build_config(test)
+        if args.smoke:
+            config.tra.n_epochs = 1
+            config.tra.eval_int = 1
+            config.tra.fast_eval_figure = True
+            config.data.max_samples_per_epoch = 96
         with startup_output():
             print(f"[campaign35] {test['tid']}: holdout={config.data.holdout_domains} "
+                  f"ctx={config.data.context_size} ds={config.data.context_downsample} "
+                  f"batch={config.dl.batch_size} lr={config.tra.lr} init={config.init_weights} "
                   f"aug_start={config.tra.aug_start_epoch} overrides={test['config']}", flush=True)
         if args.dry_run:
             success = campaign31.run_test(config, True)

@@ -13,7 +13,7 @@ import torch
 
 # "INFO": print the full config, dataset building, and cache progress at the start of a run.
 # "ERROR": start-of-run output is silenced except lines containing ERROR (exceptions still raise).
-LOG_LEVEL = "ERROR"
+LOG_LEVEL = "INFO"
 
 
 class _ErrorLinesOnly(io.TextIOBase):
@@ -309,6 +309,14 @@ class DataloaderConfig:
     context_replace_feather: int = 40
     context_replace_min_mask_frac: float = 0.8
     context_replace_surface_align: bool = True
+    context_replace_cross_prob: float = 0.0  # share of replacements drawing the donor from another physical domain
+    # context-only warps; the prediction centre plus margin is left exactly in place
+    protected_rotation_prob: float = 0.0
+    protected_elastic_prob: float = 0.0
+    protected_elastic_alpha: float = 16.0  # peak displacement in px
+    protected_elastic_sigma: float = 5.0
+    protected_warp_margin: int = 4
+    protected_warp_feather: int = 12
 
 
 @dataclass
@@ -332,6 +340,7 @@ class TrainingConfig:
     probe_int: int = 9999
     loss_type: str = "bce"
     gce_q: float = 0.9
+    dice_weight: float = 0.0  # loss = (1 - w) * primary + w * soft Dice over supervised cells
     label_smooth_pos: float = 0.1
     label_smooth_neg: float = 0.05
     tta_consistency: bool = False
@@ -522,6 +531,8 @@ class ModelConfig:
     mt_lse_r_max: float = 10.0  # upper clamp on the multitile lse temperature (2d heads)
     planar_early_convs: bool = False  # early-2d only: stem and enc1 convs never mix slices
     text_region_gate: bool = False  # early-2d only: coarse bottleneck head gates ink logits by text-region probability
+    multi_depth_collapse: bool = False  # early-2d only: volumetric enc2/enc3 max-collapsed into the 2D stages
+    two_d_strided_down: bool = False  # early-2d only: stride-2 convs replace max-pooling between 2D stages
     depth_antialias: bool = False
     sparse_deep_supervision: bool = False
     sparse_deep_supervision_dec2_weight: float = 0.3

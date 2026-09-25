@@ -1069,7 +1069,20 @@ class NnUnet3dLcndz(nn.Module):
             overlap_channels = (encoder_channels[-1], e1)
             if text_region_gate:
                 self.text_region_head = nn.Conv2d(encoder_channels[-1], 1, kernel_size=1)
+            multi_collapse = bool(getattr(config.model, "multi_depth_collapse", False))
+            self.early_collapse2 = nn.Conv2d(c2, e2, kernel_size=1, bias=False) if multi_collapse else None
+            self.early_collapse3 = nn.Conv2d(c3, e3, kernel_size=1, bias=False) if multi_collapse else None
+            self.early2d_down = (
+                nn.ModuleList([
+                    nn.Conv2d(channels, channels, kernel_size=3, stride=2, padding=1, bias=False)
+                    for channels in (e1, e2, e3) + encoder_channels[:-1]
+                ])
+                if bool(getattr(config.model, "two_d_strided_down", False)) else None
+            )
         else:
+            self.early2d_down = None
+            self.early_collapse2 = None
+            self.early_collapse3 = None
             self.early_depth_attn = None
             self.early_depth_fuse = None
             self.early2d_enc2 = None
@@ -1295,8 +1308,6 @@ class NnUnet3dLcndz(nn.Module):
             raise ValueError("minimum_support_kernel must be a positive odd integer")
         if self._early_2d_unet or self._mid_2d_unet:
             bypassed = []
-            if self._dual_scale and self._early_2d_unet:
-                bypassed.append("dual_scale")
             if self.style_film is not None:
                 bypassed.append("style_film")
             if self._mixstyle:
@@ -1786,16 +1797,23 @@ class NnUnet3dLcndz(nn.Module):
         weighted = (features3d * weights).sum(dim=2)
         strongest = features3d.amax(dim=2)
         enc1 = self.early_depth_fuse(torch.cat((weighted, strongest), dim=1))
-        enc2 = self.early2d_enc2(F.max_pool2d(enc1, 2))
+        enc2 = self.early2d_enc2(self._early_down(0, enc1))
         if self._enc2_drop is not None:
             enc2 = F.dropout2d(enc2, p=self._enc2_drop.p, training=self.training)
-        enc3 = self.early2d_enc3(F.max_pool2d(enc2, 2))
-        bottleneck = self.early2d_bottleneck(F.max_pool2d(enc3, 2))
+        if self.early_collapse2 is not None and self.early_collapse3 is not None:
+            # deeper volumetric stages collapsed by max over depth feed the matching 2D stages
+            volume2 = self.enc2(self.pool(features3d))
+            volume3 = self.enc3(self.pool(volume2))
+            enc2 = enc2 + self.early_collapse2(volume2.amax(dim=2))
+            enc3 = self.early2d_enc3(self._early_down(1, enc2)) + self.early_collapse3(volume3.amax(dim=2))
+        else:
+            enc3 = self.early2d_enc3(self._early_down(1, enc2))
+        bottleneck = self.early2d_bottleneck(self._early_down(2, enc3))
         deepest = bottleneck
         extra_skips = []
-        for encoder in self.early2d_extra_encoders:
+        for level, encoder in enumerate(self.early2d_extra_encoders):
             extra_skips.append(deepest)
-            deepest = encoder(F.max_pool2d(deepest, 2))
+            deepest = encoder(self._early_down(3 + level, deepest))
         decoded = deepest
         for upsample, decoder, skip in zip(
             reversed(self.early2d_extra_ups),
@@ -1809,6 +1827,11 @@ class NnUnet3dLcndz(nn.Module):
         if self._head_drop is not None:
             dec1 = F.dropout2d(dec1, p=self._head_drop.p, training=self.training)
         return deepest, dec1
+
+    def _early_down(self, level: int, features: torch.Tensor) -> torch.Tensor:
+        if self.early2d_down is None:
+            return F.max_pool2d(features, 2)
+        return self.early2d_down[level](features)
 
     def _encode_decode_mid_2d(
         self,
@@ -2395,6 +2418,7 @@ class NnUnet3dLcndz(nn.Module):
                 if self.supcon_head is not None else None
             )
             score = self._multitile_aggregate_2d(voxel2d, target_offsets)
+            score = self._apply_dual_scale_score(score, x, target_offsets)
             self.last_attn_entropy_loss = voxel2d.new_zeros(())
             self.last_attn_entropy_per_target = None
             self.last_surface_guided_alpha = None
@@ -2601,6 +2625,9 @@ def create_model(config: Config):
         nn.init.zeros_(model.new_surface_input.weight)
     if model.fiber_coordinate_input is not None:
         nn.init.zeros_(model.fiber_coordinate_input.weight)
+    for collapse in (model.early_collapse2, model.early_collapse3):
+        if collapse is not None:
+            nn.init.zeros_(collapse.weight)
     if model.depth_fusion_attn is not None:
         nn.init.zeros_(model.depth_fusion_attn.weight)
         nn.init.zeros_(model.depth_fusion_attn.bias)

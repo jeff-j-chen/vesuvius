@@ -2009,6 +2009,16 @@ class Trainer:
                     primary_loss = robust_loss
                     cvar_loss_value = robust_loss
             loss = primary_loss
+            dice_weight = float(getattr(self.c.tra, "dice_weight", 0.0))
+            if dice_weight > 0 and outputs.shape == loss_mask.shape:
+                probabilities = torch.sigmoid(outputs.float())
+                hard = (labels > 0.5).float()
+                weight = loss_mask.float()
+                overlap = (probabilities * hard * weight).sum()
+                dice = 1.0 - (2.0 * overlap + 1.0) / (
+                    (probabilities * weight).sum() + (hard * weight).sum() + 1.0
+                )
+                loss = (1.0 - dice_weight) * loss + dice_weight * dice
             anchor_lambda = float(getattr(self.c.tra, "mae_anchor_lambda", 0.0))
             if anchor_lambda > 0:
                 named_parameters = dict(self.model.named_parameters())

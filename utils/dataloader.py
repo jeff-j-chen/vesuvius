@@ -311,6 +311,13 @@ class Transform:
         self.randconv_depth_kernel = max(1, int(getattr(config.dl, "randconv_depth_kernel", 1)))
         self.randconv_layers_max = max(1, int(getattr(config.dl, "randconv_layers_max", 1)))
         self.randconv_mix_min = float(getattr(config.dl, "randconv_mix_min", 0.0))
+        # context-only warps: identity inside the prediction centre plus margin, full strength beyond the feather
+        self.protected_rotation_prob = float(getattr(config.dl, "protected_rotation_prob", 0.0))
+        self.protected_elastic_prob = float(getattr(config.dl, "protected_elastic_prob", 0.0))
+        self.protected_elastic_alpha = float(getattr(config.dl, "protected_elastic_alpha", 16.0))
+        self.protected_elastic_sigma = float(getattr(config.dl, "protected_elastic_sigma", 5.0))
+        self.protected_warp_margin = int(getattr(config.dl, "protected_warp_margin", 4))
+        self.protected_warp_feather = int(getattr(config.dl, "protected_warp_feather", 12))
         self.context_replace_keep_size = int(getattr(config.dl, "context_replace_keep_size", 0))
         self.context_replace_margin = int(getattr(config.dl, "context_replace_margin", 16))
         self.context_replace_feather = int(getattr(config.dl, "context_replace_feather", 16))
@@ -343,6 +350,10 @@ class Transform:
             mask = self._flip_target(mask, target_axis)
             component_ids = self._flip_target(component_ids, target_axis)
             target_offset = self._flip_offset(target_offset, axis)
+        if self.protected_rotation_prob > 0 and random.random() < self.protected_rotation_prob:
+            block = self._apply_protected_rotation(block, target_offset)
+        if self.protected_elastic_prob > 0 and random.random() < self.protected_elastic_prob:
+            block = self._apply_protected_elastic(block, target_offset)
         if random.random() < self.noise_prob:
             block = self._apply_gaussian_noise(block)
         if random.random() < self.brightness_prob:
@@ -423,6 +434,12 @@ class Transform:
                 inside = valid & (scaled >= 0) & (scaled <= self._last_depth_count - 1)
                 depth = np.where(inside, scaled, np.where(valid, -1.0, depth))
                 confidence = np.where(valid & ~inside, 0.0, confidence)
+            elif operation == "remap":
+                map_x, map_y = value
+                depth = cv2.remap(np.ascontiguousarray(depth, dtype=np.float32), map_x, map_y,
+                                  cv2.INTER_NEAREST, borderMode=cv2.BORDER_REFLECT_101)
+                confidence = cv2.remap(np.ascontiguousarray(confidence, dtype=np.float32), map_x, map_y,
+                                       cv2.INTER_NEAREST, borderMode=cv2.BORDER_REFLECT_101)
             elif operation == "elastic":
                 from scipy.ndimage import map_coordinates
 
@@ -769,6 +786,50 @@ class Transform:
         mixed = keep[None] * block + (1.0 - keep[None]) * donor_aligned
         return np.ascontiguousarray(np.clip(mixed, 0.0, 1.0).astype(np.float32))
 
+    def _protection_weight(self, height, width, target_offset):
+        """0 inside the prediction centre plus margin, rising to 1 over the feather (chebyshev)."""
+        dy, dx = (0, 0) if target_offset is None else (int(v) for v in target_offset.tolist())
+        center_y, center_x = (height - 1) / 2.0 + dy, (width - 1) / 2.0 + dx
+        prediction_center = self.multitile_grid * self.multitile_subtile if self.multitile else self.tile_size
+        half = prediction_center / 2.0 + self.protected_warp_margin
+        yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+        distance = np.maximum(np.maximum(np.abs(yy - center_y) - half, np.abs(xx - center_x) - half), 0.0)
+        weight = np.clip(distance / max(self.protected_warp_feather, 1), 0.0, 1.0)
+        return weight, yy, xx, center_y, center_x
+
+    def _remap_block(self, block, map_x, map_y):
+        out = np.empty_like(block)
+        for depth_index in range(block.shape[0]):
+            out[depth_index] = cv2.remap(block[depth_index], map_x, map_y, cv2.INTER_LINEAR,
+                                         borderMode=cv2.BORDER_REFLECT_101)
+        self._last_geometry.append(("remap", (map_x, map_y)))
+        return out
+
+    def _apply_protected_rotation(self, block, target_offset=None):
+        """rotate the context by an arbitrary angle about the target while the centre stays exact."""
+        _, height, width = block.shape
+        weight, yy, xx, center_y, center_x = self._protection_weight(height, width, target_offset)
+        angle = random.uniform(-math.pi, math.pi) * weight
+        cos, sin = np.cos(angle), np.sin(angle)
+        dy, dx = yy - center_y, xx - center_x
+        map_x = (center_x + cos * dx - sin * dy).astype(np.float32)
+        map_y = (center_y + sin * dx + cos * dy).astype(np.float32)
+        return self._remap_block(np.ascontiguousarray(block, dtype=np.float32), map_x, map_y)
+
+    def _apply_protected_elastic(self, block, target_offset=None):
+        """strong smooth in-plane displacement of the context; zero displacement in the centre."""
+        _, height, width = block.shape
+        weight, yy, xx, _, _ = self._protection_weight(height, width, target_offset)
+        fields = []
+        for _ in range(2):
+            field = cv2.GaussianBlur(np.random.uniform(-1, 1, (height, width)).astype(np.float32),
+                                     (0, 0), self.protected_elastic_sigma)
+            fields.append(field / max(float(np.abs(field).max()), 1e-6))
+        alpha = self.protected_elastic_alpha
+        map_x = (xx + alpha * fields[0] * weight).astype(np.float32)
+        map_y = (yy + alpha * fields[1] * weight).astype(np.float32)
+        return self._remap_block(np.ascontiguousarray(block, dtype=np.float32), map_x, map_y)
+
     def _surface_align_context(self, donor, recipient):
         """warp donor depth columns so their estimated surfaces match the recipient."""
         from scipy.ndimage import map_coordinates
@@ -1111,6 +1172,9 @@ class InkVolumeDataset(IterableDataset):
         self._far_neg_units = far_negative_units
         self._far_negative_share = float(getattr(config.data, "far_negative_share", 0.0))
         self._context_replace_prob = float(getattr(config.dl, "context_replace_prob", 0.0))
+        # fraction of replacements whose donor comes from another physical domain
+        self._context_replace_cross = float(getattr(config.dl, "context_replace_cross_prob", 0.0))
+        self._cross_donor_sources = []
         self._context_consistency = bool(
             getattr(config.tra, "context_consistency", False)
         ) and self.shuffle
@@ -1411,7 +1475,12 @@ class InkVolumeDataset(IterableDataset):
                     donors.append((y_off, x_off))
         self._context_donor_coords = donors
         if not donors:
-            raise ValueError(f"no valid context-replacement donors for scroll {self.scroll_id}")
+            # small ink-dense splits can have no ink-free window at large contexts; skip replacement there
+            print(
+                f"[context-replace] WARNING scroll {self.scroll_id}: no ink-free {ctx}px donor with "
+                f"mask>={min_fraction:.2f}; context replacement disabled for this split"
+            )
+            return
         print(
             f"[context-replace] scroll {self.scroll_id}: {len(donors)} "
             f"fully ink-free donors with mask>={min_fraction:.2f}"
@@ -2175,10 +2244,13 @@ class InkVolumeDataset(IterableDataset):
             and self._context_donor_coords
             and random.random() < self._context_replace_prob
         ):
-            donor_y, donor_x = self._context_donor_coords[
-                random.randrange(len(self._context_donor_coords))
+            source = self
+            if self._cross_donor_sources and random.random() < self._context_replace_cross:
+                source = random.choice(self._cross_donor_sources)
+            donor_y, donor_x = source._context_donor_coords[
+                random.randrange(len(source._context_donor_coords))
             ]
-            donor, _, _, _ = self._fetch_block(
+            donor, _, _, _ = source._fetch_block(
                 z_off,
                 donor_y,
                 donor_x,
@@ -2331,6 +2403,14 @@ class MultiScrollIterableDataset(IterableDataset):
             if any(weight <= 0 for weight in self.sampling_weights):
                 raise ValueError("sampling_weights must be positive integers")
         self._apply_transforms = False
+        for dataset in self.datasets:
+            if float(getattr(dataset, "_context_replace_cross", 0.0)) > 0:
+                dataset._cross_donor_sources = [
+                    other for other in self.datasets
+                    if other is not dataset
+                    and getattr(other, "domain_id", None) != dataset.domain_id
+                    and getattr(other, "_context_donor_coords", None)
+                ]
 
     @property
     def apply_transforms(self):
