@@ -49,7 +49,7 @@ Run a model on every single test scroll. 9 test patches correspond to 9 test scr
 
 ## Fragments
 
-`utils/config.py` registers 29 training-fragment slots. Individual campaigns select subsets from this shared inventory; newly assembled slots require repository labels and train masks before training.
+`utils/config.py` registers 30 training-fragment slots. Individual campaigns select subsets from this shared inventory; newly assembled slots require repository labels and train masks before training.
 
 | ID | Fragment | Physical scroll | Default split | Notes |
 |---|---|---|---|---|
@@ -76,9 +76,10 @@ Run a model on every single test scroll. 9 test patches correspond to 9 test scr
 | `20251111010954` | w068 | PHerc0172 | x 75% | Resampled from 7.91µm |
 | `20250919125754` | patch 487 | PHerc0009B | x 75% | Resampled to the training grid |
 | `20231210121321` | Paris4 | PHercParis4 | x 75% | 78keV surface pooled to 28 layers |
-| `20230301213755` | Fr143 | PHercParis2 | x 75% | 54keV surface TIFF stack resampled from 3.24µm |
-| `20231205222200` | Cr4 Fr8 | PHerc51 | x 75% | 53keV surface TIFF stack resampled from 3.24µm |
-| `t20230301213423` | Fr34 | PHercParis1 | x 75% | 54keV surface TIFF stack resampled from 3.24µm |
+| `20230301213755` | Fr143 | PHercParis2 | x 75% | 88keV scan rendered through the 54keV exposed-surface PPM at 9.362µm |
+| `20230205142449` | Fr47 | PHercParis2 | manual (pending) | 88keV scan rendered through the 54keV exposed-surface PPM; researcher inklabel copied unchanged |
+| `20231205222200` | Cr4 Fr8 | PHerc51 | x 75% | 88keV scan rendered through the 53keV exposed-surface PPM at 9.362µm |
+| `t20230301213423` | Fr34 | PHercParis1 | x 75% | 88keV scan rendered through the 54keV exposed-surface PPM at 9.362µm |
 | `20250511003658` | tifxyz segment | PHerc0343P | x 75% | 8.64µm / 116keV surface resampled to 28 layers |
 | `20231201215900` | Cr1 Fr3 | PHerc1667 | x 75% | 70keV flattened TIFF stack resampled from 3.24µm |
 | `20260221022814` | auto-grown 405 | PHerc0841 | x 75% | 9.366µm / 113keV surface cropped to `y=14656:21560, x=0:5248` |
@@ -129,6 +130,20 @@ Notes:
 
 ## Data layout
 
+### High-energy fragments
+
+Paris1 Fr34, Paris2 Fr143, Paris2 Fr47 and Cr4 Fr8 are assembled from their 88keV scans by default
+(`RESCAN_88KEV` in `assemble_training_segments.py`, `utils/fragment_rescan.py`). The low-energy
+exposed-surface `result.ppm` gives per-pixel positions and normals; a fitted affine (no registration is
+published) maps them into the 88keV volume, which is sampled at 28 layers on the old surface-TIFF frame,
+so labels, masks and splits carry over. Chunks missing from a published 88keV zarr are rebuilt from the
+raw slice TIFFs. An existing zarr without the `rescan_88kev` attribute is superseded on the next run.
+The replaced 54keV surface supervision, masks and norms are kept in `backup_54kev_fragments/`.
+
+Fr47 (`20230205142449`) is named after the 54keV volume its surface was traced on. Its researcher inklabel
+is scaled into `inklabels/` and copied unchanged into `dilated_inklabels/`.
+
+### Artifacts
 Each labeled fragment has four main artifacts:
 
 - `ves_zarrs2/<id>.zarr` — 28-layer surface volume

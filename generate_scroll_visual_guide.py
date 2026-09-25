@@ -66,7 +66,10 @@ TRAINING_GROUPS = [
     ("PHercParis4", [Patch("20231210121321", "Paris4")]),
     ("PHerc0500P2", [Patch("20250628074500", "500P2 front")]),
     ("PHerc0814", [Patch("20260226000000", "seg46527")]),
-    ("PHercParis2", [Patch("20230301213755", "Fr143", "mask_overlay")]),
+    ("PHercParis2", [
+        Patch("20230301213755", "Fr143", "mask_overlay"),
+        Patch("20230205142449", "Fr47", "mask_overlay"),
+    ]),
     ("PHerc51", [Patch("20231205222200", "Cr4 Fr8", "mask_overlay")]),
     ("PHercParis1", [Patch("20230301213423", "Fr34", "mask_overlay")]),
     ("PHerc0343P", [Patch("20250511003658", "tifxyz segment")]),

@@ -94,6 +94,7 @@ SEGMENTS = [
     ("paris4", "PHercParis4/segments/20231210121321", "20231210121321"),
     # dl.ash2txt fragments: native 3.24um surface TIFF stacks resampled in XYZ.
     ("paris2_fr143", "", "20230301213755"),
+    ("paris2_fr47", "", "20230205142449"),
     ("scroll6_fr8", "", "20231205222200"),
     ("paris1_fr34", "", "20230301213423"),
     ("p343", "PHerc0343P/segments/20250511003658-tifxyz", "20250511003658"),
@@ -150,9 +151,17 @@ FRAG_OPTS = {
         "surface_expected_shape": (109, 12750, 9995),
         "force_norm": True,
     },
+    # the four fragments below are rendered from their 88 keV scan (see RESCAN_88KEV / utils/fragment_rescan.py)
     "paris2_fr143": {
         "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag2/PHercParis2Fr143.volpkg/working/54keV_exposed_surface",
         "surface_expected_shape": (65, 14830, 9506),
+        "source_um": 3.24,
+        "force_norm": True,
+    },
+    # id = uuid of the 54 keV volume the exposed surface was traced on
+    "paris2_fr47": {
+        "dlash_surface_base": "https://dl.ash2txt.org/fragments/Frag1/PHercParis2Fr47.volpkg/working/54keV_exposed_surface",
+        "surface_expected_shape": (65, 8181, 6330),
         "source_um": 3.24,
         "force_norm": True,
     },
@@ -187,6 +196,47 @@ FRAG_OPTS = {
         "force_norm": True,
     },
 }
+
+# default source for these dl.ash2txt fragments: the 88 keV scan, sampled through the low-energy exposed-surface
+# PPM (<dlash_surface_base>/result.ppm) into the same frame as the old surface-tiff assembly. affine = fitted
+# low-energy voxel xyz -> 88 keV voxel xyz (3x4; no published registration). tif_url rebuilds chunks that are
+# missing from the published 88 keV zarr. an existing zarr without the rescan marker is superseded.
+_DLASH = "https://dl.ash2txt.org/fragments"
+RESCAN_88KEV = {
+    "paris1_fr34": {
+        "volume_url": f"{_DLASH}/Frag3/PHercParis1Fr34.volpkg/volumes_zarr/88keV_3.24um_.zarr/0",
+        "tif_url": f"{_DLASH}/Frag3/PHercParis1Fr34.volpkg/volumes/20230212182547",
+        "tif_digits": 4,
+        "affine": [[1.00028, 0.00101, -0.00023, -72.77],
+                   [0.00012, 1.00301, 0.00016, 7.97],
+                   [0.00003, 0.00060, 0.99997, -4.65]],
+    },
+    "scroll6_fr8": {
+        "volume_url": f"{_DLASH}/Frag6/PHerc51Cr4Fr8.volpkg/volumes_zarr/88keV_3.24um_.zarr/0",
+        "tif_url": f"{_DLASH}/Frag6/PHerc51Cr4Fr8.volpkg/volumes/20231201112849",
+        "tif_digits": 4,
+        "affine": [[1.00056, 0.00038, -0.00008, -1.52646],
+                   [-0.00008, 0.99994, 0.00144, -0.32086],
+                   [-0.00001, -0.00145, 1.00063, -0.61886]],
+    },
+    "paris2_fr143": {
+        "volume_url": f"{_DLASH}/Frag2/PHercParis2Fr143.volpkg/volumes_zarr/88keV_3.24um_.zarr/0",
+        "tif_url": f"{_DLASH}/Frag2/PHercParis2Fr143.volpkg/volumes/20230226143835",
+        "tif_digits": 5,
+        "affine": [[1.00019, 0.00239, -0.00006, 15.74067],
+                   [-0.00062, 0.99700, 0.00027, -211.31795],
+                   [-0.00006, 0.00182, 0.99952, 4.91978]],
+    },
+    "paris2_fr47": {
+        "volume_url": f"{_DLASH}/Frag1/PHercParis2Fr47.volpkg/volumes_zarr/88keV_3.24um_.zarr/0",
+        "tif_url": f"{_DLASH}/Frag1/PHercParis2Fr47.volpkg/volumes/20230213100222",
+        "tif_digits": 4,
+        "affine": [[1.00032, -0.00001, 0.00011, 150.21086],
+                   [-0.00067, 1.00025, 0.00029, 251.15753],
+                   [0.00000, -0.00015, 0.99998, 6.11317]],
+    },
+}
+RESCAN_MARKER = "rescan_88kev"
 
 TARGET_VOXEL_UM = 9.362
 TARGET_DEPTH = 28
@@ -728,6 +778,58 @@ def _assemble_dlash_surface(name, zid, opts, workers, chunk_depth, chunk_y, chun
     print(f"  [dlash] wrote {output_path} shape={output_shape}")
 
 
+def _is_rescan_zarr(path):
+    try:
+        with open(os.path.join(path, ".zattrs"), encoding="utf-8") as handle:
+            return RESCAN_MARKER in json.load(handle)
+    except (OSError, ValueError):
+        return False
+
+
+def _assemble_dlash_rescan(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
+    """render the fragment from its 88 keV scan; atomically supersedes an older (low-energy) zarr + mask."""
+    from utils import fragment_rescan
+
+    rescan = RESCAN_88KEV[name]
+    output_path = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    partial_path = output_path + ".partial"
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if os.path.isdir(output_path) and _is_rescan_zarr(output_path) and not force:
+        print("  [1/3] 88 keV rescan volume exists -> skip")
+        return
+    base = opts["dlash_surface_base"].rstrip("/")
+    cache_dir = os.path.join(TMP, f"rescan_{zid}")
+    source_depth, source_height, source_width = map(int, opts["surface_expected_shape"])
+    source_mask_path = os.path.join(cache_dir, "mask.png")
+    _download_once(f"{base}/mask.png", source_mask_path)
+    source_mask = cv2.imread(source_mask_path, cv2.IMREAD_GRAYSCALE)
+    if source_mask is None or source_mask.shape != (source_height, source_width):
+        raise RuntimeError(f"{name}: bad source mask {None if source_mask is None else source_mask.shape}")
+    frame = fragment_rescan.out_shape(source_height, source_width)
+    footprint = cv2.resize(source_mask, frame[::-1], interpolation=cv2.INTER_NEAREST) > 0
+    positions = _dlash_depth_positions(source_depth, float(opts["source_um"]))
+    empty_layers = [int(k) for k in np.flatnonzero((positions < 0) | (positions > source_depth - 1))]
+    print(f"  [1/3] 88 keV rescan -> {(TARGET_DEPTH,) + frame}; empty layers {empty_layers}", flush=True)
+    shutil.rmtree(partial_path, ignore_errors=True)
+    mask = fragment_rescan.render(
+        partial_path, f"{base}/result.ppm", rescan["volume_url"], rescan["affine"], cache_dir,
+        footprint=footprint, empty_layers=empty_layers, tif_url=rescan.get("tif_url"),
+        tif_digits=int(rescan.get("tif_digits", 4)), chunks=(min(chunk_depth, TARGET_DEPTH), chunk_y, chunk_x),
+    )
+    with open(os.path.join(partial_path, ".zattrs"), "w", encoding="utf-8") as handle:
+        json.dump({RESCAN_MARKER: {"volume_url": rescan["volume_url"], "affine": rescan["affine"],
+                                   "ppm": f"{base}/result.ppm"}}, handle, indent=1)
+    if os.path.isdir(output_path):
+        print(f"  [1/3] superseding the existing zarr {output_path}")
+        shutil.rmtree(output_path)
+    os.replace(partial_path, output_path)
+    os.makedirs("masks", exist_ok=True)
+    cv2.imwrite(mask_path, mask.astype(np.uint8) * 255)
+    print(f"  [1/3] wrote {output_path} + {mask_path} (footprint {mask.mean():.3f}, "
+          f"{mask.sum() / max(footprint.sum(), 1):.4f} of the source mask)")
+    shutil.rmtree(os.path.join(cache_dir, "chunks"), ignore_errors=True)
+
+
 def _build_dlash_mask(name, zid, opts):
     base = opts["dlash_surface_base"].rstrip("/")
     cache_dir = os.path.join(TMP, f"dlash_{zid}")
@@ -1023,6 +1125,9 @@ def _assemble_w013_volume(zid, chunk_depth, chunk_y, chunk_x, force=False):
 
 def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
     opts = FRAG_OPTS.get(name, {})
+    if name in RESCAN_88KEV:
+        _assemble_dlash_rescan(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=force)
+        return
     if opts.get("dlash_surface_base"):
         _assemble_dlash_surface(
             name, zid, opts, workers, chunk_depth, chunk_y, chunk_x, force=force
@@ -1139,7 +1244,8 @@ def process_fragment(name, seg, zid, workers, skip_norm, chunk_depth, chunk_y, c
         print(f"\n{'='*70}\n{tag}  id={zid}\n{'='*70}", flush=True)
         step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
         if opts.get("dlash_surface_base"):
-            _build_dlash_mask(name, zid, opts)
+            if name not in RESCAN_88KEV:
+                _build_dlash_mask(name, zid, opts)
             _verify_dlash_outputs(name, zid, opts)
         if not opts.get("skip_labels"):
             step2_check_eroded_labels(name, seg, zid)

@@ -35,18 +35,13 @@ so each family is measured alone against a bare baseline. Rotation/flip stay on.
 | holdout_regime          | beamline regime swap: fine scans hazed/blurred, coarse dehazed |
 | holdout_soft_labels     | label smoothing 0.2/0.1 (every other arm uses 0.1/0.05)        |
 | holdout_gce             | noise-robust GCE loss, q=0.7                                   |
-| holdout_quality_norm    | fine scans filtered to the 9.36 um scanners' measured spectrum |
-| holdout_fiber           | structure-tensor fibre orientation/coherence/deviation inputs  |
-| holdout_randconv        | aggressive random convolution texture re-rendering             |
 | holdout_edge_soft       | positive cells grazing a stroke edge get soft targets          |
-| holdout_ema_0995        | weight EMA, decay 0.995 (~200-step horizon, as in c29/c31)     |
 | holdout_ema_0999        | weight EMA, decay 0.999 (~1k steps, about one epoch)           |
 | holdout_ema_long        | weight EMA, decay 0.9998 from epoch 3 (~5k steps, SWAD-like)   |
 | holdout_all             | photometric..regime families at once                           |
 
-`holdout_quality_norm` is not an augmentation: every train and validation crop of a fine
-scan gets that scroll's fixed filter. The filter is measured once (radial power spectra
-against pherc0139/0814/0500p2) and cached in quality_transfer.json. It only lowers gain.
+`holdout_quality_norm`, `holdout_fiber`, `holdout_randconv` and `holdout_ema_0995` moved to
+campaign 36.
 
 The final epoch renders both held-out scrolls at full extent; both volumes stay in RAM.
 
@@ -84,7 +79,7 @@ VIS_SCROLL_IDS = [20260221022814, 20250919125754]  # pherc0841, pherc0009b (both
 # resampled down to the 9.36 um grid from 2.4 um (w013, w018, paris4) or 3.24 um (fragments)
 FINE_NATIVE_SCROLL_IDS = [
     20240304141531, 20240304144031, 20231210121321,
-    20230301213755, 20231205222200, 20230301213423, 20231201215900,
+    20230301213755, 20231205222200, 20230301213423, 20231201215900, 20230205142449,
 ]
 # training scrolls scanned natively on the 9.36 um / 1.2 m beamline, like the test scrolls
 QUALITY_REFERENCE_DOMAINS = ("pherc0139", "pherc0814", "pherc0500p2")
@@ -192,11 +187,7 @@ TESTS = [
     _test("holdout_regime", REGIME),
     _test("holdout_soft_labels", {"tra.label_smooth_pos": 0.2, "tra.label_smooth_neg": 0.1}),
     _test("holdout_gce", {"tra.loss_type": "gce", "tra.gce_q": 0.7}),
-    _test("holdout_quality_norm", {}, quality_normalize=True),
-    _test("holdout_fiber", {"model.fiber_coordinate_branch": True, **NEW_MODULES}),
-    _test("holdout_randconv", RANDCONV),
     _test("holdout_edge_soft", {"data.edge_soft_sigma": 4.0, "data.edge_soft_floor": 0.6}),
-    _test("holdout_ema_0995", {"tra.model_ema": True, "tra.model_ema_decay": 0.995}),
     _test("holdout_ema_0999", {"tra.model_ema": True, "tra.model_ema_decay": 0.999}),
     # before the start epoch the average just tracks the live weights
     _test("holdout_ema_long", {

@@ -12,6 +12,11 @@ recipe, and the in-scroll augmentations are off unless an arm turns one on.
 | holdout_rotate_any          | context rotated by an arbitrary angle about the target           |
 | holdout_elastic_strong      | strong smooth elastic displacement of the context (16 px peak)   |
 | holdout_ring_c2g2s4         | ring labels close 2 / gap 2 / shell 4 (campaign 33+ uses 0/0/4)  |
+| holdout_ring_c2g2s4_gce     | the same ring with GCE loss, q=0.7                               |
+| holdout_quality_norm        | fine scans filtered to the 9.36 um scanners' measured spectrum   |
+| holdout_fiber               | structure-tensor fibre orientation/coherence/deviation inputs    |
+| holdout_randconv            | aggressive random convolution texture re-rendering               |
+| holdout_ema_0995            | weight EMA, decay 0.995 (~200-step horizon, as in c29/c31)       |
 | holdout_researcher_head     | 6-stage residual 2D U-Net, strided-conv downsampling, 4x4x320    |
 
 Rotation and elastic warps leave the 64 px prediction centre plus a 4 px margin exactly in
@@ -64,24 +69,29 @@ CONTEXT_REPLACE = {
     "dl.context_replace_prob": 0.5,
     "dl.context_replace_margin": 13, "dl.context_replace_feather": 26,
 }
+RING_C2G2S4 = {"data.ring_close_r": 2, "data.ring_gap_r": 2, "data.ring_shell_r": 4}
 
 
-def _test(tid: str, augmentations: dict, arch: dict | None = None) -> dict:
-    test = campaign35._test(tid, augmentations, arch=arch)
+def _test(tid: str, augmentations: dict, arch: dict | None = None, **extra) -> dict:
+    test = campaign35._test(tid, augmentations, arch=arch, **extra)
     test["tag"] = f"36_{tid}"
     return test
 
 
 TESTS = [
     _test("holdout_baseline_rep", {}),
-    _test("holdout_ctx_replace", CONTEXT_REPLACE),
+    _test("holdout_ring_c2g2s4", RING_C2G2S4),
+    _test("holdout_ring_c2g2s4_gce", {**RING_C2G2S4, "tra.loss_type": "gce", "tra.gce_q": 0.7}),
+    _test("holdout_quality_norm", {}, quality_normalize=True),
+    _test("holdout_fiber", {"model.fiber_coordinate_branch": True, **campaign35.NEW_MODULES}),
+    _test("holdout_randconv", campaign35.RANDCONV),
+    _test("holdout_ema_0995", {"tra.model_ema": True, "tra.model_ema_decay": 0.995}),
     _test("holdout_ctx_replace_cross", {**CONTEXT_REPLACE, "dl.context_replace_cross_prob": 1.0}),
     _test("holdout_rotate_any", {"dl.protected_rotation_prob": 0.8}),
     _test("holdout_elastic_strong", {
         "dl.protected_elastic_prob": 0.8, "dl.protected_elastic_alpha": 16.0,
         "dl.protected_elastic_sigma": 5.0,
     }),
-    _test("holdout_ring_c2g2s4", {"data.ring_close_r": 2, "data.ring_gap_r": 2, "data.ring_shell_r": 4}),
     _test("holdout_researcher_head", RESEARCHER_MODEL, arch={**campaign35.NATIVE128, "pretrain_key": RESEARCHER_KEY}),
 ]
 

@@ -101,6 +101,7 @@ DEFAULT_SCROLLS: List[ScrollConfig] = [
     ScrollConfig(20250628074500, split_axis="x", train_split_frac=0.6),
     ScrollConfig(20260226000000, split_axis="y", train_split_frac=0.75),
     ScrollConfig(20230301213755, split_axis="x", train_split_frac=0.75),  # PHercParis2 Fr143
+    ScrollConfig(20230205142449, split_axis="x", train_split_frac=0.75),  # PHercParis2 Fr47
     ScrollConfig(20231205222200, split_axis="x", train_split_frac=0.75),  # PHerc51 Cr4 Fr8
     ScrollConfig(20230301213423, split_axis="x", train_split_frac=0.75),  # PHercParis1 Fr34
     ScrollConfig(20250511003658, split_axis="x", train_split_frac=0.75),  # PHerc0343P
@@ -115,7 +116,7 @@ DEFAULT_TRAIN_SCROLL_DICT = {
     "phercparis4": [20231210121321],
     "pherc0500p2": [20250628074500],
     "pherc0814": [20260226000000],
-    "phercparis2_fr143": [20230301213755],
+    "phercparis2_fr143": [20230301213755, 20230205142449],  # Fr143, Fr47
     "pherc51cr4_fr8": [20231205222200],
     "phercparis1_fr34": [20230301213423],
     "pherc0343p": [20250511003658],
