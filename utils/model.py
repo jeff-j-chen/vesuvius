@@ -21,6 +21,8 @@ import torch.nn.functional as F
 
 from .config import Config
 
+SURFACE_RELIEF_CHANNELS = 7
+
 
 class _GradReverse(torch.autograd.Function):
     @staticmethod
@@ -1214,6 +1216,23 @@ class NnUnet3dLcndz(nn.Module):
             nn.Conv3d(4, c1, kernel_size=1, bias=False)
             if self._fiber_coordinate_branch else None
         )
+        self.surface_relief_input = None
+        if bool(getattr(config.model, "surface_relief_input", False)):
+            if not self._early_2d_unet or not bool(getattr(config.model, "surface_teacher_input", False)):
+                raise ValueError("surface_relief_input requires early_2d_unet and surface_teacher_input")
+            self.surface_relief_input = nn.Conv2d(
+                SURFACE_RELIEF_CHANNELS, self.early_depth_fuse.out_channels, kernel_size=1, bias=False,
+            )
+        self.private_domain_heads = None
+        if bool(getattr(config.model, "private_domain_heads", False)):
+            n_domains = int(getattr(config.tra, "dann_n_domains", 0))
+            if not self._early_2d_unet or n_domains < 2:
+                raise ValueError("private_domain_heads requires early_2d_unet and dann_n_domains >= 2")
+            self.private_domain_heads = nn.Conv2d(self.early_depth_fuse.out_channels, n_domains, kernel_size=1)
+        self.last_private_score: torch.Tensor | None = None
+        self.last_private_delta: torch.Tensor | None = None
+        self.last_head_input: torch.Tensor | None = None
+        self.last_head_output: torch.Tensor | None = None
 
         use_better_surface = bool(getattr(config.model, "better_surface", False))
         use_new_surface = bool(getattr(config.model, "new_learned_surface", False))
@@ -1542,6 +1561,66 @@ class NnUnet3dLcndz(nn.Module):
         features = torch.cat((coherence, cos2theta, sin2theta, deviation), dim=1)
         return features.reshape(batch, 4, depth, height, width)
 
+    @staticmethod
+    @torch.no_grad()
+    def _surface_relief_features(
+        raw: torch.Tensor,
+        depth: torch.Tensor,
+        confidence: torch.Tensor,
+    ) -> torch.Tensor:
+        """2D geometry of the papyrus-air boundary around the literal surface (air is +z):
+        sub-voxel boundary height against its local trend, its roughness, the step contrast,
+        missing top material, material lifted above the boundary and the edge sharpness
+        (the last two as fractions of the local papyrus-air step).
+        """
+        if depth.ndim == 3:
+            depth = depth.unsqueeze(1)
+        if confidence.ndim == 3:
+            confidence = confidence.unsqueeze(1)
+        raw = raw.float()
+        size = raw.shape[-2:]
+        if depth.shape[-2:] != size:
+            depth = F.interpolate(depth.float(), size=size, mode="nearest")
+            confidence = F.interpolate(confidence.float(), size=size, mode="nearest")
+        depth = depth.to(raw.device).float()
+        n_depth = raw.shape[2]
+        valid = ((depth >= 0) & (depth <= n_depth - 1) & (confidence.to(raw.device) > 0)).float()
+        base = depth.clamp(0, n_depth - 1).round().long()
+        volume = raw[:, 0]
+
+        def at(offset: int) -> torch.Tensor:
+            index = (base + offset).clamp(0, n_depth - 1)
+            return volume.gather(1, index)
+
+        papyrus = (at(-3) + at(-2)) / 2.0
+        air = (at(3) + at(4)) / 2.0
+        step = papyrus - air
+        threshold = (papyrus + air) / 2.0
+        height = torch.full_like(step, float("nan"))
+        for offset in range(-3, 3):
+            upper, lower = at(offset), at(offset + 1)
+            cross = torch.isnan(height) & (upper >= threshold) & (lower < threshold)
+            frac = ((upper - threshold) / (upper - lower).clamp(min=1e-6)).clamp(0.0, 1.0)
+            height = torch.where(cross, base.float() + offset + frac, height)
+        has_height = valid * torch.isfinite(height).float()
+        height = torch.nan_to_num(height) * has_height
+
+        def local_mean(values: torch.Tensor, weight: torch.Tensor, kernel: int) -> torch.Tensor:
+            num = F.avg_pool2d(values * weight, kernel, stride=1, padding=kernel // 2, count_include_pad=False)
+            den = F.avg_pool2d(weight, kernel, stride=1, padding=kernel // 2, count_include_pad=False)
+            return num / den.clamp(min=1e-3)
+
+        relief = (height - local_mean(height, has_height, 25)) * has_height
+        spread = local_mean(height.square(), has_height, 5) - local_mean(height, has_height, 5).square()
+        roughness = spread.clamp(min=0.0).sqrt() * has_height
+        # inputs are z-scored per scroll, so the raw step is already comparable across scrolls
+        ratio = step.sign() * step.abs().clamp(min=0.02)
+        top = (at(-1) + at(0)) / 2.0 / papyrus.clamp(min=1e-3) - 1.0
+        lifted = ((at(1) + at(2) + at(3)) / 3.0 - air) / ratio
+        drops = torch.stack([at(offset) - at(offset + 1) for offset in range(-2, 2)]).amax(dim=0) / ratio
+        features = torch.cat((relief, roughness, step * 10.0, top, lifted, drops), dim=1) * valid
+        return torch.cat((features.clamp(-4.0, 4.0), valid), dim=1)
+
     def _merge_skip(self, upsampled: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         if upsampled.shape[2:] != skip.shape[2:]:
             upsampled = F.interpolate(upsampled, size=skip.shape[2:], mode="trilinear", align_corners=False)
@@ -1797,6 +1876,10 @@ class NnUnet3dLcndz(nn.Module):
         weighted = (features3d * weights).sum(dim=2)
         strongest = features3d.amax(dim=2)
         enc1 = self.early_depth_fuse(torch.cat((weighted, strongest), dim=1))
+        if self.surface_relief_input is not None:
+            enc1 = enc1 + self.surface_relief_input(
+                self._surface_relief_features(raw, teacher_surface_depth, teacher_surface_confidence).to(enc1.dtype)
+            )
         enc2 = self.early2d_enc2(self._early_down(0, enc1))
         if self._enc2_drop is not None:
             enc2 = F.dropout2d(enc2, p=self._enc2_drop.p, training=self.training)
@@ -2389,6 +2472,8 @@ class NnUnet3dLcndz(nn.Module):
                 teacher_surface_confidence,
             )
             voxel2d = self.early2d_head(decoded2d)
+            self.last_head_input = decoded2d
+            self.last_head_output = voxel2d
             if self.text_region_head is not None:
                 region = F.interpolate(
                     self.text_region_head(bottleneck2d),
@@ -2398,6 +2483,13 @@ class NnUnet3dLcndz(nn.Module):
                 )
                 self.last_text_region_logits = self._multitile_mean_2d(region, target_offsets)
                 voxel2d = voxel2d + F.logsigmoid(region)
+            self.last_private_score = None
+            self.last_private_delta = None
+            if self.private_domain_heads is not None and self.training and domain_ids is not None:
+                index = domain_ids.view(-1, 1, 1, 1).long().expand(-1, 1, *decoded2d.shape[-2:])
+                delta = self.private_domain_heads(decoded2d).gather(1, index)
+                self.last_private_delta = delta
+                self.last_private_score = self._multitile_aggregate_2d(voxel2d + delta, target_offsets)
             center2d = self._crop_center_feat(
                 voxel2d.unsqueeze(2),
                 self._mt_center_feat,
@@ -2625,6 +2717,11 @@ def create_model(config: Config):
         nn.init.zeros_(model.new_surface_input.weight)
     if model.fiber_coordinate_input is not None:
         nn.init.zeros_(model.fiber_coordinate_input.weight)
+    if model.surface_relief_input is not None:
+        nn.init.zeros_(model.surface_relief_input.weight)
+    if model.private_domain_heads is not None:
+        nn.init.zeros_(model.private_domain_heads.weight)
+        nn.init.zeros_(model.private_domain_heads.bias)
     for collapse in (model.early_collapse2, model.early_collapse3):
         if collapse is not None:
             nn.init.zeros_(collapse.weight)

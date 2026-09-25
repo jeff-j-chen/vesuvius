@@ -133,6 +133,7 @@ DEFAULT_TEST_SCROLL_IDS = (
     20260918132724,  # PHerc0175A
     20260922073234,  # PHerc0306B
     20260922161631,  # PHerc0800
+    20260925085345,  # PHerc1447 (second surface)
 )
 
 
@@ -218,6 +219,8 @@ class DataConfig:
     # ink label, floored at edge_soft_floor (>0.5 so the cell still counts as positive). 0 = off
     edge_soft_sigma: float = 0.0
     edge_soft_floor: float = 0.6
+    # control: roll training-scroll labels by this fraction of the height (visualized scrolls keep theirs)
+    label_shift_frac: float = 0.0
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
     multitile_pos_only: bool = True  # in ink-containing windows, supervise ONLY ink sub-tiles (mask out non-ink ones to avoid labelling unlabelled-ink neighbours as negatives); ink-free ring windows still give negatives
     multitile_ring_gate: bool = True  # with pos_only=False, still emit only sub-tiles inside the ring/supervision mask (False = legacy all-in-window targets)
@@ -455,6 +458,21 @@ class TrainingConfig:
     pcgrad_gram: bool = False
     pcgrad_gram_interval: int = 1  # 0 never measures conflicts: equal domain weights only
     pcgrad_gram_ema: float = 0.0
+    # AND-mask: per-step random domain groups, each run as its own sub-batch; only coordinates
+    # where at least and_mask_threshold of the groups agree in gradient sign are updated
+    and_mask: bool = False
+    and_mask_groups: int = 4
+    and_mask_threshold: float = 0.5
+    # Fishr on the output head: match per-domain variances of per-sample head gradients
+    fishr_lambda: float = 0.0
+    fishr_warmup_epochs: int = 1
+    # private per-domain heads (model.private_domain_heads): loss on shared+private logits plus
+    # this weight on the shared head alone, and an L2 on the private residual
+    private_head_shared_weight: float = 0.5
+    private_head_l2: float = 0.01
+    # pairwise logistic ranking of ink cells above negative cells from a different physical domain
+    cross_scroll_rank_lambda: float = 0.0
+    cross_scroll_rank_pairs: int = 4096
     mid_depth_entropy_lambda: float = 0.0
     topk_positive_fraction: float = 0.0  # 0 disables; else supervise only each character's top positives
     character_forgetting: bool = False
@@ -508,6 +526,10 @@ class ModelConfig:
     weldon_multi_mix: float = 0.5
     weldon_depth_support_k: int = 0
     fiber_coordinate_branch: bool = False
+    # papyrus-air boundary geometry (flaking / missing top layer) added at the early-2D enc1
+    surface_relief_input: bool = False
+    # per-physical-domain residual output heads used only in training; inference uses the shared head
+    private_domain_heads: bool = False
     early_2d_unet: bool = False
     early_2d_channels_mult: float = 1.0
     mid_2d_unet: bool = True

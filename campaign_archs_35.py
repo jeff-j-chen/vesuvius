@@ -242,10 +242,29 @@ def _radial_power(scroll_id: int, rng, samples: int = 64, size: int = 192):
     return spectrum / spectrum[1:4].mean()
 
 
+def _quality_sources_newer_than_cache() -> bool:
+    cached = QUALITY_TRANSFER_PATH.stat().st_mtime
+    ids = list(FINE_NATIVE_SCROLL_IDS) + [
+        scroll_id for domain in QUALITY_REFERENCE_DOMAINS
+        for scroll_id in campaign33.CAMPAIGN33_SCROLL_DICT[domain]
+    ]
+    root = Path(campaign33.ROOT) / "ves_zarrs2"
+    for scroll_id in ids:
+        zarr_dir = root / f"{scroll_id}.zarr"
+        stamps = [p.stat().st_mtime for p in (zarr_dir, zarr_dir / ".zattrs", zarr_dir / ".zarray") if p.exists()]
+        if stamps and max(stamps) > cached:
+            return True
+    return False
+
+
 def quality_transfer() -> dict:
     """per fine scroll, the gain that makes its radial spectrum match the reference beamline."""
     if QUALITY_TRANSFER_PATH.exists():
-        return json.loads(QUALITY_TRANSFER_PATH.read_text())
+        cached = json.loads(QUALITY_TRANSFER_PATH.read_text())
+        # re-rendered volumes (e.g. the 88 keV fragment rescans) invalidate the measured filters
+        if set(map(str, FINE_NATIVE_SCROLL_IDS)) <= set(cached) and not _quality_sources_newer_than_cache():
+            return cached
+        print("[campaign35] quality transfer cache is stale; re-measuring", flush=True)
     import numpy as np
 
     rng = np.random.default_rng(0)

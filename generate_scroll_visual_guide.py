@@ -15,7 +15,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent
 IMAGE_HEIGHT = 176
-TEST_VIEW_WIDTH = 300
+TEST_VIEW_WIDTH = 264
 CARD_GAP = 10
 GROUP_GAP = 14
 GROUP_PAD = 10
@@ -113,6 +113,10 @@ TEST_GROUPS = [
     ("PHerc0800", [Patch(
         "20260922161631", "test surface", "mask", "~23.36 cm^2",
         "merged auto_grown_20260922161631422",
+    )]),
+    ("PHerc1447", [Patch(
+        "20260925085345", "test surface 2", "mask", "10.90 cm^2",
+        "auto_grown_20260925085345806_abf",
     )]),
 ]
 
@@ -445,7 +449,7 @@ def generate_guide(output_path: Path) -> Path:
         *_section("TRAINING", "23 campaign 33 fragments grouped by physical scroll", TRAINING_GROUPS),
         *_section(
             "TEST",
-            "nine unlabeled discovery surfaces; papyrus masks, areas, and source patches shown",
+            "ten unlabeled discovery surfaces; papyrus masks, areas, and source patches shown",
             TEST_GROUPS,
         ),
     ]

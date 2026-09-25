@@ -39,12 +39,23 @@ def _depth_quantiles_linear(x: np.ndarray, quantiles: tuple[float, ...]) -> list
     return out
 
 
-def _unit_intensity(raw: np.ndarray) -> np.ndarray:
+def _unit_intensity(raw: np.ndarray, scale: float | None = None) -> np.ndarray:
     """convert integer reconstruction values to a stable [0, 1] scale."""
+    if scale is not None:
+        return np.clip(raw.astype(np.float32) / max(float(scale), 1.0), 0.0, 1.0)
     if np.issubdtype(raw.dtype, np.integer):
         scale = float(np.iinfo(raw.dtype).max)
         return raw.astype(np.float32) / max(scale, 1.0)
     return np.clip(raw.astype(np.float32), 0.0, 1.0)
+
+
+def _volume_intensity_scale(volume) -> float:
+    """full-scale value for the volume: 255 when 0..255 data is stored in a wider dtype."""
+    if not np.issubdtype(volume.dtype, np.integer):
+        return 1.0
+    depth = int(volume.shape[0])
+    sample_max = max(int(np.asarray(volume[d, ::16, ::16]).max()) for d in (0, depth // 2, depth - 1))
+    return 255.0 if sample_max <= 255 else float(np.iinfo(volume.dtype).max)
 
 
 def _detect_strip(
@@ -56,9 +67,10 @@ def _detect_strip(
     spatial_sigma: float,
     coarse_sigma: float,
     coarse_weight: float,
+    intensity_scale: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """return relative depth, confidence, and validity for one DHW strip."""
-    x = _unit_intensity(raw)
+    x = _unit_intensity(raw, intensity_scale)
     padded = np.pad(x, ((1, 1), (0, 0), (0, 0)), mode="edge")
     smooth = (padded[:-2] + 2.0 * padded[1:-1] + padded[2:]) * 0.25
 
@@ -782,6 +794,8 @@ def main() -> None:
                 yield spec, raw
 
     detection_started = time.perf_counter()
+    intensity_scale = _volume_intensity_scale(volume)
+    print(f"[surface] intensity scale {intensity_scale:g} ({volume.dtype})", flush=True)
     for (y0, y1, ys, ye), raw in prefetched_blocks():
         rel_depth, conf, valid = _detect_strip(
             raw,
@@ -792,6 +806,7 @@ def main() -> None:
             spatial_sigma=args.spatial_sigma,
             coarse_sigma=args.coarse_sigma,
             coarse_weight=args.coarse_weight,
+            intensity_scale=intensity_scale,
         )
         keep = slice(y0 - ys, y1 - ys)
         valid = valid[keep] & mask[y0:y1]
@@ -852,6 +867,7 @@ def main() -> None:
         "spatial_sigma": args.spatial_sigma,
         "coarse_sigma": args.coarse_sigma,
         "coarse_weight": args.coarse_weight,
+        "intensity_scale": intensity_scale,
         "regularization": regularization,
         "elastic": elastic,
         "histogram": histogram,

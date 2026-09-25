@@ -1788,3 +1788,98 @@ construction probes CUDA availability in the controller; the default runtime-bas
 later forked arms with `Cannot re-initialize CUDA in forked subprocess`. The NVML probe preserves
 the campaign-lifetime copy-on-write RAM cache while allowing each isolated arm to initialize its
 own CUDA runtime and persistent DataLoader workers.
+
+## 24) Held-out scroll campaigns 35/36 and banned directions (2026-09-25)
+
+### Goal
+Predict letters on segmented test surfaces (113 keV, 9.36 um) that show no visible ink. Campaigns
+35/36 hold out pherc0841 (9.366 um / 113 keV / 1.2 m, the test regime) and pherc0009b
+(8.64 um / 116 keV, treated as the same regime) and score only those two scrolls. Primary metric:
+full-extent recall at 1% FPR (`R_M/s<id>/Train/RecallAt1PctFPR`); ring PR-AUC and character F1 are
+compressed and do not track visible strokes.
+
+### Banned directions (user decision; do not propose)
+- second-stage / stacked models on prediction heatmaps (e.g. letter-shape denoisers)
+- self-training / pseudo-labels (the model is not good enough)
+- "more data": no further labelled scrolls exist; never grow strokes from predicted strokes
+- already exhausted: DANN, cross-fragment SupCon, MixStyle, SagNet, CORAL, CDAN, prototype
+  alignment, MLDG, photometric / FDA / acquisition / phase / tone / regime augmentations,
+  L1 / L2 / AdamW weight decay
+- 0841 surface and ink-band offset are verified (offsets 0, -1, -2 perform equally)
+
+### Campaign 35 result
+Every finished arm (ctx384, ds2, far negatives, shell 6, pos weight, Dice+BCE, multi-collapse,
+seven stages, dual scale, default augs, photometric, acquisition, geometric, FDA, phase, tone,
+regime, soft labels, GCE) predicts ink in the same places as the baseline. Held-out valid PR-AUC
+equals the Campaign 34 values when the same scrolls were trained on (0841 ~0.74-0.78, 0009b
+~0.85-0.88), although seen-scroll train PR-AUC reached 0.99: a scroll's own labels do not raise
+its own validation region above what the other scrolls provide. Baseline recall at 1% FPR:
+0841 0.073 train region / 0.038 valid, 0009b 0.265 / 0.134.
+
+### Zero-training checks (scripts in /data/extra/tmp)
+- `c36_anomaly_check.py`: per-scroll kNN (PatchCore-style) anomaly on MAE encoder features at
+  four depths. Chance on both held-out scrolls (AUC ~0.5, recall@1% ~0.01), including 0009b where
+  every model reads letters. Dead. The script also re-scores any checkpoint on the same 16 px grid
+  and manual split and reproduces the logged recall (0841 0.075 vs 0.073), so it is a reusable
+  held-out scorer.
+- `c36_relief_check.py` (10 scrolls): sub-voxel boundary relief and material lifted above the
+  surface are null everywhere (AUC 0.50): no flake or depression signal at 9.4 um. Ink cells sit
+  on a smoother boundary with a larger papyrus-air step and sharper edge, same sign on 8/10 scrolls
+  (paris4 and 0814 null), but against non-ink within 2-6 cells the AUC is only 0.45-0.55: it marks
+  intact written sheet, not strokes. Adding it to the baseline's ranking lowered recall@1%.
+- `c36_shortcut_check.py <arm>`: (1) score vs distance to ink: on 0009b false positives fall off
+  within 2-4 cells (a real local detector); on 0841 the non-ink score is flat from 1 to 16+ cells,
+  so held-out 0841 output has no spatial relation to ink. (2) context ablation: replacing the
+  surround outside the 64 px centre with ink-free papyrus of the same scroll changes rankings
+  strongly (rank corr 0.3-0.4) when 0-8 px of margin are kept, barely when 24 px are kept (rank
+  corr 0.82-0.90, metrics unchanged). The decision uses ~16-24 px (~150-220 um) around each cell;
+  there is no long-range context/layout shortcut.
+
+### Campaign 36 additions
+- default field back to 192 px / ds2 (batch 96, lr 1.5e-4). Every architecture gets a fresh MAE on the
+  current corpus (the campaign-33/34 checkpoints predate fragment 20230205142449): default, native96,
+  narrow 2D (0.5x), fiber, researcher head. Surface relief reuses the default MAE because the MAE runs
+  without surface maps; only its zero-initialised 1x1 conv starts untrained
+- cutout, context replacement, context jitter and depth jitter are OFF in every campaign 35/36 arm
+  unless the arm turns one on (`NO_DEFAULT_AUGS`); flips/rotations and dropout 0.05/0.05/head 0.1 stay on.
+  Context augs are in raw input px: at 192/ds2 replacement uses margin 20 / feather 40, protected warps
+  margin 8 / feather 24, elastic alpha 32 / sigma 10
+- moved from 35: quality_norm, fiber, randconv, ema_0995
+- ring c2g2s4 + GCE q0.7; ring c2g2s4 + soft edge positives (`data.edge_soft_sigma` 4, floor 0.6)
+- native 96 px field (tests whether the large-context gains were memorisation); narrow 2D; dropout
+  0.2/0.2/head 0.3; round-robin weights 0139 x2, 0343p x4, 0500p2 x3, 0814 x5, rest x1
+- `holdout_baseline_rep_2` is the only arm that renders every scroll (training and held out) at the end
+- cross-scroll mechanisms (all on top of patch GroupDRO; untested before campaign 36):
+  - `tra.and_mask` (`holdout_and_mask`): each batch is reordered into 4 random disjoint groups of
+    physical domains; each group runs its own forward/backward through the normal `_train_batch`
+    (optimizer step deferred), and only coordinates whose gradient sign is shared by >= 3 of 4
+    groups are updated (`Trainer._and_mask_train_batch`). Cost is close to one ordinary step
+  - `tra.fishr_lambda` (`holdout_fishr`): Fishr on the 1x1 output head. Per-sample head gradients
+    are exact from dL/dlogit and the head input (`fishr_head_penalty`), so it costs one extra
+    double-backward; the penalty is normalised by the mean variance's magnitude (scale-free)
+  - `model.private_domain_heads` (`holdout_private_heads`): zero-initialised per-domain residual
+    output heads, training only; loss = BCE(shared + private) + 0.5 BCE(shared) + 0.01 L2(private)
+  - `tra.cross_scroll_rank_lambda` (`holdout_cross_rank`): logistic loss on 4096 sampled pairs of
+    (ink cell, negative cell from another physical domain)
+  - synthetic checks: /data/extra/tmp/c36_cross_scroll_unit.py
+- `holdout_label_shift` control (`data.label_shift_frac`: training labels rolled off the ink,
+  held-out labels intact): measures how much train fit is memorised papyrus; last in the queue
+- `holdout_surface_relief` (`model.surface_relief_input`): 7 boundary-geometry maps computed online
+  from the surface window and literal surface, added at the early-2D enc1 through a zero-initialised
+  1x1 conv
+- the prepared-dataset cache key now includes edge_soft_*, label_shift_frac and vis_scroll_ids;
+  before this a cached dataset could silently drop the soft-edge setting
+
+### Weight decay (user result)
+L1, L2 and AdamW decoupled decay up to 1e-3 have all been tried and do nothing. Do not propose them.
+
+### Quality normalisation (`holdout_quality_norm`)
+No scanner metadata is read. `campaign_archs_35.quality_transfer()` measures, from the volumes
+themselves, the radial power spectrum of 64 fully-masked 192 px crops (middle 8 slices, z-scored with
+the norm cache) per scroll. The reference is the geometric mean over the natively-scanned 9.36 um /
+113 keV training scrolls (pherc0139, 0814, 0500p2). Each fine scroll (2.4 um / 3.24 um sources resampled
+to the 9.36 um grid) gets gain sqrt(reference / own) in 24 radial bins, smoothed, clipped to <= 1 and
+made non-increasing, cached in `quality_transfer.json`. The dataloader multiplies every train/valid
+crop of those scrolls by that fixed radial filter in Fourier space after intensity normalisation. The
+cache is re-measured automatically when a source zarr is newer than it (the 88 keV fragment
+re-renders made the first cache stale).

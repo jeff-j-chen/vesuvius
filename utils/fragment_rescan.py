@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -105,18 +106,20 @@ class RemoteZarr:
         path = self._path(key)
         if os.path.exists(path):
             return
+        part = f"{path}.{threading.get_ident()}.part"  # parallel tiles may request the same chunk
         code = "000"
         for _ in range(5):
-            result = subprocess.run(["curl", "-s", "--connect-timeout", "20", "--max-time", "300", "-o", path + ".part",
+            result = subprocess.run(["curl", "-s", "--connect-timeout", "20", "--max-time", "300", "-o", part,
                                      "-w", "%{http_code}", f"{self.url}/{key[0]}/{key[1]}/{key[2]}"], capture_output=True)
             code = result.stdout.decode()[-3:]
             if code == "200":
-                os.replace(path + ".part", path)
+                os.replace(part, path)
                 return
             if code == "404":
-                if os.path.exists(path + ".part"):
-                    os.remove(path + ".part")
-                open(path, "wb").close()
+                if os.path.exists(part):
+                    os.remove(part)
+                if not os.path.exists(path):
+                    open(path, "wb").close()
                 return
             time.sleep(2)
         raise RuntimeError(f"{self.url} chunk {key}: http {code}")
@@ -150,6 +153,8 @@ class RemoteZarr:
         return out
 
     def _evict(self):
+        if self.cap is None:
+            return
         files = [f for f in os.listdir(self.dir) if not f.endswith(".part")]
         if len(files) <= self.cap + len(self.pinned):
             return
@@ -158,6 +163,21 @@ class RemoteZarr:
         for key in keys[:max(len(files) - len(self.pinned) - self.cap, 0)]:
             os.remove(self._path(key))
             self.used.pop(key, None)
+
+    def prefetch(self, keys, workers=32):
+        with ThreadPoolExecutor(workers) as pool:
+            list(pool.map(self._fetch, keys))
+
+    def evict_except(self, keep):
+        """drop cached chunks outside `keep` (pinned tif-filled chunks always stay)."""
+        keep = set(keep) | set(self.pinned)
+        for f in os.listdir(self.dir):
+            if f.endswith(".part"):
+                continue
+            key = tuple(int(v) for v in f.split("_"))
+            if key not in keep:
+                os.remove(os.path.join(self.dir, f))
+                self.used.pop(key, None)
 
     def missing(self, keys):
         """keys whose published chunk is absent (404), whether or not a tif-filled copy is cached."""
@@ -258,10 +278,24 @@ def layer_points_zyx(xyz, normal, transform=None, sign=1.0, depth_shift=0.0):
     return pts[..., ::-1]
 
 
-def needed_keys(xyz, valid, normal, transform=None, shape=None, margin=4, step=4):
+def field_at(field, grid_step, r0, r1, c0, c1):
+    """bilinear (r1-r0, c1-c0, 3) xyz residual from a coarse field sampled at output pixels (i*step, j*step)."""
+    import cv2
+
+    rows = (np.arange(r0, r1, dtype=np.float32) / grid_step)
+    cols = (np.arange(c0, c1, dtype=np.float32) / grid_step)
+    gx, gy = np.meshgrid(cols, rows)
+    return np.stack([cv2.remap(np.ascontiguousarray(field[..., i]), gx, gy, cv2.INTER_LINEAR,
+                               borderMode=cv2.BORDER_REPLICATE) for i in range(3)], -1)
+
+
+def needed_keys(xyz, valid, normal, transform=None, shape=None, margin=4, step=4, offset=None):
     """chunk keys touched by the 28-layer sample points of all valid pixels (subsampled)."""
     sub = valid[::step, ::step]
-    pts = layer_points_zyx(xyz[::step, ::step], normal[::step, ::step], transform=transform)[:, sub].reshape(-1, 3)
+    pts = layer_points_zyx(xyz[::step, ::step], normal[::step, ::step], transform=transform)
+    if offset is not None:
+        pts = pts + offset[::step, ::step, ::-1][None]
+    pts = pts[:, sub].reshape(-1, 3)
     keys = set()
     for dz in (-margin, margin):
         for dy in (-margin, margin):
@@ -273,22 +307,60 @@ def needed_keys(xyz, valid, normal, transform=None, shape=None, margin=4, step=4
     return sorted(keys)
 
 
+def extend_grid(xyz, normal, valid, margin):
+    """continue the surface up to `margin` px beyond the valid PPM pixels: nearest valid pixel plus its local
+    tangent (d xyz / d row, col) times the offset; normals copied. returns xyz, normal, extended-valid."""
+    from scipy.ndimage import distance_transform_edt
+
+    def fill(values, have):
+        _, (ri, ci) = distance_transform_edt(~have, return_indices=True)
+        return values[ri, ci], ri, ci
+
+    jr = np.zeros_like(xyz)
+    jc = np.zeros_like(xyz)
+    jr[1:-1] = (xyz[2:] - xyz[:-2]) / 2
+    jc[:, 1:-1] = (xyz[:, 2:] - xyz[:, :-2]) / 2
+    ok_r = np.zeros_like(valid)
+    ok_c = np.zeros_like(valid)
+    ok_r[1:-1] = valid[2:] & valid[:-2]
+    ok_c[:, 1:-1] = valid[:, 2:] & valid[:, :-2]
+    jr, _, _ = fill(jr, ok_r)
+    jc, _, _ = fill(jc, ok_c)
+    dist = distance_transform_edt(~valid)
+    ext = (~valid) & (dist <= margin)
+    _, ri, ci = fill(xyz, valid)
+    rows, cols = np.mgrid[0:valid.shape[0], 0:valid.shape[1]]
+    dr = (rows - ri)[..., None].astype(np.float32)
+    dc = (cols - ci)[..., None].astype(np.float32)
+    out_xyz = xyz.copy()
+    out_nrm = normal.copy()
+    out_xyz[ext] = (xyz[ri, ci] + jr[ri, ci] * dr + jc[ri, ci] * dc)[ext]
+    out_nrm[ext] = normal[ri, ci][ext]
+    return out_xyz, out_nrm, valid | ext
+
+
 def render(out_zarr, ppm_url, volume_url, affine, cache_dir, footprint=None, empty_layers=(),
-           tif_url=None, tif_digits=4, chunks=(8, 64, 64), cache_chunks=300):
+           tif_url=None, tif_digits=4, chunks=(8, 64, 64), offset_field=None, field_step=64,
+           margin=48, render_threads=8, fetch_threads=32):
     """render the fragment into a new uint16 (28, H, W) zarr at out_zarr; returns the bool footprint
-    (valid PPM & optional footprint & inside the scan & nonzero at every rendered layer)."""
+    (valid PPM & optional footprint & inside the scan & nonzero at every rendered layer).
+    offset_field: optional coarse (gh, gw, 3) xyz residual in target voxels added after the affine.
+    margin: px of extrapolated surface rendered beyond the mesh (context only, never in the footprint)."""
     import zarr
 
-    xyz, nrm, ok = read_ppm_grid(ppm_url, os.path.join(cache_dir, "ppm_grid.npz"))
-    ok = ok.copy()
-    H, W = ok.shape
-    if footprint is not None:
-        if footprint.shape != (H, W):
-            raise RuntimeError(f"footprint {footprint.shape} != ppm frame {(H, W)}")
-        ok &= footprint
+    xyz, nrm, mesh = read_ppm_grid(ppm_url, os.path.join(cache_dir, "ppm_grid.npz"))
+    H, W = mesh.shape
+    if footprint is None:
+        footprint = np.ones((H, W), bool)
+    if footprint.shape != (H, W):
+        raise RuntimeError(f"footprint {footprint.shape} != ppm frame {(H, W)}")
+    xyz, nrm, ok = extend_grid(xyz, nrm, mesh, margin) if margin else (xyz, nrm, mesh.copy())
+    keep = mesh & footprint
     aff = np.asarray(affine, float)
-    vol = RemoteZarr(volume_url, os.path.join(cache_dir, "chunks"), cap=cache_chunks)
-    keys = needed_keys(xyz, ok, nrm, transform=aff, shape=vol.shape)
+    # eviction is band-based (see below), not LRU
+    vol = RemoteZarr(volume_url, os.path.join(cache_dir, "chunks"), cap=None)
+    offset = None if offset_field is None else field_at(offset_field, field_step, 0, H, 0, W)
+    keys = needed_keys(xyz, ok, nrm, transform=aff, shape=vol.shape, offset=offset)
     missing = vol.missing(keys)
     print(f"  [rescan] {len(keys)} chunks under the surface, {len(missing)} missing from the published zarr", flush=True)
     if missing:
@@ -306,6 +378,8 @@ def render(out_zarr, ppm_url, volume_url, affine, cache_dir, footprint=None, emp
         if not sub.any():
             return
         pts = layer_points_zyx(xyz[r0:r1, c0:c1], nrm[r0:r1, c0:c1], transform=aff)
+        if offset_field is not None:
+            pts = pts + field_at(offset_field, field_step, r0, r1, c0, c1)[None, ..., ::-1]
         valid_pts = pts[:, sub].reshape(-1, 3)
         lo, hi = np.floor(valid_pts.min(0)), np.ceil(valid_pts.max(0))
         if np.prod(hi - lo + 8) > max_box and (r1 - r0) > 8:
@@ -322,12 +396,32 @@ def render(out_zarr, ppm_url, volume_url, affine, cache_dir, footprint=None, emp
         vals[:, ~inside] = 0
         vals[list(empty_layers)] = 0
         out[:, r0:r1, c0:c1] = np.clip(np.rint(vals), 0, 65535).astype(np.uint16)
-        mask[r0:r1, c0:c1] = inside
+        mask[r0:r1, c0:c1] = inside & keep[r0:r1, c0:c1]
 
     tiles = [(r, c) for r in range(0, H, tile) for c in range(0, W, tile)]
+    bands = list(range(0, H, tile))
+
+    def band_keys(r0):
+        r1 = min(r0 + tile, H)
+        if not ok[r0:r1].any():
+            return []
+        return needed_keys(xyz[r0:r1], ok[r0:r1], nrm[r0:r1], transform=aff, shape=vol.shape, margin=6,
+                           offset=None if offset is None else offset[r0:r1])
+
     t0 = time.time()
-    for i, (r, c) in enumerate(tiles):
-        tile_render(r, min(r + tile, H), c, min(c + tile, W))
-        if i % 50 == 0 or i == len(tiles) - 1:
-            print(f"  [rescan] tile {i + 1}/{len(tiles)} ({time.time() - t0:.0f}s)", flush=True)
+    done = 0
+    with ThreadPoolExecutor(1) as fetcher, ThreadPoolExecutor(render_threads) as renderer:
+        next_keys = band_keys(bands[0])
+        pending = fetcher.submit(vol.prefetch, next_keys, fetch_threads)
+        for b, r in enumerate(bands):
+            pending.result()
+            next_keys = band_keys(bands[b + 1]) if b + 1 < len(bands) else []
+            pending = fetcher.submit(vol.prefetch, next_keys, fetch_threads)
+            row = [(r, min(r + tile, H), c, min(c + tile, W)) for c in range(0, W, tile)]
+            list(renderer.map(lambda args: tile_render(*args), row))
+            done += len(row)
+            pending.result()
+            vol.evict_except(set(next_keys))
+            if b % 4 == 0 or b == len(bands) - 1:
+                print(f"  [rescan] tile {done}/{len(tiles)} ({time.time() - t0:.0f}s)", flush=True)
     return mask

@@ -1,3 +1,4 @@
+import functools
 import json
 import math
 import os
@@ -386,6 +387,59 @@ def _physical_patch_group_losses(
     return group_ids, group_losses
 
 
+def fishr_head_penalty(
+    objective: torch.Tensor,
+    voxel_logits: torch.Tensor,
+    head_input: torch.Tensor,
+    mask: torch.Tensor,
+    domain_ids: torch.Tensor,
+) -> torch.Tensor | None:
+    """Fishr on the 1x1 output head: per-sample head gradients (weight and bias) are exact from
+    dL/dlogit and the head input, so no per-sample backward is needed. The penalty is the spread
+    of per-domain gradient variances around their mean, normalised by the mean's magnitude."""
+    batch = voxel_logits.shape[0]
+    # scaling by the batch size keeps fp16 per-sample gradients away from underflow
+    delta = torch.autograd.grad(objective * batch, voxel_logits, create_graph=True)[0].float()
+    delta = delta.reshape(batch, 1, *head_input.shape[-2:])
+    features = head_input.float()
+    gradients = torch.cat(((delta * features).sum(dim=(2, 3)), delta.sum(dim=(2, 3))), dim=1)
+    supervised = mask.reshape(batch, -1).sum(dim=1) > 0
+    variances = []
+    for domain in torch.unique(domain_ids[supervised]):
+        rows = gradients[supervised & (domain_ids == domain)]
+        if rows.shape[0] >= 2:
+            variances.append(rows.var(dim=0, unbiased=False))
+    if len(variances) < 2:
+        return None
+    stacked = torch.stack(variances)
+    mean = stacked.mean(dim=0)
+    return (stacked - mean).square().sum(dim=1).mean() / mean.square().sum().clamp(min=1e-12)
+
+
+def cross_scroll_rank_loss(
+    outputs: torch.Tensor,
+    labels: torch.Tensor,
+    mask: torch.Tensor,
+    domain_ids: torch.Tensor,
+    n_pairs: int,
+) -> torch.Tensor | None:
+    """logistic loss for ink cells scored above negative cells from a different physical domain."""
+    scores = outputs.float().reshape(-1)
+    cell_domains = domain_ids.view(-1, 1).expand_as(labels).reshape(-1)
+    supervised = mask.reshape(-1) > 0
+    flat_labels = labels.reshape(-1)
+    positives = torch.nonzero(supervised & (flat_labels > 0.5)).view(-1)
+    negatives = torch.nonzero(supervised & (flat_labels <= 0.5)).view(-1)
+    if positives.numel() == 0 or negatives.numel() == 0:
+        return None
+    left = positives[torch.randint(positives.numel(), (n_pairs,), device=scores.device)]
+    right = negatives[torch.randint(negatives.numel(), (n_pairs,), device=scores.device)]
+    cross = cell_domains[left] != cell_domains[right]
+    if not cross.any():
+        return None
+    return F.softplus(scores[right[cross]] - scores[left[cross]]).mean()
+
+
 def _connected_domain_clusters(
     domain_ids: list[int],
     similarities: dict[tuple[int, int], float],
@@ -579,6 +633,7 @@ class Trainer:
         self._pcgrad_gram_cosines: dict[tuple[int, int], float] = {}
         self._pcgrad_gram_log_norms: dict[int, float] = {}
         self._pcgrad_gram_step = 0
+        self._defer_optimizer_step = False
         self._character_learned: dict[int, bool] = {}
         self._character_forgets: dict[int, int] = {}
         forgetting_path = str(getattr(config.tra, "character_forgetting_path", "") or "")
@@ -617,6 +672,10 @@ class Trainer:
             "mid_depth_entropy": 0.0,
             "mid_depth_entropy_penalty": 0.0,
             "topk_positive_kept_frac": 0.0,
+            "fishr_penalty": 0.0,
+            "cross_scroll_rank_loss": 0.0,
+            "private_head_loss": 0.0,
+            "and_mask_kept_frac": 0.0,
         }
         self._closed = False
 
@@ -1058,6 +1117,99 @@ class Trainer:
                 count = parameter.numel()
                 parameter.grad.add_(correction[offset:offset + count].view_as(parameter))
                 offset += count
+
+    def _and_mask_partition(self, domain_ids: torch.Tensor) -> tuple[torch.Tensor, list[tuple[int, int]]]:
+        """sample order grouping random disjoint sets of physical domains, and each group's slice."""
+        domains = torch.unique(domain_ids.view(-1).cpu())
+        domains = domains[torch.randperm(domains.numel())]
+        n_groups = max(1, min(int(getattr(self.c.tra, "and_mask_groups", 4)), domains.numel()))
+        order, bounds = [], []
+        flat = domain_ids.view(-1).cpu()
+        for group in range(n_groups):
+            members = torch.nonzero(torch.isin(flat, domains[group::n_groups])).view(-1)
+            bounds.append((len(order), len(order) + members.numel()))
+            order.extend(members.tolist())
+        return torch.tensor(order, dtype=torch.long), bounds
+
+    def _and_mask_train_batch(self, bounds: list[tuple[int, int]], images, labels, mask, **kwargs):
+        """AND-mask over domain-group sub-batches (Parascandolo et al. 2021).
+
+        each group is a full forward/backward of its own samples, so the cost stays close to one
+        ordinary step; the update keeps only coordinates whose gradient sign at least
+        and_mask_threshold of the groups share, weighted by each group's supervised cells.
+        """
+        if float(getattr(self.c.tra, "sam_rho", 0.0)) > 0 or any(
+            bool(getattr(self.c.tra, name, False)) for name in ("pcgrad", "pcgrad_lite", "pcgrad_gram", "mldg")
+        ):
+            raise ValueError("and_mask cannot be combined with SAM, PCGrad or MLDG")
+        epoch = int(kwargs.get("epoch", 0))
+        sliced = ("domain_ids", "patch_ids", "character_ids", "target_offsets", "surface_depth",
+                  "surface_confidence", "depth_shift", "context_pair", "context_pair_active",
+                  "depth_pair", "depth_pair_surface", "depth_pair_confidence", "depth_pair_active")
+        parameters = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
+        group_gradients, weights, outputs, domains = [], [], [], []
+        dg_totals = {key: 0.0 for key in self._last_dg_losses}
+        patch_dro_total = 0.0
+        self._defer_optimizer_step = True
+        try:
+            for start, end in bounds:
+                group_kwargs = {
+                    key: (value[start:end] if key in sliced and value is not None else value)
+                    for key, value in kwargs.items()
+                }
+                result = self._train_batch(images[start:end], labels[start:end], mask[start:end], **group_kwargs)
+                cells = float(len(result[0])) if np.ndim(result[0]) else 0.0
+                if cells == 0:
+                    continue
+                group_gradients.append([
+                    None if parameter.grad is None else parameter.grad.detach().clone()
+                    for parameter in parameters
+                ])
+                weights.append(cells)
+                outputs.append(result)
+                domains.append(self._last_metric_domains)
+                for key, value in self._last_dg_losses.items():
+                    dg_totals[key] += cells * value
+                patch_dro_total += cells * self._last_physical_patch_groupdro_loss
+        finally:
+            self._defer_optimizer_step = False
+        if not outputs:
+            return np.empty([]), np.empty([]), np.empty([]), *([0.0] * 11)
+        total = sum(weights)
+        threshold = float(getattr(self.c.tra, "and_mask_threshold", 0.5))
+        kept = counted = 0.0
+        self.optimizer.zero_grad(set_to_none=True)
+        with torch.no_grad():
+            for index, parameter in enumerate(parameters):
+                grads = [gradients[index] for gradients in group_gradients if gradients[index] is not None]
+                if not grads:
+                    continue
+                stacked = torch.stack(grads)
+                agreement = torch.sign(stacked).sum(dim=0).abs() / len(group_gradients)
+                keep = agreement >= threshold
+                present = [w for w, gradients in zip(weights, group_gradients) if gradients[index] is not None]
+                combined = sum(w * g for w, g in zip(present, grads)) / total
+                parameter.grad = torch.where(keep, combined, torch.zeros_like(combined))
+                kept += float(keep.sum())
+                counted += keep.numel()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        self._update_model_ema(epoch)
+        self._last_dg_losses.update({key: value / total for key, value in dg_totals.items()})
+        self._last_dg_losses["and_mask_kept_frac"] = kept / max(counted, 1.0)
+        self._last_physical_patch_groupdro_loss = patch_dro_total / total
+        self._last_metric_domains = np.concatenate(domains)
+        scalars = [
+            sum(w * float(result[3 + k]) for w, result in zip(weights, outputs)) / total
+            for k in range(11)
+        ]
+        return (
+            np.concatenate([result[0] for result in outputs]),
+            np.concatenate([result[1] for result in outputs]),
+            np.concatenate([result[2] for result in outputs]),
+            *scalars,
+        )
 
     def _refresh_pcgrad_geometry(
         self,
@@ -1693,6 +1845,7 @@ class Trainer:
                 bool(getattr(self.c.tra, "spill_reduction", False)),
                 bool(getattr(self.c.tra, "spill_entropy", False)),
                 bool(getattr(self.c.tra, "spill_prob", False)),
+                bool(getattr(self.c.model, "private_domain_heads", False)),
             ])
             if bool(getattr(self.c.tra, "dann_grl_anneal", False)):
                 n_ep = float(getattr(self.c.tra, "n_epochs", 12))
@@ -2009,6 +2162,44 @@ class Trainer:
                     primary_loss = robust_loss
                     cvar_loss_value = robust_loss
             loss = primary_loss
+            private_score = getattr(self.model, "last_private_score", None)
+            if private_score is not None and private_score.shape == loss_mask.shape:
+                private_loss = (self.criterion(private_score, targets) * loss_mask).sum() / denom
+                private_delta = self.model.last_private_delta
+                loss = (
+                    float(getattr(self.c.tra, "private_head_shared_weight", 0.5)) * loss
+                    + private_loss
+                    + float(getattr(self.c.tra, "private_head_l2", 0.01)) * private_delta.float().square().mean()
+                )
+                self._last_dg_losses["private_head_loss"] = float(private_loss.detach())
+            fishr_lambda = float(getattr(self.c.tra, "fishr_lambda", 0.0))
+            if fishr_lambda > 0 and epoch >= int(getattr(self.c.tra, "fishr_warmup_epochs", 1)):
+                if domain_ids is None or getattr(self.model, "last_head_input", None) is None:
+                    raise RuntimeError("Fishr requires domain IDs and the early-2D output head")
+                fishr_penalty = fishr_head_penalty(
+                    primary_loss,
+                    self.model.last_head_output,
+                    self.model.last_head_input,
+                    loss_mask,
+                    domain_ids,
+                )
+                if fishr_penalty is not None:
+                    loss = loss + fishr_lambda * fishr_penalty
+                    self._last_dg_losses["fishr_penalty"] = float(fishr_penalty.detach())
+            rank_lambda = float(getattr(self.c.tra, "cross_scroll_rank_lambda", 0.0))
+            if rank_lambda > 0:
+                if domain_ids is None:
+                    raise RuntimeError("cross-scroll ranking requires domain IDs")
+                rank_loss = cross_scroll_rank_loss(
+                    outputs,
+                    labels,
+                    loss_mask,
+                    domain_ids,
+                    int(getattr(self.c.tra, "cross_scroll_rank_pairs", 4096)),
+                )
+                if rank_loss is not None:
+                    loss = loss + rank_lambda * rank_loss
+                    self._last_dg_losses["cross_scroll_rank_loss"] = float(rank_loss.detach())
             dice_weight = float(getattr(self.c.tra, "dice_weight", 0.0))
             if dice_weight > 0 and outputs.shape == loss_mask.shape:
                 probabilities = torch.sigmoid(outputs.float())
@@ -2629,10 +2820,11 @@ class Trainer:
                 with torch.no_grad():
                     for parameter, perturbation in perturbations:
                         parameter.sub_(perturbation)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-        self._update_model_ema(epoch)
+        if not self._defer_optimizer_step:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            self._update_model_ema(epoch)
         diagnostic_values = torch.stack((
             loss.detach().float(),
             raw_loss_value.detach().float(),
@@ -2860,6 +3052,28 @@ class Trainer:
                 batch_surface_confidence[injected_indices] = 0
             if batch_depth_pair_active is not None and injected_indices:
                 batch_depth_pair_active[injected_indices] = 0
+            train_step = self._train_batch
+            if bool(getattr(self.c.tra, "and_mask", False)):
+                if domain_ids is None:
+                    raise RuntimeError("and_mask requires physical-domain IDs")
+                order, bounds = self._and_mask_partition(domain_ids)
+                (
+                    images, batch_labels, mask, domain_ids, batch_patch_ids, batch_character_ids,
+                    batch_target_offsets, batch_surface_depth, batch_surface_confidence,
+                    batch_depth_shift, batch_context_pair, batch_context_pair_active,
+                    batch_depth_pair, batch_depth_pair_surface, batch_depth_pair_confidence,
+                    batch_depth_pair_active,
+                ) = (
+                    None if tensor is None else tensor[order.to(tensor.device)]
+                    for tensor in (
+                        images, batch_labels, mask, domain_ids, batch_patch_ids, batch_character_ids,
+                        batch_target_offsets, batch_surface_depth, batch_surface_confidence,
+                        batch_depth_shift, batch_context_pair, batch_context_pair_active,
+                        batch_depth_pair, batch_depth_pair_surface, batch_depth_pair_confidence,
+                        batch_depth_pair_active,
+                    )
+                )
+                train_step = functools.partial(self._and_mask_train_batch, bounds)
             (
                 batch_scores,
                 batch_labels_out,
@@ -2875,7 +3089,7 @@ class Trainer:
                 batch_surface_mae,
                 batch_supcon_loss,
                 batch_weighted_supcon_loss,
-            ) = self._train_batch(
+            ) = train_step(
                 images,
                 batch_labels,
                 mask,
@@ -3338,6 +3552,10 @@ class Trainer:
             ("mid_depth_entropy", "DepthLatching/MidDepthEntropy"),
             ("mid_depth_entropy_penalty", "DepthLatching/EntropyPenalty"),
             ("topk_positive_kept_frac", "Aux/TopKPositiveKept"),
+            ("fishr_penalty", "CrossScroll/FishrPenalty"),
+            ("cross_scroll_rank_loss", "CrossScroll/RankLoss"),
+            ("private_head_loss", "CrossScroll/PrivateHeadLoss"),
+            ("and_mask_kept_frac", "CrossScroll/ANDMaskKeptFraction"),
         ):
             if key in train_metrics:
                 self.vis.writer.add_scalar(tag, train_metrics[key], epoch)

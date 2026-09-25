@@ -17,6 +17,9 @@ usage:
   python assemble_training_segments.py                       # all fragments
   python assemble_training_segments.py --from w039           # resume from a fragment
   python assemble_training_segments.py --skip-norm           # skip the (slow) norm precompute
+  python assemble_training_segments.py --no-r2 --only paris1_fr34   # re-render an 88 keV fragment from dl.ash2txt
+
+the 88 keV fragments (RESCAN_88KEV) are fetched from the R2 bucket by default: R2_PUBLIC_URL must be set.
 """
 from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys, time
@@ -200,7 +203,9 @@ FRAG_OPTS = {
 # default source for these dl.ash2txt fragments: the 88 keV scan, sampled through the low-energy exposed-surface
 # PPM (<dlash_surface_base>/result.ppm) into the same frame as the old surface-tiff assembly. affine = fitted
 # low-energy voxel xyz -> 88 keV voxel xyz (3x4; no published registration). tif_url rebuilds chunks that are
-# missing from the published 88 keV zarr. an existing zarr without the rescan marker is superseded.
+# missing from the published 88 keV zarr. offset_field (optional) = smooth residual after the affine, float32
+# (gh, gw, 3) xyz in 88 keV voxels at output pixels (i*64, j*64). an existing zarr without the rescan marker is
+# superseded.
 _DLASH = "https://dl.ash2txt.org/fragments"
 RESCAN_88KEV = {
     "paris1_fr34": {
@@ -226,6 +231,8 @@ RESCAN_88KEV = {
         "affine": [[1.00019, 0.00239, -0.00006, 15.74067],
                    [-0.00062, 0.99700, 0.00027, -211.31795],
                    [-0.00006, 0.00182, 0.99952, 4.91978]],
+        # Fr143 deformed between scans (affine residuals up to ~10 voxels)
+        "offset_field": "rescan_fields/20230301213755.npy",
     },
     "paris2_fr47": {
         "volume_url": f"{_DLASH}/Frag1/PHercParis2Fr47.volpkg/volumes_zarr/88keV_3.24um_.zarr/0",
@@ -237,6 +244,10 @@ RESCAN_88KEV = {
     },
 }
 RESCAN_MARKER = "rescan_88kev"
+# pre-rendered RESCAN_88KEV archives (<zid>.tar.gz = <zid>.zarr/ + <zid>.png mask, listed in SHA256SUMS) under
+# $R2_PUBLIC_URL/<R2_PREFIX>/; the render from dl.ash2txt (~1 h, ~20 MB/s server) runs only with --no-r2
+R2_PREFIX = "fragments_88kev"
+R2_BASE = None
 
 TARGET_VOXEL_UM = 9.362
 TARGET_DEPTH = 28
@@ -811,14 +822,17 @@ def _assemble_dlash_rescan(name, zid, opts, chunk_depth, chunk_y, chunk_x, force
     empty_layers = [int(k) for k in np.flatnonzero((positions < 0) | (positions > source_depth - 1))]
     print(f"  [1/3] 88 keV rescan -> {(TARGET_DEPTH,) + frame}; empty layers {empty_layers}", flush=True)
     shutil.rmtree(partial_path, ignore_errors=True)
+    field = np.load(rescan["offset_field"]) if rescan.get("offset_field") else None
     mask = fragment_rescan.render(
         partial_path, f"{base}/result.ppm", rescan["volume_url"], rescan["affine"], cache_dir,
         footprint=footprint, empty_layers=empty_layers, tif_url=rescan.get("tif_url"),
         tif_digits=int(rescan.get("tif_digits", 4)), chunks=(min(chunk_depth, TARGET_DEPTH), chunk_y, chunk_x),
+        offset_field=field,
     )
     with open(os.path.join(partial_path, ".zattrs"), "w", encoding="utf-8") as handle:
         json.dump({RESCAN_MARKER: {"volume_url": rescan["volume_url"], "affine": rescan["affine"],
-                                   "ppm": f"{base}/result.ppm"}}, handle, indent=1)
+                                   "offset_field": rescan.get("offset_field"), "ppm": f"{base}/result.ppm"}},
+                  handle, indent=1)
     if os.path.isdir(output_path):
         print(f"  [1/3] superseding the existing zarr {output_path}")
         shutil.rmtree(output_path)
@@ -828,6 +842,57 @@ def _assemble_dlash_rescan(name, zid, opts, chunk_depth, chunk_y, chunk_x, force
     print(f"  [1/3] wrote {output_path} + {mask_path} (footprint {mask.mean():.3f}, "
           f"{mask.sum() / max(footprint.sum(), 1):.4f} of the source mask)")
     shutil.rmtree(os.path.join(cache_dir, "chunks"), ignore_errors=True)
+
+
+def _fetch_rescan_r2(name, zid, force=False):
+    """download + verify + unpack the pre-rendered 88 keV archive; supersedes an older zarr + mask."""
+    import hashlib
+    import tarfile
+
+    output_path = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if os.path.isdir(output_path) and _is_rescan_zarr(output_path) and os.path.exists(mask_path) and not force:
+        print("  [1/3] 88 keV rescan volume exists -> skip")
+        return
+    work = os.path.join(TMP, f"r2_{zid}")
+    shutil.rmtree(work, ignore_errors=True)
+    os.makedirs(work)
+    sums = subprocess.run(["curl", "-sS", "--fail", "--retry", "5", f"{R2_BASE}/SHA256SUMS"],
+                          capture_output=True, text=True)
+    if sums.returncode != 0:
+        raise RuntimeError(f"{name}: cannot read {R2_BASE}/SHA256SUMS: {sums.stderr.strip()}")
+    expected = {line.split()[1]: line.split()[0] for line in sums.stdout.splitlines() if line.strip()}
+    archive = f"{zid}.tar.gz"
+    if archive not in expected:
+        raise RuntimeError(f"{name}: {archive} is not in the R2 bucket; upload it or use --no-r2")
+    local = os.path.join(work, archive)
+    t0 = time.time()
+    run(["curl", "-sS", "--fail", "--retry", "5", "--retry-delay", "2", "-o", local, f"{R2_BASE}/{archive}"])
+    digest = hashlib.sha256()
+    with open(local, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 24), b""):
+            digest.update(block)
+    if digest.hexdigest() != expected[archive]:
+        raise RuntimeError(f"{name}: {archive} checksum mismatch")
+    with tarfile.open(local) as tar:
+        members = tar.getmembers()
+        allowed = (f"{zid}.zarr", f"{zid}.png")
+        if any(m.name.split("/")[0] not in allowed or m.issym() or m.islnk() or ".." in m.name.split("/")
+               for m in members):
+            raise RuntimeError(f"{name}: unexpected entries in {archive}")
+        tar.extractall(work, members=members)
+    os.remove(local)
+    unpacked = os.path.join(work, f"{zid}.zarr")
+    if not _is_rescan_zarr(unpacked):
+        raise RuntimeError(f"{name}: {archive} does not hold an 88 keV rescan zarr")
+    if os.path.isdir(output_path):
+        print(f"  [1/3] superseding the existing zarr {output_path}")
+        shutil.rmtree(output_path)
+    shutil.move(unpacked, output_path)
+    os.makedirs("masks", exist_ok=True)
+    shutil.move(os.path.join(work, f"{zid}.png"), mask_path)
+    shutil.rmtree(work, ignore_errors=True)
+    print(f"  [1/3] R2 archive -> {output_path} + {mask_path} ({time.time() - t0:.0f}s)")
 
 
 def _build_dlash_mask(name, zid, opts):
@@ -1126,7 +1191,10 @@ def _assemble_w013_volume(zid, chunk_depth, chunk_y, chunk_x, force=False):
 def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
     opts = FRAG_OPTS.get(name, {})
     if name in RESCAN_88KEV:
-        _assemble_dlash_rescan(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=force)
+        if R2_BASE:
+            _fetch_rescan_r2(name, zid, force=force)
+        else:
+            _assemble_dlash_rescan(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=force)
         return
     if opts.get("dlash_surface_base"):
         _assemble_dlash_surface(
@@ -1287,6 +1355,9 @@ def main():
                     help=f"zarr Y chunk size (default {DEFAULT_CHUNK_Y})")
     ap.add_argument("--chunk-x", type=int, default=DEFAULT_CHUNK_X,
                     help=f"zarr X chunk size (default {DEFAULT_CHUNK_X})")
+    ap.add_argument("--no-r2", action="store_true",
+                    help="render the 88 keV fragments from dl.ash2txt (~1 h) instead of downloading the "
+                         "pre-rendered archives from $R2_PUBLIC_URL")
     args = ap.parse_args()
 
     segs = SEGMENTS
@@ -1297,6 +1368,14 @@ def main():
     elif args.from_name:
         names = [s[0] for s in SEGMENTS]
         segs = SEGMENTS[names.index(args.from_name):]
+
+    global R2_BASE
+    if not args.no_r2 and any(name in RESCAN_88KEV for name, _seg, _zid in segs):
+        public = os.getenv("R2_PUBLIC_URL", "").strip()
+        if not public:
+            ap.error("R2_PUBLIC_URL must be set (e.g. https://pub-<hash>.r2.dev) to fetch the 88 keV fragment "
+                     "archives; pass --no-r2 to render them from dl.ash2txt instead")
+        R2_BASE = f"{public.rstrip('/')}/{R2_PREFIX}"
 
     cf = max(1, int(args.concurrent_fragments))
     print(f"[assemble] {len(segs)} fragment(s): {[s[0] for s in segs]}  "

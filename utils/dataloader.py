@@ -78,6 +78,10 @@ def needs_domain_ids(config: Config) -> bool:
         bool(getattr(config.tra, "pcgrad_lite", False)),
         bool(getattr(config.tra, "pcgrad_gram", False)),
         bool(getattr(config.tra, "domain_gradient_mode", "")),
+        bool(getattr(config.tra, "and_mask", False)),
+        float(getattr(config.tra, "fishr_lambda", 0.0)) > 0,
+        float(getattr(config.tra, "cross_scroll_rank_lambda", 0.0)) > 0,
+        bool(getattr(config.model, "private_domain_heads", False)),
         bool(getattr(config.model, "mixstyle", False)),
         bool(getattr(config.model, "sagnet", False)),
     ])
@@ -2652,6 +2656,7 @@ class DataManager:
             "character_balanced_sampling",
             "character_min_pixels", "max_samples_per_epoch",
             "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
+            "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "vis_scroll_ids",
         )
         dataloader_fields = (
             "context_replace_prob", "context_replace_min_mask_frac",
@@ -2949,7 +2954,20 @@ class DataManager:
             self.shared_range = y_range
         self.split_axis = axis
 
+        labels = self._shift_labels(labels)
+        for name in ("explicit_negative_mask", "explicit_positive_mask"):
+            if getattr(self, name) is not None:
+                setattr(self, name, self._shift_labels(getattr(self, name)))
+
         return vol, mask, labels, train_x_range, valid_x_range, y_range
+
+    def _shift_labels(self, labels):
+        """label-shift control: move training labels off the ink while keeping their statistics."""
+        frac = float(getattr(self.c.data, "label_shift_frac", 0.0))
+        evaluated = {int(s) for s in (getattr(self.c.data, "vis_scroll_ids", None) or [])}
+        if frac == 0.0 or int(self.scroll_id) in evaluated:
+            return labels
+        return np.roll(labels, int(round(labels.shape[0] * frac)), axis=0)
 
     def _get_or_compute_norm(self):
         """retrieve cached norm stats; if absent, compute with the fast chunk-aligned method."""
@@ -3250,6 +3268,7 @@ class DataManager:
         reference = np.zeros(shape, dtype=np.uint8)
         h, w = min(shape[0], drawn.shape[0]), min(shape[1], drawn.shape[1])
         reference[:h, :w] = drawn[:h, :w] > 127
+        reference = self._shift_labels(reference)
         if self.explicit_positive_mask is not None:
             reference |= (np.asarray(self.explicit_positive_mask)[:shape[0], :shape[1]] > 0).astype(np.uint8)
         return reference
