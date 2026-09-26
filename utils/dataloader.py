@@ -79,6 +79,7 @@ def needs_domain_ids(config: Config) -> bool:
         bool(getattr(config.tra, "pcgrad_gram", False)),
         bool(getattr(config.tra, "domain_gradient_mode", "")),
         bool(getattr(config.tra, "and_mask", False)),
+        bool(getattr(config.tra, "fish", False)),
         float(getattr(config.tra, "fishr_lambda", 0.0)) > 0,
         float(getattr(config.tra, "cross_scroll_rank_lambda", 0.0)) > 0,
         bool(getattr(config.model, "private_domain_heads", False)),

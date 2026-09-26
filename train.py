@@ -676,6 +676,7 @@ class Trainer:
             "cross_scroll_rank_loss": 0.0,
             "private_head_loss": 0.0,
             "and_mask_kept_frac": 0.0,
+            "spectral_decoupling_penalty": 0.0,
         }
         self._closed = False
 
@@ -1118,6 +1119,36 @@ class Trainer:
                 parameter.grad.add_(correction[offset:offset + count].view_as(parameter))
                 offset += count
 
+    def _rsc_outputs(self, outputs, labels, mask, target_offsets, probability):
+        """Representation Self-Challenging (Huang et al. 2020) at the output-head input: on a random
+        share of samples, mute the channels (or, half the time, the positions) whose gradient most
+        raises the correct-class cell logits, and score those samples from what remains."""
+        head_input = getattr(self.model, "last_head_input", None)
+        if head_input is None or outputs.shape != mask.shape:
+            raise RuntimeError("RSC requires the early-2D multitile output head")
+        batch = outputs.shape[0]
+        selected = torch.rand(batch, device=outputs.device) < probability
+        if not selected.any():
+            return outputs
+        sign = torch.where(labels > 0.5, 1.0, -1.0) * (mask > 0).float()
+        gradient = torch.autograd.grad(
+            (outputs.float() * sign).sum(), head_input, retain_graph=True,
+        )[0].detach().float()
+        drop = float(getattr(self.c.tra, "rsc_drop_frac", 0.33))
+        if random.random() < 0.5:
+            importance = gradient.mean(dim=(2, 3))
+            keep_shape = (batch, -1, 1, 1)
+        else:
+            importance = gradient.mean(dim=1).flatten(1)
+            keep_shape = (batch, 1, *head_input.shape[-2:])
+        count = importance.shape[1]
+        rank = max(1, min(count, int(round(count * (1.0 - drop)))))
+        threshold = importance.kthvalue(rank, dim=1, keepdim=True).values
+        keep = (importance <= threshold) | ~selected.unsqueeze(1)
+        muted = head_input * keep.view(keep_shape).to(head_input.dtype)
+        challenged = self.model.score_from_head_input(muted, target_offsets)
+        return torch.where(selected.unsqueeze(1), challenged, outputs)
+
     def _and_mask_partition(self, domain_ids: torch.Tensor) -> tuple[torch.Tensor, list[tuple[int, int]]]:
         """sample order grouping random disjoint sets of physical domains, and each group's slice."""
         domains = torch.unique(domain_ids.view(-1).cpu())
@@ -1131,40 +1162,34 @@ class Trainer:
             order.extend(members.tolist())
         return torch.tensor(order, dtype=torch.long), bounds
 
-    def _and_mask_train_batch(self, bounds: list[tuple[int, int]], images, labels, mask, **kwargs):
-        """AND-mask over domain-group sub-batches (Parascandolo et al. 2021).
+    _GROUP_SLICED = (
+        "domain_ids", "patch_ids", "character_ids", "target_offsets", "surface_depth",
+        "surface_confidence", "depth_shift", "context_pair", "context_pair_active",
+        "depth_pair", "depth_pair_surface", "depth_pair_confidence", "depth_pair_active",
+    )
 
-        each group is a full forward/backward of its own samples, so the cost stays close to one
-        ordinary step; the update keeps only coordinates whose gradient sign at least
-        and_mask_threshold of the groups share, weighted by each group's supervised cells.
-        """
+    def _run_domain_groups(self, bounds, images, labels, mask, kwargs, after_group):
+        """run _train_batch on each domain-group slice with the optimizer step deferred.
+        after_group() is called after every group that produced a gradient."""
         if float(getattr(self.c.tra, "sam_rho", 0.0)) > 0 or any(
             bool(getattr(self.c.tra, name, False)) for name in ("pcgrad", "pcgrad_lite", "pcgrad_gram", "mldg")
         ):
-            raise ValueError("and_mask cannot be combined with SAM, PCGrad or MLDG")
-        epoch = int(kwargs.get("epoch", 0))
-        sliced = ("domain_ids", "patch_ids", "character_ids", "target_offsets", "surface_depth",
-                  "surface_confidence", "depth_shift", "context_pair", "context_pair_active",
-                  "depth_pair", "depth_pair_surface", "depth_pair_confidence", "depth_pair_active")
-        parameters = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
-        group_gradients, weights, outputs, domains = [], [], [], []
+            raise ValueError("domain-group steps (AND-mask, Fish) cannot be combined with SAM, PCGrad or MLDG")
+        weights, outputs, domains = [], [], []
         dg_totals = {key: 0.0 for key in self._last_dg_losses}
         patch_dro_total = 0.0
         self._defer_optimizer_step = True
         try:
             for start, end in bounds:
                 group_kwargs = {
-                    key: (value[start:end] if key in sliced and value is not None else value)
+                    key: (value[start:end] if key in self._GROUP_SLICED and value is not None else value)
                     for key, value in kwargs.items()
                 }
                 result = self._train_batch(images[start:end], labels[start:end], mask[start:end], **group_kwargs)
                 cells = float(len(result[0])) if np.ndim(result[0]) else 0.0
                 if cells == 0:
                     continue
-                group_gradients.append([
-                    None if parameter.grad is None else parameter.grad.detach().clone()
-                    for parameter in parameters
-                ])
+                after_group()
                 weights.append(cells)
                 outputs.append(result)
                 domains.append(self._last_metric_domains)
@@ -1173,31 +1198,12 @@ class Trainer:
                 patch_dro_total += cells * self._last_physical_patch_groupdro_loss
         finally:
             self._defer_optimizer_step = False
-        if not outputs:
-            return np.empty([]), np.empty([]), np.empty([]), *([0.0] * 11)
+        return weights, outputs, domains, dg_totals, patch_dro_total
+
+    def _merge_group_results(self, weights, outputs, domains, dg_totals, patch_dro_total, extra_dg):
         total = sum(weights)
-        threshold = float(getattr(self.c.tra, "and_mask_threshold", 0.5))
-        kept = counted = 0.0
-        self.optimizer.zero_grad(set_to_none=True)
-        with torch.no_grad():
-            for index, parameter in enumerate(parameters):
-                grads = [gradients[index] for gradients in group_gradients if gradients[index] is not None]
-                if not grads:
-                    continue
-                stacked = torch.stack(grads)
-                agreement = torch.sign(stacked).sum(dim=0).abs() / len(group_gradients)
-                keep = agreement >= threshold
-                present = [w for w, gradients in zip(weights, group_gradients) if gradients[index] is not None]
-                combined = sum(w * g for w, g in zip(present, grads)) / total
-                parameter.grad = torch.where(keep, combined, torch.zeros_like(combined))
-                kept += float(keep.sum())
-                counted += keep.numel()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-        self._update_model_ema(epoch)
         self._last_dg_losses.update({key: value / total for key, value in dg_totals.items()})
-        self._last_dg_losses["and_mask_kept_frac"] = kept / max(counted, 1.0)
+        self._last_dg_losses.update(extra_dg)
         self._last_physical_patch_groupdro_loss = patch_dro_total / total
         self._last_metric_domains = np.concatenate(domains)
         scalars = [
@@ -1210,6 +1216,105 @@ class Trainer:
             np.concatenate([result[2] for result in outputs]),
             *scalars,
         )
+
+    @staticmethod
+    def _sign_agreement_mask(updates: list[torch.Tensor], threshold: float) -> torch.Tensor:
+        return torch.sign(torch.stack(updates)).sum(dim=0).abs() / len(updates) >= threshold
+
+    def _and_mask_train_batch(self, bounds: list[tuple[int, int]], images, labels, mask, **kwargs):
+        """AND-mask over domain-group sub-batches (Parascandolo et al. 2021).
+
+        each group is a full forward/backward of its own samples, so the cost stays close to one
+        ordinary step; the update keeps only coordinates whose gradient sign at least
+        and_mask_threshold of the groups share, weighted by each group's supervised cells.
+        """
+        epoch = int(kwargs.get("epoch", 0))
+        parameters = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
+        group_gradients = []
+
+        def capture():
+            group_gradients.append([
+                None if parameter.grad is None else parameter.grad.detach().clone()
+                for parameter in parameters
+            ])
+
+        weights, outputs, domains, dg_totals, patch_dro_total = self._run_domain_groups(
+            bounds, images, labels, mask, kwargs, capture,
+        )
+        if not outputs:
+            return np.empty([]), np.empty([]), np.empty([]), *([0.0] * 11)
+        total = sum(weights)
+        threshold = float(getattr(self.c.tra, "and_mask_threshold", 0.5))
+        kept = counted = 0.0
+        self.optimizer.zero_grad(set_to_none=True)
+        with torch.no_grad():
+            for index, parameter in enumerate(parameters):
+                if all(gradients[index] is None for gradients in group_gradients):
+                    continue
+                grads = [
+                    torch.zeros_like(parameter) if gradients[index] is None else gradients[index]
+                    for gradients in group_gradients
+                ]
+                keep = self._sign_agreement_mask(grads, threshold)
+                combined = sum(w * g for w, g in zip(weights, grads)) / total
+                parameter.grad = torch.where(keep, combined, torch.zeros_like(combined))
+                kept += float(keep.sum())
+                counted += keep.numel()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        self._update_model_ema(epoch)
+        return self._merge_group_results(
+            weights, outputs, domains, dg_totals, patch_dro_total,
+            {"and_mask_kept_frac": kept / max(counted, 1.0)},
+        )
+
+    def _fish_train_batch(self, bounds: list[tuple[int, int]], images, labels, mask, **kwargs):
+        """Fish (Shi et al. 2022): one inner optimizer step per domain group in sequence, then the
+        weights move fish_meta_step of the way from their start to the end of the inner loop.
+
+        sequential steps over different scrolls reward directions whose gradients agree; with
+        and_mask also on, only coordinates whose inner-step signs agree across groups move.
+        """
+        epoch = int(kwargs.get("epoch", 0))
+        parameters = [parameter for parameter in self.model.parameters() if parameter.requires_grad]
+        start = [parameter.detach().clone() for parameter in parameters]
+        use_and_mask = bool(getattr(self.c.tra, "and_mask", False))
+        steps = []
+
+        def inner_step():
+            before = [parameter.detach().clone() for parameter in parameters] if use_and_mask else None
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            if use_and_mask:
+                steps.append([parameter.detach() - old for parameter, old in zip(parameters, before)])
+
+        weights, outputs, domains, dg_totals, patch_dro_total = self._run_domain_groups(
+            bounds, images, labels, mask, kwargs, inner_step,
+        )
+        if not outputs:
+            with torch.no_grad():
+                for parameter, old in zip(parameters, start):
+                    parameter.copy_(old)
+            return np.empty([]), np.empty([]), np.empty([]), *([0.0] * 11)
+        meta = float(getattr(self.c.tra, "fish_meta_step", 0.5))
+        threshold = float(getattr(self.c.tra, "and_mask_threshold", 0.5))
+        kept = counted = 0.0
+        with torch.no_grad():
+            for index, (parameter, old) in enumerate(zip(parameters, start)):
+                displacement = parameter.detach() - old
+                inner = [step[index] for step in steps] if use_and_mask and len(steps) > 1 else None
+                if inner is not None and bool(torch.stack(inner).any()):
+                    keep = self._sign_agreement_mask(inner, threshold)
+                    displacement = torch.where(keep, displacement, torch.zeros_like(displacement))
+                    kept += float(keep.sum())
+                    counted += keep.numel()
+                parameter.copy_(old + meta * displacement)
+        self.optimizer.zero_grad(set_to_none=True)
+        self._update_model_ema(epoch)
+        extra = {"and_mask_kept_frac": kept / max(counted, 1.0)} if use_and_mask else {}
+        return self._merge_group_results(weights, outputs, domains, dg_totals, patch_dro_total, extra)
 
     def _refresh_pcgrad_geometry(
         self,
@@ -1887,6 +1992,10 @@ class Trainer:
             if outputs.dim() == 4:
                 outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
 
+            rsc_prob = float(getattr(self.c.tra, "rsc_prob", 0.0))
+            if rsc_prob > 0:
+                outputs = self._rsc_outputs(outputs, labels, mask, target_offsets, rsc_prob)
+
             targets = labels.float()
             explicit_negative = labels < 0
             targets = torch.where(explicit_negative, torch.zeros_like(targets), targets)
@@ -2187,6 +2296,11 @@ class Trainer:
                     loss = loss + fishr_lambda * fishr_penalty
                     self._last_dg_losses["fishr_penalty"] = float(fishr_penalty.detach())
             rank_lambda = float(getattr(self.c.tra, "cross_scroll_rank_lambda", 0.0))
+            spectral_lambda = float(getattr(self.c.tra, "spectral_decoupling_lambda", 0.0))
+            if spectral_lambda > 0 and outputs.shape == loss_mask.shape:
+                spectral_penalty = (outputs.float().square() * loss_mask).sum() / denom
+                loss = loss + spectral_lambda * spectral_penalty
+                self._last_dg_losses["spectral_decoupling_penalty"] = float(spectral_penalty.detach())
             if rank_lambda > 0:
                 if domain_ids is None:
                     raise RuntimeError("cross-scroll ranking requires domain IDs")
@@ -3053,9 +3167,10 @@ class Trainer:
             if batch_depth_pair_active is not None and injected_indices:
                 batch_depth_pair_active[injected_indices] = 0
             train_step = self._train_batch
-            if bool(getattr(self.c.tra, "and_mask", False)):
+            use_fish = bool(getattr(self.c.tra, "fish", False))
+            if use_fish or bool(getattr(self.c.tra, "and_mask", False)):
                 if domain_ids is None:
-                    raise RuntimeError("and_mask requires physical-domain IDs")
+                    raise RuntimeError("AND-mask and Fish require physical-domain IDs")
                 order, bounds = self._and_mask_partition(domain_ids)
                 (
                     images, batch_labels, mask, domain_ids, batch_patch_ids, batch_character_ids,
@@ -3073,7 +3188,9 @@ class Trainer:
                         batch_depth_pair_active,
                     )
                 )
-                train_step = functools.partial(self._and_mask_train_batch, bounds)
+                train_step = functools.partial(
+                    self._fish_train_batch if use_fish else self._and_mask_train_batch, bounds,
+                )
             (
                 batch_scores,
                 batch_labels_out,
@@ -3556,6 +3673,7 @@ class Trainer:
             ("cross_scroll_rank_loss", "CrossScroll/RankLoss"),
             ("private_head_loss", "CrossScroll/PrivateHeadLoss"),
             ("and_mask_kept_frac", "CrossScroll/ANDMaskKeptFraction"),
+            ("spectral_decoupling_penalty", "CrossScroll/SpectralDecoupling"),
         ):
             if key in train_metrics:
                 self.vis.writer.add_scalar(tag, train_metrics[key], epoch)

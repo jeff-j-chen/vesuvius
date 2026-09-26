@@ -2,7 +2,7 @@
 
 Same protocol as campaign 35: pherc0841 and pherc0009b are held out and rendered at full
 extent after the final epoch, and every arm uses the early-gated patch-GroupDRO recipe. The
-default field is back to 192 px at 2x downsampling (batch 96 / lr 1.5e-4).
+default field is 192 px at native resolution (batch 32 / lr 1e-4, eval batch 64 / 2 GB chunks).
 Cutout, context replacement, context jitter and depth jitter stay off unless an arm turns one
 on; flips/rotations and the default dropout (0.05 / 0.05 / head 0.1) stay on.
 
@@ -27,6 +27,13 @@ on; flips/rotations and the default dropout (0.05 / 0.05 / head 0.1) stay on.
 | holdout_private_heads       | per-domain residual output heads in training only; loss on       |
 |                             | shared+private plus 0.5 x shared alone; inference uses shared    |
 | holdout_cross_rank          | ink cells must outrank negative cells from other scrolls (0.2)   |
+| holdout_spectral_decoupling | L2 0.01 on supervised cell logits (anti gradient starvation)     |
+| holdout_rsc                 | RSC: on 1/3 of samples mute the top 1/3 head-input channels or   |
+|                             | positions that most support the correct logit                    |
+| holdout_fish                | Fish: one optimizer step per domain group in sequence, then move |
+|                             | halfway from the start to the end of that inner loop             |
+| holdout_fish_and_mask       | Fish whose meta step keeps only coordinates where >=3 of 4 inner |
+|                             | steps agree in sign                                              |
 | holdout_quality_norm        | fine scans filtered to the 9.36 um scanners' measured spectrum   |
 | holdout_fiber               | (arch) structure-tensor fibre inputs, own MAE                    |
 | holdout_randconv            | aggressive random convolution texture re-rendering               |
@@ -73,8 +80,11 @@ from utils.config import startup_output
 
 LOG_DIR = "./runs_archs36"
 MODEL_DIR = "models/archs36"
-# default field: 192 px at 2x downsampling, campaign-34 batch 96 / lr 1.5e-4
-DS2_192 = {"pretrain_key": "early_gated_ds2", "context_size": 192, "context_downsample": 2}
+# default field: 192 px at native resolution (native196 was the best full-extent 0814 reader);
+# full scale needs batch 32 / lr 1e-4 and a smaller inference batch
+NATIVE192 = {"pretrain_key": "early_gated_native192", "context_size": 192, "context_downsample": 1,
+             "batch_size": 32, "lr": 1e-4}
+FULL_SCALE_EVAL = {"data.eval_infer_bs": 64, "data.eval_chunk_gb": 2.0}
 NATIVE96 = {"pretrain_key": "early_gated_native96", "context_size": 96, "context_downsample": 1}
 RESEARCHER_KEY = "early_gated_researcher"
 RESEARCHER_MODEL = {
@@ -84,22 +94,25 @@ RESEARCHER_MODEL = {
 }
 # every arm's MAE pretrains on the current corpus (the campaign-33/34 checkpoints predate 20230205142449)
 campaign34.PRETRAIN_SPECS.update({
-    "early_gated_ds2": campaign31._spec(*campaign34.EARLY_GATED_ARGS, required=campaign34.EARLY_GATED_REQUIRED),
+    "early_gated_native192": campaign31._spec(
+        *campaign34.EARLY_GATED_ARGS, required=campaign34.EARLY_GATED_REQUIRED, ctx=192, ds=1,
+    ),
     RESEARCHER_KEY: campaign31._spec(
         *campaign34.EARLY_GATED_ARGS,
         "--residual-2d-unet", "--two-d-extra-channels", "320", "320", "--two-d-strided-down",
         required=campaign34.EARLY_GATED_REQUIRED + ("early2d_down.", "early2d_extra_encoders."),
+        ctx=192, ds=1,
     ),
     "early_gated_native96": campaign31._spec(
         *campaign34.EARLY_GATED_ARGS, required=campaign34.EARLY_GATED_REQUIRED, ctx=96, ds=1,
     ),
     "early_gated_narrow": campaign31._spec(
         *campaign34.EARLY_GATED_ARGS, "--early-2d-channels-mult", "0.5",
-        required=campaign34.EARLY_GATED_REQUIRED,
+        required=campaign34.EARLY_GATED_REQUIRED, ctx=192, ds=1,
     ),
     "early_gated_fiber": campaign31._spec(
         *campaign34.EARLY_GATED_ARGS, "--fiber-coordinate-branch",
-        required=campaign34.EARLY_GATED_REQUIRED + ("fiber_coordinate_input.",),
+        required=campaign34.EARLY_GATED_REQUIRED + ("fiber_coordinate_input.",), ctx=192, ds=1,
     ),
 })
 # the default 192 px surround (64 px per side) takes the campaign-33 replacement geometry;
@@ -127,7 +140,10 @@ ALL_SCROLL_EVAL = {
 
 
 def _test(tid: str, augmentations: dict, arch: dict | None = None, **extra) -> dict:
-    test = campaign35._test(tid, augmentations, arch=arch or DS2_192, **extra)
+    arch = arch or NATIVE192
+    if arch["context_size"] == 192 and arch["context_downsample"] == 1:
+        augmentations = {**FULL_SCALE_EVAL, **augmentations}
+    test = campaign35._test(tid, augmentations, arch=arch, **extra)
     test["tag"] = f"36_{tid}"
     return test
 
@@ -142,7 +158,7 @@ TESTS = [
     _test("holdout_native96", {}, arch=NATIVE96),
     _test("holdout_native96_ring_c2g2s4_edge_soft", {**RING_C2G2S4, **EDGE_SOFT}, arch=NATIVE96),
     _test("holdout_narrow2d", {"model.early_2d_channels_mult": 0.5},
-          arch={**DS2_192, "pretrain_key": "early_gated_narrow"}),
+          arch={**NATIVE192, "pretrain_key": "early_gated_narrow"}),
     _test("holdout_dropout", MORE_DROPOUT),
     _test("holdout_sampler_weights", {"data.train_scroll_weights": [
         SAMPLER_WEIGHTS.get(domain, 1) for domain in campaign33.CAMPAIGN33_SCROLL_DICT
@@ -154,9 +170,16 @@ TESTS = [
         "tra.private_head_shared_weight": 0.5, "tra.private_head_l2": 0.01,
     }),
     _test("holdout_cross_rank", {"tra.cross_scroll_rank_lambda": 0.2, "tra.cross_scroll_rank_pairs": 4096}),
+    _test("holdout_spectral_decoupling", {"tra.spectral_decoupling_lambda": 0.01}),
+    _test("holdout_rsc", {"tra.rsc_prob": 0.33, "tra.rsc_drop_frac": 0.33}),
+    _test("holdout_fish", {"tra.fish": True, "tra.fish_meta_step": 0.5, "tra.and_mask_groups": 4}),
+    _test("holdout_fish_and_mask", {
+        "tra.fish": True, "tra.fish_meta_step": 0.5, "tra.and_mask": True,
+        "tra.and_mask_groups": 4, "tra.and_mask_threshold": 0.5,
+    }),
     _test("holdout_quality_norm", {}, quality_normalize=True),
     _test("holdout_fiber", {"model.fiber_coordinate_branch": True},
-          arch={**DS2_192, "pretrain_key": "early_gated_fiber"}),
+          arch={**NATIVE192, "pretrain_key": "early_gated_fiber"}),
     _test("holdout_randconv", campaign35.RANDCONV),
     _test("holdout_ema_0995", {"tra.model_ema": True, "tra.model_ema_decay": 0.995}),
     # the MAE runs without surface maps, so only this zero-initialised 1x1 conv starts untrained
@@ -167,7 +190,7 @@ TESTS = [
         **PROTECTED_WARP, "dl.protected_elastic_prob": 0.8, "dl.protected_elastic_alpha": 32.0,
         "dl.protected_elastic_sigma": 10.0,
     }),
-    _test("holdout_researcher_head", RESEARCHER_MODEL, arch={**DS2_192, "pretrain_key": RESEARCHER_KEY}),
+    _test("holdout_researcher_head", RESEARCHER_MODEL, arch={**NATIVE192, "pretrain_key": RESEARCHER_KEY}),
     # training labels moved off the ink; if its train fit matches the baseline, that fit is memorised papyrus
     _test("holdout_label_shift", {"data.label_shift_frac": 0.5}),
 ]

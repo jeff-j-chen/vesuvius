@@ -1836,7 +1836,9 @@ its own validation region above what the other scrolls provide. Baseline recall 
   there is no long-range context/layout shortcut.
 
 ### Campaign 36 additions
-- default field back to 192 px / ds2 (batch 96, lr 1.5e-4). Every architecture gets a fresh MAE on the
+- default field is 192 px at native resolution (batch 32, lr 1e-4, eval_infer_bs 64, eval_chunk_gb 2.0),
+  chosen because native196 read pherc0814 best at full extent (recall@1%FPR 0.458 vs 0.186 for 192/ds2).
+  Native-96 keeps batch 96 / lr 1.5e-4. Every architecture gets a fresh MAE on the
   current corpus (the campaign-33/34 checkpoints predate fragment 20230205142449): default, native96,
   narrow 2D (0.5x), fiber, researcher head. Surface relief reuses the default MAE because the MAE runs
   without surface maps; only its zero-initialised 1x1 conv starts untrained
@@ -1861,6 +1863,16 @@ its own validation region above what the other scrolls provide. Baseline recall 
     output heads, training only; loss = BCE(shared + private) + 0.5 BCE(shared) + 0.01 L2(private)
   - `tra.cross_scroll_rank_lambda` (`holdout_cross_rank`): logistic loss on 4096 sampled pairs of
     (ink cell, negative cell from another physical domain)
+  - `tra.spectral_decoupling_lambda` (`holdout_spectral_decoupling`, 0.01): L2 on supervised cell
+    logits (Pezeshki et al. 2021) so one easy cue cannot starve the others
+  - `tra.rsc_prob` / `rsc_drop_frac` (`holdout_rsc`, 1/3 and 1/3): RSC (Huang et al. 2020) at the
+    early-2D head input; on selected samples the channels (or positions, 50/50) whose gradient most
+    supports the correct cell logits are zeroed and those samples are rescored
+    (`Trainer._rsc_outputs`, `model.score_from_head_input`)
+  - `tra.fish` (`holdout_fish`): Fish (Shi et al. 2022) on the AND-mask domain groups; one real
+    optimizer step per group in sequence (4 Adam steps per batch), then the weights move
+    `fish_meta_step` (0.5) of the way from the start to the end of that inner loop.
+    `holdout_fish_and_mask` also keeps only coordinates where >= 3 of 4 inner steps agree in sign
   - synthetic checks: /data/extra/tmp/c36_cross_scroll_unit.py
 - `holdout_label_shift` control (`data.label_shift_frac`: training labels rolled off the ink,
   held-out labels intact): measures how much train fit is memorised papyrus; last in the queue
@@ -1869,6 +1881,14 @@ its own validation region above what the other scrolls provide. Baseline recall 
   1x1 conv
 - the prepared-dataset cache key now includes edge_soft_*, label_shift_frac and vis_scroll_ids;
   before this a cached dataset could silently drop the soft-edge setting
+
+### pherc0814 full-extent readability (2026-09-25, /data/extra/tmp/c36_0814_compare.py)
+Per-scroll PR-AUC is ring-local (ink vs nearby ring negatives) and rose from c31 to c35, but full-extent
+recall@1%FPR (all 16 px cells, dilated labels) says otherwise: c34 native196 0.458, c31 192/ds2 (old
+inklabels, ring 2/2/4) 0.316, c35 default_augs 0.234, c35 baseline 128 0.212, c34 native128 (all
+scrolls) 0.196, c34 ds2 0.186, c35 ds2_b32 0.079. Holding out 0841/0009b does not matter (c34 vs c35
+native128 equal). The 128 px models paint a grey background everywhere (low contrast), which the
+ring-local metric never sees. Treat full-extent recall@1%FPR as the readability metric for seen scrolls too.
 
 ### Weight decay (user result)
 L1, L2 and AdamW decoupled decay up to 1e-3 have all been tried and do nothing. Do not propose them.

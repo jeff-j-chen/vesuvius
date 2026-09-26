@@ -2319,6 +2319,16 @@ class NnUnet3dLcndz(nn.Module):
         count = cells.new_tensor(float(cells.shape[-1]))
         return (torch.logsumexp(r * cells, dim=-1) - torch.log(count)) / r
 
+    def score_from_head_input(
+        self,
+        head_input: torch.Tensor,
+        target_offsets: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """multitile cell logits from (possibly edited) early-2D head input; used by RSC."""
+        if not self._early_2d_unet or self.text_region_head is not None or self.dual_scale_local is not None:
+            raise ValueError("score_from_head_input supports the plain early-2D multitile head only")
+        return self._multitile_aggregate_2d(self.early2d_head(head_input), target_offsets)
+
     def _multitile_mean_2d(
         self,
         feature_map: torch.Tensor,

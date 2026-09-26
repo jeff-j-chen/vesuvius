@@ -463,6 +463,16 @@ class TrainingConfig:
     and_mask: bool = False
     and_mask_groups: int = 4
     and_mask_threshold: float = 0.5
+    # Fish: sequential inner optimizer steps over the same domain groups, then a partial meta step
+    # back toward the start; with and_mask the meta step keeps only sign-agreeing coordinates
+    fish: bool = False
+    fish_meta_step: float = 0.5
+    # spectral decoupling: L2 on supervised cell logits so one easy cue cannot starve the rest
+    spectral_decoupling_lambda: float = 0.0
+    # RSC: on this share of samples, mute the head-input channels (or positions) most responsible
+    # for the correct-class logit and train on the rest
+    rsc_prob: float = 0.0
+    rsc_drop_frac: float = 0.33
     # Fishr on the output head: match per-domain variances of per-sample head gradients
     fishr_lambda: float = 0.0
     fishr_warmup_epochs: int = 1
