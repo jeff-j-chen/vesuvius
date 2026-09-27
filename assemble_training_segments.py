@@ -194,8 +194,9 @@ FRAG_OPTS = {
     },
     "p841": {
         "cropped_surface_url": "https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0841/segments/20260221022814-auto_grown_20260220174252405/surface-volumes/9.366um-1.2m-113keV-volume-20250821151531.zarr/0",
-        "surface_expected_shape": (28, 21560, 12260),
-        "surface_crop": (14656, 21560, 0, 5248),
+        # re-cropped upstream 2026-09-22; equals old frame rows 3144:6904, cols 0:4900 (labels cropped to match)
+        "surface_expected_shape": (28, 3760, 4900),
+        "surface_crop": (0, 3760, 0, 4900),
         "force_norm": True,
     },
 }
@@ -248,6 +249,61 @@ RESCAN_MARKER = "rescan_88kev"
 # $R2_PUBLIC_URL/<R2_PREFIX>/; the render from dl.ash2txt (~1 h, ~20 MB/s server) runs only with --no-r2
 R2_PREFIX = "fragments_88kev"
 R2_BASE = None
+# (access_key, secret_key) when R2_PUBLIC_URL is the private S3 endpoint and requests must be signed
+R2_AUTH = None
+
+
+def _r2_signed_headers(url):
+    """AWS SigV4 headers for an unsigned-payload GET against the R2 S3 endpoint (region 'auto')."""
+    import datetime
+    import hashlib
+    import hmac
+    from urllib.parse import quote, urlsplit
+
+    parts = urlsplit(url)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    amz_date, day = now.strftime("%Y%m%dT%H%M%SZ"), now.strftime("%Y%m%d")
+    headers = {"host": parts.netloc, "x-amz-content-sha256": "UNSIGNED-PAYLOAD", "x-amz-date": amz_date}
+    signed = ";".join(sorted(headers))
+    canonical = "\n".join([
+        "GET", quote(parts.path, safe="/-_.~"), "",
+        "".join(f"{key}:{headers[key]}\n" for key in sorted(headers)), signed, "UNSIGNED-PAYLOAD",
+    ])
+    scope = f"{day}/auto/s3/aws4_request"
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+    key = f"AWS4{R2_AUTH[1]}".encode()
+    for part in (day, "auto", "s3", "aws4_request"):
+        key = hmac.new(key, part.encode(), hashlib.sha256).digest()
+    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    headers["Authorization"] = (f"AWS4-HMAC-SHA256 Credential={R2_AUTH[0]}/{scope}, "
+                                f"SignedHeaders={signed}, Signature={signature}")
+    return headers
+
+
+def _r2_fetch(url, output=None, tries=5):
+    """GET an R2 object (signed when R2_AUTH is set); returns text, or streams to output."""
+    import urllib.error
+    import urllib.request
+
+    error = None
+    for attempt in range(tries):
+        try:
+            headers = _r2_signed_headers(url) if R2_AUTH else {}
+            headers.pop("host", None)
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=120) as response:
+                if output is None:
+                    return response.read().decode("utf-8")
+                with open(output, "wb") as handle:
+                    shutil.copyfileobj(response, handle, length=1 << 22)
+                return None
+        except urllib.error.HTTPError as exc:
+            error = f"HTTP {exc.code}: {exc.read()[:300].decode('utf-8', 'replace')}"
+            if exc.code in (400, 401, 403, 404):
+                break
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            error = str(exc)
+        time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"R2 GET {url} failed: {error}")
 
 TARGET_VOXEL_UM = 9.362
 TARGET_DEPTH = 28
@@ -857,17 +913,17 @@ def _fetch_rescan_r2(name, zid, force=False):
     work = os.path.join(TMP, f"r2_{zid}")
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
-    sums = subprocess.run(["curl", "-sS", "--fail", "--retry", "5", f"{R2_BASE}/SHA256SUMS"],
-                          capture_output=True, text=True)
-    if sums.returncode != 0:
-        raise RuntimeError(f"{name}: cannot read {R2_BASE}/SHA256SUMS: {sums.stderr.strip()}")
-    expected = {line.split()[1]: line.split()[0] for line in sums.stdout.splitlines() if line.strip()}
+    try:
+        sums = _r2_fetch(f"{R2_BASE}/SHA256SUMS")
+    except RuntimeError as exc:
+        raise RuntimeError(f"{name}: cannot read SHA256SUMS: {exc}") from exc
+    expected = {line.split()[1]: line.split()[0] for line in sums.splitlines() if line.strip()}
     archive = f"{zid}.tar.gz"
     if archive not in expected:
         raise RuntimeError(f"{name}: {archive} is not in the R2 bucket; upload it or use --no-r2")
     local = os.path.join(work, archive)
     t0 = time.time()
-    run(["curl", "-sS", "--fail", "--retry", "5", "--retry-delay", "2", "-o", local, f"{R2_BASE}/{archive}"])
+    _r2_fetch(f"{R2_BASE}/{archive}", output=local)
     digest = hashlib.sha256()
     with open(local, "rb") as handle:
         for block in iter(lambda: handle.read(1 << 24), b""):
@@ -1369,13 +1425,21 @@ def main():
         names = [s[0] for s in SEGMENTS]
         segs = SEGMENTS[names.index(args.from_name):]
 
-    global R2_BASE
+    global R2_BASE, R2_AUTH
     if not args.no_r2 and any(name in RESCAN_88KEV for name, _seg, _zid in segs):
-        public = os.getenv("R2_PUBLIC_URL", "").strip()
+        public = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
         if not public:
             ap.error("R2_PUBLIC_URL must be set (e.g. https://pub-<hash>.r2.dev) to fetch the 88 keV fragment "
                      "archives; pass --no-r2 to render them from dl.ash2txt instead")
-        R2_BASE = f"{public.rstrip('/')}/{R2_PREFIX}"
+        if public.endswith(".r2.cloudflarestorage.com"):
+            # private S3 endpoint: path-style bucket, SigV4-signed with the R2 access key pair
+            access, secret = os.getenv("ACCESS_KEY", "").strip(), os.getenv("SECRET_KEY", "").strip()
+            if not access or not secret:
+                ap.error("R2_PUBLIC_URL is the private R2 endpoint; export ACCESS_KEY and SECRET_KEY "
+                         "(or use the bucket's public r2.dev URL)")
+            R2_AUTH = (access, secret)
+            public = f"{public}/{os.getenv('R2_BUCKET', 'ves').strip()}"
+        R2_BASE = f"{public}/{R2_PREFIX}"
 
     cf = max(1, int(args.concurrent_fragments))
     print(f"[assemble] {len(segs)} fragment(s): {[s[0] for s in segs]}  "

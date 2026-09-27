@@ -399,6 +399,7 @@ def main():
     ap.add_argument("--mednext-adapters", action="store_true")
     ap.add_argument("--mednext-kernel", type=int, default=5)
     ap.add_argument("--fiber-coordinate-branch", action="store_true")
+    ap.add_argument("--input-denoise-sigma", type=float, default=0.0)
     ap.add_argument("--depth", type=int, default=24)
     ap.add_argument("--d-start", type=int, default=4)
     ap.add_argument("--d-end", type=int, default=28)
@@ -486,6 +487,7 @@ def main():
     cfg.model.mednext_kernel = int(args.mednext_kernel)
     cfg.model.mednext_expansion = 2
     cfg.model.fiber_coordinate_branch = bool(args.fiber_coordinate_branch)
+    cfg.model.input_denoise_sigma = float(args.input_denoise_sigma)
     cfg.tra.supcon = False
     cfg.data.tile_size = 16
     cfg.data.depth = args.depth

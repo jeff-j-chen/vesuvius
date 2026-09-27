@@ -538,6 +538,8 @@ class ModelConfig:
     fiber_coordinate_branch: bool = False
     # papyrus-air boundary geometry (flaking / missing top layer) added at the early-2D enc1
     surface_relief_input: bool = False
+    # fixed in-plane gaussian on the (downsampled) input; 0.6 px cuts white-noise variance ~4x like 2x2 pooling
+    input_denoise_sigma: float = 0.0
     # per-physical-domain residual output heads used only in training; inference uses the shared head
     private_domain_heads: bool = False
     early_2d_unet: bool = False

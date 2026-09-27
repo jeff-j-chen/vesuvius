@@ -1,22 +1,23 @@
-"""campaign 36: memorisation, label geometry, sampling and context invariance on held-out scrolls
+"""campaign 36: memorisation, label geometry, sampling and cross-scroll objectives on held-out scrolls
 
-Same protocol as campaign 35: pherc0841 and pherc0009b are held out and rendered at full
-extent after the final epoch, and every arm uses the early-gated patch-GroupDRO recipe. The
-default field is 192 px at native resolution (batch 32 / lr 1e-4, eval batch 64 / 2 GB chunks).
-Cutout, context replacement, context jitter and depth jitter stay off unless an arm turns one
-on; flips/rotations and the default dropout (0.05 / 0.05 / head 0.1) stay on.
+Same protocol as campaign 35: every scroll except pherc0841 and pherc0009b is trained on, those two
+are rendered at full extent after the final epoch in every arm and kept in RAM for the run, and
+every arm uses the early-gated patch-GroupDRO recipe.
+
+Base for every arm unless the arm replaces that component: a 196 px field at native resolution,
+ring close 2 / gap 2 / shell 4, and soft-edge positives (cores train to exactly 1, negatives to
+exactly 0, positive cells grazing a stroke edge down to 0.6, no label smoothing). Every arm trains
+at batch 32 / lr 1e-4. Cutout, context replacement, context jitter and depth jitter stay off unless
+an arm turns one on; flips/rotations and dropout (0.05 / 0.05 / head 0.1) stay on.
 
 | arm                         | what it changes                                                  |
 |-----------------------------|------------------------------------------------------------------|
-| holdout_baseline_rep        | none; replicate for noise                                        |
-| holdout_baseline_rep_2      | none; renders every scroll (training and held out) at the end    |
-| holdout_ring_c2g2s4         | ring labels close 2 / gap 2 / shell 4 (campaign 33+ uses 0/0/4)  |
-| holdout_ring_c2g2s4_gce     | the same ring with GCE loss, q=0.7                               |
-| holdout_ring_c2g2s4_edge_soft | the same ring; positive cells grazing a stroke edge get soft   |
-|                             | targets (floor 0.6); cores train to 1 and negatives to 0 (no     |
-|                             | label smoothing, which every other arm has at 0.1 / 0.05)        |
-| holdout_native96            | (arch) 96 px field at native resolution, own MAE                 |
-| holdout_native96_ring_c2g2s4_edge_soft | native 96 with the c2g2s4 ring and soft edges         |
+| holdout_base_full_vis       | none; renders every scroll, streamed from zarr (no RAM preload)  |
+| holdout_dual_scale          | independent local expert on the 64 px centre only, mixed 0.5     |
+| holdout_ds2                 | (arch) 196 px field at 2x downsampling, own MAE                  |
+| holdout_denoise             | (arch) native 196 with a fixed 0.6 px in-plane gaussian on the   |
+|                             | input: ds2's ~4x noise cut without its coarser grid, own MAE     |
+| holdout_ring_c2g3s5         | ring close 2 / gap 3 / shell 5                                   |
 | holdout_narrow2d            | (arch) early 2D U-Net at half width, own MAE                     |
 | holdout_dropout             | dropout 0.2 / 0.2 / head 0.3 instead of 0.05 / 0.05 / 0.1        |
 | holdout_sampler_weights     | round robin 0139 x2, 0343p x4, 0500p2 x3, 0814 x5, others x1     |
@@ -50,7 +51,8 @@ Rotation and elastic warps leave the 64 px prediction centre plus an 8 px margin
 place and reach full strength 24 px further out, so multitile targets stay valid without
 warping labels; the centre still receives the exact 90-degree rotations and flips.
 Every architecture is MAE-pretrained on the current corpus before its first arm; arms that keep
-the default architecture share the default checkpoint.
+the base architecture share the base checkpoint. The dual-scale local expert and the surface-relief
+input are not part of any MAE and start from initialisation.
 
 Usage:
     python3 campaign_archs_36.py --dry-run
@@ -80,43 +82,45 @@ from utils.config import startup_output
 
 LOG_DIR = "./runs_archs36"
 MODEL_DIR = "models/archs36"
-# default field: 192 px at native resolution (native196 was the best full-extent 0814 reader);
-# full scale needs batch 32 / lr 1e-4 and a smaller inference batch
-NATIVE192 = {"pretrain_key": "early_gated_native192", "context_size": 192, "context_downsample": 1,
-             "batch_size": 32, "lr": 1e-4}
-FULL_SCALE_EVAL = {"data.eval_infer_bs": 64, "data.eval_chunk_gb": 2.0}
-NATIVE96 = {"pretrain_key": "early_gated_native96", "context_size": 96, "context_downsample": 1}
-RESEARCHER_KEY = "early_gated_researcher"
+# every arm trains at batch 32 / lr 1e-4
+TRAINING = {"batch_size": 32, "lr": 1e-4}
+NATIVE196 = {"pretrain_key": "early_gated_native196_c36", "context_size": 196, "context_downsample": 1, **TRAINING}
+DS2_196 = {"pretrain_key": "early_gated_ds2_196", "context_size": 196, "context_downsample": 2, **TRAINING}
+RESEARCHER_KEY = "early_gated_researcher_native196"
 RESEARCHER_MODEL = {
     "model.residual_2d_unet": True,
     "model.two_d_extra_channels": (320, 320),
     "model.two_d_strided_down": True,
 }
+DENOISE_SIGMA = 0.6
 # every arm's MAE pretrains on the current corpus (the campaign-33/34 checkpoints predate 20230205142449)
 campaign34.PRETRAIN_SPECS.update({
-    "early_gated_native192": campaign31._spec(
-        *campaign34.EARLY_GATED_ARGS, required=campaign34.EARLY_GATED_REQUIRED, ctx=192, ds=1,
+    "early_gated_native196_c36": campaign31._spec(
+        *campaign34.EARLY_GATED_ARGS, required=campaign34.EARLY_GATED_REQUIRED, ctx=196, ds=1,
+    ),
+    "early_gated_ds2_196": campaign31._spec(
+        *campaign34.EARLY_GATED_ARGS, required=campaign34.EARLY_GATED_REQUIRED, ctx=196, ds=2,
+    ),
+    "early_gated_native196_denoise": campaign31._spec(
+        *campaign34.EARLY_GATED_ARGS, "--input-denoise-sigma", str(DENOISE_SIGMA),
+        required=campaign34.EARLY_GATED_REQUIRED, ctx=196, ds=1,
     ),
     RESEARCHER_KEY: campaign31._spec(
         *campaign34.EARLY_GATED_ARGS,
         "--residual-2d-unet", "--two-d-extra-channels", "320", "320", "--two-d-strided-down",
         required=campaign34.EARLY_GATED_REQUIRED + ("early2d_down.", "early2d_extra_encoders."),
-        ctx=192, ds=1,
+        ctx=196, ds=1,
     ),
-    "early_gated_native96": campaign31._spec(
-        *campaign34.EARLY_GATED_ARGS, required=campaign34.EARLY_GATED_REQUIRED, ctx=96, ds=1,
-    ),
-    "early_gated_narrow": campaign31._spec(
+    "early_gated_narrow_native196": campaign31._spec(
         *campaign34.EARLY_GATED_ARGS, "--early-2d-channels-mult", "0.5",
-        required=campaign34.EARLY_GATED_REQUIRED, ctx=192, ds=1,
+        required=campaign34.EARLY_GATED_REQUIRED, ctx=196, ds=1,
     ),
-    "early_gated_fiber": campaign31._spec(
+    "early_gated_fiber_native196": campaign31._spec(
         *campaign34.EARLY_GATED_ARGS, "--fiber-coordinate-branch",
-        required=campaign34.EARLY_GATED_REQUIRED + ("fiber_coordinate_input.",), ctx=192, ds=1,
+        required=campaign34.EARLY_GATED_REQUIRED + ("fiber_coordinate_input.",), ctx=196, ds=1,
     ),
 })
-# the default 192 px surround (64 px per side) takes the campaign-33 replacement geometry;
-# the protected warps double their native-128 pixel geometry for the 2x surround
+# native 196 leaves a 66 px surround per side, the same raw-pixel geometry these were set for
 CONTEXT_REPLACE = {
     "dl.context_replace_prob": 0.5,
     "dl.context_replace_margin": 20, "dl.context_replace_feather": 40,
@@ -130,6 +134,7 @@ EDGE_SOFT = {
     "data.edge_soft_sigma": 4.0, "data.edge_soft_floor": 0.6,
     "tra.label_smooth_pos": 0.0, "tra.label_smooth_neg": 0.0,
 }
+BASE_LABELS = {**RING_C2G2S4, **EDGE_SOFT}
 ALL_SCROLL_EVAL = {
     "data.vis_scroll_ids": list(campaign33.CAMPAIGN33_SCROLL_IDS),
     "tra.eval_int_scrolls": len(campaign33.CAMPAIGN33_SCROLL_IDS),
@@ -139,26 +144,28 @@ ALL_SCROLL_EVAL = {
 }
 
 
-def _test(tid: str, augmentations: dict, arch: dict | None = None, **extra) -> dict:
-    arch = arch or NATIVE192
-    if arch["context_size"] == 192 and arch["context_downsample"] == 1:
-        augmentations = {**FULL_SCALE_EVAL, **augmentations}
-    test = campaign35._test(tid, augmentations, arch=arch, **extra)
+def _test(tid: str, changes: dict, arch: dict | None = None, **extra) -> dict:
+    """the campaign-36 base (native 196, ring c2g2s4, soft edges) plus this arm's changes."""
+    test = campaign35._test(tid, {**BASE_LABELS, **changes}, arch={**NATIVE196, **(arch or {})}, **extra)
     test["tag"] = f"36_{tid}"
     return test
 
 
 TESTS = [
-    _test("holdout_baseline_rep", {}),
-    # the only arm that renders every scroll, training and held out, after the final epoch
-    _test("holdout_baseline_rep_2", ALL_SCROLL_EVAL),
-    _test("holdout_ring_c2g2s4", RING_C2G2S4),
-    _test("holdout_ring_c2g2s4_gce", {**RING_C2G2S4, "tra.loss_type": "gce", "tra.gce_q": 0.7}),
-    _test("holdout_ring_c2g2s4_edge_soft", {**RING_C2G2S4, **EDGE_SOFT}),
-    _test("holdout_native96", {}, arch=NATIVE96),
-    _test("holdout_native96_ring_c2g2s4_edge_soft", {**RING_C2G2S4, **EDGE_SOFT}, arch=NATIVE96),
+    # the only arm that renders every scroll, training and held out, streamed from zarr
+    _test("holdout_base_full_vis", ALL_SCROLL_EVAL),
+    # independent local expert that only sees the 64 px prediction centre
+    _test("holdout_dual_scale", {
+        "model.dual_scale": True, "model.dual_scale_local_size": 64, "model.dual_scale_mix": 0.5,
+    }),
+    _test("holdout_ds2", {}, arch=DS2_196),
+    # ds2's 2x2 pooling cuts voxel noise ~4x and shrinks each LSE bag 4x; this keeps the native
+    # grid and receptive field but matches that noise reduction
+    _test("holdout_denoise", {"model.input_denoise_sigma": DENOISE_SIGMA},
+          arch={"pretrain_key": "early_gated_native196_denoise"}),
+    _test("holdout_ring_c2g3s5", {"data.ring_close_r": 2, "data.ring_gap_r": 3, "data.ring_shell_r": 5}),
     _test("holdout_narrow2d", {"model.early_2d_channels_mult": 0.5},
-          arch={**NATIVE192, "pretrain_key": "early_gated_narrow"}),
+          arch={"pretrain_key": "early_gated_narrow_native196"}),
     _test("holdout_dropout", MORE_DROPOUT),
     _test("holdout_sampler_weights", {"data.train_scroll_weights": [
         SAMPLER_WEIGHTS.get(domain, 1) for domain in campaign33.CAMPAIGN33_SCROLL_DICT
@@ -179,7 +186,7 @@ TESTS = [
     }),
     _test("holdout_quality_norm", {}, quality_normalize=True),
     _test("holdout_fiber", {"model.fiber_coordinate_branch": True},
-          arch={**NATIVE192, "pretrain_key": "early_gated_fiber"}),
+          arch={"pretrain_key": "early_gated_fiber_native196"}),
     _test("holdout_randconv", campaign35.RANDCONV),
     _test("holdout_ema_0995", {"tra.model_ema": True, "tra.model_ema_decay": 0.995}),
     # the MAE runs without surface maps, so only this zero-initialised 1x1 conv starts untrained
@@ -190,7 +197,7 @@ TESTS = [
         **PROTECTED_WARP, "dl.protected_elastic_prob": 0.8, "dl.protected_elastic_alpha": 32.0,
         "dl.protected_elastic_sigma": 10.0,
     }),
-    _test("holdout_researcher_head", RESEARCHER_MODEL, arch={**NATIVE192, "pretrain_key": RESEARCHER_KEY}),
+    _test("holdout_researcher_head", RESEARCHER_MODEL, arch={"pretrain_key": RESEARCHER_KEY}),
     # training labels moved off the ink; if its train fit matches the baseline, that fit is memorised papyrus
     _test("holdout_label_shift", {"data.label_shift_frac": 0.5}),
 ]

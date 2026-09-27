@@ -768,6 +768,14 @@ class NnUnet3dLcndz(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
         self._downsample = max(1, int(getattr(config.data, "context_downsample", 1)))
+        sigma = float(getattr(config.model, "input_denoise_sigma", 0.0))
+        if sigma > 0:
+            radius = max(1, int(math.ceil(3.0 * sigma)))
+            offsets = torch.arange(-radius, radius + 1, dtype=torch.float32)
+            kernel = torch.exp(-0.5 * (offsets / sigma) ** 2)
+            self.register_buffer("_denoise_kernel", kernel / kernel.sum(), persistent=False)
+        else:
+            self._denoise_kernel = None
         self._tile_size = int(getattr(config.data, "tile_size", 16))
         self._context_size = int(getattr(config.data, "context_size", 0) or 0)
         self._attn_entropy_weight = float(getattr(config.model, "attn_entropy_weight", 0.0))
@@ -1442,6 +1450,11 @@ class NnUnet3dLcndz(nn.Module):
                 kernel_size=(1, self._downsample, self._downsample),
                 stride=(1, self._downsample, self._downsample),
             )
+        if self._denoise_kernel is not None:
+            kernel = self._denoise_kernel.to(x.dtype)
+            pad = kernel.numel() // 2
+            x = F.conv3d(F.pad(x, (0, 0, pad, pad, 0, 0), mode="replicate"), kernel.view(1, 1, 1, -1, 1))
+            x = F.conv3d(F.pad(x, (pad, pad, 0, 0, 0, 0), mode="replicate"), kernel.view(1, 1, 1, 1, -1))
         return x
 
     def _mix_feature_style(
