@@ -880,14 +880,17 @@ def _open_fd_count() -> int:
 
 
 def _cgroup_oom_kill_count() -> int:
-    try:
-        entries = dict(
-            line.split(maxsplit=1)
-            for line in Path("/sys/fs/cgroup/memory.events").read_text().splitlines()
-        )
-        return int(entries.get("oom_kill", 0))
-    except (OSError, TypeError, ValueError):
-        return -1
+    # cgroup v2 first, then v1
+    for path in ("/sys/fs/cgroup/memory.events", "/sys/fs/cgroup/memory/memory.oom_control"):
+        try:
+            entries = dict(
+                line.split(maxsplit=1)
+                for line in Path(path).read_text().splitlines()
+            )
+            return int(entries.get("oom_kill", 0))
+        except (OSError, TypeError, ValueError):
+            continue
+    return -1
 
 
 def run_test_isolated(config) -> bool:
@@ -897,6 +900,8 @@ def run_test_isolated(config) -> bool:
     oom_before = _cgroup_oom_kill_count()
     pid = os.fork()
     if pid == 0:
+        # a SIGKILLed child cannot flush, so never hold its log lines in a block buffer
+        sys.stdout.reconfigure(line_buffering=True)
         try:
             success = run_test(config, False)
             sys.stdout.flush()
