@@ -1,4 +1,5 @@
 import functools
+import gc
 import json
 import math
 import os
@@ -1486,19 +1487,27 @@ class Trainer:
             self.vis = TensorboardVisualizer(self.c, mode="metrics")
             self.vis.writer.add_scalar("Run/Initializing", 1.0, 0)
             self.vis.writer.flush()
+            self._visualizer_will_test = will_test
+            if bool(getattr(self.c.data, "ram_safe_vis", False)):
+                # full-resolution figure assets are loaded per scroll at render time only
+                self.scroll_vis = dict.fromkeys(visualizer_ids)
+                return
             self.scroll_vis = {}
             for index, scroll_id in enumerate(visualizer_ids):
-                self.scroll_vis[scroll_id] = TensorboardVisualizer(
-                    self.c,
-                    mode="train",
-                    scroll_id=scroll_id,
-                    shared_writer=self.vis.writer,
-                    tag_prefix=f"s{scroll_id}/",
-                    load_test_frags=(index == 0 and will_test),
-                )
+                self.scroll_vis[scroll_id] = self._build_scroll_visualizer(index, scroll_id)
         else:
             self.vis = TensorboardVisualizer(self.c, load_test_frags=will_test)
             self.scroll_vis = None
+
+    def _build_scroll_visualizer(self, index: int, scroll_id: int) -> TensorboardVisualizer:
+        return TensorboardVisualizer(
+            self.c,
+            mode="train",
+            scroll_id=scroll_id,
+            shared_writer=self.vis.writer,
+            tag_prefix=f"s{scroll_id}/",
+            load_test_frags=(index == 0 and self._visualizer_will_test),
+        )
 
     def _dump_run_config(self) -> None:
         import dataclasses
@@ -3721,8 +3730,14 @@ class Trainer:
 
         max_eval_scrolls = getattr(self.c.tra, "eval_int_scrolls", 2)
         eval_rendered = 0
-        for index, (scroll_id, visualizer) in enumerate(self.scroll_vis.items()):
-            if eval_due and getattr(visualizer, "eval_enabled", True) and eval_rendered < max_eval_scrolls:
+        for index, (scroll_id, visualizer) in enumerate(list(self.scroll_vis.items())):
+            render_eval = eval_due and eval_rendered < max_eval_scrolls
+            lazy = visualizer is None
+            if lazy:
+                if not (render_eval or (index == 0 and (test_due or probe_due))):
+                    continue
+                visualizer = self._build_scroll_visualizer(index, scroll_id)
+            if render_eval and getattr(visualizer, "eval_enabled", True):
                 try:
                     visualizer.load_visualization_volume()
                     visualizer.add_evaluation_figures(epoch, self.model)
@@ -3747,8 +3762,10 @@ class Trainer:
                     print(f"[ERROR] probe figures failed for scroll {scroll_id}: {exc}")
                 finally:
                     visualizer.release_visualization_volume()
-        for visualizer in self.scroll_vis.values():
             visualizer.writer.flush()
+            if lazy:
+                del visualizer
+                gc.collect()
 
     def run(self) -> None:
         try:

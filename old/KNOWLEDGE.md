@@ -1883,11 +1883,12 @@ its own validation region above what the other scrolls provide. Baseline recall 
   before this a cached dataset could silently drop the soft-edge setting
 
 ### Campaign 36 base (2026-09-27, supersedes the defaults listed above)
-Every arm: native 196 px field, ring close 2 / gap 2 / shell 4, soft-edge positives (floor 0.6, no label
+Every arm: native 192 px field (all field sizes must be multiples of 96: 96, 192, 384...; 196 was an error
+and mae_pretrain rejects it at ds2), ring close 2 / gap 2 / shell 4, soft-edge positives (floor 0.6, no label
 smoothing), batch 32 / lr 1e-4 (the new default going forward), patch GroupDRO, pherc0841 + pherc0009b held
 out and preloaded in RAM for the final render. `holdout_base_full_vis` is first and the only arm that
 renders every scroll, streamed (`ram_safe_vis`). Leading arms: dual scale (64 px centre-only local
-expert, not MAE-pretrained), 196 ds2, native 196 + `model.input_denoise_sigma` 0.6 (fixed in-plane
+expert, not MAE-pretrained), 192 ds2, native 192 + `model.input_denoise_sigma` 0.6 (fixed in-plane
 gaussian, ~4x white-noise variance cut like 2x2 pooling, native grid kept; tests whether ds2's higher
 recall comes from averaging voxel noise and from 4x smaller LSE bags rather than from the doubled
 receptive field), ring c2g3s5. Dropped from campaign 36: plain baseline_rep, ring gce, native 96 arms.
