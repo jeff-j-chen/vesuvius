@@ -593,6 +593,14 @@ class ModelConfig:
     dual_scale_outer_mix: float = 0.0
     dual_scale_adaptive_gate: bool = False
     dual_scale_gate_max: float = 1.0
+    # per-pixel expert on each pixel's own slice column (no in-plane context), added to the score
+    depth_profile_expert: bool = False
+    depth_profile_mix: float = 0.5
+    depth_profile_hidden: int = 16
+    # fixed in-plane box average (px) before the column model; 5 px ~ 47 um, well below stroke width
+    depth_profile_pool: int = 5
+    # per-sample probability of dropping the main score, and separately the expert scores, in training
+    expert_dropout: float = 0.0
     style_film: bool = False
     style_film_hidden: int = 64
     mae_reconstruction_head: bool = False

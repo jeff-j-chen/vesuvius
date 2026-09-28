@@ -379,6 +379,38 @@ class DepthProfileHead(nn.Module):
         return self.net(profile)
 
 
+class DepthProfileExpert(nn.Module):
+    """per-pixel voxel logits from each pixel's slice column; convolutions run along depth only,
+    after a fixed in-plane box average that denoises the column without learning spatial shape."""
+
+    def __init__(self, hidden: int, pool: int = 5):
+        super().__init__()
+        if pool < 1 or pool % 2 == 0:
+            raise ValueError("depth_profile_pool must be a positive odd number")
+        self._pool = int(pool)
+        self.net = nn.Sequential(
+            nn.Conv3d(2, hidden, kernel_size=(3, 1, 1), padding=(1, 0, 0)),
+            nn.GELU(),
+            nn.Conv3d(hidden, hidden, kernel_size=(3, 1, 1), padding=(1, 0, 0)),
+            nn.GELU(),
+            nn.Conv3d(hidden, 1, kernel_size=1),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x[:, :1].float()
+        if self._pool > 1:
+            x = F.avg_pool3d(
+                x, kernel_size=(1, self._pool, self._pool), stride=1,
+                padding=(0, self._pool // 2, self._pool // 2), count_include_pad=False,
+            )
+        column_mean = x.mean(dim=2, keepdim=True)
+        # one scale per window removes scanner contrast without mixing neighbouring pixels
+        scale = x.std(dim=(2, 3, 4), keepdim=True).clamp_min(1e-3)
+        profile = (x - column_mean) / scale
+        level = (column_mean - column_mean.mean(dim=(3, 4), keepdim=True)) / scale
+        return self.net(torch.cat((profile, level.expand_as(profile)), dim=1))
+
+
 class IBN3d(nn.Module):
     """IBN-a: instance norm on first half of channels, batch norm on second (Pan et al. 2018).
     IN strips fragment-specific style; BN preserves discriminative content statistics."""
@@ -986,6 +1018,20 @@ class NnUnet3dLcndz(nn.Module):
             if self._dual_scale_adaptive_gate else None
         )
         self.last_dual_scale_gate: torch.Tensor | None = None
+        self.last_dual_scale_delta: torch.Tensor | None = None
+        self.depth_profile_expert = (
+            DepthProfileExpert(
+                int(getattr(config.model, "depth_profile_hidden", 16)),
+                int(getattr(config.model, "depth_profile_pool", 5)),
+            )
+            if bool(getattr(config.model, "depth_profile_expert", False)) else None
+        )
+        self._depth_profile_mix = float(getattr(config.model, "depth_profile_mix", 0.5))
+        self._expert_dropout = float(getattr(config.model, "expert_dropout", 0.0))
+        if not 0.0 <= self._expert_dropout < 1.0:
+            raise ValueError("expert_dropout must be in [0, 1)")
+        if self._expert_dropout > 0 and not (self._dual_scale or self.depth_profile_expert is not None):
+            raise ValueError("expert_dropout requires dual_scale or depth_profile_expert")
 
         self._early_2d_unet = bool(getattr(config.model, "early_2d_unet", False))
         self._mid_2d_unet = bool(getattr(config.model, "mid_2d_unet", False))
@@ -2338,9 +2384,12 @@ class NnUnet3dLcndz(nn.Module):
         target_offsets: torch.Tensor | None,
     ) -> torch.Tensor:
         """multitile cell logits from (possibly edited) early-2D head input; used by RSC."""
-        if not self._early_2d_unet or self.text_region_head is not None or self.dual_scale_local is not None:
+        if not self._early_2d_unet or self.text_region_head is not None or self._dual_scale_local_only:
             raise ValueError("score_from_head_input supports the plain early-2D multitile head only")
-        return self._multitile_aggregate_2d(self.early2d_head(head_input), target_offsets)
+        score = self._multitile_aggregate_2d(self.early2d_head(head_input), target_offsets)
+        if self.last_dual_scale_delta is not None:
+            score = score + self.last_dual_scale_delta
+        return score
 
     def _multitile_mean_2d(
         self,
@@ -2430,48 +2479,66 @@ class NnUnet3dLcndz(nn.Module):
         x: torch.Tensor,
         target_offsets: torch.Tensor | None,
     ) -> torch.Tensor:
-        if not self._dual_scale:
+        self.last_dual_scale_delta = None
+        if not self._dual_scale and self.depth_profile_expert is None:
             return score
+        base_score = score
         prepared = self._prepare_input(x)
-        local_size = max(1, self._dual_scale_local_size // self._downsample)
-        local_input = self._crop_center_feat(prepared, local_size, target_offsets)
-        local_stem = self._stem_in(local_input)
-        if self.dual_scale_deep_local is not None:
-            local_voxels = self.dual_scale_deep_local(local_stem)
-        elif self.dual_scale_local is not None and self.dual_scale_head is not None:
-            local_voxels = self.dual_scale_head(self.dual_scale_local(local_stem))
-        else:
-            raise RuntimeError("dual-scale local expert is not initialized")
-        local_center = self._crop_center_feat(local_voxels, self._mt_center_feat)
-        local_score = self._multitile_aggregate(local_center)
-        if self._dual_scale_local_only:
-            score = local_score
-            self.last_dual_scale_gate = None
-        elif self.dual_scale_gate is not None:
-            statistics = torch.cat(
-                (
-                    prepared.mean(dim=(1, 3, 4)),
-                    prepared.std(dim=(1, 3, 4), unbiased=False),
-                ),
-                dim=1,
+        expert = torch.zeros_like(score)
+        if self._dual_scale:
+            local_size = max(1, self._dual_scale_local_size // self._downsample)
+            local_input = self._crop_center_feat(prepared, local_size, target_offsets)
+            local_stem = self._stem_in(local_input)
+            if self.dual_scale_deep_local is not None:
+                local_voxels = self.dual_scale_deep_local(local_stem)
+            elif self.dual_scale_local is not None and self.dual_scale_head is not None:
+                local_voxels = self.dual_scale_head(self.dual_scale_local(local_stem))
+            else:
+                raise RuntimeError("dual-scale local expert is not initialized")
+            local_center = self._crop_center_feat(local_voxels, self._mt_center_feat)
+            local_score = self._multitile_aggregate(local_center)
+            if self._dual_scale_local_only:
+                score = local_score
+                self.last_dual_scale_gate = None
+            elif self.dual_scale_gate is not None:
+                statistics = torch.cat(
+                    (
+                        prepared.mean(dim=(1, 3, 4)),
+                        prepared.std(dim=(1, 3, 4), unbiased=False),
+                    ),
+                    dim=1,
+                )
+                gate = self._dual_scale_gate_max * torch.sigmoid(
+                    self.dual_scale_gate(statistics)
+                )
+                expert = expert + gate * local_score
+                self.last_dual_scale_gate = gate.detach()
+            else:
+                expert = expert + self._dual_scale_mix * local_score
+                self.last_dual_scale_gate = None
+            if self.dual_scale_outer is not None and self.dual_scale_outer_head is not None:
+                outer_size = max(1, self._dual_scale_outer_size // self._downsample)
+                outer_input = self._crop_center_feat(prepared, outer_size, target_offsets)
+                outer_voxels = self.dual_scale_outer_head(
+                    self.dual_scale_outer(self._stem_in(outer_input))
+                )
+                outer_center = self._crop_center_feat(outer_voxels, self._mt_center_feat)
+                expert = expert + self._dual_scale_outer_mix * self._multitile_aggregate(outer_center)
+        if self.depth_profile_expert is not None:
+            profile_input = self._crop_center_feat(prepared, self._mt_center_feat, target_offsets)
+            profile_score = self._multitile_aggregate(
+                self.depth_profile_expert(profile_input).to(score.dtype)
             )
-            gate = self._dual_scale_gate_max * torch.sigmoid(
-                self.dual_scale_gate(statistics)
-            )
-            score = score + gate * local_score
-            self.last_dual_scale_gate = gate.detach()
-        else:
-            score = score + self._dual_scale_mix * local_score
-            self.last_dual_scale_gate = None
-        if self.dual_scale_outer is not None and self.dual_scale_outer_head is not None:
-            outer_size = max(1, self._dual_scale_outer_size // self._downsample)
-            outer_input = self._crop_center_feat(prepared, outer_size, target_offsets)
-            outer_voxels = self.dual_scale_outer_head(
-                self.dual_scale_outer(self._stem_in(outer_input))
-            )
-            outer_center = self._crop_center_feat(outer_voxels, self._mt_center_feat)
-            outer_score = self._multitile_aggregate(outer_center)
-            score = score + self._dual_scale_outer_mix * outer_score
+            expert = expert + self._depth_profile_mix * profile_score
+        if self.training and self._expert_dropout > 0 and not self._dual_scale_local_only:
+            # each path must predict alone on some samples; never drop both for one sample
+            drop_main = torch.rand(score.shape[0], 1, device=score.device) < self._expert_dropout
+            drop_expert = (torch.rand(score.shape[0], 1, device=score.device) < self._expert_dropout) & ~drop_main
+            score = torch.where(drop_main, torch.zeros_like(score), score)
+            expert = torch.where(drop_expert, torch.zeros_like(expert), expert)
+        score = score + expert
+        if not self._dual_scale_local_only:
+            self.last_dual_scale_delta = score - base_score
         return score
 
     def forward_with_extras(
@@ -2534,6 +2601,8 @@ class NnUnet3dLcndz(nn.Module):
             )
             score = self._multitile_aggregate_2d(voxel2d, target_offsets)
             score = self._apply_dual_scale_score(score, x, target_offsets)
+            if self.last_private_score is not None and self.last_dual_scale_delta is not None:
+                self.last_private_score = self.last_private_score + self.last_dual_scale_delta
             self.last_attn_entropy_loss = voxel2d.new_zeros(())
             self.last_attn_entropy_per_target = None
             self.last_surface_guided_alpha = None
@@ -2770,6 +2839,9 @@ def create_model(config: Config):
     if model.dual_scale_outer_head is not None:
         nn.init.zeros_(model.dual_scale_outer_head.weight)
         nn.init.zeros_(model.dual_scale_outer_head.bias)
+    if model.depth_profile_expert is not None:
+        nn.init.zeros_(model.depth_profile_expert.net[-1].weight)
+        nn.init.zeros_(model.depth_profile_expert.net[-1].bias)
     if model.dual_scale_gate is not None:
         final = model.dual_scale_gate[-1]
         nn.init.zeros_(final.weight)

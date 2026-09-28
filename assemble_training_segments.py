@@ -253,8 +253,8 @@ R2_BASE = None
 R2_AUTH = None
 
 
-def _r2_signed_headers(url):
-    """AWS SigV4 headers for an unsigned-payload GET against the R2 S3 endpoint (region 'auto')."""
+def _r2_signed_headers(url, method="GET"):
+    """AWS SigV4 headers for an unsigned-payload request against the R2 S3 endpoint (region 'auto')."""
     import datetime
     import hashlib
     import hmac
@@ -266,7 +266,7 @@ def _r2_signed_headers(url):
     headers = {"host": parts.netloc, "x-amz-content-sha256": "UNSIGNED-PAYLOAD", "x-amz-date": amz_date}
     signed = ";".join(sorted(headers))
     canonical = "\n".join([
-        "GET", quote(parts.path, safe="/-_.~"), "",
+        method, quote(parts.path, safe="/-_.~"), "",
         "".join(f"{key}:{headers[key]}\n" for key in sorted(headers)), signed, "UNSIGNED-PAYLOAD",
     ])
     scope = f"{day}/auto/s3/aws4_request"
@@ -304,6 +304,52 @@ def _r2_fetch(url, output=None, tries=5):
             error = str(exc)
         time.sleep(2 * (attempt + 1))
     raise RuntimeError(f"R2 GET {url} failed: {error}")
+
+
+def _r2_put(url, path, tries=3):
+    """upload a local file to R2 with a signed PUT (requires the private endpoint + key pair)."""
+    import urllib.error
+    import urllib.request
+
+    if not R2_AUTH:
+        raise RuntimeError("R2 uploads need the private R2 endpoint with ACCESS_KEY and SECRET_KEY")
+    size = os.path.getsize(path)
+    error = None
+    for attempt in range(tries):
+        try:
+            headers = _r2_signed_headers(url, method="PUT")
+            headers.pop("host", None)
+            headers["Content-Length"] = str(size)
+            with open(path, "rb") as handle:
+                request = urllib.request.Request(url, data=handle, headers=headers, method="PUT")
+                with urllib.request.urlopen(request, timeout=900) as response:
+                    response.read()
+            return
+        except urllib.error.HTTPError as exc:
+            error = f"HTTP {exc.code}: {exc.read()[:300].decode('utf-8', 'replace')}"
+            if exc.code in (400, 401, 403, 404):
+                break
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            error = str(exc)
+        time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"R2 PUT {url} failed: {error}")
+
+
+def configure_r2():
+    """set R2_AUTH from the environment and return the bucket root url; ValueError if unset."""
+    global R2_AUTH
+    public = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
+    if not public:
+        raise ValueError("R2_PUBLIC_URL must be set (e.g. https://pub-<hash>.r2.dev)")
+    if public.endswith(".r2.cloudflarestorage.com"):
+        # private S3 endpoint: path-style bucket, SigV4-signed with the R2 access key pair
+        access, secret = os.getenv("ACCESS_KEY", "").strip(), os.getenv("SECRET_KEY", "").strip()
+        if not access or not secret:
+            raise ValueError("R2_PUBLIC_URL is the private R2 endpoint; export ACCESS_KEY and SECRET_KEY "
+                             "(or use the bucket's public r2.dev URL)")
+        R2_AUTH = (access, secret)
+        public = f"{public}/{os.getenv('R2_BUCKET', 'ves').strip()}"
+    return public
 
 TARGET_VOXEL_UM = 9.362
 TARGET_DEPTH = 28
@@ -1425,21 +1471,13 @@ def main():
         names = [s[0] for s in SEGMENTS]
         segs = SEGMENTS[names.index(args.from_name):]
 
-    global R2_BASE, R2_AUTH
+    global R2_BASE
     if not args.no_r2 and any(name in RESCAN_88KEV for name, _seg, _zid in segs):
-        public = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
-        if not public:
-            ap.error("R2_PUBLIC_URL must be set (e.g. https://pub-<hash>.r2.dev) to fetch the 88 keV fragment "
-                     "archives; pass --no-r2 to render them from dl.ash2txt instead")
-        if public.endswith(".r2.cloudflarestorage.com"):
-            # private S3 endpoint: path-style bucket, SigV4-signed with the R2 access key pair
-            access, secret = os.getenv("ACCESS_KEY", "").strip(), os.getenv("SECRET_KEY", "").strip()
-            if not access or not secret:
-                ap.error("R2_PUBLIC_URL is the private R2 endpoint; export ACCESS_KEY and SECRET_KEY "
-                         "(or use the bucket's public r2.dev URL)")
-            R2_AUTH = (access, secret)
-            public = f"{public}/{os.getenv('R2_BUCKET', 'ves').strip()}"
-        R2_BASE = f"{public}/{R2_PREFIX}"
+        try:
+            R2_BASE = f"{configure_r2()}/{R2_PREFIX}"
+        except ValueError as exc:
+            ap.error(f"{exc}; needed to fetch the 88 keV fragment archives -- pass --no-r2 to render them "
+                     "from dl.ash2txt instead")
 
     cf = max(1, int(args.concurrent_fragments))
     print(f"[assemble] {len(segs)} fragment(s): {[s[0] for s in segs]}  "

@@ -17,15 +17,23 @@ This is why the tifxyz is tiny (~0.6 MB per file) even for a large segment.
 
 requires: python + project venv, curl, ~2 GB disk
 
+EXTRAS (--include-extras, off by default)
+  downloads atlas.zip from the R2 bucket root (R2_PUBLIC_URL [+ ACCESS_KEY/SECRET_KEY]) into tifxyz/atlas/,
+  renders every atlas segment (uint8, zarr id = folder name, mask in masks/extras/), then builds surface
+  labels in surface_labels/extras/. those labels are NOT committed: they are pulled from R2 as
+  atlas_surface_labels.zip when present, and re-uploaded whenever new ones are generated. extras are not
+  part of DEFAULT_SCROLLS, so MAE pretraining never samples them. rendering stops once free disk falls
+  below --min-free-gb.
+
 usage:
-  python assemble_test_segments.py [--workers N] [--out-dir DIR]
+  python assemble_test_segments.py [--workers N] [--out-dir DIR] [--include-extras]
 
 output:
     ves_zarrs2/<scroll_id>.zarr
     masks/<scroll_id>.png
 """
 from __future__ import annotations
-import argparse, multiprocessing, os, shutil, subprocess, sys
+import argparse, json, multiprocessing, os, shutil, subprocess, sys, threading, zipfile
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import cv2
@@ -48,6 +56,48 @@ ZARR_DIR = os.getenv("VESUVIUS_ZARR_PATH",
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MASK_DIR = os.path.join(SCRIPT_DIR, "masks")
 
+EXTRAS_NAME = "atlas"
+EXTRAS_ZIP = "atlas.zip"
+EXTRAS_SURFACE_ZIP = "atlas_surface_labels.zip"
+EXTRAS_MESH_ROOT = os.path.join(SCRIPT_DIR, "tifxyz", EXTRAS_NAME)
+EXTRAS_MASK_DIR = os.path.join(MASK_DIR, "extras")
+SURFACE_LABEL_ROOT = os.path.join(SCRIPT_DIR, "surface_labels")
+EXTRAS_SURFACE_DIR = os.path.join(SURFACE_LABEL_ROOT, "extras")
+# atlas segment name prefix -> (raw volume the mesh coords live in, vol shape z,y,x); bboxes verified to fit
+EXTRA_VOLUMES = {
+    "PHerc0125": (f"{BUCKET}/PHerc0125/volumes/20250821151825-9.362um-1.2m-113keV-masked.zarr/0", "20840,8387,8387"),
+    "PHerc0211": (f"{BUCKET}/PHerc0211/volumes/20250821151803-9.362um-1.2m-113keV-masked.zarr/0", "19416,7948,7948"),
+    "PHerc0257": (f"{BUCKET}/PHerc0257/volumes/20250821151750-9.362um-1.2m-113keV-masked.zarr/0", "18872,8388,8388"),
+    "PHerc0358": (f"{BUCKET}/PHerc0358/volumes/20250821151737-9.362um-1.2m-113keV-masked.zarr/0", "14744,7783,7783"),
+    "PHerc0800": (f"{BUCKET}/PHerc0800/volumes/20250521135224-8.640um-1.2m-116keV-masked.zarr/0", "24298,9867,9867"),
+    "PHerc0813": (f"{BUCKET}/PHerc0813/volumes/20250821151723-9.362um-1.2m-113keV-masked.zarr/0", "16993,7947,7947"),
+    "PHerc0826": (f"{BUCKET}/PHerc0826/volumes/20250821151701-9.362um-1.2m-113keV-masked.zarr/0", "16920,8169,8169"),
+}
+# extras are stored as uint8 (the raw data is uint8) to halve their ~150 GB uint16 footprint
+EXTRAS_DTYPE = "|u1"
+
+# free-disk floor for downloads/renders (set from --min-free-gb); tripping it stops all further rendering
+_MIN_FREE_BYTES = 0
+_LOW_DISK = threading.Event()
+
+
+class LowDiskError(RuntimeError):
+    pass
+
+
+def _disk_ok(path):
+    if _LOW_DISK.is_set():
+        return False
+    if _MIN_FREE_BYTES and shutil.disk_usage(path).free < _MIN_FREE_BYTES:
+        _LOW_DISK.set()
+        return False
+    return True
+
+
+def _require_disk(path):
+    if not _disk_ok(path):
+        raise LowDiskError(f"free disk at {path} is below {_MIN_FREE_BYTES / 1e9:.0f} GB")
+
 
 # ---- mesh rendering functions (formerly render_9um_surface.py) ----
 
@@ -58,6 +108,8 @@ def _fetch_raw_chunk(args):
     out = os.path.join(cache_dir, f"{zc}_{yc}_{xc}.raw")
     if os.path.exists(out):
         return (zc, yc, xc), "cached"
+    if not _disk_ok(cache_dir):
+        return (zc, yc, xc), "lowdisk"
     url = f"{vol_base}/{zc}/{yc}/{xc}"
     # NO --retry-all-errors: a 404 here is an EXPECTED air chunk; retrying it burned ~4x2s each.
     # --retry still covers transient 5xx/timeouts.
@@ -115,7 +167,7 @@ def compute_normals(Xu, Yu, Zu):
 
 def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, normal_step,
                           upsample_factor, workers, out_zarr, out_id, chunk_depth, chunk_y, chunk_x,
-                          crop_valid=True, crop_margin=8):
+                          crop_valid=True, crop_margin=8, mask_dir=MASK_DIR, output_dtype="<u2"):
     """render a flattened surface volume from tifxyz mesh + raw volume on S3.
     
     the mesh gives, for each point on the FLATTENED sheet, its (x,y,z) voxel in the raw scan.
@@ -199,6 +251,7 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
             done += 1
             if done % 500 == 0:
                 print(f"[chunks] fetched {done}/{len(jobs)}", flush=True)
+    _require_disk(cache_dir)
     print(f"[chunks] all {len(jobs)} present", flush=True)
 
     # ---- phase B: sample each layer (nearest neighbor) ----
@@ -246,16 +299,17 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
     D = len(offsets)
     store = zarr.open(out_zarr, mode="w", shape=(D, H, W), 
                       chunks=(min(chunk_depth, D), chunk_y, chunk_x),
-                      dtype="<u2", compressor=None, zarr_format=2)
+                      dtype=output_dtype, compressor=None, zarr_format=2)
     for li, off in enumerate(offsets):
-        store[li] = sample_layer(off).astype(np.uint16)
+        _require_disk(os.path.dirname(os.path.abspath(out_zarr)))
+        store[li] = sample_layer(off).astype(store.dtype)
         print(f"[zarr] layer {li+1}/{D}", flush=True)
 
     # the rendered zarr is the source of truth for its usable footprint
     # derive the mask from the center layer rather than mesh validity alone
     midslice_mask = (np.asarray(store[D // 2]) > 0).astype(np.uint8) * 255
-    os.makedirs(MASK_DIR, exist_ok=True)
-    mask_path = os.path.join(MASK_DIR, f"{out_id}.png")
+    os.makedirs(mask_dir, exist_ok=True)
+    mask_path = os.path.join(mask_dir, f"{out_id}.png")
     Image.fromarray(midslice_mask).save(mask_path)
     print(f"[mask] wrote {mask_path} from zarr layer {D // 2}  "
                     f"valid_frac={(midslice_mask > 0).mean():.3f}", flush=True)
@@ -307,11 +361,13 @@ FRAGMENTS = [
 
 
 def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script_dir,
-                   chunk_depth, chunk_y, chunk_x, force=False):
+                   chunk_depth, chunk_y, chunk_x, force=False, mask_dir=MASK_DIR,
+                   output_dtype="<u2", drop_cache=False):
     """render one test fragment. returns (zid, status) for summary."""
     mesh_dir = os.path.join(script_dir, "tifxyz", mesh_sub)
     out_zarr = os.path.join(out_dir, f"{zid}.zarr")
-    mask_path = os.path.join(MASK_DIR, f"{zid}.png")
+    mask_path = os.path.join(mask_dir, f"{zid}.png")
+    cache_dir = os.path.join("_ves_tmp", f"render_{zid}")
 
     if force:
         shutil.rmtree(out_zarr, ignore_errors=True)
@@ -335,9 +391,10 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
     print(f"  (renders on-demand from S3 -- can take 10-30 min per fragment depending on size/speed)")
     
     try:
+        _require_disk(out_dir)
         render_surface_volume(
             mesh_dir=mesh_dir,
-            cache_dir=os.path.join("_ves_tmp", f"render_{zid}"),
+            cache_dir=cache_dir,
             vol_base=vol_base,
             vol_shape=vol_shape_tuple,
             layers=28,
@@ -350,13 +407,152 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
             chunk_y=chunk_y,
             chunk_x=chunk_x,
             crop_valid=True,
-            crop_margin=8)
+            crop_margin=8,
+            mask_dir=mask_dir,
+            output_dtype=output_dtype)
+        if drop_cache:
+            shutil.rmtree(cache_dir, ignore_errors=True)
         return (zid, "OK")
+    except LowDiskError as e:
+        print(f"  [STOP] {zid}: {e} -- removing the partial zarr and stopping renders", flush=True)
+        shutil.rmtree(out_zarr, ignore_errors=True)
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        return (zid, f"STOPPED: {e}")
     except Exception as e:
         import traceback
         print(f"  [WARN] render failed for {zid}: {e}")
         traceback.print_exc()
         return (zid, f"FAIL: {e}")
+
+
+def _safe_extract(zip_path, dest, top):
+    """extract a zip whose entries must all live under top/ (no absolute paths or '..')."""
+    with zipfile.ZipFile(zip_path) as archive:
+        for member in archive.namelist():
+            parts = member.replace("\\", "/").split("/")
+            if member.startswith(("/", "\\")) or ".." in parts or parts[0] != top:
+                raise RuntimeError(f"{zip_path}: unexpected entry {member!r}")
+        archive.extractall(dest)
+
+
+def fetch_extras_meshes(ats, r2_root):
+    """download + extract atlas.zip into tifxyz/atlas/ unless it is already there."""
+    if os.path.isdir(EXTRAS_MESH_ROOT) and os.listdir(EXTRAS_MESH_ROOT):
+        print(f"[extras] meshes present in {EXTRAS_MESH_ROOT}")
+        return
+    if r2_root is None:
+        raise SystemExit(f"[extras] {EXTRAS_MESH_ROOT} is missing and R2 is not configured "
+                         "(export R2_PUBLIC_URL [+ ACCESS_KEY/SECRET_KEY])")
+    _require_disk(SCRIPT_DIR)
+    local = os.path.join("_ves_tmp", EXTRAS_ZIP)
+    print(f"[extras] downloading {EXTRAS_ZIP} from R2 ...", flush=True)
+    try:
+        ats._r2_fetch(f"{r2_root}/{EXTRAS_ZIP}", output=local)
+        _safe_extract(local, os.path.dirname(EXTRAS_MESH_ROOT), EXTRAS_NAME)
+    finally:
+        if os.path.exists(local):
+            os.remove(local)
+    print(f"[extras] extracted {len(os.listdir(EXTRAS_MESH_ROOT))} meshes -> {EXTRAS_MESH_ROOT}")
+
+
+def extra_fragments():
+    """(zid, mesh subdir, vol base, vol shape) for every atlas mesh; zid = folder name."""
+    if not os.path.isdir(EXTRAS_MESH_ROOT):
+        return []
+    fragments = []
+    for name in sorted(os.listdir(EXTRAS_MESH_ROOT)):
+        if not os.path.isfile(os.path.join(EXTRAS_MESH_ROOT, name, "x.tif")):
+            continue
+        volume = EXTRA_VOLUMES.get(name.split("_")[0])
+        if volume is None:
+            print(f"[extras] WARN no raw volume mapped for {name} -- skipping")
+            continue
+        fragments.append((name, f"{EXTRAS_NAME}/{name}", *volume))
+    return fragments
+
+
+def _has_extra_surface(zid):
+    # metadata.json is written after depth/confidence are complete
+    folder = os.path.join(EXTRAS_SURFACE_DIR, zid)
+    return all(os.path.isfile(os.path.join(folder, name))
+               for name in ("depth.npy", "confidence.npy", "metadata.json"))
+
+
+def fetch_extras_surface(ats, r2_root, zids):
+    """download + extract atlas_surface_labels.zip from R2 when any selected extra lacks labels."""
+    missing = [zid for zid in zids if not _has_extra_surface(zid)]
+    if not missing:
+        print(f"[extras] surface labels present for all {len(zids)} selected extras")
+        return
+    if r2_root is None:
+        print(f"[extras] R2 not configured -- {len(missing)} extra(s) lack surface labels and will be generated")
+        return
+    _require_disk(SCRIPT_DIR)
+    local = os.path.join("_ves_tmp", EXTRAS_SURFACE_ZIP)
+    print(f"[extras] {len(missing)} extra(s) lack surface labels -> downloading {EXTRAS_SURFACE_ZIP} from R2 ...",
+          flush=True)
+    try:
+        ats._r2_fetch(f"{r2_root}/{EXTRAS_SURFACE_ZIP}", output=local)
+    except RuntimeError as exc:
+        print(f"[extras] {EXTRAS_SURFACE_ZIP} not fetched from R2 ({exc}); missing labels will be generated")
+    else:
+        _safe_extract(local, SURFACE_LABEL_ROOT, "extras")
+        still = sum(not _has_extra_surface(zid) for zid in zids)
+        print(f"[extras] extracted {EXTRAS_SURFACE_ZIP} -> {EXTRAS_SURFACE_DIR}; {still} still missing")
+    finally:
+        if os.path.exists(local):
+            os.remove(local)
+
+
+def sync_extras_surface(ats, r2_root, zids, zarr_dir):
+    """generate surface labels for assembled extras still lacking them, and re-upload if new ones were made."""
+    ready = [zid for zid in zids
+             if os.path.isdir(os.path.join(zarr_dir, f"{zid}.zarr"))
+             and os.path.isfile(os.path.join(EXTRAS_MASK_DIR, f"{zid}.png"))]
+    missing = [zid for zid in ready if not _has_extra_surface(zid)]
+    print(f"[extras] surface labels: {len(ready) - len(missing)}/{len(ready)} present, generating {len(missing)}")
+    generated = 0
+    for index, zid in enumerate(missing, 1):
+        print(f"\n[extras] surface {index}/{len(missing)} {zid}", flush=True)
+        result = subprocess.run(
+            [
+                sys.executable, os.path.join(SCRIPT_DIR, "generate_surface_supervision.py"),
+                "--scroll-id", zid,
+                "--z-start", "4", "--z-end", "28",
+                "--zarr-dir", zarr_dir,
+                "--mask-dir", EXTRAS_MASK_DIR,
+                "--output-dir", EXTRAS_SURFACE_DIR,
+                "--review-dir", os.path.join(SCRIPT_DIR, "output", "surface_review", "extras"),
+            ],
+            cwd=SCRIPT_DIR,
+        )
+        if result.returncode == 0 and _has_extra_surface(zid):
+            generated += 1
+        else:
+            print(f"[extras] WARN surface generation failed for {zid} (exit {result.returncode})")
+    if generated and r2_root is not None:
+        upload_extras_surface(ats, r2_root)
+    elif generated:
+        print(f"[extras] WARN R2 not configured -- {generated} new surface label(s) were not uploaded")
+
+
+def upload_extras_surface(ats, r2_root):
+    """zip every complete surface_labels/extras/<id>/ and PUT it to R2 as atlas_surface_labels.zip."""
+    local = os.path.join("_ves_tmp", EXTRAS_SURFACE_ZIP)
+    zids = sorted(name for name in os.listdir(EXTRAS_SURFACE_DIR) if _has_extra_surface(name))
+    with zipfile.ZipFile(local, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        for zid in zids:
+            for name in ("depth.npy", "confidence.npy", "metadata.json"):
+                archive.write(os.path.join(EXTRAS_SURFACE_DIR, zid, name), f"extras/{zid}/{name}")
+    size_mb = os.path.getsize(local) / 1e6
+    print(f"[extras] uploading {EXTRAS_SURFACE_ZIP} ({len(zids)} segments, {size_mb:.0f} MB) to R2 ...", flush=True)
+    try:
+        ats._r2_put(f"{r2_root}/{EXTRAS_SURFACE_ZIP}", local)
+        print(f"[extras] uploaded {EXTRAS_SURFACE_ZIP}")
+    except RuntimeError as exc:
+        print(f"[extras] WARN upload failed: {exc}")
+    finally:
+        os.remove(local)
 
 
 def main():
@@ -379,35 +575,73 @@ def main():
                     help=f"zarr Y chunk size (default {DEFAULT_CHUNK_Y})")
     ap.add_argument("--chunk-x", type=int, default=DEFAULT_CHUNK_X,
                     help=f"zarr X chunk size (default {DEFAULT_CHUNK_X})")
+    ap.add_argument("--include-extras", action="store_true",
+                    help="also fetch atlas.zip from R2, render every atlas segment, and sync their surface labels")
+    ap.add_argument("--min-free-gb", type=float, default=10.0,
+                    help="stop downloading/rendering once free disk drops below this (default 10)")
     args = ap.parse_args()
+    global _MIN_FREE_BYTES
+    _MIN_FREE_BYTES = int(args.min_free_gb * 1e9)
+    os.makedirs("_ves_tmp", exist_ok=True)
+
+    ats = r2_root = None
+    extras = []
+    if args.include_extras:
+        sys.path.insert(0, SCRIPT_DIR)
+        import assemble_training_segments as ats
+        try:
+            r2_root = ats.configure_r2()
+        except ValueError as exc:
+            print(f"[extras] R2 unavailable ({exc}); using local extras only")
+        fetch_extras_meshes(ats, r2_root)
+        extras = extra_fragments()
+
     selected_ids = {str(value) for value in args.only}
     fragments = [
         fragment for fragment in FRAGMENTS
         if not selected_ids or fragment[0] in selected_ids
     ]
-    missing_ids = selected_ids - {fragment[0] for fragment in fragments}
+    extras = [fragment for fragment in extras if not selected_ids or fragment[0] in selected_ids]
+    missing_ids = selected_ids - {fragment[0] for fragment in fragments + extras}
     if missing_ids:
         ap.error(f"unknown --only IDs: {sorted(missing_ids)}")
+    if extras:
+        fetch_extras_surface(ats, r2_root, [fragment[0] for fragment in extras])
     
     script_dir = SCRIPT_DIR
     
     # ensure output directories exist
     os.makedirs(args.out_dir, exist_ok=True)
     os.makedirs(MASK_DIR, exist_ok=True)
-    os.makedirs("_ves_tmp", exist_ok=True)
     
     print(f"[assemble] python={sys.executable}  out_dir={args.out_dir}  workers={args.workers}")
-    print(f"[assemble] {len(fragments)} test fragment(s)  "
-          f"chunks=({args.chunk_depth},{args.chunk_y},{args.chunk_x})")
+    print(f"[assemble] {len(fragments)} test fragment(s) + {len(extras)} extra(s)  "
+          f"chunks=({args.chunk_depth},{args.chunk_y},{args.chunk_x})  min_free={args.min_free_gb:g} GB")
     
     results = []
     for i, (zid, mesh_sub, vol_base, vol_shape) in enumerate(fragments, 1):
+        if _LOW_DISK.is_set():
+            break
         print(f"\n{'='*70}\n=== {i}/{len(fragments)}  {zid}  (mesh {mesh_sub}) ===\n{'='*70}", flush=True)
         result = render_fragment(zid, mesh_sub, vol_base, vol_shape, 
                                 args.workers, args.out_dir, script_dir,
                                 args.chunk_depth, args.chunk_y, args.chunk_x,
                                 force=args.force)
         results.append(result)
+
+    for i, (zid, mesh_sub, vol_base, vol_shape) in enumerate(extras, 1):
+        if _LOW_DISK.is_set():
+            break
+        print(f"\n{'='*70}\n=== extra {i}/{len(extras)}  {zid} ===\n{'='*70}", flush=True)
+        results.append(render_fragment(
+            zid, mesh_sub, vol_base, vol_shape, args.workers, args.out_dir, script_dir,
+            args.chunk_depth, args.chunk_y, args.chunk_x, force=args.force,
+            mask_dir=EXTRAS_MASK_DIR, output_dtype=EXTRAS_DTYPE, drop_cache=True,
+        ))
+    if _LOW_DISK.is_set():
+        print(f"\n[assemble] free disk fell below {args.min_free_gb:g} GB -- remaining renders skipped")
+    if extras:
+        sync_extras_surface(ats, r2_root, [fragment[0] for fragment in extras], args.out_dir)
     
     print(f"\n{'='*70}\n[assemble] SUMMARY\n{'='*70}")
     for zid, status in results:

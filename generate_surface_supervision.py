@@ -605,8 +605,9 @@ def _write_depth_overview(
         )
 
     legend_width = 520
-    canvas = np.zeros((rgb.shape[0], rgb.shape[1] + legend_width, 3), dtype=np.uint8)
-    canvas[:, :rgb.shape[1]] = rgb
+    # short segments still need room for the legend bar
+    canvas = np.zeros((max(rgb.shape[0], 1100), rgb.shape[1] + legend_width, 3), dtype=np.uint8)
+    canvas[:rgb.shape[0], :rgb.shape[1]] = rgb
     x0 = rgb.shape[1] + 55
     cv2.putText(canvas, "SURFACE DEPTH", (x0, 110), cv2.FONT_HERSHEY_SIMPLEX,
                 1.5, (255, 255, 255), 3, cv2.LINE_AA)
@@ -642,7 +643,7 @@ def _write_depth_overview(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="generate papyrus-air surface pseudo-labels")
-    parser.add_argument("--scroll-id", type=int, required=True)
+    parser.add_argument("--scroll-id", type=str, required=True)
     parser.add_argument("--zarr-dir", default="./ves_zarrs2")
     parser.add_argument("--mask-dir", default="./masks")
     parser.add_argument("--output-dir", default="./surface_labels")
@@ -851,7 +852,7 @@ def main() -> None:
         for depth_index in range(args.z_start, args.z_end)
     }
     metadata = {
-        "scroll_id": int(args.scroll_id),
+        "scroll_id": int(scroll_id) if scroll_id.isdigit() else scroll_id,
         "volume_shape": [depth, height, width],
         "z_start": args.z_start,
         "z_end": args.z_end,

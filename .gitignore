@@ -13,3 +13,9 @@ runs/
 .vscode/*
 _ves_tmp/
 PHerc0813_spiral_dataset/*
+# atlas extras are synced through R2 (assemble_test_segments.py --include-extras), never git
+tifxyz/atlas/
+masks/extras/
+surface_labels/extras/
+output/surface_review/extras/
+output/test_visualizations/*/extras/
