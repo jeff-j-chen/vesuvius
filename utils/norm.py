@@ -175,15 +175,17 @@ def compute_surface_anchors(
     """raw gap level (1st percentile) and papyrus level (median at the fitted surface) from sampled tiles."""
     import cv2
     sid = str(scroll_id)
+    # sibling volumes (<id>.translated) share the original's mask and fitted surface
+    base = sid.split(".", 1)[0]
     vol = zarr.open(os.path.join(zarr_path, f"{sid}.zarr"), mode="r")
     _, height, width = map(int, vol.shape)
-    mask = cv2.imread(os.path.join(mask_dir, f"{sid}.png"), cv2.IMREAD_GRAYSCALE)
+    mask = cv2.imread(os.path.join(mask_dir, f"{base}.png"), cv2.IMREAD_GRAYSCALE)
     if mask is None:
-        mask = _imread_gray_pil(os.path.join(mask_dir, f"{sid}.png"))
+        mask = _imread_gray_pil(os.path.join(mask_dir, f"{base}.png"))
     if mask.shape != (height, width):
         mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
-    depth = np.load(os.path.join(surface_dir, sid, "depth.npy"), mmap_mode="r")
-    confidence = np.load(os.path.join(surface_dir, sid, "confidence.npy"), mmap_mode="r")
+    depth = np.load(os.path.join(surface_dir, base, "depth.npy"), mmap_mode="r")
+    confidence = np.load(os.path.join(surface_dir, base, "confidence.npy"), mmap_mode="r")
     rows, cols = height // tile, width // tile
     valid = ((mask > 0) & (np.asarray(depth) != 255) & (np.asarray(confidence) > 0))
     coverage = valid[:rows * tile, :cols * tile].reshape(rows, tile, cols, tile).mean(axis=(1, 3))

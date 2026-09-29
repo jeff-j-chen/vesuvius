@@ -1151,7 +1151,8 @@ class InkVolumeDataset(IterableDataset):
         noise_path = str(getattr(config.data, "native_noise", "") or "")
         # opened lazily so each worker memory-maps the bank itself
         self._native_noise_spec = (
-            (noise_path, float(getattr(config.data, "native_noise_scale", 1.0)))
+            (noise_path, float(getattr(config.data, "native_noise_scale", 1.0)),
+             str(getattr(config.data, "norm_mode", "global")))
             if noise_path and shuffle and self.scroll_id is not None and int(self.scroll_id) in noise_ids else None
         )
         self._native_noise = None

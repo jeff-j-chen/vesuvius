@@ -1412,7 +1412,8 @@ def step3_norm(name, seg, zid, skip, force=False):
 def step4_translate(name, zid, checkpoint, force=False):
     """write ves_zarrs2/<id>.translated.zarr from the local zarr (no download) and its norm under that key."""
     from utils.degrader import REFERENCE_NATIVE_ID, TRANSLATED_SUFFIX, is_current, translate_zarr
-    from utils.norm import UNIFIED_CACHE_PATH, compute_norm, load_cached_norm
+    from utils.norm import (SURFACE_ANCHOR_CACHE_PATH, UNIFIED_CACHE_PATH, compute_norm, ensure_surface_anchors,
+                            load_cached_norm)
 
     src = os.path.join(ZARR_DIR, f"{zid}.zarr")
     volume_id = f"{zid}{TRANSLATED_SUFFIX}"
@@ -1430,6 +1431,13 @@ def step4_translate(name, zid, checkpoint, force=False):
         force = True
     if force or load_cached_norm(volume_id, UNIFIED_CACHE_PATH) is None:
         compute_norm(volume_id, ZARR_DIR, cache_path=UNIFIED_CACHE_PATH, mask_id=zid)
+    if force and os.path.exists(SURFACE_ANCHOR_CACHE_PATH):
+        anchors = json.load(open(SURFACE_ANCHOR_CACHE_PATH))
+        if anchors.pop(volume_id, None) is not None:
+            with open(SURFACE_ANCHOR_CACHE_PATH, "w") as handle:
+                json.dump(anchors, handle, indent=2)
+    # surface-anchored normalisation (the campaign-39 baseline) needs the translated volume's own anchors
+    ensure_surface_anchors([volume_id], ZARR_DIR)
 
 
 def process_fragment(name, seg, zid, workers, skip_norm, chunk_depth, chunk_y, chunk_x, prefix="", force=False):

@@ -2,7 +2,7 @@
 
 per patch: a (28, S+2h, S+2h) raw block inside the footprint and at least --label-margin px from any ink
 label (the denoiser also removes faint ink, so its residual near text would hold signal), normalised
-exactly as training (norm_cache.json, clipped to [0, 1]), denoised with the frozen blind-spot denoiser; the
+exactly as training (norm_cache.json in --norm-mode, clipped to [0, 1]), denoised with the frozen blind-spot denoiser; the
 bank keeps residual = normalised - denoised over the central --depth slices and S x S pixels.
 
 intensity check: residual std per decile of the denoised intensity. if the largest / smallest exceeds
@@ -72,6 +72,8 @@ def main():
     ap.add_argument("--size", type=int, default=128, help="patch side, px (>= the 96 px training context)")
     ap.add_argument("--label-margin", type=int, default=64)
     ap.add_argument("--scale-threshold", type=float, default=1.25)
+    ap.add_argument("--norm-mode", default="surface_anchor", choices=("global", "surface_anchor"),
+                    help="must equal the training data.norm_mode (campaign 39: surface_anchor)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--dry-run", action="store_true", help="4 patches, print the statistics, write nothing")
     args = ap.parse_args()
@@ -100,7 +102,7 @@ def main():
         if len(ys) == 0:
             print(f"[noise] {zid}: no footprint {span}px from ink; skipped", flush=True)
             continue
-        norm = load_cached_norm(str(zid), str(ROOT / UNIFIED_CACHE_PATH))
+        norm = load_cached_norm(str(zid), str(ROOT / UNIFIED_CACHE_PATH), mode=args.norm_mode)
         if norm is None:
             raise RuntimeError(f"{zid} has no norm_cache.json entry")
         sources.append((zid, volume, norm, ys, xs))
@@ -144,7 +146,8 @@ def main():
     report = {
         "scroll_ids": scroll_ids, "patches_per_scroll": per_scroll, "denoiser": os.path.basename(args.denoiser),
         "slices": [z0, z0 + args.depth], "size": size, "label_margin": args.label_margin,
-        "normalisation": "norm_cache.json global, clipped to [0, 1]", "residual_std": float(residual.std()),
+        "normalisation": "norm_cache.json, clipped to [0, 1]", "norm_mode": args.norm_mode,
+        "residual_std": float(residual.std()),
         "sigma_by_intensity": [{"intensity": c, "sigma": s} for c, s in zip(centres, sigmas)],
         "sigma_spread": spread, "intensity_scaled": bool(scaled), "sigma_coeffs": [float(c) for c in coeffs],
         "sigma_floor": floor,

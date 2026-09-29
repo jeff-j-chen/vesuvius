@@ -1,39 +1,36 @@
-"""campaign 39: cross-resolution pretrains (crossres/PLAN.md) and v8-in's input handling
+"""campaign 39: cross-resolution pretrains (crossres/PLAN.md) on a surface-normalised baseline
 
-Base: campaign 38's holdout_n96_combined (bag rank + regime weights + RSC + dropout/augs, native 96 px
-field, ring c2g2s4, sigma-8 soft edges, early-gated patch-GroupDRO, seed 41); pherc0841 and pherc0009b
-held out and rendered at full extent after the final epoch. The campaign-37 holdout_n96 and
+Base: campaign 38's holdout_n96_combined (bag rank + fiber + regime weights + RSC + dropout/augs, native
+96 px field, ring c2g2s4, sigma-8 soft edges, early-gated patch-GroupDRO, seed 41) plus surface-anchored
+normalisation (gap -> 0.1, surface papyrus -> 0.5); pherc0841 and pherc0009b held out and rendered at full
+extent after the final epoch. Every arm trains at batch 32 / lr 1e-4. The campaign-37 holdout_n96 and
 holdout_n96_seed42 runs are copied into ./runs_archs39 for comparison.
 
 The cross-resolution MAEs were continued from the production (non-fiber) native-96 MAE on another machine,
-so they have no fibre-coordinate branch: every arm that uses them runs the base without it, against a
-production-MAE control with the same config.
+so they have no fibre-coordinate branch: the arms that use them run the base without it. They, the learned
+upsampler and the degrader were all pretrained on globally normalised data; only fine-tuning is surface-
+normalised (as holdout_n96_combined_surface_norm does with the global-norm fiber MAE).
 
-| arm                             | init / input                                                   | batch / lr  |
-|---------------------------------|----------------------------------------------------------------|-------------|
-| holdout_n96_combined_v8norm     | the base (fiber MAE), v8-in input: raw clipped to [0, 200] /   | 96 / 1.5e-4 |
-|                                 | 255, z-scored per crop                                         |             |
-| holdout_n96_nofiber             | control: the base without fiber, production native-96 MAE      | 96 / 1.5e-4 |
-| holdout_n96_crossres_depth (D)  | MAE + head predicting 32 x 96^2 (4x depth) of the 2.4 um scan  | 96 / 1.5e-4 |
-| holdout_n96_crossres_xyz (X)    | MAE + head predicting 32 x 192^2 (4x depth, 2x x/y)            | 96 / 1.5e-4 |
-| holdout_n96_slab (S)            | the same continued MAE with slab masking, no 2.4 um pairs      | 96 / 1.5e-4 |
-| holdout_n96_slab_b32            | S at the upsampled arms' batch: their native baseline          | 32 / 1e-4   |
-| holdout_n96_upsampled_trilinear | (U-1) crop normalised, then trilinear x2 x/y, x4 depth pooled  | 32 / 1e-4   |
-|                                 | 2 -> 16 x 192^2 into the network; MAE continued on that        |             |
-| holdout_n96_upsampled_learned   | (U-2) the same with trilinear + a residual learned from the    | 32 / 1e-4   |
-|                                 | 2.4 um pairs (models/upsampler_learned_xy2_d4.pth)             |             |
-| holdout_n96_downsampled         | (R-1) the base, with every fine-scan fragment (FINE_NATIVE_    | 96 / 1.5e-4 |
-|                                 | SCROLL_IDS: pherc1667, paris4, paris2 fr143/fr47, 51cr4 fr8,   |             |
-|                                 | paris1 fr34) read from its degrader-translated sibling zarr    |             |
-| ..._downsampled_upsampled_trilinear | (R-2) R-1's data through U-1's input head and MAE          | 32 / 1e-4   |
-| ..._downsampled_upsampled_learned   | (R-3) R-1's data through U-2's input head and MAE          | 32 / 1e-4   |
-| holdout_n96_downsampled_noise   | R-1 plus real 113 keV / 1.2 m scan noise (crossres/build_noise_bank.py) | 96 / 1.5e-4 |
-|                                 | on every training crop of the translated fragments             |             |
+| arm                               | init / input                                                     |
+|-----------------------------------|------------------------------------------------------------------|
+| holdout_n96_combined_surface_norm | the baseline: c38 combined (fiber MAE) + surface-anchored norm   |
+| holdout_n96_upsampled_learned     | (U-2) crop normalised, then trilinear + a residual learned from  |
+|                                   | the 2.4 um pairs, x2 x/y, x4 depth pooled 2 -> 16 x 192^2; MAE   |
+|                                   | continued on that (models/upsampler_learned_xy2_d4.pth)          |
+| holdout_n96_upsampled_trilinear   | (U-1) the same with plain trilinear upsampling                   |
+| holdout_n96_crossres_depth (D)    | MAE + head predicting 32 x 96^2 (4x depth) of the 2.4 um scan    |
+| holdout_n96_crossres_xyz (X)      | MAE + head predicting 32 x 192^2 (4x depth, 2x x/y)              |
+| holdout_n96_slab (S)              | the same continued MAE with slab masking, no 2.4 um pairs        |
+| holdout_n96_downsampled           | (R-1) the baseline, with every fine-scan fragment (FINE_NATIVE_  |
+|                                   | SCROLL_IDS: pherc1667, paris4, paris2 fr143/fr47, 51cr4 fr8,     |
+|                                   | paris1 fr34) read from its degrader-translated sibling zarr      |
+| holdout_n96_downsampled_noise     | R-1 plus real 113 keV / 1.2 m scan noise on every training crop  |
+|                                   | of the translated fragments (crossres/build_noise_bank.py)       |
+| ..._downsampled_upsampled_trilinear | (R-2) R-1's data through U-1's input head and MAE              |
+| ..._downsampled_upsampled_learned   | (R-3) R-1's data through U-2's input head and MAE              |
 
-D - S and X - S are what the real high-resolution pairs add; S - nofiber is slab masking alone. The
-upsampled arms run at the native192_depth16 recipe (16 x 192^2 per crop, 8x the voxels of the base), so
-they are compared with holdout_n96_slab_b32 under one fine-tune config and seed. R-1 is judged against
-the c38 holdout_n96_combined run, R-2 against U-1 and R-3 against U-2.
+U-2 - U-1 is learned vs fixed upsampling; D - S and X - S are what the real high-resolution pairs add.
+R-1 is judged against the baseline, R-2 against U-1 and R-3 against U-2.
 
 Upsampled arms (model.input_upsampler): the data pipeline is unchanged (96 px context, 8-slice
 surface-relative window, 16 px tiles, labels and masks on the native grid). The model normalises, then
@@ -46,10 +43,10 @@ crossres/mae_pretrain_crossres.py: "upsampler") names the upsampler the MAE was 
 
 Downsampled arms (plan R, crossres/PLAN.md 0.7) need the translated siblings first; the campaign never
 writes them and refuses to start if any is missing, stale for models/degrader_pooled_native.pth, or has no
-norm entry:
+norm or surface-anchor entry:
     python assemble_training_segments.py --degrader models/degrader_pooled_native.pth
 Masks, labels, train masks and surface maps are shared with the original zarrs. The noise arm also needs
-the local bank: python crossres/build_noise_bank.py
+the local bank, built in the same normalisation: python crossres/build_noise_bank.py
 
 Usage:
     python3 campaign_archs_39.py --dry-run
@@ -80,17 +77,19 @@ import campaign_archs_36 as campaign36
 import campaign_archs_37 as campaign37
 import campaign_archs_38 as campaign38
 from utils.config import startup_output
+from utils.norm import ensure_surface_anchors
 
 
 ROOT = Path(__file__).resolve().parent
 LOG_DIR = "./runs_archs39"
 MODEL_DIR = "models/archs39"
 COMBINED = campaign38.COMBINED
-NOFIBER = {**COMBINED, "model.fiber_coordinate_branch": False}
-V8_NORM = {"data.norm_mode": "raw255", "model.input_tile_norm": "clip200"}
+BASE = {**COMBINED, **campaign38.SURFACE_NORM}
+NOFIBER = {**BASE, "model.fiber_coordinate_branch": False}
+FIBER_MAE = "early_gated_fiber_native96"
 PRODUCTION_MAE = "early_gated_native96"
-# native192_depth16 ran at this batch; the upsampled network grid is the same 16 x 192^2
-UPSAMPLED_TRAINING = {"batch_size": 32, "lr": 1e-4}
+# every arm, whether or not a larger batch would fit
+TRAINING = {"batch_size": 32, "lr": 1e-4}
 LEARNED_UPSAMPLER = "models/upsampler_learned_xy2_d4.pth"
 DEGRADER = "models/degrader_pooled_native.pth"
 TRANSLATED_SUFFIX = ".translated"
@@ -102,8 +101,8 @@ NATIVE_NOISE = {"data.native_noise": NOISE_BANK, "data.native_noise_scale": 1.0,
 
 def _test(tid: str, changes: dict, arch: dict | None = None, init_weights: str | None = None,
           upsampler: str | None = None) -> dict:
-    """the campaign-38 combined base (via campaign 37) plus this arm's changes."""
-    test = campaign37._test(tid, changes, arch=arch)
+    """campaign 37's harness plus this arm's changes, at batch 32 / lr 1e-4."""
+    test = campaign37._test(tid, changes, arch={**(arch or {}), **TRAINING})
     test["tag"] = f"39_{tid}"
     test["init_weights"] = init_weights
     test["upsampler"] = upsampler
@@ -111,35 +110,27 @@ def _test(tid: str, changes: dict, arch: dict | None = None, init_weights: str |
 
 
 TESTS = [
-    # changes the prepared-dataset cache key (norm_mode), so it loads its own data first
-    _test("holdout_n96_combined_v8norm", {**COMBINED, **V8_NORM},
-          arch={"pretrain_key": "early_gated_fiber_native96"}),
-    _test("holdout_n96_nofiber", NOFIBER, arch={"pretrain_key": PRODUCTION_MAE}),
+    _test("holdout_n96_combined_surface_norm", BASE, arch={"pretrain_key": FIBER_MAE}),
+    _test("holdout_n96_upsampled_learned", NOFIBER, arch={"pretrain_key": PRODUCTION_MAE},
+          init_weights="models/mae_upsampled_learned_native96.pth", upsampler=LEARNED_UPSAMPLER),
+    _test("holdout_n96_upsampled_trilinear", NOFIBER, arch={"pretrain_key": PRODUCTION_MAE},
+          init_weights="models/mae_upsampled_trilinear_native96.pth", upsampler="trilinear"),
     _test("holdout_n96_crossres_depth", NOFIBER, arch={"pretrain_key": PRODUCTION_MAE},
           init_weights="models/mae_crossres_depth.pth"),
     _test("holdout_n96_crossres_xyz", NOFIBER, arch={"pretrain_key": PRODUCTION_MAE},
           init_weights="models/mae_crossres_xyz.pth"),
     _test("holdout_n96_slab", NOFIBER, arch={"pretrain_key": PRODUCTION_MAE},
           init_weights="models/mae_slab_native96.pth"),
-    _test("holdout_n96_slab_b32", NOFIBER, arch={"pretrain_key": PRODUCTION_MAE, **UPSAMPLED_TRAINING},
-          init_weights="models/mae_slab_native96.pth"),
-    _test("holdout_n96_upsampled_trilinear", NOFIBER,
-          arch={"pretrain_key": PRODUCTION_MAE, **UPSAMPLED_TRAINING},
-          init_weights="models/mae_upsampled_trilinear_native96.pth", upsampler="trilinear"),
-    _test("holdout_n96_upsampled_learned", NOFIBER,
-          arch={"pretrain_key": PRODUCTION_MAE, **UPSAMPLED_TRAINING},
-          init_weights="models/mae_upsampled_learned_native96.pth", upsampler=LEARNED_UPSAMPLER),
     # last: these read the translated fine-scan volumes (one shared prepared-dataset cache key)
-    _test("holdout_n96_downsampled", {**COMBINED, **DOWNSAMPLED},
-          arch={"pretrain_key": "early_gated_fiber_native96"}),
+    _test("holdout_n96_downsampled", {**BASE, **DOWNSAMPLED}, arch={"pretrain_key": FIBER_MAE}),
     # the degrader predicts the mean scan; real 113 keV noise is added per training crop (plan R.3)
-    _test("holdout_n96_downsampled_noise", {**COMBINED, **DOWNSAMPLED, **NATIVE_NOISE},
-          arch={"pretrain_key": "early_gated_fiber_native96"}),
+    _test("holdout_n96_downsampled_noise", {**BASE, **DOWNSAMPLED, **NATIVE_NOISE},
+          arch={"pretrain_key": FIBER_MAE}),
     _test("holdout_n96_downsampled_upsampled_trilinear", {**NOFIBER, **DOWNSAMPLED},
-          arch={"pretrain_key": PRODUCTION_MAE, **UPSAMPLED_TRAINING},
+          arch={"pretrain_key": PRODUCTION_MAE},
           init_weights="models/mae_upsampled_trilinear_native96.pth", upsampler="trilinear"),
     _test("holdout_n96_downsampled_upsampled_learned", {**NOFIBER, **DOWNSAMPLED},
-          arch={"pretrain_key": PRODUCTION_MAE, **UPSAMPLED_TRAINING},
+          arch={"pretrain_key": PRODUCTION_MAE},
           init_weights="models/mae_upsampled_learned_native96.pth", upsampler=LEARNED_UPSAMPLER),
 ]
 
@@ -173,8 +164,9 @@ def _translation_problems(test: dict) -> list[str]:
     if not suffixes or not (ROOT / DEGRADER).is_file():
         return []
     from utils.degrader import is_current
-    from utils.norm import UNIFIED_CACHE_PATH, load_cached_norm
+    from utils.norm import SURFACE_ANCHOR_CACHE_PATH, UNIFIED_CACHE_PATH, _read_json, load_cached_norm
     zarr_root = Path(os.getenv("VESUVIUS_ZARR_PATH", "/vesuvius/ves_zarrs2"))
+    anchors = _read_json(str(ROOT / SURFACE_ANCHOR_CACHE_PATH))
     problems = []
     for scroll_id, suffix in suffixes.items():
         volume = zarr_root / f"{scroll_id}{suffix}.zarr"
@@ -184,6 +176,8 @@ def _translation_problems(test: dict) -> list[str]:
             problems.append(f"{volume} was not made by {DEGRADER}")
         elif load_cached_norm(f"{scroll_id}{suffix}", str(ROOT / UNIFIED_CACHE_PATH)) is None:
             problems.append(f"{scroll_id}{suffix} has no norm_cache.json entry")
+        elif f"{scroll_id}{suffix}" not in anchors:
+            problems.append(f"{scroll_id}{suffix} has no surface_anchor_cache.json entry")
     return problems
 
 
@@ -256,6 +250,8 @@ def main() -> None:
             strict=not (args.dry_run or args.smoke),
         )
         if not args.smoke:
+            if not args.dry_run:
+                ensure_surface_anchors(campaign38.SURFACE_ANCHOR_SCROLL_IDS, str(ROOT / "ves_zarrs2"))
             campaign34.preflight_pretraining(selected, args.dry_run)
             preflight_external(selected, args.dry_run)
         print(f"[campaign39] {len(selected)} run(s) queued (log -> {LOG_DIR})")

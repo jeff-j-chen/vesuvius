@@ -14,10 +14,13 @@ import numpy as np
 
 
 class NativeNoise:
-    def __init__(self, path: str, scale: float = 1.0):
+    def __init__(self, path: str, scale: float = 1.0, norm_mode: str = "global"):
         self.path, self.scale = str(path), float(scale)
         self.bank = np.load(self.path, mmap_mode="r")
         meta = json.loads(Path(self.path).with_suffix(".json").read_text(encoding="utf-8"))
+        if meta.get("norm_mode", "global") != norm_mode:
+            raise ValueError(f"{self.path} was built with norm_mode {meta.get('norm_mode', 'global')!r}, "
+                             f"training uses {norm_mode!r}; rebuild it with --norm-mode {norm_mode}")
         self.coeffs = np.asarray(meta["sigma_coeffs"], np.float32) if meta.get("intensity_scaled") else None
         self.sigma_floor = float(meta.get("sigma_floor", 0.0))
 
