@@ -112,8 +112,11 @@ def compute_norm(
     return mean, std, norm_min, norm_max
 
 
-def load_cached_norm(scroll_id: str | int, cache_path: str = UNIFIED_CACHE_PATH):
-    """load norm stats from cache if present; return None if missing."""
+def load_cached_norm(scroll_id: str | int, cache_path: str = UNIFIED_CACHE_PATH, mode: str = "global"):
+    """load norm stats from cache if present; return None if missing.
+
+    mode "surface_anchor" maps the scroll's gap level to 0.1 and its surface papyrus level to 0.5.
+    """
     sid = str(scroll_id)
     if not os.path.exists(cache_path):
         return None
@@ -124,5 +127,106 @@ def load_cached_norm(scroll_id: str | int, cache_path: str = UNIFIED_CACHE_PATH)
         return None
     entry = cache.get(sid)
     if isinstance(entry, dict) and all(k in entry for k in ("mean", "std", "min", "max")):
-        return entry["mean"], entry["std"], entry["min"], entry["max"]
-    return None
+        stats = entry["mean"], entry["std"], entry["min"], entry["max"]
+    else:
+        stats = None
+    if mode == "global":
+        return stats
+    if mode != "surface_anchor":
+        raise ValueError(f"unknown norm mode {mode!r}")
+    anchors = _read_json(SURFACE_ANCHOR_CACHE_PATH).get(sid)
+    if stats is None or not isinstance(anchors, dict):
+        raise RuntimeError(f"surface-anchored normalization needs global and anchor stats for {sid}")
+    mean, std = stats[:2]
+    gap = (anchors["gap"] - mean) / std
+    papyrus = (anchors["papyrus"] - mean) / std
+    span = (papyrus - gap) / (ANCHOR_PAPYRUS_LEVEL - ANCHOR_GAP_LEVEL)
+    lower = gap - ANCHOR_GAP_LEVEL * span
+    return mean, std, lower, lower + span
+
+
+SURFACE_ANCHOR_CACHE_PATH = "./surface_anchor_cache.json"
+# normalized levels the gap and the surface papyrus are pinned to
+ANCHOR_GAP_LEVEL = 0.1
+ANCHOR_PAPYRUS_LEVEL = 0.5
+SUPPORT_THRESHOLD = 0.5 * (ANCHOR_GAP_LEVEL + ANCHOR_PAPYRUS_LEVEL)
+
+
+def _read_json(path: str) -> dict:
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        data = json.load(f)
+    return data if isinstance(data, dict) else {}
+
+
+def compute_surface_anchors(
+    scroll_id: str | int,
+    zarr_path: str,
+    surface_dir: str = "./surface_labels",
+    mask_dir: str = "./masks",
+    tiles: int = 384,
+    tile: int = 64,
+    seed: int = 0,
+) -> dict:
+    """raw gap level (1st percentile) and papyrus level (median at the fitted surface) from sampled tiles."""
+    import cv2
+    sid = str(scroll_id)
+    vol = zarr.open(os.path.join(zarr_path, f"{sid}.zarr"), mode="r")
+    _, height, width = map(int, vol.shape)
+    mask = cv2.imread(os.path.join(mask_dir, f"{sid}.png"), cv2.IMREAD_GRAYSCALE)
+    if mask is None:
+        mask = _imread_gray_pil(os.path.join(mask_dir, f"{sid}.png"))
+    if mask.shape != (height, width):
+        mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
+    depth = np.load(os.path.join(surface_dir, sid, "depth.npy"), mmap_mode="r")
+    confidence = np.load(os.path.join(surface_dir, sid, "confidence.npy"), mmap_mode="r")
+    rows, cols = height // tile, width // tile
+    valid = ((mask > 0) & (np.asarray(depth) != 255) & (np.asarray(confidence) > 0))
+    coverage = valid[:rows * tile, :cols * tile].reshape(rows, tile, cols, tile).mean(axis=(1, 3))
+    candidates = np.argwhere(coverage >= 0.9)
+    if len(candidates) == 0:
+        raise RuntimeError(f"[anchor] {sid} has no tiles with a fitted surface under the mask")
+    rng = np.random.default_rng(seed)
+    picks = candidates[rng.permutation(len(candidates))[:tiles]]
+    all_values, surface_values, noise_values = [], [], []
+    for row, col in picks:
+        y, x = int(row) * tile, int(col) * tile
+        block = np.asarray(vol[:, y:y + tile, x:x + tile], dtype=np.float32)
+        keep = valid[y:y + tile, x:x + tile]
+        index = np.clip(np.asarray(depth[y:y + tile, x:x + tile], dtype=np.int64), 0, block.shape[0] - 1)
+        surface = np.take_along_axis(block, index[None], axis=0)[0]
+        values = block[:, keep].ravel()
+        # exact zeros are padding outside the scanned data, not air
+        all_values.append(values[values > 0])
+        pairs = keep[:, 1:] & keep[:, :-1] & (surface[:, 1:] > 0) & (surface[:, :-1] > 0)
+        noise_values.append(np.abs(np.diff(surface, axis=1))[pairs])
+        surface = surface[keep]
+        surface_values.append(surface[surface > 0])
+    all_values = np.concatenate(all_values)
+    anchors = {
+        "gap": float(np.percentile(all_values, 1.0)),
+        "papyrus": float(np.median(np.concatenate(surface_values))),
+        # robust pixel-to-pixel spread at the surface (texture plus noise), raw units
+        "surface_mad": float(1.4826 * np.median(np.concatenate(noise_values)) / np.sqrt(2.0)),
+        "tiles": int(len(picks)),
+    }
+    if anchors["papyrus"] <= anchors["gap"]:
+        raise RuntimeError(f"[anchor] {sid} papyrus level is not above the gap level: {anchors}")
+    return anchors
+
+
+def ensure_surface_anchors(scroll_ids, zarr_path: str, surface_dir: str = "./surface_labels") -> dict:
+    """compute and cache anchors for any scroll that lacks them; returns the full anchor cache."""
+    cache = _read_json(SURFACE_ANCHOR_CACHE_PATH)
+    for scroll_id in scroll_ids:
+        sid = str(scroll_id)
+        if sid in cache:
+            continue
+        cache[sid] = compute_surface_anchors(sid, zarr_path, surface_dir=surface_dir)
+        print(f"[anchor] {sid} {cache[sid]}", flush=True)
+        temporary = f"{SURFACE_ANCHOR_CACHE_PATH}.tmp"
+        with open(temporary, "w") as f:
+            json.dump(cache, f, indent=2)
+        os.replace(temporary, SURFACE_ANCHOR_CACHE_PATH)
+    return cache

@@ -113,13 +113,17 @@ def _pretrain_path(key: str) -> Path:
     return ROOT / "models" / f"{_pretrain_name(key)}.pth"
 
 
+def _pretrain_scroll_ids(key: str) -> tuple:
+    return tuple(PRETRAIN_SPECS[key].get("scroll_ids", campaign33.PRETRAIN_SCROLL_IDS))
+
+
 def _pretrain_metadata(key: str) -> dict:
     spec = PRETRAIN_SPECS[key]
     return {
         "campaign": 34,
         "key": key,
         "steps": campaign31.PRETRAIN_STEPS,
-        "scroll_ids": list(campaign33.PRETRAIN_SCROLL_IDS),
+        "scroll_ids": list(_pretrain_scroll_ids(key)),
         "architecture_args": list(spec["args"]),
         "depth": spec["depth"],
         "d_start": spec["d_start"],
@@ -187,10 +191,10 @@ def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:
         if key in campaign33.PRETRAIN_SPECS and not _pretraining_complete(key):
             raise RuntimeError(f"Campaign 34 reuses the Campaign 33 checkpoint for {key}, but it is incomplete")
     pending = [key for key in keys if key in PRETRAIN_SPECS and not _pretraining_complete(key)]
-    missing = [
-        scroll_id for scroll_id in campaign33.PRETRAIN_SCROLL_IDS
+    missing = sorted({
+        scroll_id for key in pending for scroll_id in _pretrain_scroll_ids(key)
         if not (ROOT / "ves_zarrs2" / f"{scroll_id}.zarr").is_dir()
-    ]
+    })
     if pending and missing:
         message = f"Campaign 34 pretraining needs every training and test zarr; missing={missing}"
         if not dry_run:
@@ -202,6 +206,7 @@ def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:
         if dry_run:
             print(
                 f"[campaign34] would pretrain {key}: ctx={spec['ctx']} ds={spec['ds']} "
+                f"scrolls={len(_pretrain_scroll_ids(key))} "
                 f"{campaign31.PRETRAIN_STEPS} steps batch={campaign31.PRETRAIN_BATCH_SIZE} "
                 f"lr={campaign31.PRETRAIN_LR}",
                 flush=True,
@@ -211,7 +216,7 @@ def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:
             sys.executable,
             str(ROOT / "mae_pretrain_nnunet.py"),
             "--name", _pretrain_name(key),
-            "--scroll-ids", *(str(value) for value in campaign33.PRETRAIN_SCROLL_IDS),
+            "--scroll-ids", *(str(value) for value in _pretrain_scroll_ids(key)),
             "--require-all-scrolls",
             "--physical-round-robin",
             "--ctx", str(spec["ctx"]),

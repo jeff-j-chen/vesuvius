@@ -246,6 +246,51 @@ class ContinuousStyleFiLM3d(nn.Module):
         return features * (1.0 + gamma) + beta
 
 
+class ScanFiLM(nn.Module):
+    """FiLM on stem features from the window's own scan statistics: mean, std, mean depth gradient
+    and a log radial power spectrum (noise and blur are scanner properties)."""
+
+    def __init__(self, channels: int, bands: int, hidden: int):
+        super().__init__()
+        self.channels = int(channels)
+        self.bands = int(bands)
+        self.net = nn.Sequential(
+            nn.Linear(3 + self.bands, hidden),
+            nn.LeakyReLU(0.01, inplace=False),
+            nn.Linear(hidden, 2 * self.channels),
+        )
+        self._band_cache: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
+
+    def _band_matrix(self, height: int, width: int, device) -> tuple[torch.Tensor, torch.Tensor]:
+        key = (height, width, str(device))
+        if key not in self._band_cache:
+            fy = torch.fft.fftfreq(height, device=device)
+            fx = torch.fft.rfftfreq(width, device=device)
+            radius = torch.sqrt(fy[:, None] ** 2 + fx[None, :] ** 2).flatten() / 0.5
+            index = torch.clamp((radius * self.bands).long(), max=self.bands - 1)
+            onehot = F.one_hot(index, self.bands).float()
+            self._band_cache[key] = (onehot, onehot.sum(dim=0).clamp_min(1.0))
+        return self._band_cache[key]
+
+    def descriptor(self, raw: torch.Tensor) -> torch.Tensor:
+        with torch.autocast(device_type=raw.device.type, enabled=False):
+            x = raw[:, 0].float()
+            mean = x.mean(dim=(1, 2, 3))
+            std = x.std(dim=(1, 2, 3), unbiased=False)
+            depth_grad = (x[:, 1:] - x[:, :-1]).abs().mean(dim=(1, 2, 3))
+            centered = x - x.mean(dim=(2, 3), keepdim=True)
+            power = torch.fft.rfft2(centered, norm="ortho").abs().square().mean(dim=1).flatten(1)
+            onehot, counts = self._band_matrix(x.shape[-2], x.shape[-1], x.device)
+            bands = torch.log1p((power @ onehot) / counts)
+            return torch.cat((mean[:, None], std[:, None], depth_grad[:, None], bands), dim=1)
+
+    def forward(self, features: torch.Tensor, raw: torch.Tensor) -> torch.Tensor:
+        gamma, beta = self.net(self.descriptor(raw)).to(features.dtype).chunk(2, dim=1)
+        gamma = 0.25 * torch.tanh(gamma).view(-1, self.channels, 1, 1, 1)
+        beta = 0.25 * torch.tanh(beta).view(-1, self.channels, 1, 1, 1)
+        return features * (1.0 + gamma) + beta
+
+
 class SagNetStyleHead(nn.Module):
     """predict target presence from early feature style through gradient reversal."""
 
@@ -808,6 +853,12 @@ class NnUnet3dLcndz(nn.Module):
             self.register_buffer("_denoise_kernel", kernel / kernel.sum(), persistent=False)
         else:
             self._denoise_kernel = None
+        self._input_denoiser_path = str(getattr(config.model, "input_denoiser", "") or "")
+        if self._input_denoiser_path:
+            from utils.denoise import BlindSpotDenoiser
+            self.input_denoiser = BlindSpotDenoiser()
+        else:
+            self.input_denoiser = None
         self._tile_size = int(getattr(config.data, "tile_size", 16))
         self._context_size = int(getattr(config.data, "context_size", 0) or 0)
         self._attn_entropy_weight = float(getattr(config.model, "attn_entropy_weight", 0.0))
@@ -928,6 +979,16 @@ class NnUnet3dLcndz(nn.Module):
             )
             if bool(getattr(config.model, "style_film", False)) else None
         )
+        self.scan_film = (
+            ScanFiLM(
+                c1,
+                int(getattr(config.model, "scan_film_bands", 8)),
+                int(getattr(config.model, "scan_film_hidden", 32)),
+            )
+            if bool(getattr(config.model, "scan_film", False)) else None
+        )
+        if self.scan_film is not None and not bool(getattr(config.model, "early_2d_unet", False)):
+            raise ValueError("scan_film is implemented for the early-2D U-Net only")
 
         # spatial channel dropout after early encoder stages and before classification head
         _d1 = float(getattr(config.model, "conv1_drop", 0.0))
@@ -1283,6 +1344,7 @@ class NnUnet3dLcndz(nn.Module):
             if not self._early_2d_unet or n_domains < 2:
                 raise ValueError("private_domain_heads requires early_2d_unet and dann_n_domains >= 2")
             self.private_domain_heads = nn.Conv2d(self.early_depth_fuse.out_channels, n_domains, kernel_size=1)
+        self._private_head_detach_shared = bool(getattr(config.model, "private_head_detach_shared", False))
         self.last_private_score: torch.Tensor | None = None
         self.last_private_delta: torch.Tensor | None = None
         self.last_head_input: torch.Tensor | None = None
@@ -1490,6 +1552,9 @@ class NnUnet3dLcndz(nn.Module):
     def _prepare_input(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 4:
             x = x.unsqueeze(1)
+        if self.input_denoiser is not None:
+            with torch.no_grad():
+                x = self.input_denoiser(x)
         if self._downsample > 1:
             x = F.avg_pool3d(
                 x,
@@ -1923,6 +1988,8 @@ class NnUnet3dLcndz(nn.Module):
         elif self.new_surface_head is not None:
             raise ValueError("early_2d_unet currently requires literal or disabled surface input")
         features3d = self.enc1(self._apply_gated_cues(self._stem_in(raw, surface)))
+        if self.scan_film is not None:
+            features3d = self.scan_film(features3d, raw)
         if surface is not None and self.new_surface_input is not None:
             features3d = features3d + self.new_surface_input(surface)
         if self.fiber_coordinate_input is not None:
@@ -2579,7 +2646,8 @@ class NnUnet3dLcndz(nn.Module):
                 index = domain_ids.view(-1, 1, 1, 1).long().expand(-1, 1, *decoded2d.shape[-2:])
                 delta = self.private_domain_heads(decoded2d).gather(1, index)
                 self.last_private_delta = delta
-                self.last_private_score = self._multitile_aggregate_2d(voxel2d + delta, target_offsets)
+                shared = voxel2d.detach() if self._private_head_detach_shared else voxel2d
+                self.last_private_score = self._multitile_aggregate_2d(shared + delta, target_offsets)
             center2d = self._crop_center_feat(
                 voxel2d.unsqueeze(2),
                 self._mt_center_feat,
@@ -2842,6 +2910,9 @@ def create_model(config: Config):
     if model.depth_profile_expert is not None:
         nn.init.zeros_(model.depth_profile_expert.net[-1].weight)
         nn.init.zeros_(model.depth_profile_expert.net[-1].bias)
+    if model.scan_film is not None:
+        nn.init.zeros_(model.scan_film.net[-1].weight)
+        nn.init.zeros_(model.scan_film.net[-1].bias)
     if model.dual_scale_gate is not None:
         final = model.dual_scale_gate[-1]
         nn.init.zeros_(final.weight)
@@ -2867,6 +2938,11 @@ def create_model(config: Config):
             module.reset_output_layer()
         elif isinstance(module, MedNeXtAdapter3d):
             module.reset_output()
+    if getattr(model, "input_denoiser", None) is not None:
+        state = torch.load(model._input_denoiser_path, map_location=config.device, weights_only=True)
+        model.input_denoiser.load_state_dict(state)
+        model.input_denoiser.requires_grad_(False)
+        model.input_denoiser.eval()
 
     params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters ({arch}): {params:,}")

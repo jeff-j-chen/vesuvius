@@ -676,6 +676,9 @@ class Trainer:
             "fishr_penalty": 0.0,
             "cross_scroll_rank_loss": 0.0,
             "private_head_loss": 0.0,
+            "pu_loss": 0.0,
+            "unsupported_pos_frac": 0.0,
+            "unsupported_neg_frac": 0.0,
             "and_mask_kept_frac": 0.0,
             "spectral_decoupling_penalty": 0.0,
         }
@@ -1119,6 +1122,43 @@ class Trainer:
                 count = parameter.numel()
                 parameter.grad.add_(correction[offset:offset + count].view_as(parameter))
                 offset += count
+
+    def _unsupported_cells(self, images, surface_depth, surface_confidence, target_offsets):
+        """(B, cells) True where under a quarter of the cell's pixels show papyrus at the fitted surface
+        (+-1 slice), i.e. the ink-bearing layer is not in the input and the label cannot be read."""
+        from utils.norm import SUPPORT_THRESHOLD
+        if surface_depth is None:
+            raise RuntimeError("support_drop needs the surface depth maps")
+        if str(getattr(self.c.data, "norm_mode", "global")) != "surface_anchor":
+            raise RuntimeError("support_drop thresholds papyrus in surface-anchored units")
+        volume = images.detach().float()
+        volume = volume.reshape(volume.shape[0], -1, *volume.shape[-2:])
+        batch, depth_count, height, width = volume.shape
+        depth = surface_depth.reshape(batch, height, width)
+        confidence = (
+            torch.ones_like(depth) if surface_confidence is None
+            else surface_confidence.reshape(batch, height, width)
+        )
+        index = depth.round().long()
+        at_surface = torch.stack([
+            volume.gather(1, (index + shift).clamp(0, depth_count - 1).unsqueeze(1)).squeeze(1)
+            for shift in (-1, 0, 1)
+        ]).amax(dim=0)
+        supported = ((depth >= 0) & (confidence > 0) & (at_surface >= SUPPORT_THRESHOLD)).float()
+        grid = int(self.c.model.multitile_grid)
+        sub = int(self.c.model.multitile_subtile)
+        size = grid * sub
+        top, left = (height - size) // 2, (width - size) // 2
+        if target_offsets is None:
+            center = supported[:, top:top + size, left:left + size]
+        else:
+            offsets = target_offsets.reshape(batch, 2).long().tolist()
+            center = torch.stack([
+                supported[b, top + jy:top + jy + size, left + jx:left + jx + size]
+                for b, (jy, jx) in enumerate(offsets)
+            ])
+        fraction = F.avg_pool2d(center.unsqueeze(1), sub).flatten(1)
+        return fraction < float(getattr(self.c.tra, "support_min_fraction", 0.25))
 
     def _rsc_outputs(self, outputs, labels, mask, target_offsets, probability):
         """Representation Self-Challenging (Huang et al. 2020) at the output-head input: on a random
@@ -2042,8 +2082,30 @@ class Trainer:
                 self._last_dg_losses["topk_positive_kept_frac"] = float(
                     (((targets > 0.5) & (loss_mask > 0)).sum() / positives).item()
                 )
+            pu_lambda = float(getattr(self.c.tra, "pu_lambda", 0.0))
+            pu_unlabeled = None
+            if pu_lambda > 0 and outputs.shape == mask.shape:
+                # far-background cells may hold unlabelled ink: they leave the BCE for the PU risk
+                pu_unlabeled = (labels < -1.5) & (mask > 0)
+                loss_mask = loss_mask * (~pu_unlabeled).to(loss_mask.dtype)
+            support_drop = str(getattr(self.c.tra, "support_drop", "") or "")
+            if support_drop:
+                if outputs.shape != mask.shape:
+                    raise RuntimeError("support_drop requires multitile cell outputs")
+                unsupported = self._unsupported_cells(
+                    surface_source, surface_depth, surface_confidence, target_offsets,
+                ) & (mask > 0)
+                positive_cells = labels > 0.5
+                drop = unsupported if support_drop == "both" else unsupported & positive_cells
+                self._last_dg_losses["unsupported_pos_frac"] = float(
+                    ((unsupported & positive_cells).sum() / ((mask > 0) & positive_cells).sum().clamp(min=1)).item()
+                )
+                self._last_dg_losses["unsupported_neg_frac"] = float(
+                    ((unsupported & ~positive_cells).sum() / ((mask > 0) & ~positive_cells).sum().clamp(min=1)).item()
+                )
+                loss_mask = loss_mask * (~drop).to(loss_mask.dtype)
             raw_loss = per_target_loss * loss_mask
-            denom = loss_mask.sum()
+            denom = loss_mask.sum().clamp(min=1.0)
             raw_loss_value = raw_loss.sum() / denom
             primary_loss = raw_loss.sum() / denom
             needs_domain_losses = any([
@@ -2434,6 +2496,19 @@ class Trainer:
                     topk_frac=float(getattr(self.c.tra, "character_bag_topk_frac", 0.5)),
                 )
                 loss = loss + float(getattr(self.c.tra, "character_bag_lambda", 0.2)) * bag_rank_loss_value
+
+            if pu_unlabeled is not None:
+                pu_positive = (labels > 0.5) & (mask > 0)
+                if pu_unlabeled.any() and pu_positive.any():
+                    logits = outputs.float()
+                    # negative-class risk of U minus the share of it that hidden positives explain, floored at 0
+                    pu_loss = torch.clamp(
+                        F.softplus(logits[pu_unlabeled]).mean()
+                        - float(getattr(self.c.tra, "pu_prior", 0.03)) * F.softplus(logits[pu_positive]).mean(),
+                        min=0.0,
+                    )
+                    loss = loss + pu_lambda * pu_loss
+                    self._last_dg_losses["pu_loss"] = float(pu_loss.detach())
 
             tta_lambda = float(getattr(self.c.tra, "tta_consistency_lambda", 0.0))
             _tta_on = getattr(self.c.tra, "tta_consistency", False) and tta_lambda > 0

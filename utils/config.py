@@ -222,6 +222,8 @@ class DataConfig:
     # ink label, floored at edge_soft_floor (>0.5 so the cell still counts as positive). 0 = off
     edge_soft_sigma: float = 0.0
     edge_soft_floor: float = 0.6
+    # "global": whole-volume z-score and raw min/max; "surface_anchor": gap -> 0.1, surface papyrus -> 0.5
+    norm_mode: str = "global"
     # control: roll training-scroll labels by this fraction of the height (visualized scrolls keep theirs)
     label_shift_frac: float = 0.0
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
@@ -486,6 +488,13 @@ class TrainingConfig:
     # pairwise logistic ranking of ink cells above negative cells from a different physical domain
     cross_scroll_rank_lambda: float = 0.0
     cross_scroll_rank_pairs: int = 4096
+    # non-negative PU risk (Kiryo et al. 2017) on far-background cells (label -2), treated as
+    # unlabelled with this ink prior instead of as negatives; needs data.far_negative_share > 0
+    pu_lambda: float = 0.0
+    pu_prior: float = 0.03
+    # drop cells whose fitted surface shows no papyrus from the loss: "" off, "pos" positives, "both"
+    support_drop: str = ""
+    support_min_fraction: float = 0.25
     mid_depth_entropy_lambda: float = 0.0
     topk_positive_fraction: float = 0.0  # 0 disables; else supervise only each character's top positives
     character_forgetting: bool = False
@@ -543,8 +552,11 @@ class ModelConfig:
     surface_relief_input: bool = False
     # fixed in-plane gaussian on the (downsampled) input; 0.6 px cuts white-noise variance ~4x like 2x2 pooling
     input_denoise_sigma: float = 0.0
+    input_denoiser: str = ""
     # per-physical-domain residual output heads used only in training; inference uses the shared head
     private_domain_heads: bool = False
+    # private loss sees the shared logits detached: the private head only shapes shared features, never takes over calibration
+    private_head_detach_shared: bool = False
     early_2d_unet: bool = False
     early_2d_channels_mult: float = 1.0
     mid_2d_unet: bool = True
@@ -596,6 +608,11 @@ class ModelConfig:
     dual_scale_outer_mix: float = 0.0
     dual_scale_adaptive_gate: bool = False
     dual_scale_gate_max: float = 1.0
+    # early-2D only: FiLM on the stem from each window's measured scan statistics
+    # (intensity, depth gradient, radial power spectrum), so ink appearance can depend on the scanner
+    scan_film: bool = False
+    scan_film_bands: int = 8
+    scan_film_hidden: int = 32
     # per-pixel expert on each pixel's own slice column (no in-plane context), added to the score
     depth_profile_expert: bool = False
     depth_profile_mix: float = 0.5

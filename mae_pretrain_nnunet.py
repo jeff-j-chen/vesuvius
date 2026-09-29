@@ -102,7 +102,9 @@ class CropSampler:
             self.mask = (mask_img > 0).astype(np.uint8)
             self.mask_integral = cv2.integral(self.mask)
 
-            norm = load_cached_norm(str(scroll_id), UNIFIED_CACHE_PATH)
+            norm = load_cached_norm(
+                str(scroll_id), UNIFIED_CACHE_PATH, mode=str(getattr(cfg.data, "norm_mode", "global")),
+            )
             if norm is None:
                 print(f"[mae] computing norm for {scroll_id}...")
                 norm = compute_norm(str(scroll_id), zarr_path, UNIFIED_CACHE_PATH)
@@ -400,6 +402,8 @@ def main():
     ap.add_argument("--mednext-kernel", type=int, default=5)
     ap.add_argument("--fiber-coordinate-branch", action="store_true")
     ap.add_argument("--input-denoise-sigma", type=float, default=0.0)
+    ap.add_argument("--input-denoiser", default="")
+    ap.add_argument("--data-norm-mode", default="global", choices=("global", "surface_anchor"))
     ap.add_argument("--depth", type=int, default=24)
     ap.add_argument("--d-start", type=int, default=4)
     ap.add_argument("--d-end", type=int, default=28)
@@ -488,6 +492,8 @@ def main():
     cfg.model.mednext_expansion = 2
     cfg.model.fiber_coordinate_branch = bool(args.fiber_coordinate_branch)
     cfg.model.input_denoise_sigma = float(args.input_denoise_sigma)
+    cfg.model.input_denoiser = str(args.input_denoiser)
+    cfg.data.norm_mode = str(args.data_norm_mode)
     cfg.tra.supcon = False
     cfg.data.tile_size = 16
     cfg.data.depth = args.depth
@@ -575,6 +581,19 @@ def main():
 
     from utils.model import create_model
     backbone, _ = create_model(cfg)
+    # denoise whole crops before masking so the reconstruction target is the denoised volume too
+    input_denoiser = getattr(backbone, "input_denoiser", None)
+    if input_denoiser is not None:
+        backbone.input_denoiser = None
+    if input_denoiser is not None:
+        input_denoiser = input_denoiser.to(dev)
+
+    def _denoised(batch):
+        if input_denoiser is None:
+            return batch
+        with torch.no_grad():
+            return input_denoiser(batch)
+
     model = NnUnetMAE(backbone, args.depth).to(dev)
     if args.init_weights:
         state = torch.load(args.init_weights, map_location=dev, weights_only=True)
@@ -647,7 +666,7 @@ def main():
             xb = train_s.sample(args.batch_size, rng)
             if xb is None:
                 continue
-            xb = xb.to(dev)
+            xb = _denoised(xb.to(dev))
 
             # target: ds-downsampled raw crop (what the backbone's decoder sees)
             if args.ds > 1:
@@ -690,7 +709,7 @@ def main():
             with torch.no_grad():
                 mb = mon_s.sample(args.batch_size, rng)
                 if mb is not None:
-                    mb = mb.to(dev)
+                    mb = _denoised(mb.to(dev))
                     if args.ds > 1:
                         mt = F.avg_pool3d(mb, kernel_size=(1, args.ds, args.ds),
                                           stride=(1, args.ds, args.ds))

@@ -105,7 +105,7 @@ TESTS = [
         "model.depth_profile_expert": True, "model.depth_profile_mix": 0.5, "model.depth_profile_pool": 5,
     }),
     # keeps the two paths' errors different by making each predict alone on some samples
-    # _test("holdout_n96_dual_expert_dropout", {**campaign36.DUAL_SCALE, "model.expert_dropout": 0.3}),
+    _test("holdout_n96_dual_expert_dropout", {**campaign36.DUAL_SCALE, "model.expert_dropout": 0.3}),
     _test("holdout_n96_bag_rank", {
         "tra.character_bag_ranking": True, "tra.character_bag_margin": 0.5,
         "tra.character_bag_topk_frac": 0.5, "tra.character_bag_lambda": 0.2,

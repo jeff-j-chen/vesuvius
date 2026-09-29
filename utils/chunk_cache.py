@@ -178,9 +178,18 @@ def get_selective_chunk_volume(source, norm_stats=None) -> SelectiveChunkVolume:
         cached.shape != tuple(source.shape)
         or cached.source_dtype != np.dtype(source.dtype)
         or cached.chunks != tuple(source.chunks)
-        or cached.norm_stats != (
-            None if norm_stats is None else tuple(float(value) for value in norm_stats)
-        )
     ):
         raise RuntimeError(f"selective cache metadata changed for {path}")
+    elif cached.norm_stats != (
+        None if norm_stats is None else tuple(float(value) for value in norm_stats)
+    ):
+        # a later arm normalizes the same volume differently (e.g. surface-anchored norm)
+        cached = SelectiveChunkVolume(
+            path,
+            source.shape,
+            source.dtype,
+            source.chunks,
+            norm_stats=norm_stats,
+        )
+        _CACHE_REGISTRY[path] = cached
     return cached

@@ -2657,7 +2657,7 @@ class DataManager:
             "character_balanced_sampling",
             "character_min_pixels", "max_samples_per_epoch",
             "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
-            "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "vis_scroll_ids",
+            "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "vis_scroll_ids", "norm_mode",
         )
         dataloader_fields = (
             "context_replace_prob", "context_replace_min_mask_frac",
@@ -2974,7 +2974,9 @@ class DataManager:
         """retrieve cached norm stats; if absent, compute with the fast chunk-aligned method."""
         from .norm import compute_norm, load_cached_norm, UNIFIED_CACHE_PATH
         seg_id = str(self.scroll_id)
-        cached = load_cached_norm(seg_id, UNIFIED_CACHE_PATH)
+        cached = load_cached_norm(
+            seg_id, UNIFIED_CACHE_PATH, mode=str(getattr(self.c.data, "norm_mode", "global")),
+        )
         if cached is not None:
             return cached
         print(f"[info] computing normalization for segment {seg_id} (chunk-aligned pass)")

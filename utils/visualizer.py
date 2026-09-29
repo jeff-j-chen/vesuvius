@@ -1077,7 +1077,9 @@ class TensorboardVisualizer:
     def _get_or_compute_norm(self, vol, mask, seg_id):
         """load cached normalization stats or compute them via utils.norm."""
         from .norm import UNIFIED_CACHE_PATH, compute_norm, load_cached_norm
-        cached = load_cached_norm(seg_id, UNIFIED_CACHE_PATH)
+        cached = load_cached_norm(
+            seg_id, UNIFIED_CACHE_PATH, mode=str(getattr(self.c.data, "norm_mode", "global")),
+        )
         if cached is not None:
             return cached
         return compute_norm(seg_id, self.c.data.zarr_path, UNIFIED_CACHE_PATH)
