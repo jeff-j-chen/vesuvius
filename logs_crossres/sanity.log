@@ -1,0 +1,28 @@
+nohup: ignoring input
+[w044] low (28, 6040, 8160) z=14  high L2 (109, 5880, 7940) z=54
+[w044] dice as_rendered=0.727 phase=0.736 sift=0.785 (inliers 964) best=shape_ratio_shift residual_scale=1.0024 depth_offset=+1.50 slices reversed=False (r=1.00) -> check
+[w059] low (28, 7220, 10020) z=14  high L2 (109, 7020, 9740) z=54
+[w059] dice as_rendered=0.664 phase=0.683 sift=0.749 (inliers 725) best=sift_similarity residual_scale=1.0035 depth_offset=+1.00 slices reversed=False (r=1.00) -> check
+[w030] low (28, 7140, 7460) z=14  high L2 (109, 6940, 7260) z=54
+[w030] FAILED: 500, message='Internal Server Error', url='https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0139/segments/20250108000005-w030_2025010818/surface-volumes/9.362um-1.2m-113keV-volume-20250728140407.zarr/0/0/32/9'
+[w043] low (28, 6120, 8120) z=14  high L2 (109, 5940, 7900) z=54
+[w043] dice as_rendered=0.704 phase=0.722 sift=0.770 (inliers 723) best=shape_ratio_shift residual_scale=1.0040 depth_offset=+1.75 slices reversed=False (r=1.00) -> check
+[w045] low (28, 5980, 8240) z=14  high L2 (109, 5820, 8020) z=54
+[w045] dice as_rendered=0.721 phase=0.722 sift=0.785 (inliers 1000) best=sift_similarity residual_scale=1.0023 depth_offset=+1.50 slices reversed=False (r=1.00) -> check
+[w040] low (28, 6400, 7980) z=14  high L2 (109, 6220, 7760) z=54
+[w040] dice as_rendered=0.685 phase=0.694 sift=0.781 (inliers 1329) best=sift_similarity residual_scale=1.0033 depth_offset=+1.75 slices reversed=False (r=1.00) -> check
+[w041] low (28, 6200, 8020) z=14  high L2 (109, 6020, 7800) z=54
+[w041] dice as_rendered=0.681 phase=0.699 sift=0.770 (inliers 1169) best=shape_ratio_shift residual_scale=1.0040 depth_offset=+1.50 slices reversed=False (r=1.00) -> check
+[w039] low (28, 8560, 7720) z=14  high L2 (109, 8320, 7500) z=54
+[w039] dice as_rendered=0.660 phase=0.683 sift=0.774 (inliers 944) best=shape_ratio_shift residual_scale=1.0040 depth_offset=+1.75 slices reversed=False (r=1.00) -> check
+[w035] low (28, 5820, 5240) z=14  high L2 (109, 5660, 5100) z=54
+[w035] dice as_rendered=0.655 phase=0.668 sift=0.716 (inliers 848) best=shape_ratio_shift residual_scale=1.0029 depth_offset=+1.25 slices reversed=False (r=1.00) -> check
+[500P2_front] low (28, 6280, 3580) z=14  high L2 (118, 6610, 3765) z=59
+[500P2_front] dice as_rendered=0.686 phase=0.696 sift=0.827 (inliers 2391) best=shape_ratio_shift residual_scale=1.0043 depth_offset=-0.25 slices reversed=False (r=0.99) -> check
+[seg46527] low (28, 2180, 3560) z=14  high L2 (109, 2130, 3455) z=54
+[seg46527] dice as_rendered=0.692 phase=0.790 sift=0.799 (inliers 598) best=shape_ratio_shift residual_scale=1.0020 depth_offset=-0.50 slices reversed=False (r=0.99) -> check
+[p9b_487] low (31, 7040, 5700) z=15  high L2 (109, 6340, 5130) z=54
+[p9b_487] dice as_rendered=0.674 phase=0.790 sift=0.796 (inliers 1489) best=shape_ratio_shift residual_scale=0.9993 depth_offset=+1.25 slices reversed=False (r=0.99) -> check
+[p841] low (28, 3760, 4900) z=14  high L2 (109, 3665, 4775) z=54
+[p841] dice as_rendered=0.697 phase=0.835 sift=0.838 (inliers 1572) best=sift_similarity residual_scale=0.9996 depth_offset=+0.25 slices reversed=False (r=0.97) -> check
+wrote /vesuvius/crossres/sanity/registration.json

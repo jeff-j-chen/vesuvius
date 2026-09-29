@@ -182,6 +182,220 @@ It also leaves a cheap diagnostic: render the generator's output over 0841 next 
 strokes appear sharper in the predicted fine layers than in the 9.36 µm slices, the route is worth its
 arm.
 
+### 0.6 The input head: v8-in's upsampling, learned from our pairs (plan U)
+
+**What v8-in does.** It trilinearly upsamples each 24 × 64 × 64 tile 4× in depth and x/y (to
+96 × 256 × 256) *before* the network, and predicts at native resolution.
+- It adds no information.
+- It gives every conv 4× more grid per micrometre of papyrus, and matches the scale the video-pretrained
+  ResNet3D-50 was built for.
+- This is the change that made the canonical 2.4 µm recipe work at ~9 µm. It points the same way as our
+  own biggest effect: native resolution beat 2× pooling in c33.
+
+**Our advantage: replace the fixed interpolation with one learned from real 2.4 µm data.**
+- `utils/upsampler.py:LearnedUpsampler` is trilinear interpolation **plus** a learned residual (an
+  8-layer 3D conv net and a sub-voxel shuffle, 0.38 M parameters).
+- The residual head is zero-initialised, so the untrained module is *exactly* v8-in's upsampler, verified
+  numerically. Training on the pairs can only add detail on top of it.
+- `crossres/train_upsampler.py` fits it on plan X's tiles: 8 × 96² at 9.36 µm to 32 × 192², i.e. 4× depth
+  (the "unsquish") and 2× x/y.
+- Its report is one number: monitor MSE ÷ trilinear MSE on tiles it never trained on. Below 1 means the
+  learned detail is real.
+
+**Two runs, identical except the upsampler.** Each pretrains the standard MAE (with slab masking) on
+*upsampled* crops over all 37 volumes:
+
+| id | upsampler | network input for a 96 px (0.9 mm) field | isolates |
+|---|---|---|---|
+| **U-L** | learned (`upsampler_learned_xy2_d4`) | 16 × 192 × 192 (×4 depth pooled 2, ×2 x/y) | learned vs fixed upsampling (against U-T) |
+| **U-T** | trilinear only (`--steps 0`) | 16 × 192 × 192 | v8-in's input head inside our model (against S) |
+
+- **Size.** ×2 x/y and ×2 depth is 8× our current voxels (v8-in runs 64× on 4 GPUs); batch 16 fits one
+  48 GB GPU.
+- **Warm start.** Checkpoint weights do not depend on depth or field size (native96, native96_depth16 and
+  native192 share every shape), so both warm-start fully from the production MAE. Mask blocks are
+  scaled to the same physical size.
+- **Honest holdout.** The upsampler is trained with `--exclude-holdout-pairs` (0841 never seen).
+- **When the checkpoints come back (this machine):** add the frozen upsampler to the model's
+  `_prepare_input`, the same plumbing as the input denoiser; the model's grid geometry scales by 2. Then
+  fine-tune the U-L, U-T and baseline arms under one config.
+- **Risk.** The learned upsampler has seen 3 physical scrolls; on a new scroll it may add their texture.
+  U-T is the control, and the papyrus check in the renders is decisive.
+
+The hallucination route in §0.5 is the same idea one level deeper (the generator is the whole
+backbone). Plan U is the cheap, input-head-only version, and it can be fine-tuned end to end.
+
+**Status on the pretraining machine (2026-09-29): implemented and queued (`crossres/run_queue.sh`).**
+- `utils/upsampler.py`: `LearnedUpsampler`, 0.40 M parameters (width 48, 8 conv layers), verified to equal
+  trilinear exactly when untrained. `network_input()` = ×4 depth, ×2 x/y, then depth average-pooled by 2.
+- `crossres/train_upsampler.py`: 3000 steps on plan X tiles (honest: 0841 and 0009B excluded), keeps the
+  checkpoint with the best monitor ratio → `models/upsampler_learned_xy2_d4.pth`.
+- `mae_pretrain_crossres.py --plan none --upsampler <ckpt|trilinear>`: masks on the native grid *before*
+  upsampling (no leakage through interpolation), target = upsampled unmasked crop.
+  - Standard branch: the 13 paired volumes (not 37).
+  - Batch 32 as 2 × 16 (about 9 GB peak on the 24 GB A5000); warm start loads 187/187 tensors.
+- Outputs: `models/mae_upsampled_learned_native96.pth` (U-L) and
+  `models/mae_upsampled_trilinear_native96.pth` (U-T). Each has a `.json` sidecar naming the upsampler
+  and the input geometry.
+- **Fine-tune plumbing still needed on the main machine:**
+  1. Load the sidecar's upsampler frozen in `_prepare_input` (as `input_denoiser`). Apply it to the
+     normalised 8 × 96 × 96 crop *before* the backbone, so the backbone sees 16 × 192 × 192.
+  2. Build the model with `depth=16`, `context_size=192`, `context_downsample=1`. native192_depth16 proves
+     that geometry works.
+  3. Double `tile_size` (16 → 32 network px = 16 native px), so each output cell still covers the same
+     papyrus as the baseline's label cell. Labels, masks and the surface window stay on the native grid.
+  4. Keep the surface-relative window at 8 native slices; the upsampler turns it into 16.
+  5. Run the U-L, U-T and native baseline arms under one fine-tune config and seed.
+
+### 0.7 The reverse direction: a pooled → native translator (plan R, chosen design, not implemented)
+
+**Idea.** Some training fragments exist only as 2.4 µm scans: Paris4, w018 and w013. Today they are
+pooled onto a 9.36 µm grid. Learn to turn that *pooled* 9.36 µm volume into a synthetic *native*
+9.36 µm scan (113 keV / 1.2 m), and train on the result. This is the learned form of the researchers'
+finding that near-native data beats plain downsampling.
+
+**Why it is logical.**
+- Degradation is the well-posed direction. It removes information rather than inventing it: the
+  contrast change, phase fringes, blur and partial volume.
+- It can be validated honestly. Pool 0841's 2.4 µm render, translate it, and compare with 0841's real
+  9.36 µm scan. The super-resolution plans can't be checked this way.
+
+**Why the pooled version (and not 2.4 µm → 9.36 µm directly).** It fits the rent-a-GPU workflow.
+- `_assemble_pooled_surface` already streams only **level 2** of the S3 pyramid (≈9.6 µm x/y, all 109
+  layers) and pools depth row by row. That costs about 4× a native zarr, never level 0.
+- The translator runs on that local pooled zarr, on the GPU, in about a minute. Nothing extra is
+  downloaded or stored remotely, and the checkpoint is a few MB, so it lives in git.
+- The trade-off is that the translator never sees the 4× depth detail. Revisit only if the 0841 check
+  fails.
+
+#### R.1 Training data (other machine)
+
+- **New `build_pairs.py` plan `degrade`.** Same as `depth` (level 2, `xy_scale` 1, `depth_factor` 4),
+  but with slices 0–28 instead of 8–19. The translator is applied to all 28 slices, so it must train
+  on them.
+  - The `PLANS` entries are applied through `setattr`, so add `"z0": 0, "z1": 28` to the entry.
+  - **No extra download.** High chunks are [all layers, 128, 128], so the same chunks are read. They
+    come from the `_ves_tmp/crossres_high` cache if it is still present, otherwise it is the same ≈15 GB
+    stream as plan D.
+  - **Disk.** About 28/12 × plan D's footprint.
+- **Pairs.** Use only those whose high side is in the regime of the fragments to translate. Paris4,
+  w018 and w013 are all `*-0.22m-78keV`.
+  - **Use:** the nine 0139 segments and 0814 (78 keV / 0.22 m high; 113 keV / 1.2 m low).
+  - **Leave out:** 500P2 (111 keV / 0.4 m high) and 0009B (its low scan is 8.64 µm / 116 keV).
+  - **Validation only:** 0841, via `--include-holdouts --names p841` (64 random footprint tiles; its
+    high scan is 2.403 µm / 0.22 m / 77 keV, so it is in the regime).
+- **Per-tile sample.**
+  - Input = the tile's `target` averaged over its 4 sub-slices, i.e. `_coarse(target, 4, 1, size)`.
+  - Target = the tile's `input` (the real 9.36 µm slices).
+  - Both are on the training frame and already depth- and x/y-registered per tile.
+
+#### R.2 Model and training
+
+- **Module.** New `utils/degrader.py:LearnedDegrader`: identity plus a zero-initialised 3D conv
+  residual, 28 → 28 layers, the same grid, ≈0.4 M parameters, with a small depth kernel. Untrained, it
+  is exactly today's pooled volume.
+- **Script.** New `crossres/train_degrader.py`, modelled on `train_upsampler.py`.
+  - Loss: MSE inside `valid` and the papyrus mask.
+  - Keep the checkpoint with the best monitor ratio.
+- **Normalisation.**
+  - Input: the per-segment robust affine (median/MAD) of the pooled tiles.
+  - Target: the native zarr's `norm_cache.json` entry.
+- **Misregistration guard.** A residual shift looks exactly like blur, so the net would learn it as
+  "degradation". Train only on tiles with midslice NCC ≥ 0.5, not 0.3; this is a knob worth one
+  ablation.
+- **Report** (the gate), on the 0841 tiles only:
+  - `monitor ratio` = MSE(translated, real) ÷ MSE(pooled, real). It must be below 1.
+  - The radial power spectrum of translated and of pooled, each against real, for the mean prediction
+    and again with noise added (R.3). It should move towards real.
+  - Mean and std per slice against real.
+- **Outputs to send back** (commit them):
+  - `models/degrader_pooled_native.pth` plus a `.json` sidecar (pairs used, NCC gate, normalisation,
+    monitor ratio);
+  - `runs_mae/degrader_*`;
+  - `crossres/pairs/degrade/*/meta.json`.
+
+#### R.3 Noise: in the dataloader, not baked in
+
+The translator predicts the mean, and a noise-free volume is the old "too clean" failure. Noise is
+added at training time, fresh for every sample, so the model never memorises a single realisation.
+
+- **Noise bank.** New `crossres/build_noise_bank.py`, run on every spin-up (it only needs local files).
+  - Source: patches of raw − `denoiser_n2v_block3_4k(raw)` from the 113 keV / 1.2 m zarrs (0139, 0814,
+    500P2), inside papyrus, in normalised units.
+  - Output: `_ves_tmp/native_noise_bank.npy` (e.g. 256 × 16 × 128² float16, ≈130 MB, too large for
+    git).
+  - **Check first:** whether the noise variance depends on intensity. If it does, scale each patch by
+    the local intensity.
+  - **Caveat:** that denoiser removes faint ink (c38), so the residual holds some signal. Take patches
+    away from labels.
+- **Dataloader hook.** In `utils/dataloader.py` `_fetch_block`, right after `_normalize_block`, add a
+    random crop / flip / depth-slice offset from the bank × `noise_scale`.
+  - Training crops only (not validation, inference or visuals).
+  - Only for fragments flagged as translated.
+  - The flag is a new per-fragment set in `utils/config.py` (e.g. `NATIVE_NOISE_IDS`), switched per arm
+    with `data.native_noise`.
+
+#### R.4 Assembly plumbing (main machine)
+
+- **`utils/degrader.py:translate_zarr(src, dst, ckpt)`.** Streams row bands with all 28 layers and a
+  halo equal to the receptive field.
+  - Normalise with the pooled volume's own stats, translate, then map back to raw values with a fixed
+    reference native scroll's stats (w044's `norm_cache.json` entry).
+  - Clip to 0–255 and keep the source dtype: Paris4 writes `<u2`, w018 `|u1`.
+  - Store the zarr attribute `degrader=<sha256[:12] of ckpt>`.
+- **`assemble_training_segments.py --degrader <ckpt>`** (off by default).
+  - After `_assemble_pooled_surface` (Paris4, w018) and `_assemble_w013_volume` (w013), write
+    `ves_zarrs2/<id>.translated.zarr` next to the pooled zarr.
+  - A copy whose `degrader` attribute doesn't match the checkpoint is rebuilt locally from the pooled
+    zarr, without re-downloading.
+  - **Why a sibling rather than in place:** the A/B arms need both volumes, and an in-place volume would
+    have to be re-streamed from S3 (≈14 GB for Paris4) whenever the checkpoint changes. The copy is
+    local disk only.
+- **Choosing the volume per arm.**
+  - The dataloader and norm lookup need a per-fragment volume override, e.g.
+    `data.zarr_suffix = {"20231210121321": ".translated"}`.
+  - Norm is cached under the key `<id>.translated` (`compute_norm` on the sibling zarr). Paris4 and w018
+    already have `force_norm`; w013 needs it added.
+- **Unchanged:** masks, labels, `train_masks/` and `surface_labels/` (same grid and geometry). Don't
+  regenerate surface maps from the translated volume, so that the arms differ only in intensities.
+- **Out of scope:** Cr1 Fr3 (70 keV flattened TIFFs from 3.24 µm, resampled rather than pooled, and not
+  in the pairs' regime), 500P2 (already a native 9.36 µm scan), and the 88 keV fragments.
+
+#### R.5 Evaluation
+
+Arms under one fine-tune config and seed, differing only in how Paris4, w018 and w013 enter:
+1. Pooled (control, today).
+2. Translated.
+3. Translated plus native noise.
+4. Pooled plus native noise, which separates the noise from the translator.
+
+Judge on 0841 and 0009B R@1%/R@5%/pAUC@1% and the papyrus renders, as in §5. Replicate noise is
+~0.03 recall, so add a seed-42 replicate of the winner.
+
+#### R.6 Risks and extra information needed
+
+- **Coverage.** The pairs cover 2 physical scrolls (0139 dominant). Paris4 is carbonised and preserved
+  differently; the 0841 gate is the only guard. If it fails, drop the translator and keep only R.3's
+  noise (arm 4).
+- **Pooling mismatch.**
+  - Assembly bins 109 → 28 as 3–4 whole layers (`_pool_w013_depth`, ≈9.34 µm), with no depth
+    registration.
+  - Training pools 4 registered sub-slices of exactly 9.362 µm.
+  - x/y is 9.596 µm (level 2, unresampled) at assembly against 9.362 µm in training, a 2.5% difference.
+  - A local conv should tolerate both. If the 0841 gate is marginal, train with the assembly pooling
+    instead: store the raw 109 high layers in plan `degrade` and apply `_pool_w013_depth`.
+- **To confirm before training.**
+  - The 0.22 m / 78 keV regime of Paris4, w018 and w013 (from their volume names; `probe_pairs.py` can
+    read their `.zarray`).
+  - That `denoiser_n2v_block3_4k.pth` is present on the main machine.
+  - The noise-versus-intensity check (R.3).
+- **Integration.**
+  - Plan U's `LearnedUpsampler` is the inverse; a joint cycle loss is possible later.
+  - Plan D is complementary: it shapes features with high-resolution truth, while R moves
+    high-resolution-only fragments into the native domain.
+  - R is consistent with c33 (native beats pooled) and is the opposite of the denoiser mistake: it adds
+    real noise rather than removing it.
+
 ## 1. Pair inventory
 
 Every name below was confirmed by an S3 listing on 2026-09-29. Two were truncated in the listing and

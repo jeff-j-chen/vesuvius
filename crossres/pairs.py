@@ -52,8 +52,8 @@ PAIRS = [
     },
     {
         "name": "p9b_487", "zid": 20250919125754, "scroll": "PHerc0009B",
-        # still held out from fine-tuning, but its pair is used; 0841 is the strict measure
-        "role": "train",
+        # held out like 0841 so both holdout metrics stay clean; --include-holdouts adds footprint tiles
+        "role": "holdout",
         "segment": "PHerc0009B/segments/20250919125754-auto_grown_20250919055754487_inp_hr",
         # verify: the listing truncated after "8.64um-1.2m"; this name is the one assemble_training_segments uses
         "low": "8.64um-1.2m-116keV-volume-20250521125136.zarr", "low_um": 8.64,

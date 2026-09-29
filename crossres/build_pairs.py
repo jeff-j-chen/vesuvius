@@ -33,7 +33,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -115,12 +121,22 @@ def _map_coords(pair, low_to_high0, level, y0, x0, size, scale, shift=(0.0, 0.0)
     return (u0 + 0.5) / 2 ** level - 0.5, (v0 + 0.5) / 2 ** level - 0.5
 
 
-def _load_block(high, u, v, pad=4):
+def _load_block(high, u, v, pad=4, reverse_depth=False):
     ux0, ux1 = max(0, int(np.floor(u.min())) - pad), min(high.shape[2], int(np.ceil(u.max())) + pad)
     vy0, vy1 = max(0, int(np.floor(v.min())) - pad), min(high.shape[1], int(np.ceil(v.max())) + pad)
     if ux1 <= ux0 or vy1 <= vy0:
         return None
-    block = np.asarray(high[:, vy0:vy1, ux0:ux1], dtype=np.float32)
+    for attempt in range(6):
+        try:
+            block = np.asarray(high[:, vy0:vy1, ux0:ux1], dtype=np.float32)
+            break
+        except Exception as error:  # S3 returns sporadic 500s
+            if attempt == 5:
+                raise
+            print(f"  read failed ({error}); retry {attempt + 1}", flush=True)
+            time.sleep(2 ** attempt)
+    if reverse_depth:
+        block = np.ascontiguousarray(block[::-1])
     return block, (u - ux0).astype(np.float32), (v - vy0).astype(np.float32)
 
 
@@ -145,6 +161,63 @@ def _coarse(target, factor, scale, size):
     if scale == 1:
         return slices
     return np.stack([cv2.resize(plane, (size, size), interpolation=cv2.INTER_AREA) for plane in slices])
+
+
+def _fetch(address, out_path):
+    """one chunk to disk; 404 is an all-fill chunk and leaves no file."""
+    if out_path.exists():
+        return "cached"
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(address, timeout=120) as response:
+                data = response.read()
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            # unique per writer: parallel builds share this cache
+            tmp = out_path.with_name(f"{out_path.name}.{os.getpid()}.{threading.get_ident()}.part")
+            tmp.write_bytes(data)
+            tmp.replace(out_path)
+            return "ok"
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return "fill"
+            if attempt == 5:
+                raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if attempt == 5:
+                raise
+        time.sleep(2 ** attempt)
+
+
+def _prefetch_high(pair, registration, tiles, args):
+    """download, in parallel, every high chunk any tile (plus its residual-shift margin) can read."""
+    base = url(pair, "high", args.high_level)
+    local = Path(args.cache_dir) / pair["name"] / str(args.high_level)
+    local.mkdir(parents=True, exist_ok=True)
+    meta_path = local / ".zarray"
+    if not meta_path.exists():
+        with urllib.request.urlopen(f"{base}/.zarray", timeout=60) as response:
+            meta_path.write_bytes(response.read())
+    meta = json.loads(meta_path.read_text())
+    sep = meta.get("dimension_separator", ".")
+    _, height, width = meta["shape"]
+    _, cy_size, cx_size = meta["chunks"]
+    pad = int(args.max_residual) + 8
+    keys = set()
+    for y0, x0 in tiles:
+        u, v = _map_coords(pair, registration["low_to_high0"], args.high_level, y0 - pad, x0 - pad,
+                           int(args.tile + 2 * pad), 1)
+        cy0, cy1 = max(0, int(v.min()) // cy_size), min((height - 1) // cy_size, int(np.ceil(v.max())) // cy_size)
+        cx0, cx1 = max(0, int(u.min()) // cx_size), min((width - 1) // cx_size, int(np.ceil(u.max())) // cx_size)
+        keys.update((cy, cx) for cy in range(cy0, cy1 + 1) for cx in range(cx0, cx1 + 1))
+    jobs = [(f"{base}/0{sep}{cy}{sep}{cx}", local / "0" / str(cy) / str(cx) if sep == "/" else local / f"0.{cy}.{cx}")
+            for cy, cx in sorted(keys)]
+    started = time.time()
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        for done, _ in enumerate(pool.map(lambda job: _fetch(*job), jobs), 1):
+            if done % 200 == 0 or done == len(jobs):
+                print(f"[{pair['name']}] prefetched {done}/{len(jobs)} chunks ({time.time() - started:.0f}s)",
+                      flush=True)
+    return zarr.open_array(str(local), mode="r")
 
 
 def _chunk_budget(pair, tiles, args):
@@ -172,7 +245,9 @@ def build_pair(pair, registration, args, rng):
         return download, len(tiles) * per_tile
 
     frame = zarr.open(str(Path(args.zarr_dir) / f"{pair['zid']}.zarr"), mode="r")
-    high = zarr.open(url(pair, "high", args.high_level), mode="r")
+    tiles = _select_tiles(pair, tuple(frame.shape[1:]), args, rng)
+    high = _prefetch_high(pair, registration, tiles, args)
+    reverse = bool(registration.get("depth_reversed", False))
     slices = list(range(args.z0, args.z1))
     frame_depth = int(frame.shape[0])
     mid = slices.index(frame_depth // 2) if frame_depth // 2 in slices else len(slices) // 2
@@ -181,22 +256,21 @@ def build_pair(pair, registration, args, rng):
     offsets = base_offset + np.arange(-args.depth_search, args.depth_search + 1e-6, 0.125) * frame_um
     weights_by_offset = [_depth_weights(slices, frame_depth, factor, int(high.shape[0]), frame_um,
                                         pair["high_um"], offset) for offset in offsets]
-    tiles = _select_tiles(pair, tuple(frame.shape[1:]), args, rng)
     out_dir = ROOT / "pairs" / args.plan / str(pair["zid"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    store = zarr.open_group(str(out_dir / "pairs.zarr"), mode="w")
+    group = zarr.open_group(str(out_dir / "pairs.zarr"), mode="w")
     big = scale * size
-    inputs = store.create_dataset("input", shape=(0, depth, size, size), chunks=(1, depth, size, size), dtype="u2")
-    targets = store.create_dataset("target", shape=(0, depth * factor, big, big),
-                                   chunks=(1, depth * factor, big, big), dtype="u1")
-    valids = store.create_dataset("valid", shape=(0, big, big), chunks=(1, big, big), dtype=bool)
+    inputs = group.create_dataset("input", shape=(0, depth, size, size), chunks=(1, depth, 128, 128), dtype="u2")
+    targets = group.create_dataset("target", shape=(0, depth * factor, big, big),
+                                   chunks=(1, depth * factor, 128 * scale, 128 * scale), dtype="u1")
+    valids = group.create_dataset("valid", shape=(0, big, big), chunks=(1, 128 * scale, 128 * scale), dtype=bool)
     origins, dropped, nccs, depth_shifts = [], [], [], []
     for index, (y0, x0) in enumerate(tiles):
         source = np.asarray(frame[args.z0:args.z1, y0:y0 + size, x0:x0 + size]).astype(np.float32)
         if not source.any():
             continue
         u, v = _map_coords(pair, registration["low_to_high0"], args.high_level, y0, x0, size, scale)
-        loaded = _load_block(high, u, v)
+        loaded = _load_block(high, u, v, reverse_depth=reverse)
         if loaded is None:
             dropped.append([y0, x0, "outside high render"])
             continue
@@ -220,7 +294,7 @@ def build_pair(pair, registration, args, rng):
             for sign in (1.0, -1.0):
                 u2, v2 = _map_coords(pair, registration["low_to_high0"], args.high_level, y0, x0, size,
                                      scale, (sign * dx, sign * dy))
-                loaded2 = _load_block(high, u2, v2)
+                loaded2 = _load_block(high, u2, v2, reverse_depth=reverse)
                 if loaded2 is None:
                     continue
                 target2, valid2 = _render(*loaded2, weights_by_offset[pick])
@@ -247,7 +321,7 @@ def build_pair(pair, registration, args, rng):
         depth_shifts.append(float((offsets[pick] - base_offset) / frame_um))
         if (index + 1) % 20 == 0:
             print(f"[{pair['name']}] {index + 1}/{len(tiles)} tiles, kept {len(origins)}", flush=True)
-    store.create_dataset("origin", data=np.asarray(origins, np.int32).reshape(-1, 2))
+    group.create_dataset("origin", data=np.asarray(origins, np.int32).reshape(-1, 2))
     meta = {
         "pair": pair, "registration": registration, "plan": args.plan, "tile": size,
         "z_range": [args.z0, args.z1], "high_level": args.high_level, "xy_scale": scale,
@@ -280,6 +354,9 @@ def main():
     parser.add_argument("--min-ncc", type=float, default=0.3)
     parser.add_argument("--max-residual", type=float, default=12.0, help="largest residual shift applied, px")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--workers", type=int, default=32, help="parallel S3 chunk downloads")
+    parser.add_argument("--cache-dir", default=str(ROOT.parent / "_ves_tmp" / "crossres_high"),
+                        help="local copy of the streamed high-resolution chunks")
     parser.add_argument("--count-only", action="store_true",
                         help="print tiles, download and disk per pair from the label / mask pngs, then exit")
     args = parser.parse_args()

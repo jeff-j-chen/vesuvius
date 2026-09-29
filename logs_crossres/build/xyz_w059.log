@@ -1,0 +1,26 @@
+nohup: ignoring input
+[w059] ink bbox y[2412,4418] x[2934,8959] (17% of the frame) -> 60 tiles (bbox, margin 256px)
+[w059] prefetched 200/3895 chunks (42s)
+[w059] prefetched 400/3895 chunks (82s)
+[w059] prefetched 600/3895 chunks (121s)
+[w059] prefetched 800/3895 chunks (161s)
+[w059] prefetched 1000/3895 chunks (202s)
+[w059] prefetched 1200/3895 chunks (243s)
+[w059] prefetched 1400/3895 chunks (282s)
+[w059] prefetched 1600/3895 chunks (322s)
+[w059] prefetched 1800/3895 chunks (363s)
+[w059] prefetched 2000/3895 chunks (408s)
+[w059] prefetched 2200/3895 chunks (448s)
+[w059] prefetched 2400/3895 chunks (487s)
+[w059] prefetched 2600/3895 chunks (530s)
+[w059] prefetched 2800/3895 chunks (576s)
+[w059] prefetched 3000/3895 chunks (616s)
+[w059] prefetched 3200/3895 chunks (658s)
+[w059] prefetched 3400/3895 chunks (702s)
+[w059] prefetched 3600/3895 chunks (747s)
+[w059] prefetched 3800/3895 chunks (791s)
+[w059] prefetched 3895/3895 chunks (811s)
+[w059] 20/60 tiles, kept 20
+[w059] 40/60 tiles, kept 40
+[w059] 60/60 tiles, kept 60
+[w059] kept 60 tiles (median midslice NCC 0.8340435133990833, median depth shift +0.12 slices), dropped 0 -> /vesuvius/crossres/pairs/xyz/20250223000000
