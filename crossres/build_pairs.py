@@ -28,6 +28,7 @@ target (N, Z*F, S*T, S*T) uint8, valid (N, S*T, S*T) bool, origin (N, 2), plus m
     python crossres/build_pairs.py --count-only                       # tiles, download and disk per pair
     python crossres/build_pairs.py --zarr-dir ves_zarrs2 --plan depth # plan 1
     python crossres/build_pairs.py --zarr-dir ves_zarrs2 --plan xyz   # plan 2
+    python crossres/build_pairs.py --zarr-dir ves_zarrs2 --plan degrade --names w044 ... seg46527  # plan R
 """
 from __future__ import annotations
 
@@ -53,6 +54,8 @@ from pairs import PAIRS, TRAIN_FRAME_UM, high_to_frame, url  # noqa: E402
 PLANS = {
     "depth": {"high_level": 2, "xy_scale": 1, "depth_factor": 4},
     "xyz": {"high_level": 1, "xy_scale": 2, "depth_factor": 4},
+    # plan R: the degrader is applied to all 28 slices, so it trains on all of them (same chunks as depth)
+    "degrade": {"high_level": 2, "xy_scale": 1, "depth_factor": 4, "z0": 0, "z1": 28},
 }
 HIGH_LAYERS_GUESS = 109  # 28 x 9.362 / 2.4; the real count is read from the zarr when building
 
@@ -327,7 +330,7 @@ def build_pair(pair, registration, args, rng):
         "z_range": [args.z0, args.z1], "high_level": args.high_level, "xy_scale": scale,
         "depth_factor": factor, "kept": len(origins), "dropped": dropped,
         "ncc_median": float(np.median(nccs)) if nccs else None,
-        "tile_depth_shift_slices": depth_shifts,
+        "tile_depth_shift_slices": depth_shifts, "tile_ncc": [round(float(v), 4) for v in nccs],
     }
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=1) + "\n", encoding="utf-8")
     print(f"[{pair['name']}] kept {len(origins)} tiles (median midslice NCC {meta['ncc_median']}, "

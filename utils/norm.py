@@ -30,6 +30,7 @@ def compute_norm(
     cache_path: str = UNIFIED_CACHE_PATH,
     y_block: int = 512,
     mask_dir: str = "./masks",
+    mask_id: str | int | None = None,
 ) -> tuple[float, float, float, float]:
     """compute normalization stats for one scroll and write to cache.
 
@@ -42,7 +43,7 @@ def compute_norm(
     D, H, W = map(int, vol.shape)
     zc = int(vol.chunks[0])  # chunk depth -- read whole z-bands so each chunk is hit once
 
-    mask_file = os.path.join(mask_dir, f"{sid}.png")
+    mask_file = os.path.join(mask_dir, f"{sid if mask_id is None else mask_id}.png")
     try:
         import cv2
         mask = cv2.imread(mask_file, cv2.IMREAD_GRAYSCALE)

@@ -225,6 +225,8 @@ class DataConfig:
     # "global": whole-volume z-score and raw min/max; "surface_anchor": gap -> 0.1, surface papyrus -> 0.5;
     # "raw255": raw / 255 (for model.input_tile_norm)
     norm_mode: str = "global"
+    # scroll id -> zarr/norm-key suffix, e.g. {"20231210121321": ".translated"} reads <id>.translated.zarr
+    zarr_suffix: dict = field(default_factory=dict)
     # control: roll training-scroll labels by this fraction of the height (visualized scrolls keep theirs)
     label_shift_frac: float = 0.0
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
@@ -555,9 +557,8 @@ class ModelConfig:
     input_denoise_sigma: float = 0.0
     input_denoiser: str = ""
     # frozen utils/upsampler.py checkpoint (or "trilinear") applied to the normalised crop before the backbone;
-    # the network grid becomes xy_scale x wider and depth_factor / depth_pool x deeper, labels stay native
+    # the network grid becomes scale x wider and depth_factor / depth_pool x deeper, labels stay native
     input_upsampler: str = ""
-    input_upsampler_depth_pool: int = 2
     # "clip200": v8-in input (with data.norm_mode "raw255"): raw clipped to [0, 200] / 255, z-scored per crop
     input_tile_norm: str = ""
     # per-physical-domain residual output heads used only in training; inference uses the shared head

@@ -18,6 +18,7 @@ usage:
   python assemble_training_segments.py --from w039           # resume from a fragment
   python assemble_training_segments.py --skip-norm           # skip the (slow) norm precompute
   python assemble_training_segments.py --no-r2 --only paris1_fr34   # re-render an 88 keV fragment from dl.ash2txt
+  python assemble_training_segments.py --degrader models/degrader_pooled_native.pth   # plan R translated siblings
 
 the 88 keV fragments (RESCAN_88KEV) are fetched from the R2 bucket by default: R2_PUBLIC_URL must be set.
 """
@@ -245,6 +246,9 @@ RESCAN_88KEV = {
     },
 }
 RESCAN_MARKER = "rescan_88kev"
+# plan R (crossres/PLAN.md 0.7): fragments whose local zarr is a clean downscaling of a finer scan (2.4 um
+# pooled, 3.24 um resampled); --degrader writes a translated sibling <id>.translated.zarr for each
+TRANSLATE_NAMES = ("w013", "w018", "cr1fr3", "paris4", "paris2_fr143", "paris2_fr47", "scroll6_fr8", "paris1_fr34")
 # pre-rendered RESCAN_88KEV archives (<zid>.tar.gz = <zid>.zarr/ + <zid>.png mask, listed in SHA256SUMS) under
 # $R2_PUBLIC_URL/<R2_PREFIX>/; the render from dl.ash2txt (~1 h, ~20 MB/s server) runs only with --no-r2
 R2_PREFIX = "fragments_88kev"
@@ -1405,6 +1409,29 @@ def step3_norm(name, seg, zid, skip, force=False):
     run([sys.executable, "precompute_norm.py", "--scroll-id", zid, "--zarr-path", ZARR_DIR])
 
 
+def step4_translate(name, zid, checkpoint, force=False):
+    """write ves_zarrs2/<id>.translated.zarr from the local zarr (no download) and its norm under that key."""
+    from utils.degrader import REFERENCE_NATIVE_ID, TRANSLATED_SUFFIX, is_current, translate_zarr
+    from utils.norm import UNIFIED_CACHE_PATH, compute_norm, load_cached_norm
+
+    src = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    volume_id = f"{zid}{TRANSLATED_SUFFIX}"
+    dst = os.path.join(ZARR_DIR, f"{volume_id}.zarr")
+    if not os.path.isdir(src):
+        raise FileNotFoundError(f"{name}: {src} missing; assemble it first")
+    if is_current(dst, checkpoint) and not force:
+        print(f"  [translate] {dst} matches {checkpoint} -> skip")
+    else:
+        reference = load_cached_norm(REFERENCE_NATIVE_ID, UNIFIED_CACHE_PATH)
+        if reference is None:
+            raise RuntimeError(f"reference native scroll {REFERENCE_NATIVE_ID} has no norm_cache.json entry")
+        mask = np.array(Image.open(f"masks/{zid}.png").convert("L"))
+        translate_zarr(src, dst, checkpoint, mask, reference)
+        force = True
+    if force or load_cached_norm(volume_id, UNIFIED_CACHE_PATH) is None:
+        compute_norm(volume_id, ZARR_DIR, cache_path=UNIFIED_CACHE_PATH, mask_id=zid)
+
+
 def process_fragment(name, seg, zid, workers, skip_norm, chunk_depth, chunk_y, chunk_x, prefix="", force=False):
     """run the full assembly pipeline for one fragment. isolated in try/except so a
     single failure never kills a concurrent batch. respects FRAG_OPTS (skip_labels)."""
@@ -1460,7 +1487,32 @@ def main():
     ap.add_argument("--no-r2", action="store_true",
                     help="render the 88 keV fragments from dl.ash2txt (~1 h) instead of downloading the "
                          "pre-rendered archives from $R2_PUBLIC_URL")
+    ap.add_argument("--degrader", default=None,
+                    help="plan R only: translate the existing local zarrs of TRANSLATE_NAMES (or --only) with this "
+                         "utils/degrader.py checkpoint into <id>.translated.zarr siblings; nothing is downloaded")
     args = ap.parse_args()
+
+    if args.degrader:
+        want = {o.strip() for o in (args.only or "").split(",") if o.strip()} or set(TRANSLATE_NAMES)
+        results = []
+        for name, _seg, zid in SEGMENTS:
+            if name not in want:
+                continue
+            if name not in TRANSLATE_NAMES:
+                print(f"[translate] {name} is not a downscaled fine scan; skipped")
+                continue
+            try:
+                print(f"\n{'='*70}\n[translate] {name} ({zid})\n{'='*70}", flush=True)
+                step4_translate(name, zid, args.degrader, force=args.force)
+                results.append((name, "OK"))
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                results.append((name, f"FAIL: {exc}"))
+        print(f"\n[translate] SUMMARY")
+        for name, status in results:
+            print(f"  {name}: {status}")
+        return
 
     segs = SEGMENTS
     if args.only:

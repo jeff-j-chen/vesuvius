@@ -1566,18 +1566,12 @@ class NnUnet3dLcndz(nn.Module):
         upsampled crop, so its context, depth, tile and multitile sub-tile are scaled here.
         """
         import copy
-        from utils.upsampler import LearnedUpsampler
-        if self._input_upsampler_path == "trilinear":
-            # a zero residual head is exact trilinear interpolation, as train_upsampler.py --steps 0 saves
-            settings = {"xy_scale": 2, "depth_factor": 4}
-        else:
-            payload = torch.load(self._input_upsampler_path, map_location="cpu", weights_only=False)
-            settings = dict(payload["config"])
-        self.input_upsampler = LearnedUpsampler(**settings)
-        scale, factor = self.input_upsampler.xy_scale, self.input_upsampler.depth_factor
-        pool = max(1, int(getattr(config.model, "input_upsampler_depth_pool", 2)))
+        from utils.upsampler import load_upsampler
+        self.input_upsampler = load_upsampler(self._input_upsampler_path)
+        scale, factor = self.input_upsampler.scale, self.input_upsampler.depth_factor
+        pool = max(1, int(self.input_upsampler.depth_pool))
         if factor % pool:
-            raise ValueError("input_upsampler_depth_pool must divide the upsampler's depth factor")
+            raise ValueError("the upsampler's depth_pool must divide its depth factor")
         if int(getattr(config.data, "context_downsample", 1)) != 1:
             raise ValueError("input_upsampler requires context_downsample 1")
         self._input_upsample, self._upsampler_depth_pool = scale, pool
@@ -1610,9 +1604,7 @@ class NnUnet3dLcndz(nn.Module):
         if self.input_upsampler is not None:
             # normalise, then upsample, as in the upsampled-crop MAE
             with torch.no_grad():
-                x = self.input_upsampler(x.float())
-                if self._upsampler_depth_pool > 1:
-                    x = F.avg_pool3d(x, kernel_size=(self._upsampler_depth_pool, 1, 1))
+                x = self.input_upsampler.network_input(x.float())
         if self._downsample > 1:
             x = F.avg_pool3d(
                 x,
@@ -3003,12 +2995,9 @@ def create_model(config: Config):
         model.input_denoiser.requires_grad_(False)
         model.input_denoiser.eval()
     if model.input_upsampler is not None:
-        if model._input_upsampler_path == "trilinear":
-            nn.init.zeros_(model.input_upsampler.net[-1].weight)
-            nn.init.zeros_(model.input_upsampler.net[-1].bias)
-        else:
-            payload = torch.load(model._input_upsampler_path, map_location=config.device, weights_only=False)
-            model.input_upsampler.load_state_dict(payload["state_dict"])
+        # the conv re-init above touched it; 'trilinear' reloads the untrained (zero-residual) module
+        from utils.upsampler import load_upsampler
+        model.input_upsampler.load_state_dict(load_upsampler(model._input_upsampler_path).state_dict())
         model.input_upsampler.requires_grad_(False)
         model.input_upsampler.eval()
 

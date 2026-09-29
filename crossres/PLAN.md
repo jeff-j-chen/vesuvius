@@ -396,6 +396,36 @@ Judge on 0841 and 0009B R@1%/R@5%/pAUC@1% and the papyrus renders, as in §5. Re
   - R is consistent with c33 (native beats pooled) and is the opposite of the denoiser mistake: it adds
     real noise rather than removing it.
 
+#### R.7 Status (2026-09-29, main machine): plumbing in place, nothing translated yet
+
+- **Pretraining machine** (needs the S3 stream):
+  ```bash
+  python crossres/build_pairs.py --zarr-dir ves_zarrs2 --plan degrade \
+      --names w044 w059 w030 w043 w045 w040 w041 w039 w035 seg46527
+  python crossres/build_pairs.py --zarr-dir ves_zarrs2 --plan degrade --include-holdouts --names p841
+  python crossres/train_degrader.py --dry-run && python crossres/train_degrader.py
+  ```
+  Send back `models/degrader_pooled_native.pth` + `.json`, `runs_mae/degrader_pooled_native_*` and
+  `crossres/pairs/degrade/*/meta.json`. Gate: `ratio` below 1 on the 0841 tiles.
+- **Implemented:**
+  - `build_pairs.py` plan `degrade` (level 2, ×4 depth, slices 0–28). `meta.json` now stores `tile_ncc`,
+    and `train_degrader.py --min-ncc 0.5` filters on it.
+  - `utils/degrader.py`: `LearnedDegrader` (identity + zero-initialised residual, width 48, 8 layers),
+    the median/MAD mapping, and `translate_zarr`, which tiles with a halo, maps back to raw with w044's
+    stats, and tags the output with the checkpoint's hash.
+  - `assemble_training_segments.py --degrader <ckpt>`: translate-only mode that writes
+    `ves_zarrs2/<id>.translated.zarr` plus the norm key `<id>.translated`. It reads the original mask
+    and downloads nothing.
+  - `data.zarr_suffix`: a per-fragment volume override used by the dataloader (zarr, norm and cache key).
+- **Scope is wider than R.4.** Every fragment in `campaign35.FINE_NATIVE_SCROLL_IDS` is translated:
+  w013, w018, Cr1Fr3, Paris4, Paris2 Fr143/Fr47, 51Cr4 Fr8, Paris1 Fr34. The 3.24 µm / 88 keV fragments
+  are outside the pairs' regime, so the renders decide whether they stay.
+- **Not implemented:** R.3's noise bank. The three campaign-39 arms train on the translated mean only.
+- **Campaign 39 arms (last in the queue):** `holdout_n96_downsampled` (against c38 `holdout_n96_combined`),
+  `holdout_n96_downsampled_upsampled_trilinear` (against U-T) and `..._learned` (against U-L). The
+  campaign refuses to start them until every translated sibling is current for the checkpoint and has
+  a norm entry.
+
 ## 1. Pair inventory
 
 Every name below was confirmed by an S3 listing on 2026-09-29. Two were truncated in the listing and

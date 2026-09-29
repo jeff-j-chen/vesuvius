@@ -2626,6 +2626,12 @@ class DataManager:
         # get or compute normalization statistics
         self.norm_stats = self._get_or_compute_norm()
 
+    @property
+    def volume_id(self) -> str:
+        """zarr / norm-cache key: the scroll id plus its data.zarr_suffix entry (masks and labels keep the id)."""
+        suffixes = getattr(self.c.data, "zarr_suffix", None) or {}
+        return f"{self.scroll_id}{suffixes.get(str(self.scroll_id), '')}"
+
     def _make_prepared_cache_key(self) -> tuple:
         """key all inputs that can affect manager or dataset preparation."""
         scroll = next(
@@ -2636,7 +2642,7 @@ class DataManager:
         label_dir = str(getattr(self.c.data, "inklabel_dir", "./eroded_inklabels"))
         train_mask_dir = str(getattr(self.c.data, "train_mask_dir", "./train_masks"))
         paths = [
-            os.path.join(str(getattr(self.c.data, "zarr_path", "./ves_zarrs2")), f"{self.scroll_id}.zarr"),
+            os.path.join(str(getattr(self.c.data, "zarr_path", "./ves_zarrs2")), f"{self.volume_id}.zarr"),
             os.path.join(label_dir, f"{self.scroll_id}.png"),
             os.path.join("./masks", f"{self.scroll_id}.png"),
         ]
@@ -2658,6 +2664,7 @@ class DataManager:
             "character_min_pixels", "max_samples_per_epoch",
             "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
             "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "vis_scroll_ids", "norm_mode",
+            "zarr_suffix",
         )
         dataloader_fields = (
             "context_replace_prob", "context_replace_min_mask_frac",
@@ -2733,7 +2740,7 @@ class DataManager:
     def _load_raw_data(self):
         """loads raw zarr data and metadata"""
         # open the zarr volume in read-only mode
-        zarr_dir = os.path.join(self.c.data.zarr_path, f"{self.scroll_id}.zarr")
+        zarr_dir = os.path.join(self.c.data.zarr_path, f"{self.volume_id}.zarr")
         vol = zarr.open(zarr_dir, mode='r')
         if bool(getattr(self.c.data, "preload_volumes", False)):
             source_shape = tuple(vol.shape)
@@ -2973,7 +2980,7 @@ class DataManager:
     def _get_or_compute_norm(self):
         """retrieve cached norm stats; if absent, compute with the fast chunk-aligned method."""
         from .norm import compute_norm, load_cached_norm, UNIFIED_CACHE_PATH
-        seg_id = str(self.scroll_id)
+        seg_id = self.volume_id
         cached = load_cached_norm(
             seg_id, UNIFIED_CACHE_PATH, mode=str(getattr(self.c.data, "norm_mode", "global")),
         )
@@ -2981,7 +2988,7 @@ class DataManager:
             return cached
         print(f"[info] computing normalization for segment {seg_id} (chunk-aligned pass)")
         zarr_path = getattr(self.c.data, "zarr_path", "./ves_zarrs2")
-        return compute_norm(seg_id, zarr_path, UNIFIED_CACHE_PATH)
+        return compute_norm(seg_id, zarr_path, UNIFIED_CACHE_PATH, mask_id=self.scroll_id)
 
     def enable_selective_chunk_preload(self, *datasets: InkVolumeDataset) -> None:
         """eagerly retain the union of future dataset reads in campaign RAM."""

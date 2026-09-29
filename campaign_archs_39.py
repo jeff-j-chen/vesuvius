@@ -22,10 +22,16 @@ production-MAE control with the same config.
 |                                 | 2 -> 16 x 192^2 into the network; MAE continued on that        |             |
 | holdout_n96_upsampled_learned   | (U-2) the same with trilinear + a residual learned from the    | 32 / 1e-4   |
 |                                 | 2.4 um pairs (models/upsampler_learned_xy2_d4.pth)             |             |
+| holdout_n96_downsampled         | (R-1) the base, with every fine-scan fragment (FINE_NATIVE_    | 96 / 1.5e-4 |
+|                                 | SCROLL_IDS: pherc1667, paris4, paris2 fr143/fr47, 51cr4 fr8,   |             |
+|                                 | paris1 fr34) read from its degrader-translated sibling zarr    |             |
+| ..._downsampled_upsampled_trilinear | (R-2) R-1's data through U-1's input head and MAE          | 32 / 1e-4   |
+| ..._downsampled_upsampled_learned   | (R-3) R-1's data through U-2's input head and MAE          | 32 / 1e-4   |
 
 D - S and X - S are what the real high-resolution pairs add; S - nofiber is slab masking alone. The
 upsampled arms run at the native192_depth16 recipe (16 x 192^2 per crop, 8x the voxels of the base), so
-they are compared with holdout_n96_slab_b32 under one fine-tune config and seed.
+they are compared with holdout_n96_slab_b32 under one fine-tune config and seed. R-1 is judged against
+the c38 holdout_n96_combined run, R-2 against U-1 and R-3 against U-2.
 
 Upsampled arms (model.input_upsampler): the data pipeline is unchanged (96 px context, 8-slice
 surface-relative window, 16 px tiles, labels and masks on the native grid). The model normalises, then
@@ -33,8 +39,14 @@ applies the frozen upsampler in _prepare_input, and is built at the network grid
 tile and multitile sub-tile 32 network px = 16 native px), so each output cell covers the base's papyrus.
 
 The pretrained checkpoints are produced elsewhere; the campaign refuses to start an arm whose checkpoint
-(or upsampler) is missing. A JSON sidecar next to an upsampled MAE (models/<name>.json with
-"input_upsampler" and optionally "upsampler_depth_pool") overrides the default upsampler.
+(or upsampler) is missing. The JSON sidecar next to an upsampled MAE (models/<name>.json, written by
+crossres/mae_pretrain_crossres.py: "upsampler") names the upsampler the MAE was trained behind.
+
+Downsampled arms (plan R, crossres/PLAN.md 0.7) need the translated siblings first; the campaign never
+writes them and refuses to start if any is missing, stale for models/degrader_pooled_native.pth, or has no
+norm entry:
+    python assemble_training_segments.py --degrader models/degrader_pooled_native.pth
+Masks, labels, train masks and surface maps are shared with the original zarrs.
 
 Usage:
     python3 campaign_archs_39.py --dry-run
@@ -77,6 +89,9 @@ PRODUCTION_MAE = "early_gated_native96"
 # native192_depth16 ran at this batch; the upsampled network grid is the same 16 x 192^2
 UPSAMPLED_TRAINING = {"batch_size": 32, "lr": 1e-4}
 LEARNED_UPSAMPLER = "models/upsampler_learned_xy2_d4.pth"
+DEGRADER = "models/degrader_pooled_native.pth"
+TRANSLATED_SUFFIX = ".translated"
+DOWNSAMPLED = {"data.zarr_suffix": {str(sid): TRANSLATED_SUFFIX for sid in campaign35.FINE_NATIVE_SCROLL_IDS}}
 
 
 def _test(tid: str, changes: dict, arch: dict | None = None, init_weights: str | None = None,
@@ -108,37 +123,67 @@ TESTS = [
     _test("holdout_n96_upsampled_learned", NOFIBER,
           arch={"pretrain_key": PRODUCTION_MAE, **UPSAMPLED_TRAINING},
           init_weights="models/mae_upsampled_learned_native96.pth", upsampler=LEARNED_UPSAMPLER),
+    # last: these read the translated fine-scan volumes (one shared prepared-dataset cache key)
+    _test("holdout_n96_downsampled", {**COMBINED, **DOWNSAMPLED},
+          arch={"pretrain_key": "early_gated_fiber_native96"}),
+    _test("holdout_n96_downsampled_upsampled_trilinear", {**NOFIBER, **DOWNSAMPLED},
+          arch={"pretrain_key": PRODUCTION_MAE, **UPSAMPLED_TRAINING},
+          init_weights="models/mae_upsampled_trilinear_native96.pth", upsampler="trilinear"),
+    _test("holdout_n96_downsampled_upsampled_learned", {**NOFIBER, **DOWNSAMPLED},
+          arch={"pretrain_key": PRODUCTION_MAE, **UPSAMPLED_TRAINING},
+          init_weights="models/mae_upsampled_learned_native96.pth", upsampler=LEARNED_UPSAMPLER),
 ]
 
 
-def _upsampler_settings(test: dict) -> tuple[str, int]:
-    """(upsampler, depth pool): the MAE's sidecar if it names one, else the arm's default."""
-    upsampler, pool = str(test["upsampler"]), 2
+def _upsampler_setting(test: dict) -> str:
+    """the upsampler named by the MAE's sidecar, else the arm's default."""
+    upsampler = str(test["upsampler"])
     sidecar = (ROOT / test["init_weights"]).with_suffix(".json")
     if sidecar.is_file():
-        info = json.loads(sidecar.read_text(encoding="utf-8"))
-        upsampler = str(info.get("input_upsampler") or upsampler)
-        pool = int(info.get("upsampler_depth_pool", pool))
-    return upsampler, pool
+        upsampler = str(json.loads(sidecar.read_text(encoding="utf-8")).get("upsampler") or upsampler)
+    return upsampler
 
 
 def _external_files(test: dict) -> list[str]:
     files = [test["init_weights"]] if test["init_weights"] else []
     if test["upsampler"]:
-        upsampler, _ = _upsampler_settings(test)
+        upsampler = _upsampler_setting(test)
         if upsampler != "trilinear":
             files.append(upsampler)
+    if test["config"].get("data.zarr_suffix"):
+        files.append(DEGRADER)
     return files
 
 
+def _translation_problems(test: dict) -> list[str]:
+    """translated siblings that are missing, made by another degrader checkpoint, or lack a norm entry."""
+    suffixes = test["config"].get("data.zarr_suffix") or {}
+    if not suffixes or not (ROOT / DEGRADER).is_file():
+        return []
+    from utils.degrader import is_current
+    from utils.norm import UNIFIED_CACHE_PATH, load_cached_norm
+    zarr_root = Path(os.getenv("VESUVIUS_ZARR_PATH", "/vesuvius/ves_zarrs2"))
+    problems = []
+    for scroll_id, suffix in suffixes.items():
+        volume = zarr_root / f"{scroll_id}{suffix}.zarr"
+        if not volume.is_dir():
+            problems.append(f"{volume} missing")
+        elif not is_current(str(volume), str(ROOT / DEGRADER)):
+            problems.append(f"{volume} was not made by {DEGRADER}")
+        elif load_cached_norm(f"{scroll_id}{suffix}", str(ROOT / UNIFIED_CACHE_PATH)) is None:
+            problems.append(f"{scroll_id}{suffix} has no norm_cache.json entry")
+    return problems
+
+
 def preflight_external(selected: list[dict], dry_run: bool) -> None:
-    """the cross-resolution checkpoints come from another machine; stop before any arm if one is missing."""
+    """externally pretrained checkpoints and plan R's translated volumes; stop before any arm if one is missing."""
     missing = sorted({
         path for test in selected for path in _external_files(test) if not (ROOT / path).is_file()
     })
-    if not missing:
+    problems = sorted({problem for test in selected for problem in _translation_problems(test)})
+    if not missing and not problems:
         return
-    message = f"campaign 39 needs the externally pretrained files: missing={missing}"
+    message = f"campaign 39 inputs not ready: missing={missing} translation={problems}"
     if not dry_run:
         raise FileNotFoundError(message)
     print(f"[campaign39] WARNING {message}", flush=True)
@@ -160,7 +205,7 @@ def build_config(test: dict):
     if test["init_weights"]:
         config.init_weights = test["init_weights"]
     if test["upsampler"]:
-        config.model.input_upsampler, config.model.input_upsampler_depth_pool = _upsampler_settings(test)
+        config.model.input_upsampler = _upsampler_setting(test)
     return config
 
 
@@ -212,8 +257,8 @@ def main() -> None:
         with startup_output():
             print(f"[campaign39] {test['tid']}: ctx={config.data.context_size} depth={config.data.depth} "
                   f"norm={config.data.norm_mode}/{config.model.input_tile_norm or 'none'} "
-                  f"upsampler={config.model.input_upsampler or 'none'}"
-                  f"/pool{config.model.input_upsampler_depth_pool} "
+                  f"upsampler={config.model.input_upsampler or 'none'} "
+                  f"translated={len(config.data.zarr_suffix)} "
                   f"fiber={config.model.fiber_coordinate_branch} batch={config.dl.batch_size} lr={config.tra.lr} "
                   f"seed={config.tra.seed} init={config.init_weights} dropped={len(dropped)} "
                   f"overrides={test['config']}", flush=True)
