@@ -227,6 +227,10 @@ class DataConfig:
     norm_mode: str = "global"
     # scroll id -> zarr/norm-key suffix, e.g. {"20231210121321": ".translated"} reads <id>.translated.zarr
     zarr_suffix: dict = field(default_factory=dict)
+    # plan R.3: crossres/build_noise_bank.py output added to training crops of these scrolls ("" = off)
+    native_noise: str = ""
+    native_noise_scale: float = 1.0
+    native_noise_ids: List[int] = field(default_factory=list)
     # control: roll training-scroll labels by this fraction of the height (visualized scrolls keep theirs)
     label_shift_frac: float = 0.0
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode

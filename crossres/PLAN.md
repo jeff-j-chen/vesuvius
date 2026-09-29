@@ -420,7 +420,17 @@ Judge on 0841 and 0009B R@1%/R@5%/pAUC@1% and the papyrus renders, as in §5. Re
 - **Scope is wider than R.4.** Every fragment in `campaign35.FINE_NATIVE_SCROLL_IDS` is translated:
   w013, w018, Cr1Fr3, Paris4, Paris2 Fr143/Fr47, 51Cr4 Fr8, Paris1 Fr34. The 3.24 µm / 88 keV fragments
   are outside the pairs' regime, so the renders decide whether they stay.
-- **Not implemented:** R.3's noise bank. The three campaign-39 arms train on the translated mean only.
+- **R.3 noise (implemented 2026-09-29).**
+  - `crossres/build_noise_bank.py`: 256 patches, each 16 × 128², of raw − denoiser residual. They come
+    from the 0139 / 0814 / 500P2 zarrs, inside the footprint and at least 64 px from any label. It also
+    measures sigma per intensity decile. If the spread exceeds ×1.25, the patches are stored at unit std
+    with a linear sigma(intensity) fit in the sidecar.
+  - Output: `_ves_tmp/native_noise_bank.npy` (gitignored), to be rebuilt on each machine.
+  - `utils/native_noise.py` plus a hook right after `_normalize_block`, active on training windows only
+    (`shuffle=True`). Each crop gets a random patch, depth offset, rotation and flip, scaled by the local
+    clean intensity when the bank is intensity-scaled; air stays 0.
+  - Config: `data.native_noise`, `data.native_noise_scale`, `data.native_noise_ids`.
+  - Campaign 39 arm `holdout_n96_downsampled_noise` = R-1 plus noise on the translated fragments.
 - **Campaign 39 arms (last in the queue):** `holdout_n96_downsampled` (against c38 `holdout_n96_combined`),
   `holdout_n96_downsampled_upsampled_trilinear` (against U-T) and `..._learned` (against U-L). The
   campaign refuses to start them until every translated sibling is current for the checkpoint and has

@@ -27,6 +27,8 @@ production-MAE control with the same config.
 |                                 | paris1 fr34) read from its degrader-translated sibling zarr    |             |
 | ..._downsampled_upsampled_trilinear | (R-2) R-1's data through U-1's input head and MAE          | 32 / 1e-4   |
 | ..._downsampled_upsampled_learned   | (R-3) R-1's data through U-2's input head and MAE          | 32 / 1e-4   |
+| holdout_n96_downsampled_noise   | R-1 plus real 113 keV / 1.2 m scan noise (crossres/build_noise_bank.py) | 96 / 1.5e-4 |
+|                                 | on every training crop of the translated fragments             |             |
 
 D - S and X - S are what the real high-resolution pairs add; S - nofiber is slab masking alone. The
 upsampled arms run at the native192_depth16 recipe (16 x 192^2 per crop, 8x the voxels of the base), so
@@ -46,7 +48,8 @@ Downsampled arms (plan R, crossres/PLAN.md 0.7) need the translated siblings fir
 writes them and refuses to start if any is missing, stale for models/degrader_pooled_native.pth, or has no
 norm entry:
     python assemble_training_segments.py --degrader models/degrader_pooled_native.pth
-Masks, labels, train masks and surface maps are shared with the original zarrs.
+Masks, labels, train masks and surface maps are shared with the original zarrs. The noise arm also needs
+the local bank: python crossres/build_noise_bank.py
 
 Usage:
     python3 campaign_archs_39.py --dry-run
@@ -92,6 +95,9 @@ LEARNED_UPSAMPLER = "models/upsampler_learned_xy2_d4.pth"
 DEGRADER = "models/degrader_pooled_native.pth"
 TRANSLATED_SUFFIX = ".translated"
 DOWNSAMPLED = {"data.zarr_suffix": {str(sid): TRANSLATED_SUFFIX for sid in campaign35.FINE_NATIVE_SCROLL_IDS}}
+NOISE_BANK = "_ves_tmp/native_noise_bank.npy"
+NATIVE_NOISE = {"data.native_noise": NOISE_BANK, "data.native_noise_scale": 1.0,
+                "data.native_noise_ids": [int(sid) for sid in campaign35.FINE_NATIVE_SCROLL_IDS]}
 
 
 def _test(tid: str, changes: dict, arch: dict | None = None, init_weights: str | None = None,
@@ -126,6 +132,9 @@ TESTS = [
     # last: these read the translated fine-scan volumes (one shared prepared-dataset cache key)
     _test("holdout_n96_downsampled", {**COMBINED, **DOWNSAMPLED},
           arch={"pretrain_key": "early_gated_fiber_native96"}),
+    # the degrader predicts the mean scan; real 113 keV noise is added per training crop (plan R.3)
+    _test("holdout_n96_downsampled_noise", {**COMBINED, **DOWNSAMPLED, **NATIVE_NOISE},
+          arch={"pretrain_key": "early_gated_fiber_native96"}),
     _test("holdout_n96_downsampled_upsampled_trilinear", {**NOFIBER, **DOWNSAMPLED},
           arch={"pretrain_key": PRODUCTION_MAE, **UPSAMPLED_TRAINING},
           init_weights="models/mae_upsampled_trilinear_native96.pth", upsampler="trilinear"),
@@ -152,6 +161,9 @@ def _external_files(test: dict) -> list[str]:
             files.append(upsampler)
     if test["config"].get("data.zarr_suffix"):
         files.append(DEGRADER)
+    if test["config"].get("data.native_noise"):
+        bank = str(test["config"]["data.native_noise"])
+        files += [bank, str(Path(bank).with_suffix(".json"))]
     return files
 
 

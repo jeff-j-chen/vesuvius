@@ -1147,6 +1147,14 @@ class InkVolumeDataset(IterableDataset):
         self.shuffle = shuffle
         self.norm_stats = norm_stats
         self.transform = Transform(config, scroll_id=self.scroll_id)
+        noise_ids = {int(s) for s in (getattr(config.data, "native_noise_ids", None) or [])}
+        noise_path = str(getattr(config.data, "native_noise", "") or "")
+        # opened lazily so each worker memory-maps the bank itself
+        self._native_noise_spec = (
+            (noise_path, float(getattr(config.data, "native_noise_scale", 1.0)))
+            if noise_path and shuffle and self.scroll_id is not None and int(self.scroll_id) in noise_ids else None
+        )
+        self._native_noise = None
         self._edge_soft_sigma = float(getattr(config.data, "edge_soft_sigma", 0.0)) if shuffle else 0.0
         self._edge_soft_floor = float(getattr(config.data, "edge_soft_floor", 0.6))
         if self._edge_soft_sigma > 0 and not 0.5 < self._edge_soft_floor <= 1.0:
@@ -1876,6 +1884,11 @@ class InkVolumeDataset(IterableDataset):
             block = np.zeros((self.depth, sp, sp), dtype=np.float32)
 
         block = self._normalize_block(block)
+        if self._native_noise_spec is not None:
+            if self._native_noise is None:
+                from .native_noise import NativeNoise
+                self._native_noise = NativeNoise(*self._native_noise_spec)
+            block = self._native_noise.add(block)
         if self.transform.has_quality_transfer:
             block = self.transform.normalize_quality(block)
         return block, target_offset, dj, augmentation_depth_shift
