@@ -15,7 +15,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent
 IMAGE_HEIGHT = 176
-TEST_VIEW_WIDTH = 264
+TEST_VIEW_WIDTH = 196
 CARD_GAP = 10
 GROUP_GAP = 14
 GROUP_PAD = 10
@@ -117,6 +117,18 @@ TEST_GROUPS = [
     ("PHerc1447", [Patch(
         "20260925085345", "test surface 2", "mask", "10.90 cm^2",
         "auto_grown_20260925085345806_abf",
+    )]),
+    ("PHerc0800", [Patch(
+        "20260928000001", "test surface 2", "mask", "5.50 cm^2",
+        "PHerc0800_z9264_w040_abf",
+    )]),
+    ("PHerc0125", [Patch(
+        "20260928000002", "test surface", "mask", "2.50 cm^2",
+        "PHerc0125_z15344_w040_abf",
+    )]),
+    ("PHerc0211", [Patch(
+        "20260928000003", "test surface 2", "mask", "3.32 cm^2",
+        "PHerc0211_z7312_w080_abf",
     )]),
 ]
 
@@ -285,8 +297,9 @@ def _render_card(patch: Patch) -> np.ndarray:
     preview_x = (width - preview_width) // 2
     card[:height, preview_x:preview_x + preview_width] = preview
     cv2.line(card, (0, height), (width - 1, height), (220, 220, 216), 1)
+    # bold text blurs once narrow test cards shrink it
     _text_fit(card, primary_label, (7, height + 26), width - 14,
-              scale=0.58, thickness=2)
+              scale=0.58, thickness=1 if patch.source == "mask" else 2)
     if patch.source == "mask":
         _text_fit(card, f"area: {patch.area}", (7, height + 53), width - 14,
                   scale=0.54, color=TEXT, thickness=1)
@@ -449,7 +462,7 @@ def generate_guide(output_path: Path) -> Path:
         *_section("TRAINING", "23 campaign 33 fragments grouped by physical scroll", TRAINING_GROUPS),
         *_section(
             "TEST",
-            "ten unlabeled discovery surfaces; papyrus masks, areas, and source patches shown",
+            "thirteen unlabeled discovery surfaces; papyrus masks, areas, and source patches shown",
             TEST_GROUPS,
         ),
     ]

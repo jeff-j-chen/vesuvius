@@ -50,18 +50,28 @@ _ylgnbu_nan.set_bad(color=(0.45, 0.45, 0.45, 1.0))
 
 _purples_nan = _copy.copy(plt.cm.Purples)
 _purples_nan.set_bad(color=(0.45, 0.45, 0.45, 1.0))
+# inverted grayscale: 0 (papyrus) = white, 1 (ink) = black; masked-out cells pale blue so they
+# cannot be mistaken for either end
+NAN_RGB = (0.78, 0.86, 0.95)
+_ink_gray_nan = _copy.copy(plt.cm.gray_r)
+_ink_gray_nan.set_bad(color=(*NAN_RGB, 1.0))
 try:
     import matplotlib as _mpl
     _mpl.colormaps.register(_inferno_nan, name='inferno_nan', force=True)
     _mpl.colormaps.register(_ylgnbu_nan, name='ylgnbu_nan', force=True)
     _mpl.colormaps.register(_purples_nan, name='purples_nan', force=True)
+    _mpl.colormaps.register(_ink_gray_nan, name='ink_gray_nan', force=True)
 except Exception:
     plt.cm.inferno_nan = _inferno_nan  # fallback: attach directly
     plt.cm.ylgnbu_nan = _ylgnbu_nan
     plt.cm.purples_nan = _purples_nan
+    plt.cm.ink_gray_nan = _ink_gray_nan
 
-# single knob for all scroll prediction colormaps. high score (ink) = bright yellow.
-SCROLL_CMAP = 'inferno_nan'
+# single knob for all scroll prediction colormaps. high score (ink) = black.
+SCROLL_CMAP = 'ink_gray_nan'
+# white vanishes on the white-papyrus colormap, so label overlays and split lines use red
+LABEL_TINT = np.array((0.9, 0.1, 0.1))
+SPLIT_COLOR = 'red'
 
 
 def _patch_character_f1_layout(scrolls):
@@ -2187,7 +2197,7 @@ class TensorboardVisualizer:
                     raw, vmap = _fetch(d_off, y_off, x_off)
                     if raw is None: continue
                     axes[row][0].imshow(raw,  cmap='gray', vmin=0, vmax=1, interpolation='nearest')
-                    axes[row][1].imshow(vmap, cmap='hot',  vmin=0, vmax=1, interpolation='nearest')
+                    axes[row][1].imshow(vmap, cmap=SCROLL_CMAP, vmin=0, vmax=1, interpolation='nearest')
                     axes[row][0].axis('off'); axes[row][1].axis('off')
                 axes[0][0].set_title('scan (depth-mean)', fontsize=7)
                 axes[0][1].set_title('voxel map (depth-max sigmoid)', fontsize=7)
@@ -2339,7 +2349,7 @@ class TensorboardVisualizer:
     def add_test_figures(self, epoch, model):
         """FULL-SIZE, notebook-style 4-panel test figures for every test fragment + holdout.
 
-        each figure (one per fragment): [raw pred | pred | composite | overlay], inferno
+        each figure (one per fragment): [raw pred | pred | composite | overlay], inverted-grayscale
         heatmaps upsampled to native resolution, native-resolution VC3D-style composite,
         cropped to the mask bbox with white padding on a black background. inference and
         compositing only read that bbox, and the saved JPG uses its native pixel scale.
@@ -2410,11 +2420,11 @@ class TensorboardVisualizer:
         return y0, y1, x0, x1
 
     def _frag_colorize(self, pmap, out_hw):
-        """tile-res prob map -> full-res inferno BGR; NaN (outside mask) -> gray."""
+        """tile-res prob map -> full-res inverted-grayscale BGR (0 white, 1 black); NaN -> NAN_RGB."""
         m = np.isfinite(pmap)
         p8 = (np.clip(np.nan_to_num(pmap, nan=0.0), 0, 1) * 255).astype(np.uint8)
-        bgr = cv2.applyColorMap(p8, cv2.COLORMAP_INFERNO)
-        bgr[~m] = (115, 115, 115)
+        bgr = cv2.cvtColor(255 - p8, cv2.COLOR_GRAY2BGR)
+        bgr[~m] = tuple(int(round(255 * v)) for v in NAN_RGB[::-1])
         return cv2.resize(bgr, (out_hw[1], out_hw[0]), interpolation=cv2.INTER_NEAREST)
 
     def _frag_scale_bar(self, bgr, voxel_um):
@@ -2576,10 +2586,10 @@ class TensorboardVisualizer:
             overlay = np.zeros((*full_pred.shape, 4))
             h = min(label_binary.shape[0], overlay.shape[0])
             w = min(label_binary.shape[1], overlay.shape[1])
-            overlay[:h, :w][label_binary[:h, :w] > 0.5] = [1, 1, 1, 0.4]
+            overlay[:h, :w][label_binary[:h, :w] > 0.5] = [*LABEL_TINT, 0.4]
             ax_overlay.imshow(overlay)
 
-        ax_overlay.axvline(x=split_pos, color='white', linestyle=':', linewidth=2.0)
+        ax_overlay.axvline(x=split_pos, color=SPLIT_COLOR, linestyle=':', linewidth=2.0)
         ax_overlay.axis('off')
 
         plt.subplots_adjust(wspace=0.05, hspace=0.05, left=0.05, right=0.95, top=0.95, bottom=0.05)
@@ -2637,7 +2647,7 @@ class TensorboardVisualizer:
                     ax.contour(
                         boundary_mask,
                         levels=[0.5],
-                        colors="white",
+                        colors=SPLIT_COLOR,
                         linewidths=2.0,
                         linestyles=":",
                     )
@@ -2645,9 +2655,9 @@ class TensorboardVisualizer:
             if split_pos is None:
                 return
             if split_axis == "y":
-                ax.axhline(y=split_pos, color='white', linestyle=':', linewidth=2.0)
+                ax.axhline(y=split_pos, color=SPLIT_COLOR, linestyle=':', linewidth=2.0)
             else:
-                ax.axvline(x=split_pos, color='white', linestyle=':', linewidth=2.0)
+                ax.axvline(x=split_pos, color=SPLIT_COLOR, linestyle=':', linewidth=2.0)
 
         def _overlay(ax, pred):
             if label_binary is not None:
@@ -2657,7 +2667,7 @@ class TensorboardVisualizer:
                 w = min(label_binary.shape[1], rgb.shape[1])
                 g = label_binary[:h, :w] > 0.5
                 rgb[:h, :w][~g] = rgb[:h, :w][~g] * (1.0 - 0.15)
-                rgb[:h, :w][g] = 0.5 * rgb[:h, :w][g] + 0.5
+                rgb[:h, :w][g] = 0.5 * rgb[:h, :w][g] + 0.5 * LABEL_TINT
                 ax.imshow(rgb, aspect='equal', interpolation='nearest')
             else:
                 ax.imshow(pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')
@@ -2677,7 +2687,8 @@ class TensorboardVisualizer:
         for ax, raw, ttl in ((axes[1, 0], raw_1_1, "1.1um inklabel_raw"),
                              (axes[1, 1], raw_2_4, "2.4um inklabel_raw")):
             if raw is not None:
-                ax.imshow(raw, cmap="gray", vmin=0, vmax=255, aspect='equal')
+                # inklabels drawn like predictions: ink black on white
+                ax.imshow(raw, cmap="gray_r", vmin=0, vmax=255, aspect='equal')
             ax.set_title(ttl, fontsize=8); ax.axis('off')
 
         plt.subplots_adjust(wspace=0.04, hspace=0.12, left=0.01, right=0.99, top=0.98, bottom=0.01)
@@ -2717,12 +2728,12 @@ class TensorboardVisualizer:
 
         def _draw_split(ax):
             if split_axis == "y":
-                ax.axhline(y=split_pos, color='white', linestyle=':', linewidth=2.0)
+                ax.axhline(y=split_pos, color=SPLIT_COLOR, linestyle=':', linewidth=2.0)
             else:
-                ax.axvline(x=split_pos, color='white', linestyle=':', linewidth=2.0)
+                ax.axvline(x=split_pos, color=SPLIT_COLOR, linestyle=':', linewidth=2.0)
 
         def _overlay(ax, pred):
-            """black barely darkens non-ink; white at half opacity augments ink signal."""
+            """non-ink barely dimmed; ink labels blended halfway to LABEL_TINT."""
             if label_binary is not None:
                 cmap_fn = plt.get_cmap(SCROLL_CMAP)
                 rgb = cmap_fn(np.clip(np.nan_to_num(pred, nan=0.0), 0.0, 1.0))[..., :3].copy()
@@ -2730,7 +2741,7 @@ class TensorboardVisualizer:
                 w = min(label_binary.shape[1], rgb.shape[1])
                 g = label_binary[:h, :w] > 0.5
                 rgb[:h, :w][~g] = rgb[:h, :w][~g] * (1.0 - 0.15)
-                rgb[:h, :w][g] = 0.5 * rgb[:h, :w][g] + 0.5
+                rgb[:h, :w][g] = 0.5 * rgb[:h, :w][g] + 0.5 * LABEL_TINT
                 ax.imshow(rgb, aspect='equal', interpolation='nearest')
 
         for row, (full_pred, train_pred, d_start, d_end) in enumerate(all_pred_data):
@@ -3184,8 +3195,8 @@ class TensorboardVisualizer:
                     g = lb[:h, :w] > 0.5
                     # non-ink: barely darkened by black at 0.15 opacity
                     rgb[:h, :w][~g] = rgb[:h, :w][~g] * (1.0 - 0.15)
-                    # ink: white at 0.5 opacity augments the signal, shows overlap clearly
-                    rgb[:h, :w][g] = 0.5 * rgb[:h, :w][g] + 0.5
+                    # ink: blended halfway to LABEL_TINT, shows overlap clearly
+                    rgb[:h, :w][g] = 0.5 * rgb[:h, :w][g] + 0.5 * LABEL_TINT
                 ax.imshow(rgb, aspect="equal", interpolation="nearest")
                 lab = pd["spec"].get("label") or pd["spec"]["tag"]
                 suf = "-tta" if is_tta else ""
