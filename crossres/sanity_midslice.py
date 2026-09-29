@@ -96,22 +96,27 @@ def _depth_profile(array, box, valid_level0=None) -> np.ndarray:
     return np.array([layer[mask].mean() if mask.any() else 0.0 for layer in block])
 
 
-def _depth_offset(low_profile, high_profile, low_um, high_um) -> float:
-    """shift (in low slices) that best aligns the high profile, pooled onto low slices, with the low one."""
-    def pooled(offset):
+def _depth_offset(low_profile, high_profile, low_um, high_um) -> tuple[float, bool, float]:
+    """(shift in low slices, high layer order reversed, correlation) that best aligns the high profile,
+    pooled onto low slices, with the low one."""
+    def pooled(profile, offset):
         centres = (np.arange(len(low_profile)) - (len(low_profile) - 1) / 2 + offset) * low_um
-        positions = centres / high_um + (len(high_profile) - 1) / 2
-        return np.interp(positions, np.arange(len(high_profile)), high_profile, left=np.nan, right=np.nan)
-    best, best_score = 0.0, -np.inf
-    for offset in np.arange(-3.0, 3.01, 0.25):
-        candidate = pooled(offset)
-        keep = np.isfinite(candidate)
-        if keep.sum() < len(low_profile) // 2:
-            continue
-        score = np.corrcoef(candidate[keep], low_profile[keep])[0, 1]
-        if score > best_score:
-            best, best_score = float(offset), float(score)
-    return best if np.isfinite(best_score) else float("nan")
+        positions = centres / high_um + (len(profile) - 1) / 2
+        return np.interp(positions, np.arange(len(profile)), profile, left=np.nan, right=np.nan)
+    best, best_reversed, best_score = 0.0, False, -np.inf
+    for reversed_ in (False, True):
+        profile = high_profile[::-1] if reversed_ else high_profile
+        for offset in np.arange(-3.0, 3.01, 0.25):
+            candidate = pooled(profile, offset)
+            keep = np.isfinite(candidate)
+            if keep.sum() < len(low_profile) // 2:
+                continue
+            score = np.corrcoef(candidate[keep], low_profile[keep])[0, 1]
+            if score > best_score:
+                best, best_reversed, best_score = float(offset), reversed_, float(score)
+    if not np.isfinite(best_score):
+        return float("nan"), False, float("nan")
+    return best, best_reversed, best_score
 
 
 def run_pair(pair: dict, high_level: int, max_side: int) -> dict:
@@ -140,6 +145,13 @@ def run_pair(pair: dict, high_level: int, max_side: int) -> dict:
     candidates["phase_shift"] = np.float32([[1, 0, dx], [0, 1, dy]])
     # opencv's sign convention is easy to get backwards; let the Dice decide
     candidates["phase_shift_neg"] = np.float32([[1, 0, -dx], [0, 1, -dy]])
+    # the renders' measured size ratio can differ from the nominal voxel ratio by ~0.3% (~25 px over 8k px)
+    sx, sy = low.shape[1] / high.shape[1], low.shape[0] / high.shape[0]
+    candidates["shape_ratio"] = np.float32([[sx, 0, 0], [0, sy, 0]])
+    scaled, _ = _fit(low.shape, high_u8, high_valid, candidates["shape_ratio"])
+    (dx, dy), _ = cv2.phaseCorrelate(scaled.astype(np.float32), low_u8.astype(np.float32), window)
+    candidates["shape_ratio_shift"] = np.float32([[sx, 0, dx], [0, sy, dy]])
+    candidates["shape_ratio_shift_neg"] = np.float32([[sx, 0, -dx], [0, sy, -dy]])
     matrix, inliers = _sift_similarity(low_u8, high_u8, max_side)
     report["sift_inliers"] = inliers
     if matrix is not None:
@@ -165,10 +177,13 @@ def run_pair(pair: dict, high_level: int, max_side: int) -> dict:
     high_box = (corners @ to_high0.T) / (2 ** high_level)
     hy0, hy1 = sorted(int(v) for v in high_box[:, 1])
     hx0, hx1 = sorted(int(v) for v in high_box[:, 0])
-    report["depth_offset_low_slices"] = _depth_offset(
+    offset, reversed_, depth_score = _depth_offset(
         _depth_profile(low_array, box), _depth_profile(high_array, (max(0, hy0), hy1, max(0, hx0), hx1)),
         pair["low_um"], pair["high_um"],
     )
+    report["depth_offset_low_slices"] = offset
+    report["depth_reversed"] = reversed_
+    report["depth_profile_corr"] = depth_score
 
     dice = report[best]["dice"]
     report["verdict"] = "good" if dice >= 0.85 else "check" if dice >= 0.7 else "INVESTIGATE"
@@ -186,7 +201,8 @@ def run_pair(pair: dict, high_level: int, max_side: int) -> dict:
           f"phase={report['phase_shift']['dice']:.3f} "
           f"sift={report.get('sift_similarity', {}).get('dice', float('nan')):.3f} (inliers {inliers}) "
           f"best={best} residual_scale={scale_estimate:.4f} "
-          f"depth_offset={report['depth_offset_low_slices']:+.2f} slices -> {report['verdict']}", flush=True)
+          f"depth_offset={report['depth_offset_low_slices']:+.2f} slices reversed={reversed_} "
+          f"(r={depth_score:.2f}) -> {report['verdict']}", flush=True)
     return report
 
 

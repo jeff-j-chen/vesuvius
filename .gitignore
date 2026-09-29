@@ -22,3 +22,5 @@ surface_labels/extras/
 output/surface_review/extras/
 output/composite_cache/extras/
 output/test_visualizations/*/extras/
+crossres/pairs/*
+crossres/sanity/*
