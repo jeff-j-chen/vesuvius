@@ -212,9 +212,10 @@ def build_config(args) -> Config:
     return cfg
 
 
-def standard_samplers(cfg, scroll_ids, holdout_frac):
+def standard_samplers(cfg, scroll_ids, holdout_frac, flip_ids=()):
     import zarr
     split_by_id = {int(s.scroll_id): (s.split_axis, float(s.train_split_frac)) for s in DEFAULT_SCROLLS}
+    flip_ids = {int(i) for i in flip_ids}
     train, monitor = [], []
     for sid in scroll_ids:
         volume = zarr.open(os.path.join(cfg.data.zarr_path, f"{sid}.zarr"), mode="r")
@@ -225,10 +226,22 @@ def standard_samplers(cfg, scroll_ids, holdout_frac):
         else:
             box = (0, (height // ctx) * ctx, 0, (int(width * frac) // ctx) * ctx)
         crop = CropSampler(sid, cfg.data.zarr_path, cfg, *box, "train", holdout_frac=holdout_frac)
-        train.append(crop)
-        monitor.append(CropSampler(sid, cfg.data.zarr_path, cfg, *box, "monitor",
+        crops = (crop, CropSampler(sid, cfg.data.zarr_path, cfg, *box, "monitor",
                                    holdout_frac=holdout_frac, shared=crop))
+        if int(sid) in flip_ids:
+            for sampler in crops:
+                # renders whose normal points the other way are read in the training orientation
+                sampler.sample = _depth_flipped(sampler.sample)
+        train.append(crops[0])
+        monitor.append(crops[1])
     return make_physical_sampler(train)[0], make_physical_sampler(monitor)[0]
+
+
+def _depth_flipped(sample):
+    def wrapped(n, rng):
+        crops = sample(n, rng)
+        return None if crops is None else torch.flip(crops, dims=(2,))
+    return wrapped
 
 
 def main():
@@ -270,25 +283,64 @@ def main():
     ap.add_argument("--save-int", type=int, default=500)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--input-upsampler", default="",
+                    help="train_upsampler.py checkpoint applied to every crop first (v8-in's upsample-before-"
+                         "network geometry); requires --plan none")
+    ap.add_argument("--upsampler-depth-pool", type=int, default=2,
+                    help="average this many predicted sub-slices: x4 depth pooled 2 -> 16 slices")
+    ap.add_argument("--flip-depth-ids", type=int, nargs="*", default=(),
+                    help="scrolls whose renders are reversed in depth (crossres/depth_orientation.py); "
+                         "their crops are flipped. the stored window 8-19 is symmetric about the centre")
     args = ap.parse_args()
+    if args.input_upsampler and args.plan != "none":
+        ap.error("--input-upsampler trains the standard MAE on upsampled crops; use --plan none")
 
     cfg = build_config(args)
     dev = cfg.device
     rng = np.random.default_rng(args.seed)
     torch.manual_seed(args.seed)
+    upsampler = None
+    model_ctx, model_depth, model_patch = args.ctx, args.depth, args.mask_patch
+    model_cfg = cfg
+    if args.input_upsampler:
+        import copy
+        from utils.upsampler import load_upsampler
+        upsampler = load_upsampler(args.input_upsampler, dev)
+        up_scale, up_factor = upsampler.xy_scale, upsampler.depth_factor
+        if up_factor % args.upsampler_depth_pool:
+            ap.error("--upsampler-depth-pool must divide the upsampler's depth factor")
+        model_ctx = args.ctx * up_scale
+        model_depth = args.depth * up_factor // args.upsampler_depth_pool
+        # the same physical mask blocks on the finer grid
+        model_patch = args.mask_patch * up_scale
+        model_cfg = copy.deepcopy(cfg)
+        model_cfg.data.context_size, model_cfg.data.depth = model_ctx, model_depth
+        print(f"[crossres] input upsampler {args.input_upsampler}: {args.depth}x{args.ctx}^2 crops -> "
+              f"{model_depth}x{model_ctx}^2 network input", flush=True)
+
+    def prepare(x):
+        """crops as the network sees them: upsampled (and depth-pooled) when an upsampler is set."""
+        x = x.to(dev)
+        if upsampler is None:
+            return x
+        with torch.no_grad():
+            x = upsampler(x)
+            pool = args.upsampler_depth_pool
+            return F.avg_pool3d(x, kernel_size=(pool, 1, 1)) if pool > 1 else x
 
     def make_mask(batch, n_paired=0):
         """(B, 1, D, H, W): hidden columns, plus on some samples a run of whole hidden slices; a share of
         the paired samples (the last n_paired) is left whole."""
-        columns = _make_spatial_mask(batch, args.ctx, 1, args.mask_patch, args.mask_frac, dev, rng)
-        mask = columns.expand(batch, 1, args.depth, args.ctx, args.ctx).clone()
+        columns = _make_spatial_mask(batch, model_ctx, 1, model_patch, args.mask_frac, dev, rng)
+        mask = columns.expand(batch, 1, model_depth, model_ctx, model_ctx).clone()
+        slab_max = args.slab_max * max(1, model_depth // args.depth)
         for b in range(batch):
             if b >= batch - n_paired and rng.random() < args.unmasked_paired_frac:
                 mask[b] = 0.0
                 continue
             if rng.random() < args.slab_mask_prob:
-                length = int(rng.integers(1, args.slab_max + 1))
-                start = int(rng.integers(0, args.depth - length + 1))
+                length = int(rng.integers(1, slab_max + 1))
+                start = int(rng.integers(0, model_depth - length + 1))
                 mask[b, :, start:start + length] = 1.0
         return mask
 
@@ -297,7 +349,7 @@ def main():
     else:
         import campaign_archs_33 as campaign33
         scroll_ids = [int(s) for s in campaign33.PRETRAIN_SCROLL_IDS]
-    std_train, std_monitor = standard_samplers(cfg, scroll_ids, holdout_frac=0.1)
+    std_train, std_monitor = standard_samplers(cfg, scroll_ids, holdout_frac=0.1, flip_ids=args.flip_depth_ids)
 
     wanted = [] if args.plan == "none" else [
         p for p in PAIRS if (ROOT / "pairs" / args.plan / str(p["zid"]) / "meta.json").exists()
@@ -322,7 +374,7 @@ def main():
     n_std = args.batch_size - n_pair
 
     if args.dry_run:
-        x_std = std_train.sample(max(1, n_std), rng)
+        x_std = prepare(std_train.sample(max(1, n_std), rng))
         print(f"[crossres] dry-run standard {tuple(x_std.shape)} mask {tuple(make_mask(x_std.shape[0]).shape)}")
         if paired:
             x_pair, target, valid = paired.sample(n_pair, rng)
@@ -331,8 +383,8 @@ def main():
         return
 
     from utils.model import create_model
-    backbone, _ = create_model(cfg)
-    model = CrossResMAE(backbone, args.depth, scale=scale, depth_factor=factor).to(dev)
+    backbone, _ = create_model(model_cfg)
+    model = CrossResMAE(backbone, model_depth, scale=scale, depth_factor=factor).to(dev)
     state = torch.load(args.init_weights, map_location=dev, weights_only=True)
     state = {k.removeprefix("module.").removeprefix("_orig_mod."): v for k, v in state.items()}
     own = model.backbone.state_dict()
@@ -381,7 +433,7 @@ def main():
 
     started = time.time()
     for step in range(1, args.steps + 1):
-        x_std = std_train.sample(n_std, rng) if n_std else None
+        x_std = prepare(std_train.sample(n_std, rng)) if n_std else None
         if paired:
             x_pair, target, valid = paired.sample(n_pair, rng)
             target, valid = target.to(dev), valid.to(dev)
@@ -398,7 +450,7 @@ def main():
         if step % args.log_int == 0 or step == 1:
             model.eval()
             with torch.no_grad():
-                xm_std = std_monitor.sample(max(1, n_std), rng)
+                xm_std = prepare(std_monitor.sample(max(1, n_std), rng))
                 if paired_monitor:
                     xm_pair, tm, vm = (t.to(dev) for t in paired_monitor.sample(n_pair, rng))
                     mon_rec, mon_sr = losses(torch.cat([xm_std.to(dev), xm_pair]), tm, vm, n_pair)

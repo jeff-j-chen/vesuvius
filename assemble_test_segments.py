@@ -87,6 +87,12 @@ EXTRA_VOLUMES = {
 # extras are stored as uint8 (the raw data is uint8) to halve their ~150 GB uint16 footprint
 EXTRAS_DTYPE = "|u1"
 
+sys.path.insert(0, SCRIPT_DIR)
+from utils.depth_flip import flip_zarr_depth, reversed_ids  # noqa: E402
+
+# renders whose mesh normal opposes the training orientation; rendered with reversed depth offsets
+DEPTH_REVERSED = reversed_ids()
+
 # free-disk floor for downloads/renders (set from --min-free-gb); tripping it stops all further rendering
 _MIN_FREE_BYTES = 0
 _LOW_DISK = threading.Event()
@@ -178,7 +184,8 @@ def compute_normals(Xu, Yu, Zu):
 
 def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, normal_step,
                           upsample_factor, workers, out_zarr, out_id, chunk_depth, chunk_y, chunk_x,
-                          crop_valid=True, crop_margin=8, mask_dir=MASK_DIR, output_dtype="<u2"):
+                          crop_valid=True, crop_margin=8, mask_dir=MASK_DIR, output_dtype="<u2",
+                          reverse_depth=False):
     """render a flattened surface volume from tifxyz mesh + raw volume on S3.
     
     the mesh gives, for each point on the FLATTENED sheet, its (x,y,z) voxel in the raw scan.
@@ -225,6 +232,9 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
     if layers > 1:
         normals = compute_normals(Xu, Yu, Zu)
         offsets = (np.arange(layers) - (layers - 1) / 2.0) * normal_step
+        if reverse_depth:
+            # mesh normal opposes the training orientation (depth_reversed.json): same as negating it
+            offsets = offsets[::-1]
     else:
         normals = None
         offsets = np.array([0.0])
@@ -315,6 +325,8 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
         _require_disk(os.path.dirname(os.path.abspath(out_zarr)))
         store[li] = sample_layer(off).astype(store.dtype)
         print(f"[zarr] layer {li+1}/{D}", flush=True)
+    if reverse_depth and normals is not None:
+        store.attrs["depth_flipped"] = True
 
     # the rendered zarr is the source of truth for its usable footprint
     # derive the mask from the center layer rather than mesh validity alone
@@ -430,7 +442,8 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
             crop_valid=True,
             crop_margin=8,
             mask_dir=mask_dir,
-            output_dtype=output_dtype)
+            output_dtype=output_dtype,
+            reverse_depth=zid in DEPTH_REVERSED)
         if drop_cache:
             shutil.rmtree(cache_dir, ignore_errors=True)
         return (zid, "OK")
@@ -444,6 +457,30 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
         print(f"  [WARN] render failed for {zid}: {e}")
         traceback.print_exc()
         return (zid, f"FAIL: {e}")
+
+
+def reconcile_depth_orientation(zids, out_dir, extra_ids):
+    """flip any existing render listed in depth_reversed.json that is not yet corrected, and drop stale
+    extras surface labels so they are re-fetched from R2 or regenerated. native test labels are tracked
+    in git and regenerated there; a stale copy is only reported."""
+    for zid in zids:
+        path = os.path.join(out_dir, f"{zid}.zarr")
+        if zid in DEPTH_REVERSED and os.path.isdir(path) and flip_zarr_depth(path):
+            print(f"[orient] {zid}: depth flipped in place", flush=True)
+        if zid not in DEPTH_REVERSED:
+            continue
+        folder = os.path.join(EXTRAS_SURFACE_DIR if zid in extra_ids else SURFACE_LABEL_ROOT, zid)
+        meta_path = os.path.join(folder, "metadata.json")
+        if not os.path.isfile(meta_path):
+            continue
+        with open(meta_path, encoding="utf-8") as handle:
+            if json.load(handle).get("depth_flipped", False):
+                continue
+        if zid in extra_ids:
+            shutil.rmtree(folder)
+            print(f"[orient] {zid}: removed stale surface labels", flush=True)
+        else:
+            print(f"[orient] WARN {zid}: surface labels predate the depth flip -- git pull or regenerate")
 
 
 def _safe_extract(zip_path, dest, top):
@@ -697,6 +734,8 @@ def main():
     missing_ids = selected_ids - {fragment[0] for fragment in fragments + extras}
     if missing_ids:
         ap.error(f"unknown --only IDs: {sorted(missing_ids)}")
+    reconcile_depth_orientation([fragment[0] for fragment in fragments + extras], args.out_dir,
+                                {fragment[0] for fragment in extras})
     if extras:
         fetch_extras_artifacts(ats, r2_root, extras)
     

@@ -117,6 +117,8 @@ def load_cached_norm(scroll_id: str | int, cache_path: str = UNIFIED_CACHE_PATH,
 
     mode "surface_anchor" maps the scroll's gap level to 0.1 and its surface papyrus level to 0.5.
     """
+    if mode == "raw255":
+        return 0.0, 1.0, 0.0, 255.0
     sid = str(scroll_id)
     if not os.path.exists(cache_path):
         return None

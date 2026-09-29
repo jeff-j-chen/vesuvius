@@ -222,7 +222,8 @@ class DataConfig:
     # ink label, floored at edge_soft_floor (>0.5 so the cell still counts as positive). 0 = off
     edge_soft_sigma: float = 0.0
     edge_soft_floor: float = 0.6
-    # "global": whole-volume z-score and raw min/max; "surface_anchor": gap -> 0.1, surface papyrus -> 0.5
+    # "global": whole-volume z-score and raw min/max; "surface_anchor": gap -> 0.1, surface papyrus -> 0.5;
+    # "raw255": raw / 255 (for model.input_tile_norm)
     norm_mode: str = "global"
     # control: roll training-scroll labels by this fraction of the height (visualized scrolls keep theirs)
     label_shift_frac: float = 0.0
@@ -553,6 +554,12 @@ class ModelConfig:
     # fixed in-plane gaussian on the (downsampled) input; 0.6 px cuts white-noise variance ~4x like 2x2 pooling
     input_denoise_sigma: float = 0.0
     input_denoiser: str = ""
+    # frozen utils/upsampler.py checkpoint (or "trilinear") applied to the normalised crop before the backbone;
+    # the network grid becomes xy_scale x wider and depth_factor / depth_pool x deeper, labels stay native
+    input_upsampler: str = ""
+    input_upsampler_depth_pool: int = 2
+    # "clip200": v8-in input (with data.norm_mode "raw255"): raw clipped to [0, 200] / 255, z-scored per crop
+    input_tile_norm: str = ""
     # per-physical-domain residual output heads used only in training; inference uses the shared head
     private_domain_heads: bool = False
     # private loss sees the shared logits detached: the private head only shapes shared features, never takes over calibration

@@ -844,6 +844,16 @@ class NnUnet3dLcndz(nn.Module):
 
     def __init__(self, config: Config):
         super().__init__()
+        self._input_tile_norm = str(getattr(config.model, "input_tile_norm", "") or "")
+        if self._input_tile_norm not in ("", "clip200"):
+            raise ValueError(f"unknown input_tile_norm {self._input_tile_norm!r}")
+        self._input_upsampler_path = str(getattr(config.model, "input_upsampler", "") or "")
+        self.input_upsampler = None
+        self._input_upsample = 1
+        self._upsampler_depth_pool = 1
+        self._upsampled_depth_ratio = 1.0
+        if self._input_upsampler_path:
+            config = self._build_input_upsampler(config)
         self._downsample = max(1, int(getattr(config.data, "context_downsample", 1)))
         sigma = float(getattr(config.model, "input_denoise_sigma", 0.0))
         if sigma > 0:
@@ -1549,12 +1559,60 @@ class NnUnet3dLcndz(nn.Module):
             if bool(getattr(config.tra, "depth_shift_aux", False)) else None
         )
 
+    def _build_input_upsampler(self, config: Config) -> Config:
+        """frozen input upsampler (weights loaded in create_model); returns the config at the network grid.
+
+        the data stay on the native grid (context, depth window, tile, labels); only the network sees the
+        upsampled crop, so its context, depth, tile and multitile sub-tile are scaled here.
+        """
+        import copy
+        from utils.upsampler import LearnedUpsampler
+        if self._input_upsampler_path == "trilinear":
+            # a zero residual head is exact trilinear interpolation, as train_upsampler.py --steps 0 saves
+            settings = {"xy_scale": 2, "depth_factor": 4}
+        else:
+            payload = torch.load(self._input_upsampler_path, map_location="cpu", weights_only=False)
+            settings = dict(payload["config"])
+        self.input_upsampler = LearnedUpsampler(**settings)
+        scale, factor = self.input_upsampler.xy_scale, self.input_upsampler.depth_factor
+        pool = max(1, int(getattr(config.model, "input_upsampler_depth_pool", 2)))
+        if factor % pool:
+            raise ValueError("input_upsampler_depth_pool must divide the upsampler's depth factor")
+        if int(getattr(config.data, "context_downsample", 1)) != 1:
+            raise ValueError("input_upsampler requires context_downsample 1")
+        self._input_upsample, self._upsampler_depth_pool = scale, pool
+        self._upsampled_depth_ratio = factor / pool
+        network = copy.deepcopy(config)
+        network.data.context_size = int(config.data.context_size) * scale
+        network.data.tile_size = int(config.data.tile_size) * scale
+        network.data.depth = int(config.data.depth) * factor // pool
+        network.model.multitile_subtile = int(config.model.multitile_subtile) * scale
+        return network
+
+    def _native_to_network_depth(self, depth: torch.Tensor | None) -> torch.Tensor | None:
+        """native slice index -> upsampled slice index (voxel centres, align_corners=False); -1 stays invalid."""
+        if depth is None or self.input_upsampler is None:
+            return depth
+        ratio = self._upsampled_depth_ratio
+        return torch.where(depth >= 0, (depth + 0.5) * ratio - 0.5, depth)
+
     def _prepare_input(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 4:
             x = x.unsqueeze(1)
+        if self._input_tile_norm == "clip200":
+            x = x.clamp(0.0, 200.0 / 255.0)
+            mean = x.mean(dim=(1, 2, 3, 4), keepdim=True)
+            std = x.std(dim=(1, 2, 3, 4), keepdim=True, unbiased=False)
+            x = (x - mean) / (std + 1e-6)
         if self.input_denoiser is not None:
             with torch.no_grad():
                 x = self.input_denoiser(x)
+        if self.input_upsampler is not None:
+            # normalise, then upsample, as in the upsampled-crop MAE
+            with torch.no_grad():
+                x = self.input_upsampler(x.float())
+                if self._upsampler_depth_pool > 1:
+                    x = F.avg_pool3d(x, kernel_size=(self._upsampler_depth_pool, 1, 1))
         if self._downsample > 1:
             x = F.avg_pool3d(
                 x,
@@ -2240,7 +2298,7 @@ class NnUnet3dLcndz(nn.Module):
             return voxel_map[:, :, :, cy:cy + feat, cx:cx + feat]
 
         offsets = torch.div(
-            target_offsets.to(device=voxel_map.device, dtype=torch.long),
+            target_offsets.to(device=voxel_map.device, dtype=torch.long) * self._input_upsample,
             self._downsample,
             rounding_mode="trunc",
         )
@@ -2618,6 +2676,7 @@ class NnUnet3dLcndz(nn.Module):
         domain_ids: torch.Tensor | None = None,
         sagnet_grl_scale: float = 0.0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        teacher_surface_depth = self._native_to_network_depth(teacher_surface_depth)
         if self._early_2d_unet:
             encode = (
                 self._encode_decode_overlapping_depth
@@ -2943,6 +3002,15 @@ def create_model(config: Config):
         model.input_denoiser.load_state_dict(state)
         model.input_denoiser.requires_grad_(False)
         model.input_denoiser.eval()
+    if model.input_upsampler is not None:
+        if model._input_upsampler_path == "trilinear":
+            nn.init.zeros_(model.input_upsampler.net[-1].weight)
+            nn.init.zeros_(model.input_upsampler.net[-1].bias)
+        else:
+            payload = torch.load(model._input_upsampler_path, map_location=config.device, weights_only=False)
+            model.input_upsampler.load_state_dict(payload["state_dict"])
+        model.input_upsampler.requires_grad_(False)
+        model.input_upsampler.eval()
 
     params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters ({arch}): {params:,}")

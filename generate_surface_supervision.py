@@ -854,6 +854,8 @@ def main() -> None:
     metadata = {
         "scroll_id": int(scroll_id) if scroll_id.isdigit() else scroll_id,
         "volume_shape": [depth, height, width],
+        # true once the zarr's depth order was corrected (depth_reversed.json); stale labels lack it
+        "depth_flipped": bool(volume.attrs.get("depth_flipped", False)),
         "z_start": args.z_start,
         "z_end": args.z_end,
         "depth_semantics": "last papyrus-like slice before strongest papyrus-to-air transition",
