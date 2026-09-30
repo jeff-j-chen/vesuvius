@@ -1,0 +1,46 @@
+[degrader] train [('w044', 16), ('w059', 52), ('w030', 14), ('w043', 27), ('w045', 50), ('w040', 93), ('w041', 57), ('w039', 17), ('w035', 27), ('seg46527', 5)] monitor ['p841'] (all); NCC >= 0.5; reference median/MAD 0.2903/0.1804; params=376,177
+2026-09-30 05:47:13.061426: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-09-30 05:47:13.063659: I external/local_xla/xla/tsl/cuda/cudart_stub.cc:32] Could not find cuda drivers on your machine, GPU will not be used.
+2026-09-30 05:47:13.067434: I external/local_xla/xla/tsl/cuda/cudart_stub.cc:32] Could not find cuda drivers on your machine, GPU will not be used.
+2026-09-30 05:47:13.076480: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1790747233.091240  588377 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1790747233.095602  588377 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1790747233.107331  588377 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790747233.107353  588377 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790747233.107358  588377 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790747233.107361  588377 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2026-09-30 05:47:13.110819: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[degrader] step 0/3000 mse_translated=0.01392 mse_pooled=0.01392 ratio=1.00000 spectrum_translated=0.27635 slice_stats_translated=0.11021 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 4s
+[degrader] step 100/3000 train=0.02286 mse_translated=0.01307 mse_pooled=0.01392 ratio=0.93891 spectrum_translated=0.29487 slice_stats_translated=0.11573 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 45s
+[degrader] step 200/3000 train=0.01194 mse_translated=0.00868 mse_pooled=0.01392 ratio=0.62363 spectrum_translated=0.27259 slice_stats_translated=0.07735 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 86s
+[degrader] step 300/3000 train=0.00975 mse_translated=0.01290 mse_pooled=0.01392 ratio=0.92668 spectrum_translated=0.32213 slice_stats_translated=0.11329 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 128s
+[degrader] step 400/3000 train=0.00868 mse_translated=0.01175 mse_pooled=0.01392 ratio=0.84400 spectrum_translated=0.37576 slice_stats_translated=0.10694 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 170s
+[degrader] step 500/3000 train=0.00841 mse_translated=0.00876 mse_pooled=0.01392 ratio=0.62944 spectrum_translated=0.36569 slice_stats_translated=0.07932 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 212s
+[degrader] step 600/3000 train=0.00925 mse_translated=0.01042 mse_pooled=0.01392 ratio=0.74868 spectrum_translated=0.42862 slice_stats_translated=0.09937 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 254s
+[degrader] step 700/3000 train=0.00859 mse_translated=0.00959 mse_pooled=0.01392 ratio=0.68913 spectrum_translated=0.41664 slice_stats_translated=0.09205 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 296s
+[degrader] step 800/3000 train=0.00741 mse_translated=0.01189 mse_pooled=0.01392 ratio=0.85457 spectrum_translated=0.39861 slice_stats_translated=0.10319 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 337s
+[degrader] step 900/3000 train=0.00726 mse_translated=0.00934 mse_pooled=0.01392 ratio=0.67122 spectrum_translated=0.33770 slice_stats_translated=0.08153 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 379s
+[degrader] step 1000/3000 train=0.00752 mse_translated=0.01013 mse_pooled=0.01392 ratio=0.72799 spectrum_translated=0.38146 slice_stats_translated=0.09126 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 421s
+[degrader] step 1100/3000 train=0.00712 mse_translated=0.01021 mse_pooled=0.01392 ratio=0.73329 spectrum_translated=0.40216 slice_stats_translated=0.08939 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 463s
+[degrader] step 1200/3000 train=0.00712 mse_translated=0.01161 mse_pooled=0.01392 ratio=0.83419 spectrum_translated=0.44774 slice_stats_translated=0.10137 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 505s
+[degrader] step 1300/3000 train=0.00716 mse_translated=0.00979 mse_pooled=0.01392 ratio=0.70362 spectrum_translated=0.38720 slice_stats_translated=0.08529 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 547s
+[degrader] step 1400/3000 train=0.00681 mse_translated=0.00875 mse_pooled=0.01392 ratio=0.62862 spectrum_translated=0.41414 slice_stats_translated=0.08321 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 589s
+[degrader] step 1500/3000 train=0.00651 mse_translated=0.00983 mse_pooled=0.01392 ratio=0.70612 spectrum_translated=0.36399 slice_stats_translated=0.07915 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 631s
+[degrader] step 1600/3000 train=0.00701 mse_translated=0.00945 mse_pooled=0.01392 ratio=0.67925 spectrum_translated=0.40339 slice_stats_translated=0.08442 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 673s
+[degrader] step 1700/3000 train=0.00696 mse_translated=0.00744 mse_pooled=0.01392 ratio=0.53491 spectrum_translated=0.36295 slice_stats_translated=0.05745 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 715s
+[degrader] step 1800/3000 train=0.00647 mse_translated=0.00771 mse_pooled=0.01392 ratio=0.55423 spectrum_translated=0.34414 slice_stats_translated=0.06033 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 758s
+[degrader] step 1900/3000 train=0.00646 mse_translated=0.00874 mse_pooled=0.01392 ratio=0.62764 spectrum_translated=0.42140 slice_stats_translated=0.07594 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 799s
+[degrader] step 2000/3000 train=0.00643 mse_translated=0.00909 mse_pooled=0.01392 ratio=0.65328 spectrum_translated=0.40405 slice_stats_translated=0.07866 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 841s
+[degrader] step 2100/3000 train=0.00622 mse_translated=0.00925 mse_pooled=0.01392 ratio=0.66430 spectrum_translated=0.41645 slice_stats_translated=0.08059 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 883s
+[degrader] step 2200/3000 train=0.00634 mse_translated=0.00871 mse_pooled=0.01392 ratio=0.62590 spectrum_translated=0.41163 slice_stats_translated=0.07226 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 925s
+[degrader] step 2300/3000 train=0.00690 mse_translated=0.00739 mse_pooled=0.01392 ratio=0.53103 spectrum_translated=0.35010 slice_stats_translated=0.05152 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 969s
+[degrader] step 2400/3000 train=0.00620 mse_translated=0.00775 mse_pooled=0.01392 ratio=0.55670 spectrum_translated=0.41228 slice_stats_translated=0.06530 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 1012s
+[degrader] step 2500/3000 train=0.00604 mse_translated=0.00816 mse_pooled=0.01392 ratio=0.58637 spectrum_translated=0.35085 slice_stats_translated=0.05899 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 1054s
+[degrader] step 2600/3000 train=0.00613 mse_translated=0.00785 mse_pooled=0.01392 ratio=0.56390 spectrum_translated=0.34674 slice_stats_translated=0.05396 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 1096s
+[degrader] step 2700/3000 train=0.00637 mse_translated=0.00747 mse_pooled=0.01392 ratio=0.53647 spectrum_translated=0.38070 slice_stats_translated=0.05617 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 1138s
+[degrader] step 2800/3000 train=0.00577 mse_translated=0.00763 mse_pooled=0.01392 ratio=0.54821 spectrum_translated=0.37323 slice_stats_translated=0.05786 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 1180s
+[degrader] step 2900/3000 train=0.00613 mse_translated=0.00770 mse_pooled=0.01392 ratio=0.55300 spectrum_translated=0.36054 slice_stats_translated=0.05482 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 1222s
+[degrader] step 3000/3000 train=0.00592 mse_translated=0.00769 mse_pooled=0.01392 ratio=0.55243 spectrum_translated=0.36082 slice_stats_translated=0.05493 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 1263s
+[degrader] best step 2300: ratio=0.5310 -> models/c39_degrader.pth

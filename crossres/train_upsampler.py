@@ -41,6 +41,8 @@ def main():
     ap.add_argument("--name", default="upsampler_learned_xy2_d4")
     ap.add_argument("--plan", default="xyz")
     ap.add_argument("--include-holdout-pairs", action="store_true")
+    ap.add_argument("--norm-mode", default="global", choices=("global", "surface_anchor"),
+                    help="input normalisation; must match the fine-tuning runs that put this upsampler in front")
     ap.add_argument("--width", type=int, default=48)
     ap.add_argument("--layers", type=int, default=8)
     ap.add_argument("--steps", type=int, default=3000)
@@ -65,7 +67,7 @@ def main():
               and (args.include_holdout_pairs or p["role"] != "holdout")]
     if not wanted:
         raise SystemExit(f"no built pairs under crossres/pairs/{args.plan}")
-    segments = [PairedSegment(p, cfg, "global", args.plan) for p in wanted]
+    segments = [PairedSegment(p, cfg, args.norm_mode, args.plan) for p in wanted]
     factor, scale = segments[0].factor, segments[0].scale
     if (factor, scale) != (4, 2):
         raise SystemExit(f"expected plan xyz tiles (x4 depth, x2 xy), got x{factor} depth, x{scale} xy")
@@ -166,7 +168,8 @@ def main():
             if best is None or report["ratio_vs_trilinear"] < best["ratio_vs_trilinear"]:
                 best = {"step": step, **report}
                 torch.save({"state_dict": model.state_dict(), "config": model.config(), "report": best,
-                            "pairs": [s.name for s in segments], "plan": args.plan}, save_path)
+                            "pairs": [s.name for s in segments], "plan": args.plan, "norm_mode": args.norm_mode},
+                           save_path)
     writer.close()
     print(f"[upsampler] best step {best['step']}: ratio_vs_trilinear={best['ratio_vs_trilinear']:.4f} "
           f"ratio_vs_linear3={best['ratio_vs_linear3']:.4f} -> {save_path}", flush=True)

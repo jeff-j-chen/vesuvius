@@ -1,0 +1,68 @@
+nohup: ignoring input
+[assemble] 1 fragment(s): ['w013']  (concurrent_fragments=1, workers/frag=16, chunks=(8,64,64))
+
+======================================================================
+w013 (20240304141531)  id=20240304141531
+======================================================================
+/usr/local/lib/python3.10/dist-packages/zarr/creation.py:614: UserWarning: ignoring keyword argument 'zarr_format'
+  compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+  [1/3] w013 source=https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc1667/segments/20240304141531-w013_20240304141531_flatboi/surface-volumes/2.399um-0.22m-78keV-volume-20251217075048.zarr/2 pool=109->28 output=(28, 10400, 4975)
+  [w013] rows 10/82
+  [w013] rows 20/82
+  [w013] rows 30/82
+  [w013] rows 40/82
+  [w013] rows 50/82
+  [w013] rows 60/82
+  [w013] rows 70/82
+  [w013] rows 80/82
+  [w013] rows 82/82
+  [w013] wrote /vesuvius/ves_zarrs2/20240304141531.zarr and masks/20240304141531.png
+  [labels] skip_labels -> keeping existing eroded_inklabels
+  [3/3] --skip-norm -> skip
+[done] w013 (20240304141531)
+
+======================================================================
+[assemble] SUMMARY
+======================================================================
+  w013: OK
+
+======================================================================
+[assemble] INTEGRITY SWEEP (34 scrolls)
+======================================================================
+  OK   w044         20260115000000  cov=1.00
+  OK   w059         20250223000000  cov=1.00
+  [91mFAIL w047         20260206000001  MISSING zarr[0m
+  [91mFAIL w056         20260115000001  MISSING zarr[0m
+  [91mFAIL w058         20260210000000  MISSING zarr[0m
+  [91mFAIL w052         20260227000000  MISSING zarr[0m
+  [91mFAIL w049         20260318000000  MISSING zarr[0m
+  [91mFAIL w046         20260325000000  MISSING zarr[0m
+  OK   w041         20260108000000  cov=1.00
+  OK   w040         20250831000000  cov=1.00
+  OK   w039         20260302000000  cov=1.00
+  [91mFAIL w038         20260306000000  MISSING zarr[0m
+  [91mFAIL w037         20260310000000  MISSING zarr[0m
+  [91mFAIL w034         20260303000000  MISSING zarr[0m
+  OK   w035         20260317000000  cov=1.00
+  OK   w030         20250108000005  cov=1.00
+  OK   w043         20260112000000  cov=1.00
+  OK   w045         20260126000000  cov=1.00
+  [91mFAIL w055         20251226000000  MISSING zarr[0m
+  OK   seg46527     20260226000000  cov=1.00
+  OK   500P2_front  20250628074500  cov=1.00
+  OK   w013         20240304141531  cov=1.00
+  [91mFAIL w087         20251112000002  MISSING zarr[0m
+  [91mFAIL w068         20251111010954  MISSING zarr[0m
+  [91mFAIL w018         20240304144031  MISSING zarr[0m
+  OK   p9b_487      20250919125754  cov=1.00
+  [91mFAIL paris4       20231210121321  MISSING zarr[0m
+  [91mFAIL paris2_fr143 20230301213755  MISSING zarr[0m
+  [91mFAIL paris2_fr47  20230205142449  MISSING zarr[0m
+  [91mFAIL scroll6_fr8  20231205222200  MISSING zarr[0m
+  [91mFAIL paris1_fr34  20230301213423  MISSING zarr[0m
+  OK   p343         20250511003658  cov=1.00
+  OK   cr1fr3       20231201215900  cov=1.00
+  OK   p841         20260221022814  cov=1.00
+
+[91m[assemble] 18 scroll(s) FAILED integrity: ['w047', 'w056', 'w058', 'w052', 'w049', 'w046', 'w038', 'w037', 'w034', 'w055', 'w087', 'w068', 'w018', 'paris4', 'paris2_fr143', 'paris2_fr47', 'scroll6_fr8', 'paris1_fr34']
+  fix with: python assemble_training_segments.py --force --only w047,w056,w058,w052,w049,w046,w038,w037,w034,w055,w087,w068,w018,paris4,paris2_fr143,paris2_fr47,scroll6_fr8,paris1_fr34[0m

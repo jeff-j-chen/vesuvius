@@ -1,0 +1,41 @@
+[upsampler] 11 segments ['w044', 'w059', 'w030', 'w043', 'w045', 'w040', 'w041', 'w039', 'w035', '500P2_front', 'seg46527']; scroll weights {'PHerc0139': 0.697, 'PHerc0500P2': 0.223, 'PHerc0814': 0.081}
+[upsampler] params=395,632
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1790714866.488353  242375 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1790714866.492011  242375 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1790714866.501763  242375 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790714866.501785  242375 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790714866.501788  242375 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790714866.501791  242375 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+[upsampler] step 0/3000 monitor=0.01139 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=1.00000 ratio_vs_linear3=1.18037 1s
+[upsampler] step 100/3000 train=0.01052 monitor=0.01085 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.95213 ratio_vs_linear3=1.12387 82s
+[upsampler] step 200/3000 train=0.01104 monitor=0.01338 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=1.17418 ratio_vs_linear3=1.38597 164s
+[upsampler] step 300/3000 train=0.01027 monitor=0.01076 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.94413 ratio_vs_linear3=1.11442 245s
+[upsampler] step 400/3000 train=0.00990 monitor=0.01070 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.93878 ratio_vs_linear3=1.10811 326s
+[upsampler] step 500/3000 train=0.00960 monitor=0.01060 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.93012 ratio_vs_linear3=1.09788 408s
+[upsampler] step 600/3000 train=0.00995 monitor=0.01051 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.92225 ratio_vs_linear3=1.08860 643s
+[upsampler] step 700/3000 train=0.00968 monitor=0.01047 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.91935 ratio_vs_linear3=1.08517 963s
+[upsampler] step 800/3000 train=0.00933 monitor=0.01046 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.91822 ratio_vs_linear3=1.08383 1209s
+[upsampler] step 900/3000 train=0.00952 monitor=0.01040 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.91296 ratio_vs_linear3=1.07763 1420s
+[upsampler] step 1000/3000 train=0.00933 monitor=0.01042 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.91496 ratio_vs_linear3=1.07999 1620s
+[upsampler] step 1100/3000 train=0.00946 monitor=0.01048 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.91994 ratio_vs_linear3=1.08587 1804s
+[upsampler] step 1200/3000 train=0.00946 monitor=0.01038 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.91147 ratio_vs_linear3=1.07587 1934s
+[upsampler] step 1300/3000 train=0.00957 monitor=0.01031 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90528 ratio_vs_linear3=1.06856 2057s
+[upsampler] step 1400/3000 train=0.00957 monitor=0.01038 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.91109 ratio_vs_linear3=1.07542 2159s
+[upsampler] step 1500/3000 train=0.00954 monitor=0.01032 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90580 ratio_vs_linear3=1.06918 2258s
+[upsampler] step 1600/3000 train=0.00928 monitor=0.01034 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90794 ratio_vs_linear3=1.07171 2357s
+[upsampler] step 1700/3000 train=0.00937 monitor=0.01033 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90682 ratio_vs_linear3=1.07038 2458s
+[upsampler] step 1800/3000 train=0.00959 monitor=0.01032 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90562 ratio_vs_linear3=1.06897 2570s
+[upsampler] step 1900/3000 train=0.00947 monitor=0.01032 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90564 ratio_vs_linear3=1.06899 2655s
+[upsampler] step 2000/3000 train=0.00929 monitor=0.01031 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90499 ratio_vs_linear3=1.06823 2738s
+[upsampler] step 2100/3000 train=0.00932 monitor=0.01031 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90516 ratio_vs_linear3=1.06842 2819s
+[upsampler] step 2200/3000 train=0.00930 monitor=0.01029 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90314 ratio_vs_linear3=1.06604 2901s
+[upsampler] step 2300/3000 train=0.00934 monitor=0.01029 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90362 ratio_vs_linear3=1.06661 2984s
+[upsampler] step 2400/3000 train=0.00943 monitor=0.01030 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90420 ratio_vs_linear3=1.06729 3088s
+[upsampler] step 2500/3000 train=0.00946 monitor=0.01029 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90345 ratio_vs_linear3=1.06641 3190s
+[upsampler] step 2600/3000 train=0.00929 monitor=0.01029 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90290 ratio_vs_linear3=1.06575 3272s
+[upsampler] step 2700/3000 train=0.00939 monitor=0.01029 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90300 ratio_vs_linear3=1.06588 3354s
+[upsampler] step 2800/3000 train=0.00940 monitor=0.01029 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90287 ratio_vs_linear3=1.06572 3435s
+[upsampler] step 2900/3000 train=0.00936 monitor=0.01028 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90219 ratio_vs_linear3=1.06491 3517s
+[upsampler] step 3000/3000 train=0.00947 monitor=0.01028 trilinear=0.01139 linear3=0.00965 ratio_vs_trilinear=0.90198 ratio_vs_linear3=1.06467 3599s
+[upsampler] best step 3000: ratio_vs_trilinear=0.9020 ratio_vs_linear3=1.0647 -> models/upsampler_learned_xy2_d4.pth

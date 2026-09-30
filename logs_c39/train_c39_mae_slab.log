@@ -1,0 +1,57 @@
+/usr/local/lib/python3.10/dist-packages/torch/_utils.py:831: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+Model parameters (nnunet3d_lcndz): 7,522,746
+[crossres] warm start from models/c39_mae_base.pth: loaded 188/188 (missing 0)
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1790739207.363857  583992 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1790739207.367546  583992 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1790739207.377491  583992 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790739207.377514  583992 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790739207.377518  583992 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790739207.377521  583992 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+[crossres] step 0/2000 monitor_rec=0.25771 monitor_rec_slab=0.25700 1s
+[crossres] step 50/2000 train_rec=0.25984 lr=0.00000 lr_head=0.00007 monitor_rec=0.22439 monitor_rec_slab=0.22722 24s
+[crossres] step 100/2000 train_rec=0.20105 lr=0.00000 lr_head=0.00015 monitor_rec=0.14437 monitor_rec_slab=0.15552 46s
+[crossres] step 150/2000 train_rec=0.12413 lr=0.00000 lr_head=0.00015 monitor_rec=0.08067 monitor_rec_slab=0.09811 68s
+[crossres] step 200/2000 train_rec=0.07741 lr=0.00000 lr_head=0.00015 monitor_rec=0.04836 monitor_rec_slab=0.06886 89s
+[crossres] step 250/2000 train_rec=0.05175 lr=0.00007 lr_head=0.00015 monitor_rec=0.02840 monitor_rec_slab=0.05347 110s
+[crossres] step 300/2000 train_rec=0.04429 lr=0.00015 lr_head=0.00015 monitor_rec=0.02606 monitor_rec_slab=0.04982 131s
+[crossres] step 350/2000 train_rec=0.04164 lr=0.00014 lr_head=0.00014 monitor_rec=0.02431 monitor_rec_slab=0.04633 151s
+[crossres] step 400/2000 train_rec=0.03934 lr=0.00014 lr_head=0.00014 monitor_rec=0.02319 monitor_rec_slab=0.04271 172s
+[crossres] step 450/2000 train_rec=0.03680 lr=0.00014 lr_head=0.00014 monitor_rec=0.02267 monitor_rec_slab=0.03973 193s
+[crossres] step 500/2000 train_rec=0.03486 lr=0.00013 lr_head=0.00013 monitor_rec=0.02247 monitor_rec_slab=0.03770 213s
+[crossres] saved models/c39_mae_slab.pth (188 backbone keys)
+[crossres] step 550/2000 train_rec=0.03331 lr=0.00013 lr_head=0.00013 monitor_rec=0.02172 monitor_rec_slab=0.03539 232s
+[crossres] step 600/2000 train_rec=0.03237 lr=0.00013 lr_head=0.00013 monitor_rec=0.02146 monitor_rec_slab=0.03356 252s
+[crossres] step 650/2000 train_rec=0.03113 lr=0.00012 lr_head=0.00012 monitor_rec=0.02125 monitor_rec_slab=0.03166 272s
+[crossres] step 700/2000 train_rec=0.02930 lr=0.00012 lr_head=0.00012 monitor_rec=0.02089 monitor_rec_slab=0.03022 291s
+[crossres] step 750/2000 train_rec=0.02947 lr=0.00011 lr_head=0.00011 monitor_rec=0.02074 monitor_rec_slab=0.02910 310s
+[crossres] step 800/2000 train_rec=0.02845 lr=0.00011 lr_head=0.00011 monitor_rec=0.02043 monitor_rec_slab=0.02796 330s
+[crossres] step 850/2000 train_rec=0.02801 lr=0.00010 lr_head=0.00010 monitor_rec=0.02024 monitor_rec_slab=0.02720 348s
+[crossres] step 900/2000 train_rec=0.02685 lr=0.00009 lr_head=0.00009 monitor_rec=0.02007 monitor_rec_slab=0.02656 367s
+[crossres] step 950/2000 train_rec=0.02656 lr=0.00009 lr_head=0.00009 monitor_rec=0.01959 monitor_rec_slab=0.02580 386s
+[crossres] step 1000/2000 train_rec=0.02639 lr=0.00008 lr_head=0.00008 monitor_rec=0.01933 monitor_rec_slab=0.02533 404s
+[crossres] saved models/c39_mae_slab.pth (188 backbone keys)
+[crossres] saved models/c39_mae_slab.step1000.pth (188 backbone keys)
+[crossres] step 1050/2000 train_rec=0.02559 lr=0.00008 lr_head=0.00008 monitor_rec=0.01906 monitor_rec_slab=0.02489 422s
+[crossres] step 1100/2000 train_rec=0.02530 lr=0.00007 lr_head=0.00007 monitor_rec=0.01891 monitor_rec_slab=0.02466 442s
+[crossres] step 1150/2000 train_rec=0.02523 lr=0.00006 lr_head=0.00006 monitor_rec=0.01857 monitor_rec_slab=0.02422 460s
+[crossres] step 1200/2000 train_rec=0.02529 lr=0.00006 lr_head=0.00006 monitor_rec=0.01850 monitor_rec_slab=0.02405 478s
+[crossres] step 1250/2000 train_rec=0.02467 lr=0.00005 lr_head=0.00005 monitor_rec=0.01824 monitor_rec_slab=0.02369 496s
+[crossres] step 1300/2000 train_rec=0.02457 lr=0.00005 lr_head=0.00005 monitor_rec=0.01816 monitor_rec_slab=0.02342 512s
+[crossres] step 1350/2000 train_rec=0.02401 lr=0.00004 lr_head=0.00004 monitor_rec=0.01801 monitor_rec_slab=0.02330 532s
+[crossres] step 1400/2000 train_rec=0.02418 lr=0.00004 lr_head=0.00004 monitor_rec=0.01784 monitor_rec_slab=0.02307 550s
+[crossres] step 1450/2000 train_rec=0.02390 lr=0.00003 lr_head=0.00003 monitor_rec=0.01771 monitor_rec_slab=0.02296 568s
+[crossres] step 1500/2000 train_rec=0.02350 lr=0.00003 lr_head=0.00003 monitor_rec=0.01759 monitor_rec_slab=0.02282 586s
+[crossres] saved models/c39_mae_slab.pth (188 backbone keys)
+[crossres] step 1550/2000 train_rec=0.02351 lr=0.00002 lr_head=0.00002 monitor_rec=0.01757 monitor_rec_slab=0.02275 602s
+[crossres] step 1600/2000 train_rec=0.02360 lr=0.00002 lr_head=0.00002 monitor_rec=0.01751 monitor_rec_slab=0.02268 621s
+[crossres] step 1650/2000 train_rec=0.02331 lr=0.00001 lr_head=0.00001 monitor_rec=0.01748 monitor_rec_slab=0.02266 639s
+[crossres] step 1700/2000 train_rec=0.02366 lr=0.00001 lr_head=0.00001 monitor_rec=0.01748 monitor_rec_slab=0.02261 656s
+[crossres] step 1750/2000 train_rec=0.02342 lr=0.00001 lr_head=0.00001 monitor_rec=0.01742 monitor_rec_slab=0.02256 673s
+[crossres] step 1800/2000 train_rec=0.02362 lr=0.00001 lr_head=0.00001 monitor_rec=0.01738 monitor_rec_slab=0.02252 691s
+[crossres] step 1850/2000 train_rec=0.02319 lr=0.00001 lr_head=0.00001 monitor_rec=0.01738 monitor_rec_slab=0.02247 710s
+[crossres] step 1900/2000 train_rec=0.02293 lr=0.00000 lr_head=0.00000 monitor_rec=0.01733 monitor_rec_slab=0.02246 726s
+[crossres] step 1950/2000 train_rec=0.02319 lr=0.00000 lr_head=0.00000 monitor_rec=0.01731 monitor_rec_slab=0.02245 744s
+[crossres] step 2000/2000 train_rec=0.02314 lr=0.00000 lr_head=0.00000 monitor_rec=0.01731 monitor_rec_slab=0.02241 761s
+[crossres] saved models/c39_mae_slab.pth (188 backbone keys)

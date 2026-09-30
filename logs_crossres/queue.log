@@ -1,3 +1,18 @@
 [queue] 19:16:47 plan depth tiles ready: 11 segments
 [queue] 19:16:47 start mae_crossres_depth
 [queue] 19:50:25 done mae_crossres_depth
+[queue] 19:56:25 plan xyz tiles ready: 11 segments
+[queue] 19:56:25 start mae_crossres_xyz
+crossres/run_queue.sh: line 13: 236887 Killed                  python crossres/mae_pretrain_crossres.py --name "$name" --init-weights "$INIT" --exclude-holdout-pairs "$@" > "$LOG/train_$name.log" 2>&1
+[queue] 20:22:58 plan depth tiles ready: 11 segments
+[queue] 20:22:58 skip mae_crossres_depth (done)
+[queue] 20:22:58 plan xyz tiles ready: 11 segments
+[queue] 20:22:58 start mae_crossres_xyz
+[queue] 20:43:59 done mae_crossres_xyz
+[queue] 20:43:59 start upsampler
+[queue] 21:47:49 done upsampler
+[queue] 21:47:49 start mae_upsampled_learned_native96
+[queue] 22:24:09 done mae_upsampled_learned_native96
+[queue] 22:24:09 start mae_upsampled_trilinear_native96
+[queue] 22:59:10 done mae_upsampled_trilinear_native96
+[queue] 22:59:10 all done

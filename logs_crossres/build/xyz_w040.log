@@ -47,3 +47,4 @@ nohup: ignoring input
 [w040] 80/128 tiles, kept 78
 [w040] 100/128 tiles, kept 96
 [w040] 120/128 tiles, kept 113
+[w040] kept 121 tiles (median midslice NCC 0.7896147082889343, median depth shift -0.50 slices), dropped 7 -> /vesuvius/crossres/pairs/xyz/20250831000000

@@ -1,0 +1,50 @@
+[assemble] python=/usr/bin/python  out_dir=/vesuvius/ves_zarrs2  workers=12
+[assemble] 1 test fragment(s) + 0 extra(s)  chunks=(8,64,64)  min_free=10 GB
+
+======================================================================
+=== 1/1  20260723112922  (mesh auto_grown_20260723112922652_merged_flatboi) ===
+======================================================================
+  raw vol: https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc0826/volumes/20250821151701-9.362um-1.2m-113keV-masked.zarr/0  shape=16920,8169,8169
+  (renders on-demand from S3 -- can take 10-30 min per fragment depending on size/speed)
+[mesh] crop valid bbox grid[0:260, 0:131] from (260, 131)
+[mesh] grid 260x131 -> flattened 5181x2601  valid=0.612
+[chunks] 941 unique chunks to ensure (~1.8 GB max)
+[chunks] fetched 500/941
+[chunks] all 941 present
+/usr/local/lib/python3.10/dist-packages/zarr/creation.py:614: UserWarning: ignoring keyword argument 'zarr_format'
+  compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+[zarr] layer 1/28
+[zarr] layer 2/28
+[zarr] layer 3/28
+[zarr] layer 4/28
+[zarr] layer 5/28
+[zarr] layer 6/28
+[zarr] layer 7/28
+[zarr] layer 8/28
+[zarr] layer 9/28
+[zarr] layer 10/28
+[zarr] layer 11/28
+[zarr] layer 12/28
+[zarr] layer 13/28
+[zarr] layer 14/28
+[zarr] layer 15/28
+[zarr] layer 16/28
+[zarr] layer 17/28
+[zarr] layer 18/28
+[zarr] layer 19/28
+[zarr] layer 20/28
+[zarr] layer 21/28
+[zarr] layer 22/28
+[zarr] layer 23/28
+[zarr] layer 24/28
+[zarr] layer 25/28
+[zarr] layer 26/28
+[zarr] layer 27/28
+[zarr] layer 28/28
+[mask] wrote /vesuvius/masks/20260723112922.png from zarr layer 14  valid_frac=0.596
+[zarr] wrote /vesuvius/ves_zarrs2/20260723112922.zarr  (28,5181,2601)
+
+======================================================================
+[assemble] SUMMARY
+======================================================================
+  20260723112922: OK

@@ -1,0 +1,27 @@
+[degrader] train [('w044', 16), ('w059', 52), ('w030', 14), ('w043', 27), ('w045', 50), ('w040', 93), ('w041', 57), ('w039', 17), ('w035', 27), ('seg46527', 5)] monitor ['p841'] (all); NCC >= 0.5; reference median/MAD 0.2903/0.1804; params=376,177
+2026-09-30 00:40:34.262305: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-09-30 00:40:34.263997: I external/local_xla/xla/tsl/cuda/cudart_stub.cc:32] Could not find cuda drivers on your machine, GPU will not be used.
+2026-09-30 00:40:34.267405: I external/local_xla/xla/tsl/cuda/cudart_stub.cc:32] Could not find cuda drivers on your machine, GPU will not be used.
+2026-09-30 00:40:34.291102: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1790728834.303958  260253 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1790728834.307706  260253 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1790728834.318295  260253 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790728834.318320  260253 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790728834.318324  260253 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790728834.318326  260253 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2026-09-30 00:40:34.321450: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[degrader] step 0/3000 mse_translated=0.01392 mse_pooled=0.01392 ratio=1.00000 spectrum_translated=0.27635 slice_stats_translated=0.11021 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 4s
+[degrader] step 100/3000 train=0.02286 mse_translated=0.01309 mse_pooled=0.01392 ratio=0.94032 spectrum_translated=0.29498 slice_stats_translated=0.11587 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 50s
+[degrader] step 200/3000 train=0.01194 mse_translated=0.00867 mse_pooled=0.01392 ratio=0.62325 spectrum_translated=0.27257 slice_stats_translated=0.07730 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 101s
+[degrader] step 300/3000 train=0.00975 mse_translated=0.01301 mse_pooled=0.01392 ratio=0.93482 spectrum_translated=0.32273 slice_stats_translated=0.11402 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 155s
+[degrader] step 400/3000 train=0.00870 mse_translated=0.01172 mse_pooled=0.01392 ratio=0.84238 spectrum_translated=0.37561 slice_stats_translated=0.10693 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 206s
+[degrader] step 500/3000 train=0.00841 mse_translated=0.00874 mse_pooled=0.01392 ratio=0.62793 spectrum_translated=0.36507 slice_stats_translated=0.07890 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 248s
+[degrader] step 600/3000 train=0.00926 mse_translated=0.01031 mse_pooled=0.01392 ratio=0.74069 spectrum_translated=0.42671 slice_stats_translated=0.09819 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 290s
+[degrader] step 700/3000 train=0.00851 mse_translated=0.00964 mse_pooled=0.01392 ratio=0.69287 spectrum_translated=0.42021 slice_stats_translated=0.09366 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 332s
+[degrader] step 800/3000 train=0.00740 mse_translated=0.01194 mse_pooled=0.01392 ratio=0.85798 spectrum_translated=0.39961 slice_stats_translated=0.10364 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 374s
+[degrader] step 900/3000 train=0.00727 mse_translated=0.00937 mse_pooled=0.01392 ratio=0.67325 spectrum_translated=0.33749 slice_stats_translated=0.08165 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 416s
+[degrader] step 1000/3000 train=0.00754 mse_translated=0.01023 mse_pooled=0.01392 ratio=0.73538 spectrum_translated=0.38568 slice_stats_translated=0.09221 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 458s
+[degrader] step 1100/3000 train=0.00713 mse_translated=0.01021 mse_pooled=0.01392 ratio=0.73334 spectrum_translated=0.39622 slice_stats_translated=0.08890 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 500s
+[degrader] step 1200/3000 train=0.00712 mse_translated=0.01153 mse_pooled=0.01392 ratio=0.82823 spectrum_translated=0.45041 slice_stats_translated=0.10179 spectrum_pooled=0.27635 slice_stats_pooled=0.11021 542s

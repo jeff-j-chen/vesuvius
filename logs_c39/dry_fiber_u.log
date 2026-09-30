@@ -1,0 +1,8 @@
+[crossres] plan U: models/upsampler_learned_xy2_d4.pth {'depth_factor': 4, 'scale': 2, 'width': 48, 'layers': 8, 'depth_pool': 2} -> network input 16 x 192 x 192
+/usr/local/lib/python3.10/dist-packages/torch/_utils.py:831: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+Model parameters (nnunet3d_lcndz): 7,522,746
+[crossres] warm start from models/mae_nnunet_192_campaign34_early_gated_fiber_native96_2k.pth: loaded 188/188 (missing 0)
+[crossres] dry-run standard (16, 1, 8, 96, 96)
+[crossres] dry-run forward/backward rec=0.30097 sr=0.00000 params with grad=77 micro-batch=16 peak GPU 9.2 GB
+[crossres] dry-run monitor {"monitor_rec": 0.305615, "monitor_rec_slab": 0.306521}

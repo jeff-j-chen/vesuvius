@@ -1,0 +1,80 @@
+nohup: ignoring input
+[assemble] 1 fragment(s): ['cr1fr3']  (concurrent_fragments=1, workers/frag=16, chunks=(8,64,64))
+
+======================================================================
+cr1fr3 (20231201215900)  id=20231201215900
+======================================================================
+/usr/local/lib/python3.10/dist-packages/zarr/creation.py:614: UserWarning: ignoring keyword argument 'zarr_format'
+  compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+  [1/3] dl.ash2txt resample (65, 7309, 4560) @3.240um -> (28, 2529, 1578) @9.362um; valid target depths=3..24
+  [dlash] rows 512/7309
+  [dlash] rows 1024/7309
+  [dlash] rows 1536/7309
+  [dlash] rows 2048/7309
+  [dlash] rows 2560/7309
+  [dlash] rows 3072/7309
+  [dlash] rows 3584/7309
+  [dlash] rows 4096/7309
+  [dlash] rows 4608/7309
+  [dlash] rows 5120/7309
+  [dlash] rows 5632/7309
+  [dlash] rows 6144/7309
+  [dlash] rows 6656/7309
+  [dlash] rows 7168/7309
+  [dlash] rows 7309/7309
+  [dlash] wrote /vesuvius/ves_zarrs2/20231201215900.zarr shape=(28, 2529, 1578)
+  $ curl -L --fail --retry 5 --retry-delay 2 -o _ves_tmp/dlash_20231201215900/mask.png https://dl.ash2txt.org/fragments/Frag5/PHerc1667Cr1Fr3.volpkg/working/PHerc1667Cr01Fr03_70keV_3.24um/surface_processing/mask.png
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100 81169  100 81169    0     0   116k      0 --:--:-- --:--:-- --:--:--  116k
+  [mask] wrote masks/20231201215900.png shape=(2529, 1578)
+  [verify] cr1fr3: shape=(28, 2529, 1578) mask/midslice=0.99990
+  [2/3] eroded labels present: eroded_inklabels/20231201215900.png  valid=0.0280
+  [3/3] --skip-norm -> skip
+[done] cr1fr3 (20231201215900)
+
+======================================================================
+[assemble] SUMMARY
+======================================================================
+  cr1fr3: OK
+
+======================================================================
+[assemble] INTEGRITY SWEEP (34 scrolls)
+======================================================================
+  OK   w044         20260115000000  cov=1.00
+  OK   w059         20250223000000  cov=1.00
+  [91mFAIL w047         20260206000001  MISSING zarr[0m
+  [91mFAIL w056         20260115000001  MISSING zarr[0m
+  [91mFAIL w058         20260210000000  MISSING zarr[0m
+  [91mFAIL w052         20260227000000  MISSING zarr[0m
+  [91mFAIL w049         20260318000000  MISSING zarr[0m
+  [91mFAIL w046         20260325000000  MISSING zarr[0m
+  OK   w041         20260108000000  cov=1.00
+  OK   w040         20250831000000  cov=1.00
+  OK   w039         20260302000000  cov=1.00
+  [91mFAIL w038         20260306000000  MISSING zarr[0m
+  [91mFAIL w037         20260310000000  MISSING zarr[0m
+  [91mFAIL w034         20260303000000  MISSING zarr[0m
+  OK   w035         20260317000000  cov=1.00
+  OK   w030         20250108000005  cov=1.00
+  OK   w043         20260112000000  cov=1.00
+  OK   w045         20260126000000  cov=1.00
+  [91mFAIL w055         20251226000000  MISSING zarr[0m
+  OK   seg46527     20260226000000  cov=1.00
+  OK   500P2_front  20250628074500  cov=1.00
+  OK   w013         20240304141531  cov=0.87
+  [91mFAIL w087         20251112000002  MISSING zarr[0m
+  [91mFAIL w068         20251111010954  MISSING zarr[0m
+  [91mFAIL w018         20240304144031  MISSING zarr[0m
+  OK   p9b_487      20250919125754  cov=1.00
+  [91mFAIL paris4       20231210121321  MISSING zarr[0m
+  [91mFAIL paris2_fr143 20230301213755  MISSING zarr[0m
+  [91mFAIL paris2_fr47  20230205142449  MISSING zarr[0m
+  [91mFAIL scroll6_fr8  20231205222200  MISSING zarr[0m
+  [91mFAIL paris1_fr34  20230301213423  MISSING zarr[0m
+  OK   p343         20250511003658  cov=1.00
+  OK   cr1fr3       20231201215900  cov=1.00
+  OK   p841         20260221022814  cov=1.00
+
+[91m[assemble] 18 scroll(s) FAILED integrity: ['w047', 'w056', 'w058', 'w052', 'w049', 'w046', 'w038', 'w037', 'w034', 'w055', 'w087', 'w068', 'w018', 'paris4', 'paris2_fr143', 'paris2_fr47', 'scroll6_fr8', 'paris1_fr34']
+  fix with: python assemble_training_segments.py --force --only w047,w056,w058,w052,w049,w046,w038,w037,w034,w055,w087,w068,w018,paris4,paris2_fr143,paris2_fr47,scroll6_fr8,paris1_fr34[0m

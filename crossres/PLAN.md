@@ -17,6 +17,18 @@ also exist as ~2.4 µm scans. Use those pairs to teach the backbone what the 9.3
 - The 9.36 µm side is never re-downloaded. Inputs are cut from the local training zarrs (`ves_zarrs2`),
   so they are exactly what fine-tuning sees.
 
+**Campaign-39 source of truth.** Fiber branch + surface-anchored normalisation is the baseline. Every
+campaign-39 pretrain is `models/c39_*` and is built by `crossres/run_queue_c39.sh`. Each uses fiber and
+surface-anchored normalisation on all 37 `campaign_archs_33.PRETRAIN_SCROLL_IDS` (the 24 campaign-39
+training/holdout segments + the 13 official test segments; the paired tiles are unchanged):
+- `c39_mae_base`: from scratch, production recipe;
+- `c39_mae_crossres_depth` (D), `c39_mae_crossres_xyz` (X), `c39_mae_slab` (S): continued from the base;
+- `c39_upsampler_learned`: the same pairs, in surface-anchored normalisation;
+- `c39_mae_upsampled_{learned,trilinear}` (U-2/U-1);
+- `c39_degrader` + translated siblings + noise bank (R).
+
+Everything earlier (the global-norm, non-fiber, 13-volume runs below) is history.
+
 ## 0. What to train: three pretrains, one shot
 
 This section supersedes the single "option #5" in §3. Train all three and send back the three

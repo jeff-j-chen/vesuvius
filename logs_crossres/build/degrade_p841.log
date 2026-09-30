@@ -1,0 +1,9 @@
+nohup: ignoring input
+[p841] held out: 40 random footprint tiles (labels not used)
+[p841] prefetched 200/697 chunks (40s)
+[p841] prefetched 400/697 chunks (79s)
+[p841] prefetched 600/697 chunks (127s)
+[p841] prefetched 697/697 chunks (141s)
+[p841] 20/40 tiles, kept 20
+[p841] 40/40 tiles, kept 40
+[p841] kept 40 tiles (median midslice NCC 0.8424230878416219, median depth shift -0.12 slices), dropped 0 -> /vesuvius/crossres/pairs/degrade/20260221022814

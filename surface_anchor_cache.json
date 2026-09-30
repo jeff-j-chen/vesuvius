@@ -220,5 +220,53 @@
     "papyrus": 123.0,
     "surface_mad": 8.386852110297403,
     "tiles": 384
+  },
+  "20240304141531.translated": {
+    "gap": 13.0,
+    "papyrus": 78.0,
+    "surface_mad": 7.338495596510227,
+    "tiles": 384
+  },
+  "20240304144031.translated": {
+    "gap": 14.0,
+    "papyrus": 76.0,
+    "surface_mad": 7.338495596510227,
+    "tiles": 384
+  },
+  "20231210121321.translated": {
+    "gap": 32.0,
+    "papyrus": 94.0,
+    "surface_mad": 4.193426055148701,
+    "tiles": 384
+  },
+  "20230301213755.translated": {
+    "gap": 1.0,
+    "papyrus": 76.0,
+    "surface_mad": 12.580278165446103,
+    "tiles": 384
+  },
+  "20230205142449.translated": {
+    "gap": 1.0,
+    "papyrus": 75.0,
+    "surface_mad": 13.628634679233278,
+    "tiles": 384
+  },
+  "20231205222200.translated": {
+    "gap": 1.0,
+    "papyrus": 69.0,
+    "surface_mad": 18.870417248169154,
+    "tiles": 384
+  },
+  "20230301213423.translated": {
+    "gap": 1.0,
+    "papyrus": 71.0,
+    "surface_mad": 13.628634679233278,
+    "tiles": 384
+  },
+  "20231201215900.translated": {
+    "gap": 1.0,
+    "papyrus": 80.0,
+    "surface_mad": 18.870417248169154,
+    "tiles": 384
   }
 }

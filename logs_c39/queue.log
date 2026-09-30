@@ -1,0 +1,28 @@
+nohup: ignoring input
+[queue] re-assembling test 20260717193517
+[queue] re-assembling test 20250703034159
+[queue] re-assembling test 20260922161631
+[queue] re-assembling training w018
+[queue] re-assembling training paris2_fr143
+[queue] surface anchors ready for all 37
+[queue] 02:40 start c39_mae_base
+[queue] 02:56 done c39_mae_base
+[queue] 02:56 start c39_mae_crossres_depth
+[queue] 03:10 done c39_mae_crossres_depth
+[queue] 03:10 start c39_mae_crossres_xyz
+[queue] 03:33 done c39_mae_crossres_xyz
+[queue] 03:33 start c39_mae_slab
+[queue] 03:46 done c39_mae_slab
+[queue] 03:46 start c39_upsampler_learned
+[queue] 04:30 done c39_upsampler_learned
+[queue] 04:30 start c39_mae_upsampled_learned
+[queue] 05:08 done c39_mae_upsampled_learned
+[queue] 05:08 start c39_mae_upsampled_trilinear
+[queue] 05:44 done c39_mae_upsampled_trilinear
+[queue] 05:44 start c39_degrader
+[queue] 06:08 done c39_degrader
+[queue] 06:08 start c39_translate
+[queue] 06:29 done c39_translate
+[queue] 06:29 start c39_noise_bank
+[queue] 06:33 done c39_noise_bank
+[queue] 06:33 all campaign-39 pretrains finished

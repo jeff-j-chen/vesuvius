@@ -1,0 +1,142 @@
+[assemble] 1 fragment(s): ['w018']  (concurrent_fragments=1, workers/frag=16, chunks=(8,64,64))
+
+======================================================================
+w018 (20240304144031)  id=20240304144031
+======================================================================
+/usr/local/lib/python3.10/dist-packages/zarr/creation.py:614: UserWarning: ignoring keyword argument 'zarr_format'
+  compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+  [1/3] level-2 pool (109, 10595, 24525) crop=(0, 10595, 0, 24525) depth=109->28 output=(28, 10595, 24525)
+  [pool] rows 128/10595
+  [pool] rows 256/10595
+  [pool] rows 384/10595
+  [pool] rows 512/10595
+  [pool] rows 640/10595
+  [pool] rows 768/10595
+  [pool] rows 896/10595
+  [pool] rows 1024/10595
+  [pool] rows 1152/10595
+  [pool] rows 1280/10595
+  [pool] rows 1408/10595
+  [pool] rows 1536/10595
+  [pool] rows 1664/10595
+  [pool] rows 1792/10595
+  [pool] rows 1920/10595
+  [pool] rows 2048/10595
+  [pool] rows 2176/10595
+  [pool] rows 2304/10595
+  [pool] rows 2432/10595
+  [pool] rows 2560/10595
+  [pool] rows 2688/10595
+  [pool] rows 2816/10595
+  [pool] rows 2944/10595
+  [pool] rows 3072/10595
+  [pool] rows 3200/10595
+  [pool] rows 3328/10595
+  [pool] rows 3456/10595
+  [pool] rows 3584/10595
+  [pool] rows 3712/10595
+  [pool] rows 3840/10595
+  [pool] rows 3968/10595
+  [pool] rows 4096/10595
+  [pool] rows 4224/10595
+  [pool] rows 4352/10595
+  [pool] rows 4480/10595
+  [pool] rows 4608/10595
+  [pool] rows 4736/10595
+  [pool] rows 4864/10595
+  [pool] rows 4992/10595
+  [pool] rows 5120/10595
+  [pool] rows 5248/10595
+  [pool] rows 5376/10595
+  [pool] rows 5504/10595
+  [pool] rows 5632/10595
+  [pool] rows 5760/10595
+  [pool] rows 5888/10595
+  [pool] rows 6016/10595
+  [pool] rows 6144/10595
+  [pool] rows 6272/10595
+  [pool] rows 6400/10595
+  [pool] rows 6528/10595
+  [pool] rows 6656/10595
+  [pool] rows 6784/10595
+  [pool] rows 6912/10595
+  [pool] rows 7040/10595
+  [pool] rows 7168/10595
+  [pool] rows 7296/10595
+  [pool] rows 7424/10595
+  [pool] rows 7552/10595
+  [pool] rows 7680/10595
+  [pool] rows 7808/10595
+  [pool] rows 7936/10595
+  [pool] rows 8064/10595
+  [pool] rows 8192/10595
+  [pool] rows 8320/10595
+  [pool] rows 8448/10595
+  [pool] rows 8576/10595
+  [pool] rows 8704/10595
+  [pool] rows 8832/10595
+  [pool] rows 8960/10595
+  [pool] rows 9088/10595
+  [pool] rows 9216/10595
+  [pool] rows 9344/10595
+  [pool] rows 9472/10595
+  [pool] rows 9600/10595
+  [pool] rows 9728/10595
+  [pool] rows 9856/10595
+  [pool] rows 9984/10595
+  [pool] rows 10112/10595
+  [pool] rows 10240/10595
+  [pool] rows 10368/10595
+  [pool] rows 10496/10595
+  [pool] rows 10595/10595
+  [mask] wrote masks/20240304144031.png from midslice valid_frac=0.873
+  [pool] wrote /vesuvius/ves_zarrs2/20240304144031.zarr shape=(28, 10595, 24525)
+  [2/3] eroded labels present: eroded_inklabels/20240304144031.png  valid=0.0137
+  [3/3] --skip-norm -> skip
+[done] w018 (20240304144031)
+
+======================================================================
+[assemble] SUMMARY
+======================================================================
+  w018: OK
+
+======================================================================
+[assemble] INTEGRITY SWEEP (34 scrolls)
+======================================================================
+  OK   w044         20260115000000  cov=1.00
+  OK   w059         20250223000000  cov=1.00
+  [91mFAIL w047         20260206000001  MISSING zarr[0m
+  [91mFAIL w056         20260115000001  MISSING zarr[0m
+  [91mFAIL w058         20260210000000  MISSING zarr[0m
+  [91mFAIL w052         20260227000000  MISSING zarr[0m
+  [91mFAIL w049         20260318000000  MISSING zarr[0m
+  [91mFAIL w046         20260325000000  MISSING zarr[0m
+  OK   w041         20260108000000  cov=1.00
+  OK   w040         20250831000000  cov=1.00
+  OK   w039         20260302000000  cov=1.00
+  [91mFAIL w038         20260306000000  MISSING zarr[0m
+  [91mFAIL w037         20260310000000  MISSING zarr[0m
+  [91mFAIL w034         20260303000000  MISSING zarr[0m
+  OK   w035         20260317000000  cov=1.00
+  OK   w030         20250108000005  cov=1.00
+  OK   w043         20260112000000  cov=1.00
+  OK   w045         20260126000000  cov=1.00
+  [91mFAIL w055         20251226000000  MISSING zarr[0m
+  OK   seg46527     20260226000000  cov=1.00
+  OK   500P2_front  20250628074500  cov=1.00
+  OK   w013         20240304141531  cov=1.00
+  OK   w087         20251112000002  cov=1.00
+  OK   w068         20251111010954  cov=1.00
+  OK   w018         20240304144031  cov=1.00
+  OK   p9b_487      20250919125754  cov=1.00
+  OK   paris4       20231210121321  cov=1.00
+  [91mFAIL paris2_fr143 20230301213755  MISSING zarr[0m
+  OK   paris2_fr47  20230205142449  cov=1.00
+  OK   scroll6_fr8  20231205222200  cov=1.00
+  OK   paris1_fr34  20230301213423  cov=1.00
+  OK   p343         20250511003658  cov=1.00
+  OK   cr1fr3       20231201215900  cov=1.00
+  OK   p841         20260221022814  cov=1.00
+
+[91m[assemble] 11 scroll(s) FAILED integrity: ['w047', 'w056', 'w058', 'w052', 'w049', 'w046', 'w038', 'w037', 'w034', 'w055', 'paris2_fr143']
+  fix with: python assemble_training_segments.py --force --only w047,w056,w058,w052,w049,w046,w038,w037,w034,w055,paris2_fr143[0m

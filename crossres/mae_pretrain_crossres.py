@@ -68,19 +68,44 @@ def upsample(x, factor, scale):
     return F.interpolate(x, scale_factor=(factor, scale, scale), mode="trilinear", align_corners=False)
 
 
+class DeepSRHead(nn.Module):
+    """residual conv head on [decoder features, the unmasked input slices], so it can sharpen raw intensities."""
+
+    def __init__(self, channels: int, depth: int, out_channels: int, scale: int, width: int = 96, blocks: int = 4):
+        super().__init__()
+        self.stem = nn.Conv2d(channels + depth, width, 3, padding=1)
+        self.blocks = nn.ModuleList(nn.Sequential(nn.GELU(), nn.Conv2d(width, width, 3, padding=1),
+                                                  nn.GELU(), nn.Conv2d(width, width, 3, padding=1))
+                                    for _ in range(blocks))
+        self.out = nn.Conv2d(width, out_channels, 3, padding=1)
+        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.out.bias)
+        self.shuffle = nn.PixelShuffle(scale) if scale > 1 else nn.Identity()
+
+    def forward(self, features, x_full):
+        h = self.stem(torch.cat([features, x_full[:, 0].to(features.dtype)], dim=1))
+        for block in self.blocks:
+            h = h + block(h)
+        return self.shuffle(self.out(F.gelu(h)))
+
+
 class CrossResMAE(NnUnetMAE):
     """the production MAE wrapper plus a residual super-resolution head (depth_factor x depth, scale x x/y)."""
 
-    def __init__(self, backbone, depth: int, scale: int = 1, depth_factor: int = 4):
+    def __init__(self, backbone, depth: int, scale: int = 1, depth_factor: int = 4, head: str = "small"):
         super().__init__(backbone, depth)
         if not self.early_2d or backbone._overlapping_depth_windows:
             raise ValueError("the cross-resolution head is written for the early-2D decoder")
-        self.scale, self.factor = int(scale), int(depth_factor)
+        self.scale, self.factor, self.head = int(scale), int(depth_factor), head
         channels = int(backbone.early2d_head.in_channels)
+        out_channels = depth * depth_factor * scale * scale
+        if head == "deep":
+            self.sr_head = DeepSRHead(channels, depth, out_channels, scale)
+            return
         self.sr_head = nn.Sequential(
             nn.Conv2d(channels, channels, 3, padding=1),
             nn.GELU(),
-            nn.Conv2d(channels, depth * depth_factor * scale * scale, 1),
+            nn.Conv2d(channels, out_channels, 1),
             nn.PixelShuffle(scale) if scale > 1 else nn.Identity(),
         )
         nn.init.zeros_(self.sr_head[2].weight)
@@ -92,21 +117,24 @@ class CrossResMAE(NnUnetMAE):
         recon = self.recon_head(dec1).unsqueeze(1)
         if x_full is None:
             return recon, None
-        residual = self.sr_head(dec1[-x_full.shape[0]:]).unsqueeze(1)
-        return recon, residual.float() + upsample(x_full.float(), self.factor, self.scale)
+        features = dec1[-x_full.shape[0]:]
+        residual = self.sr_head(features, x_full) if self.head == "deep" else self.sr_head(features)
+        return recon, residual.unsqueeze(1).float() + upsample(x_full.float(), self.factor, self.scale)
 
 
 class PairedSegment:
     """one segment's pairs.zarr held in RAM: normalized input, quantile-matched target, validity."""
 
-    def __init__(self, pair: dict, cfg, norm_mode: str, plan: str):
+    def __init__(self, pair: dict, cfg, norm_mode: str, plan: str, lazy: bool = False):
         import zarr
         self.zid, self.scroll, self.name = int(pair["zid"]), pair["scroll"], pair["name"]
         folder = ROOT / "pairs" / plan / str(self.zid)
         self.meta = json.loads((folder / "meta.json").read_text())
         self.scale, self.factor = int(self.meta["xy_scale"]), int(self.meta["depth_factor"])
         group = zarr.open_group(str(folder / "pairs.zarr"), mode="r")
-        self.input, self.target, self.valid = group["input"][:], group["target"][:], group["valid"][:]
+        # lazy: read only the chunks a crop touches (inspection); training holds everything in RAM
+        self.input, self.target, self.valid = ((group["input"], group["target"], group["valid"]) if lazy
+                                               else (group["input"][:], group["target"][:], group["valid"][:]))
         self.ctx, self.depth = cfg.data.context_size, cfg.data.depth
         z0, z1 = self.meta["z_range"]
         # window starts allowed by both the stored slices and the MAE depth range, relative to z0
@@ -322,6 +350,9 @@ def main():
                     help="drop pairs whose role is holdout (0841 and 0009B)")
     ap.add_argument("--paired-frac", type=float, default=0.5)
     ap.add_argument("--sr-weight", type=float, default=1.0)
+    ap.add_argument("--sr-head", choices=("small", "deep"), default="small",
+                    help="deep: residual head that also sees the unmasked input slices")
+    ap.add_argument("--head-lr-mult", type=float, default=1.0, help="head lr = lr x this (heads start from zero)")
     ap.add_argument("--visible-weight", type=float, default=0.25)
     ap.add_argument("--fiber-coordinate-branch", action="store_true")
     ap.add_argument("--data-norm-mode", default="global", choices=("global", "surface_anchor"))
@@ -453,7 +484,7 @@ def main():
 
     from utils.model import create_model
     backbone, _ = create_model(model_cfg)
-    model = CrossResMAE(backbone, net_depth, scale=scale, depth_factor=factor).to(dev)
+    model = CrossResMAE(backbone, net_depth, scale=scale, depth_factor=factor, head=args.sr_head).to(dev)
     state = torch.load(args.init_weights, map_location=dev, weights_only=True)
     state = {k.removeprefix("module.").removeprefix("_orig_mod."): v for k, v in state.items()}
     own = model.backbone.state_dict()
@@ -562,7 +593,7 @@ def main():
     backbone_params = list(model.backbone.parameters())
     backbone_ids = {id(p) for p in backbone_params}
     head_params = [p for p in model.parameters() if id(p) not in backbone_ids]
-    opt = torch.optim.AdamW([{"params": backbone_params}, {"params": head_params}],
+    opt = torch.optim.AdamW([{"params": backbone_params}, {"params": head_params, "lr": args.lr * args.head_lr_mult}],
                             lr=args.lr, weight_decay=args.weight_decay)
     scaler = _scaler(dev)
     warmup = max(1, int(args.warmup_frac * args.steps))
@@ -600,11 +631,11 @@ def main():
             Path(path).with_suffix(".json").write_text(json.dumps({
                 "upsampler": args.upsampler, "upsampler_config": up.config(),
                 "native_input": [args.depth, args.ctx, args.ctx], "network_input": [net_depth, net_ctx, net_ctx],
-                "init_weights": args.init_weights}, indent=1) + "\n")
+                "init_weights": args.init_weights, "data_norm_mode": args.data_norm_mode}, indent=1) + "\n")
         if segments:
             # the whole network incl. the SR head: the generator for the hallucination route
             torch.save({"state_dict": model.state_dict(), "xy_scale": scale, "depth_factor": factor,
-                        "depth": args.depth, "ctx": args.ctx, "residual_over": "trilinear",
+                        "depth": args.depth, "ctx": args.ctx, "residual_over": "trilinear", "sr_head": args.sr_head,
                         "target_lut": {s.zid: s.lut.tolist() for s in segments}},
                        path.replace(".pth", ".generator.pth"))
         else:
