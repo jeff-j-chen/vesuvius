@@ -49,7 +49,9 @@ Run a model on every single test scroll. 13 test patches correspond to 10 test s
 
 ## Fragments
 
-`utils/config.py` registers 30 training-fragment slots. Individual campaigns select subsets from this shared inventory; newly assembled slots require repository labels and train masks before training.
+`utils/config.py` registers 30 training-fragment slots. Individual campaigns select subsets from this shared inventory; newly assembled slots usually require repository labels and train masks before training.
+
+The PHerc1447 fine-tune windings below are assembled separately by `assemble_training_segments.py` under synthetic IDs and are consumed by `campaign_finetune.py` with axis splits (`simple_split=True`), so they do not require `train_masks/`.
 
 | ID | Fragment | Physical scroll | Default split | Notes |
 |---|---|---|---|---|
@@ -89,6 +91,16 @@ Run a model on every single test scroll. 13 test patches correspond to 10 test s
 | ID | Fragment | Physical scroll | Purpose |
 |---|---|---|---|
 | `20251226000000` | w055 | PHerc0139 | Deliberately excluded from supervised training; checks whether a model reproduces known text rather than familiar texture |
+
+### PHerc1447 Fine-Tune Windings
+
+These three windings come from the released dataset `YoussefMoNader/ink-8um-pherc1447-surfaces` on Hugging Face. The source renders are native 8.64µm / 116keV 24-layer TIFF stacks; `assemble_training_segments.py` reverses their layer order into this repo's training orientation, resamples them to the standard 28-layer 9.362µm training frame, writes midslice masks, copies the released labels into both `inklabels/` and `dilated_inklabels/`, and precomputes `surface_labels/`.
+
+| Synthetic ID | Winding | Source labels | Notes |
+|---|---|---|---|
+| `20260930144758` | PHerc1447 w058 | `labels/inklabels.png` | Held-out winding render from the release; copied unchanged into `inklabels/` and `dilated_inklabels/` after XY resampling |
+| `20260930144760` | PHerc1447 w060 | `labels/inklabels.png` | Same assembly path as w058 |
+| `20260930144762` | PHerc1447 w062 | `predictions/loo_w062.png` | No manual label is released for w062; the held-out `loo_w062.png` prediction is copied into `inklabels/` and `dilated_inklabels/` for the finetune bootstrap |
 
 ## Test surfaces
 
@@ -249,6 +261,7 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 |---|---|
 | `train.py` | Training loop, losses, metrics, checkpoints, and logging |
 | `campaign_archs_*.py` | Complete experiment definitions and campaign runners |
+| `campaign_finetune.py` | Fine-tunes the archs40 learned-upsampled checkpoint with PHerc0211 + PHerc1447 |
 | `utils/config.py` | Shared configuration and registered train, holdout, and test IDs |
 | `utils/model.py` | 3D nnU-Net model and experimental architecture branches |
 | `utils/dataloader.py` | Labels, rings, splits, sampling, augmentation, and zarr loading |
@@ -279,6 +292,7 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 | `ves_zarrs2/` | Local 28-layer surface volumes |
 | `masks/` | Valid papyrus footprints |
 | `inklabels/` | Continuous aligned labels and archived source resolutions |
+| `dilated_inklabels/` | Training-time labels used by the newer campaigns and the PHerc1447 fine-tune |
 | `eroded_inklabels/` | Conservative binary training labels |
 | `train_masks/` | Explicit train, validation, and guaranteed-negative assignments |
 | `surface_labels/` | Literal surface depth and confidence maps |

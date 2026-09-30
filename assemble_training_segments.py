@@ -4,23 +4,25 @@ Most inputs are native 9.362um surfaces. Configured exceptions are resampled in 
 7.91um and 8.64um isotropic volumes are interpolated to the target grid, while 2.4um
 volumes use level-2 XY and pool 109 native depth samples to 28 output layers.
 
-per fragment, in order (each step skips if its output already exists):
-  1. download 9.362um surface volume (level 0)  -> ves_zarrs2/<id>.zarr + masks/<id>.png
-    2. verify that the repository-provided eroded label is present; inklabels are never fetched
-  3. precompute normalization stats
+PHerc1447 windings are assembled from the released 24-layer Hugging Face renders. They are
+depth-reversed into this repo's training orientation, resampled to the standard 28-layer
+9.362um frame, and their released labels are copied into both ./inklabels and
+./dilated_inklabels on the same XY grid.
 
-Label files are repository-owned inputs. This script never downloads or rewrites them.
-Use old/ink_shrinker.py to derive top-level inklabels from conservative targets.
+per fragment, in order (each step skips if its output already exists):
+    1. download or assemble the surface volume -> ves_zarrs2/<id>.zarr + masks/<id>.png
+    2. verify the required labels exist and match the zarr/mask XY dimensions
+    3. precompute normalization stats
+    4. precompute surface supervision under surface_labels/<id>/
 
 usage:
   python assemble_training_segments.py --only w058          # one fragment (pilot)
   python assemble_training_segments.py                       # all fragments
   python assemble_training_segments.py --from w039           # resume from a fragment
   python assemble_training_segments.py --skip-norm           # skip the (slow) norm precompute
+    python assemble_training_segments.py --skip-surface        # skip the surface supervision precompute
   python assemble_training_segments.py --no-r2 --only paris1_fr34   # re-render an 88 keV fragment from dl.ash2txt
   python assemble_training_segments.py --degrader models/degrader_pooled_native.pth   # plan R translated siblings
-
-the 88 keV fragments (RESCAN_88KEV) are fetched from the R2 bucket by default: R2_PUBLIC_URL must be set.
 """
 from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys, time
@@ -94,6 +96,11 @@ SEGMENTS = [
     ("w018", "PHerc1667/segments/20240304144031-w018_20240304144031_flatboi", "20240304144031"),
     # PHerc0009B: native 8.64um volumes resampled in XYZ to the training frame.
     ("p9b_487", "PHerc0009B/segments/20250919125754-auto_grown_20250919055754487_inp_hr", "20250919125754"),
+    # PHerc1447 fine-tune windings: released 24-layer native 8.64um renders from Hugging Face.
+    # Synthetic ids keep them distinct from PHerc0139's w058 and future campaign ids.
+    ("ph1447_w058", "", "20260930144758"),
+    ("ph1447_w060", "", "20260930144760"),
+    ("ph1447_w062", "", "20260930144762"),
     # PHercParis4: level-2 XY is 9.6um; pool 109 source depths to 28.
     ("paris4", "PHercParis4/segments/20231210121321", "20231210121321"),
     # dl.ash2txt fragments: native 3.24um surface TIFF stacks resampled in XYZ.
@@ -146,6 +153,22 @@ FRAG_OPTS = {
     "p9b_487": {
         "vol9_name": "8.64um-1.2m-116keV-volume-20250521125136.zarr",
         "resample_um": 8.64,
+        "force_norm": True,
+    },
+    "ph1447_w058": {
+        "hf_pherc1447": "w058",
+        "required_label_dirs": ("inklabels", "dilated_inklabels"),
+        "force_norm": True,
+    },
+    "ph1447_w060": {
+        "hf_pherc1447": "w060",
+        "required_label_dirs": ("inklabels", "dilated_inklabels"),
+        "force_norm": True,
+    },
+    "ph1447_w062": {
+        "hf_pherc1447": "w062",
+        "required_label_dirs": ("inklabels", "dilated_inklabels"),
+        "pseudo_label_from_prediction": "loo_w062.png",
         "force_norm": True,
     },
     "paris4": {
@@ -357,6 +380,8 @@ def configure_r2():
 
 TARGET_VOXEL_UM = 9.362
 TARGET_DEPTH = 28
+HF_DATASET_REPO = "YoussefMoNader/ink-8um-pherc1447-surfaces"
+PHERC1447_SOURCE_UM = 8.64
 
 # PHerc1667 w013 is a pre-rendered 2.399um volume. Level 2 is ~9.596um in XY;
 # pooling 109 source depths to 28 gives ~9.34um in Z. Only the left 25% is useful.
@@ -787,6 +812,77 @@ def _download_once(url, path):
         "curl", "-L", "--fail", "--retry", "5", "--retry-delay", "2",
         "-o", path, url,
     ])
+
+
+def _hf_cli():
+    for name in ("hf", "huggingface-cli"):
+        if shutil.which(name):
+            return name
+    raise RuntimeError("Hugging Face CLI not found; install `hf` to assemble the PHerc1447 windings")
+
+
+def _hf_download(local_dir, files, force=False):
+    command = [_hf_cli(), "download", HF_DATASET_REPO, *files, "--repo-type", "dataset", "--local-dir", local_dir]
+    if force:
+        command.append("--force-download")
+    run(command)
+
+
+def _pherc1447_output_shape(source_height, source_width):
+    return (
+        TARGET_DEPTH,
+        int(round(int(source_height) * PHERC1447_SOURCE_UM / TARGET_VOXEL_UM)),
+        int(round(int(source_width) * PHERC1447_SOURCE_UM / TARGET_VOXEL_UM)),
+    )
+
+
+def _write_resized_label(source_path, out_path, output_shape):
+    image = cv2.imread(source_path, cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise RuntimeError(f"failed to read label source {source_path}")
+    target_height, target_width = map(int, output_shape)
+    resized = cv2.resize(image, (target_width, target_height), interpolation=cv2.INTER_AREA)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    if not cv2.imwrite(out_path, resized):
+        raise RuntimeError(f"failed to write {out_path}")
+    print(f"  [label] wrote {out_path} shape={resized.shape} valid_frac={(resized > 0).mean():.3f}", flush=True)
+
+
+def _prepare_pherc1447_labels(name, zid, opts, force=False):
+    winding = str(opts["hf_pherc1447"])
+    cache_dir = os.path.join(TMP, "hf_pherc1447", winding)
+    label_dirs = tuple(opts.get("required_label_dirs", ()))
+    output_paths = [os.path.join(directory, f"{zid}.png") for directory in label_dirs]
+    if output_paths and not force and all(os.path.exists(path) for path in output_paths):
+        return
+
+    source_file = f"{winding}/labels/inklabels.png"
+    if opts.get("pseudo_label_from_prediction"):
+        source_file = f"{winding}/predictions/{opts['pseudo_label_from_prediction']}"
+    _hf_download(cache_dir, [source_file], force=force)
+    source_path = os.path.join(cache_dir, source_file)
+    source = cv2.imread(source_path, cv2.IMREAD_GRAYSCALE)
+    if source is None:
+        raise RuntimeError(f"{name}: failed to read downloaded source label {source_path}")
+    output_shape = _pherc1447_output_shape(source.shape[0], source.shape[1])[1:]
+    for out_path in output_paths:
+        _write_resized_label(source_path, out_path, output_shape)
+
+
+def _load_gray(path):
+    image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise RuntimeError(f"failed to read {path}")
+    return image
+
+
+def _check_png_xy(label, path, expected_shape):
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+    image = _load_gray(path)
+    if tuple(image.shape) != tuple(expected_shape):
+        raise RuntimeError(f"{label} shape {image.shape} != expected {expected_shape} at {path}")
+    return float((image > 0).mean())
 
 
 def _assemble_dlash_surface(name, zid, opts, workers, chunk_depth, chunk_y, chunk_x, force=False):
@@ -1294,8 +1390,88 @@ def _assemble_w013_volume(zid, chunk_depth, chunk_y, chunk_x, force=False):
     print(f"  [w013] wrote {out_zarr} and {mask_path}")
 
 
+def _assemble_pherc1447_surface(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
+    """assemble the released PHerc1447 24-layer render into the standard 28-layer training frame."""
+    import zarr
+
+    winding = str(opts["hf_pherc1447"])
+    out_zarr = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    partial = out_zarr + ".partial"
+    mask_path = os.path.join("masks", f"{zid}.png")
+    if force:
+        shutil.rmtree(out_zarr, ignore_errors=True)
+        shutil.rmtree(partial, ignore_errors=True)
+        if os.path.exists(mask_path):
+            os.remove(mask_path)
+    if os.path.isdir(out_zarr) and os.path.exists(mask_path):
+        print("  [1/3] PHerc1447 volume+mask exist -> skip")
+        return
+
+    cache_dir = os.path.join(TMP, "hf_pherc1447", winding)
+    layer_files = [f"{winding}/layers/{index:02d}.tif" for index in range(24)]
+    _hf_download(cache_dir, layer_files, force=force)
+    layer_paths = [os.path.join(cache_dir, relpath) for relpath in layer_files]
+    first_layer = cv2.imread(layer_paths[0], cv2.IMREAD_GRAYSCALE)
+    if first_layer is None:
+        raise RuntimeError(f"{name}: failed to read downloaded layer {layer_paths[0]}")
+    source_depth = len(layer_paths)
+    source_height, source_width = map(int, first_layer.shape)
+    output_shape = _pherc1447_output_shape(source_height, source_width)
+    print(
+        f"  [1/3] PHerc1447 {winding} resample {(source_depth, source_height, source_width)} "
+        f"@{PHERC1447_SOURCE_UM:.3f}um -> {output_shape} @{TARGET_VOXEL_UM:.3f}um"
+    )
+
+    layer_arrays = [cv2.imread(path, cv2.IMREAD_GRAYSCALE) for path in layer_paths]
+    if any(layer is None for layer in layer_arrays):
+        missing = [path for path, layer in zip(layer_paths, layer_arrays) if layer is None]
+        raise RuntimeError(f"{name}: failed to decode one or more downloaded layers: {missing[:3]}")
+    row_height = 256
+    shutil.rmtree(partial, ignore_errors=True)
+    output = zarr.open(
+        partial,
+        mode="w",
+        shape=output_shape,
+        chunks=(min(chunk_depth, TARGET_DEPTH), chunk_y, chunk_x),
+        dtype="<u2",
+        compressor=None,
+        zarr_format=2,
+    )
+    for source_y0 in range(0, source_height, row_height):
+        source_y1 = min(source_y0 + row_height, source_height)
+        output_y0 = int(round(source_y0 * output_shape[1] / source_height))
+        output_y1 = int(round(source_y1 * output_shape[1] / source_height))
+        if output_y1 <= output_y0:
+            continue
+        source_strip = np.stack(
+            [np.asarray(layer[source_y0:source_y1, :], dtype=np.uint8) for layer in layer_arrays],
+            axis=0,
+        )[::-1]
+        depth_resampled = _resample_depth_physical(source_strip, PHERC1447_SOURCE_UM, TARGET_DEPTH)
+        output_strip = np.empty((TARGET_DEPTH, output_y1 - output_y0, output_shape[2]), dtype=np.uint16)
+        for output_z in range(TARGET_DEPTH):
+            plane = cv2.resize(
+                depth_resampled[output_z],
+                (output_shape[2], output_y1 - output_y0),
+                interpolation=cv2.INTER_AREA,
+            )
+            output_strip[output_z] = np.clip(np.rint(plane), 0, 255).astype(np.uint16)
+        output[:, output_y0:output_y1, :] = output_strip
+        print(f"  [ph1447] rows {output_y1}/{output_shape[1]}", flush=True)
+    del output
+    if os.path.isdir(out_zarr):
+        shutil.rmtree(out_zarr)
+    os.replace(partial, out_zarr)
+    output = zarr.open(out_zarr, mode="r")
+    _write_mask_from_midslice(output, mask_path)
+    print(f"  [ph1447] wrote {out_zarr} shape={output_shape}")
+
+
 def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
     opts = FRAG_OPTS.get(name, {})
+    if opts.get("hf_pherc1447"):
+        _assemble_pherc1447_surface(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=force)
+        return
     if name in RESCAN_88KEV:
         if R2_BASE:
             _fetch_rescan_r2(name, zid, force=force)
@@ -1368,45 +1544,75 @@ def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=F
     _verify_zarr_integrity(zpath, zid)
 
 
-def step2_check_eroded_labels(name, seg, zid):
-    """verify eroded_inklabels exist (the only labels we actually use for training).
-    these are pre-generated conservative binary labels: high-confidence ink pixels,
-    eroded and masked. the inklabels/ dir (raw 1um ink detection) is NOT used."""
+def step2_check_labels(name, seg, zid):
+    """verify required label files exist and match the assembled zarr's XY dimensions."""
+    del seg
+    import zarr
+
+    opts = FRAG_OPTS.get(name, {})
+    volume = zarr.open(os.path.join(ZARR_DIR, f"{zid}.zarr"), mode="r")
+    expected_shape = tuple(map(int, volume.shape[1:]))
+    mask_path = f"masks/{zid}.png"
+    mask_frac = _check_png_xy("mask", mask_path, expected_shape)
+    print(f"  [2/4] mask present: {mask_path}  valid={mask_frac:.4f}")
+
+    required_dirs = tuple(opts.get("required_label_dirs", ()))
+    if required_dirs:
+        for directory in required_dirs:
+            path = os.path.join(directory, f"{zid}.png")
+            valid_frac = _check_png_xy(directory, path, expected_shape)
+            print(f"  [2/4] {directory} present: {path}  valid={valid_frac:.4f}")
+        return
+
     eroded_path = f"eroded_inklabels/{zid}.png"
-    if os.path.exists(eroded_path):
-        # check it's not empty/corrupt
-        try:
-            img = np.array(Image.open(eroded_path).convert("L"))
-            valid_frac = (img > 0).mean()
-            print(f"  [2/3] eroded labels present: {eroded_path}  valid={valid_frac:.4f}")
-            return
-        except Exception as e:
-            print(f"  [2/3] \033[91m!! ERROR: eroded label exists but failed to load: {e}\033[0m")
-            return
-    
-    # MISSING eroded labels -> big red warning
-    print(f"  [2/3] \033[91m{'='*60}")
-    print(f"  !! WARNING: MISSING ERODED LABEL FILE !!")
-    print(f"  Expected: {eroded_path}")
-    print(f"  This fragment CANNOT be used for training without labels.")
-    print(f"  Eroded labels must be pre-generated (e.g., from 1um ink detection)")
-    print(f"  and placed in eroded_inklabels/ before running training.")
-    print(f"  {'='*60}\033[0m")
+    try:
+        valid_frac = _check_png_xy("eroded labels", eroded_path, expected_shape)
+        print(f"  [2/4] eroded labels present: {eroded_path}  valid={valid_frac:.4f}")
+        return
+    except Exception as exc:
+        print(f"  [2/4] \033[91m{'='*60}")
+        print(f"  !! WARNING: MISSING OR MISMATCHED ERODED LABEL FILE !!")
+        print(f"  Expected: {eroded_path}")
+        print(f"  Reason: {exc}")
+        print(f"  This fragment CANNOT be used for training without labels.")
+        print(f"  Eroded labels must be pre-generated and match the zarr/mask XY dimensions.")
+        print(f"  {'='*60}\033[0m")
 
 
 def step3_norm(name, seg, zid, skip, force=False):
     if skip:
-        print(f"  [3/3] --skip-norm -> skip")
+        print(f"  [3/4] --skip-norm -> skip")
         return
     import json
     if not force and os.path.exists("norm_cache.json"):
         try:
             if zid in json.load(open("norm_cache.json")):
-                print(f"  [3/3] norm cached -> skip")
+                print(f"  [3/4] norm cached -> skip")
                 return
         except Exception:
             pass
     run([sys.executable, "precompute_norm.py", "--scroll-id", zid, "--zarr-path", ZARR_DIR])
+
+
+def step4_surface(name, zid, skip, force=False):
+    del name
+    if skip:
+        print(f"  [4/4] --skip-surface -> skip")
+        return
+    output_dir = os.path.join("surface_labels", str(zid))
+    required = [os.path.join(output_dir, name) for name in ("depth.npy", "confidence.npy", "metadata.json")]
+    if not force and all(os.path.exists(path) for path in required):
+        print(f"  [4/4] surface supervision cached -> skip")
+        return
+    shutil.rmtree(output_dir, ignore_errors=True)
+    run([
+        sys.executable,
+        "generate_surface_supervision.py",
+        "--scroll-id", str(zid),
+        "--zarr-dir", ZARR_DIR,
+        "--mask-dir", "masks",
+        "--output-dir", "./surface_labels",
+    ])
 
 
 def step4_translate(name, zid, checkpoint, force=False):
@@ -1440,20 +1646,23 @@ def step4_translate(name, zid, checkpoint, force=False):
     ensure_surface_anchors([volume_id], ZARR_DIR)
 
 
-def process_fragment(name, seg, zid, workers, skip_norm, chunk_depth, chunk_y, chunk_x, prefix="", force=False):
+def process_fragment(name, seg, zid, workers, skip_norm, skip_surface, chunk_depth, chunk_y, chunk_x,
+                     prefix="", force=False):
     """run the full assembly pipeline for one fragment. isolated in try/except so a
     single failure never kills a concurrent batch. respects FRAG_OPTS (skip_labels)."""
     opts = FRAG_OPTS.get(name, {})
     tag = f"{prefix}{name} ({zid})"
     try:
         print(f"\n{'='*70}\n{tag}  id={zid}\n{'='*70}", flush=True)
+        if opts.get("hf_pherc1447"):
+            _prepare_pherc1447_labels(name, zid, opts, force=force)
         step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
         if opts.get("dlash_surface_base"):
             if name not in RESCAN_88KEV:
                 _build_dlash_mask(name, zid, opts)
             _verify_dlash_outputs(name, zid, opts)
         if not opts.get("skip_labels"):
-            step2_check_eroded_labels(name, seg, zid)
+            step2_check_labels(name, seg, zid)
         else:
             print(f"  [labels] skip_labels -> keeping existing eroded_inklabels")
         step3_norm(
@@ -1463,6 +1672,7 @@ def process_fragment(name, seg, zid, workers, skip_norm, chunk_depth, chunk_y, c
             skip_norm,
             force=force or bool(opts.get("force_norm", False)),
         )
+        step4_surface(name, zid, skip_surface, force=force)
         print(f"[done] {tag}")
         return (name, "OK")
     except Exception as e:
@@ -1483,6 +1693,7 @@ def main():
                          "each uses --workers download threads, so total connections "
                          "= concurrent_fragments * workers; watch RAM (~2-5GB per fragment).")
     ap.add_argument("--skip-norm", action="store_true")
+    ap.add_argument("--skip-surface", action="store_true")
     ap.add_argument("--force", action="store_true",
                     help="re-download/re-render + recompute norm even if outputs exist; also clears "
                          "the per-fragment chunk cache for a clean S3 re-fetch (use to fix a corrupted zarr)")
@@ -1547,14 +1758,15 @@ def main():
     results = []
     if cf == 1:
         for name, seg, zid in segs:
-            results.append(process_fragment(name, seg, zid, args.workers, args.skip_norm,
+            results.append(process_fragment(name, seg, zid, args.workers, args.skip_norm, args.skip_surface,
                                           args.chunk_depth, args.chunk_y, args.chunk_x,
                                           force=args.force))
     else:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         with ThreadPoolExecutor(max_workers=cf) as ex:
             futs = {ex.submit(process_fragment, name, seg, zid, args.workers,
-                              args.skip_norm, args.chunk_depth, args.chunk_y, args.chunk_x,
+                              args.skip_norm, args.skip_surface,
+                              args.chunk_depth, args.chunk_y, args.chunk_x,
                               prefix=f"[{name}] ", force=args.force): name
                     for name, seg, zid in segs}
             for fut in as_completed(futs):
