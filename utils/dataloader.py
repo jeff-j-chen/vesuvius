@@ -1310,6 +1310,10 @@ class InkVolumeDataset(IterableDataset):
             ).all(axis=(1, 3))
             chars[~split_cells] = 0
         if not np.any(chars > 0):
+            if not self.shuffle:
+                self._character_nearest = None
+                self._character_ids = []
+                return
             raise ValueError(f"character-aware split has no positive characters for {self.scroll_id}")
 
         _, nearest_indices = distance_transform_edt(chars == 0, return_indices=True)
@@ -1344,6 +1348,8 @@ class InkVolumeDataset(IterableDataset):
         valid_chars = sorted(set(self._character_pos_coords) & set(self._character_neg_coords))
         self._character_ids = valid_chars
         if not valid_chars:
+            if not self.shuffle:
+                return
             raise ValueError(f"no characters have both positive and ring-negative windows for {self.scroll_id}")
         print(
             f"[character-sampling] scroll {self.scroll_id}: {len(valid_chars)} characters "
@@ -2678,6 +2684,7 @@ class DataManager:
             "character_min_pixels", "max_samples_per_epoch",
             "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
             "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "vis_scroll_ids", "norm_mode",
+            "train_only_scroll_ids",
             "zarr_suffix",
         )
         dataloader_fields = (
@@ -3127,6 +3134,11 @@ class DataManager:
         if manual_split:
             if self.manual_train_mask is None:
                 raise RuntimeError(f"manual split mask was not loaded for scroll {self.scroll_id}")
+            train_only_scrolls = {
+                int(scroll_id)
+                for scroll_id in (getattr(self.c.data, "train_only_scroll_ids", ()) or ())
+            }
+            train_only = int(self.scroll_id) in train_only_scrolls
 
             # align the hand mask to the model's actual target grid. a target unit is assigned
             # to train if any hand-mask pixel touches it; the expanded unit is then wholly train
@@ -3161,19 +3173,26 @@ class DataManager:
                 train_mask = combined_mask
                 valid_mask = combined_mask if coordinate_hash_split else supervision_mask
                 train_split_mask = assignment
-                valid_split_mask = (assignment == 0).astype(np.uint8)
+                valid_split_mask = (
+                    np.zeros_like(assignment, dtype=np.uint8)
+                    if train_only else (assignment == 0).astype(np.uint8)
+                )
             else:
                 train_mask = (
                     (eligible & (assignment > 0))
                     | (explicit_negative > 0)
                     | (explicit_positive > 0)
                 ).astype(np.uint8)
-                valid_mask = (eligible & (assignment == 0)).astype(np.uint8)
+                valid_mask = (
+                    np.zeros_like(supervision_mask, dtype=np.uint8)
+                    if train_only else (eligible & (assignment == 0)).astype(np.uint8)
+                )
                 train_split_mask = valid_split_mask = None
             print(
                 f"[manual-split] scroll {self.scroll_id}: unit={split_unit}px "
                 f"train_ring={int((eligible & (assignment > 0)).sum())}px "
-                f"valid_ring={int((eligible & (assignment == 0)).sum())}px"
+                f"valid_ring={0 if train_only else int((eligible & (assignment == 0)).sum())}px "
+                f"train_only={train_only}"
             )
         else:
             train_mask = supervision_mask
@@ -3287,7 +3306,12 @@ class DataManager:
         path = f"./inklabels/{self.scroll_id}.png"
         drawn = imread_gray(path)
         if drawn is None:
-            raise FileNotFoundError(f"character reference labels not found: {path}")
+            print(
+                f"[character-components] scroll {self.scroll_id}: missing {path}; "
+                "falling back to connected components on the training labels",
+                flush=True,
+            )
+            return None
         shape = np.asarray(self.labels).shape
         reference = np.zeros(shape, dtype=np.uint8)
         h, w = min(shape[0], drawn.shape[0]), min(shape[1], drawn.shape[1])

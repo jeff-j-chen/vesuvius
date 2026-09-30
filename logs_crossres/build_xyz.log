@@ -1,8 +1,0 @@
-nohup: ignoring input
-[w044] ink bbox y[3844,4742] x[1887,4406] (5% of the frame) -> 18 tiles (bbox, margin 256px)
-[w044] prefetched 200/1200 chunks (30s)
-[w044] prefetched 400/1200 chunks (55s)
-[w044] prefetched 600/1200 chunks (80s)
-[w044] prefetched 800/1200 chunks (105s)
-[w044] prefetched 1000/1200 chunks (126s)
-[w044] prefetched 1200/1200 chunks (146s)

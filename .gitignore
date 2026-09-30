@@ -24,3 +24,4 @@ output/composite_cache/extras/
 output/test_visualizations/*/extras/
 crossres/pairs/*
 crossres/sanity/*
+models/v8in/

@@ -1201,7 +1201,7 @@ class TensorboardVisualizer:
                 })
         return specs
 
-    def _load_segment_labels(self, seg_id):
+    def _load_segment_labels(self, seg_id, target_shape=None):
         """load eroded labels as a compact binary (uint8 0/1) map. only the >0.5 threshold
         is ever used downstream (label_fraction is the mean of the binarized ink), so the old
         float64 /255 was 8x wasted RAM. >127 matches the prior `/255 > 0.5` cut exactly."""
@@ -1210,7 +1210,21 @@ class TensorboardVisualizer:
         labels = imread_gray(path)
         if labels is None:
             raise RuntimeError(f"could not read labels at {path}")
-        return (labels > 127).astype(np.uint8)
+        labels = (labels > 127).astype(np.uint8)
+        if target_shape is None:
+            return labels
+        target_shape = tuple(int(value) for value in target_shape)
+        if labels.shape == target_shape:
+            return labels
+        aligned = np.zeros(target_shape, dtype=np.uint8)
+        h, w = min(target_shape[0], labels.shape[0]), min(target_shape[1], labels.shape[1])
+        aligned[:h, :w] = labels[:h, :w]
+        print(
+            f"[visualizer] label shape mismatch for {seg_id}: labels={labels.shape} target={target_shape}; "
+            "padding/cropping to match the rendered frame",
+            flush=True,
+        )
+        return aligned
 
     def _load_segment_mask(self, seg_id):
         """load mask as a compact binary (uint8 0/1) map (only >0 is ever tested)."""
@@ -1237,7 +1251,7 @@ class TensorboardVisualizer:
 
             volume = zarr.open(os.path.join(self.c.data.zarr_path, f"{seg_id}.zarr"), mode="r")
             mask = self._load_segment_mask(seg_id)
-            labels = self._load_segment_labels(seg_id)
+            labels = self._load_segment_labels(seg_id, target_shape=mask.shape)
             g_mean, g_std, g_min, g_max = self._get_or_compute_norm(volume, mask, str(seg_id))
             asset = {
                 "volume": volume,
