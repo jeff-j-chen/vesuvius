@@ -2830,11 +2830,19 @@ class DataManager:
                 (volume_h, volume_w),
             )
         ):
-            raise ValueError(
-                f"manual train mask shape {manual_mask.shape} does not match volume "
-                f"{(volume_h, volume_w)} for scroll {self.scroll_id}; resample the mask "
-                "to the assembled volume grid"
-            )
+            if int(self.scroll_id) == 20260928000003:
+                # PHerc0211_z7312_w080_abf keeps a smaller authoritative label/train-mask frame inside a larger render.
+                print(
+                    f"[align] scroll {self.scroll_id}: manual train mask {manual_mask.shape} inside volume "
+                    f"{(volume_h, volume_w)}; cropping to the common frame",
+                    flush=True,
+                )
+            else:
+                raise ValueError(
+                    f"manual train mask shape {manual_mask.shape} does not match volume "
+                    f"{(volume_h, volume_w)} for scroll {self.scroll_id}; resample the mask "
+                    "to the assembled volume grid"
+                )
         common_h = min(volume_h, int(mask.shape[0]), int(labels.shape[0]))
         common_w = min(volume_w, int(mask.shape[1]), int(labels.shape[1]))
         if manual_mask is not None:
