@@ -88,7 +88,7 @@ EXTRA_VOLUMES = {
 EXTRAS_DTYPE = "|u1"
 
 sys.path.insert(0, SCRIPT_DIR)
-from utils.depth_flip import flip_zarr_depth, reversed_ids  # noqa: E402
+from utils.depth_flip import reversed_ids  # noqa: E402
 
 # renders whose mesh normal opposes the training orientation; rendered with reversed depth offsets
 DEPTH_REVERSED = reversed_ids()
@@ -460,28 +460,25 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
 
 
 def reconcile_depth_orientation(zids, out_dir, extra_ids):
-    """flip any existing render listed in depth_reversed.json that is not yet corrected, and drop stale
-    extras surface labels so they are re-fetched from R2 or regenerated. native test labels are tracked
-    in git and regenerated there; a stale copy is only reported."""
+    """no in-place flips: reversed ids must be rendered reversed (attrs depth_flipped=true)."""
+    import zarr
+    stale = []
     for zid in zids:
-        path = os.path.join(out_dir, f"{zid}.zarr")
-        if zid in DEPTH_REVERSED and os.path.isdir(path) and flip_zarr_depth(path):
-            print(f"[orient] {zid}: depth flipped in place", flush=True)
         if zid not in DEPTH_REVERSED:
+            continue
+        path = os.path.join(out_dir, f"{zid}.zarr")
+        if os.path.isdir(path) and not zarr.open(path, mode="r").attrs.get("depth_flipped", False):
+            stale.append(zid)
             continue
         folder = os.path.join(EXTRAS_SURFACE_DIR if zid in extra_ids else SURFACE_LABEL_ROOT, zid)
         meta_path = os.path.join(folder, "metadata.json")
-        if not os.path.isfile(meta_path):
-            continue
-        with open(meta_path, encoding="utf-8") as handle:
-            if json.load(handle).get("depth_flipped", False):
-                continue
-        if zid in extra_ids:
-            shutil.rmtree(folder)
-            print(f"[orient] {zid}: removed stale surface labels", flush=True)
-        else:
-            print(f"[orient] WARN {zid}: surface labels predate the depth flip -- git pull or regenerate")
-
+        if os.path.isfile(meta_path):
+            with open(meta_path, encoding="utf-8") as handle:
+                if not json.load(handle).get("depth_flipped", False):
+                    shutil.rmtree(folder) if zid in extra_ids else print(
+                        f"[orient] WARN {zid}: surface labels predate the flip -- regenerate")
+    if stale:
+        raise SystemExit(f"[orient] unflipped zarrs for reversed ids {stale}; re-run with --force --only <id>")
 
 def _safe_extract(zip_path, dest, top):
     """extract a zip whose entries must all live under top/ (no absolute paths or '..')."""

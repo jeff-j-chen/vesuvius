@@ -254,7 +254,7 @@ def _test(
     init_weights: str | None = None,
     upsampler: str | None = None,
     batch_size: int = 96,
-    lr: float = 1e-4,
+    lr: float = 1.5e-4,
 ) -> dict:
     test = campaign34._test(
         tid,

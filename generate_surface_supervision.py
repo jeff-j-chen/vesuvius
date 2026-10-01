@@ -700,6 +700,12 @@ def main() -> None:
     depth, height, width = map(int, volume.shape)
     if not (0 <= args.z_start < args.z_end <= depth):
         raise ValueError(f"invalid depth window [{args.z_start}, {args.z_end}) for depth {depth}")
+    # resampled volumes (e.g. 24->28 layers) carry all-zero padding layers; a nonzero->zero step
+    # there is not a papyrus-air transition, so keep the window inside the populated layers
+    populated = [d for d in range(depth) if np.asarray(volume[d, ::16, ::16]).any()]
+    args.z_start = max(args.z_start, populated[0])
+    args.z_end = min(args.z_end, populated[-1] + 1)
+    print(f"[surface] detection window [{args.z_start}, {args.z_end}) of {depth} layers", flush=True)
 
     mask = cv2.imread(os.path.join(args.mask_dir, f"{scroll_id}.png"), cv2.IMREAD_GRAYSCALE)
     if mask is None or mask.shape != (height, width):

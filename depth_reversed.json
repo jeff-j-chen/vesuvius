@@ -1,5 +1,5 @@
 {
- "note": "renders whose mesh normal is opposite to the training orientation (crossres/depth_orientation.py + template cross-check). assemble_test_segments.py renders these with reversed depth offsets and flips existing unmarked zarrs in place (utils/depth_flip.py). corrected zarrs carry attrs depth_flipped=true.",
+ "note": "renders whose mesh normal is opposite to the training orientation. All assemblers write these ids directly in reversed depth order and set attrs depth_flipped=true; surface supervision treats them as normal volumes.",
  "zids": [
   "20250703034159",
   "20260723112922",
@@ -8,6 +8,9 @@
   "20260922161631",
   "20260925085345",
   "20260928000002",
+  "20260930144758",
+  "20260930144760",
+  "20260930144762",
   "PHerc0125_z11744_w100",
   "PHerc0125_z14144_w100",
   "PHerc0125_z14736_w060",
