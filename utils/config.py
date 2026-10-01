@@ -249,9 +249,9 @@ class DataConfig:
 
 @dataclass
 class DataloaderConfig:
-    batch_size: int = 96
-    num_workers: int = 12
-    prefetch_factor: int = 2
+    batch_size: int = 32
+    num_workers: int = 4
+    prefetch_factor: int = 1
     data_aug: bool = True
     rotation_prob: float = 0.6
     flip_prob: float = 0.6

@@ -64,7 +64,7 @@ SMOKE_SCROLL = 20260226000000  # pherc0814
 BASE_TEST_SCROLL_IDS = tuple(
     int(scroll_id) for scroll_id in DEFAULT_TEST_SCROLL_IDS if int(scroll_id) != NEW_SCROLL_ID
 )
-SCRATCH_TRAINING = {"batch_size": 96, "lr": 1e-4}
+SCRATCH_TRAINING = {"batch_size": 32, "lr": 1e-4}
 CROSSRES_TRAINING = {"batch_size": 32, "lr": 1e-4}
 BASE_MAE = "models/c39_mae_base.pth"
 LEARNED_UPSAMPLER = "models/c39_upsampler_learned.pth"
