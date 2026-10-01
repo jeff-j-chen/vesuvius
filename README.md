@@ -49,58 +49,67 @@ Run a model on every single test scroll. 13 test patches correspond to 10 test s
 
 ## Fragments
 
-`utils/config.py` registers 30 training-fragment slots. Individual campaigns select subsets from this shared inventory; newly assembled slots usually require repository labels and train masks before training.
+`assemble_training_segments.py` brings every fragment onto the same training grid: 28 layers at 9.362µm. **Scan** is the CT volume the surface is sampled from (voxel size / beam energy). **Rendering** says how it got onto the grid. The tables below list the current training corpus: the 24 fragments used by Campaign 40 plus the PHerc1447 fine-tune windings. The same fragments, in the same groups, appear in the scroll visual guide (`python3 generate_scroll_visual_guide.py` → `output/scroll_patch_guide.png`). Splits come from `train_masks/` (see [Splits and character sampling](#splits-and-character-sampling)).
 
-The PHerc1447 fine-tune windings below are assembled separately by `assemble_training_segments.py` under synthetic IDs and are consumed by `campaign_finetune.py` with axis splits (`simple_split=True`), so they do not require `train_masks/`.
+| ID | Fragment | Physical scroll | Scan | Rendering | Notes |
+|---|---|---|---|---|---|
+| `20260115000000` | w044 | PHerc0139 | 9.362µm / 113keV | Native surface volume | Established evaluation fragment |
+| `20260317000000` | w035 | PHerc0139 | 9.362µm / 113keV | Native surface volume | Separately downloaded 1.1µm labels |
+| `20250223000000` | w059 | PHerc0139 | 9.362µm / 113keV | Native surface volume | Mask restricted to labeled footprint |
+| `20250108000005` | w030 | PHerc0139 | 9.362µm / 113keV | Native surface volume | Official researcher labels (2026-09-18 release) |
+| `20260112000000` | w043 | PHerc0139 | 9.362µm / 113keV | Native surface volume | Official researcher labels (2026-09-18 release) |
+| `20260126000000` | w045 | PHerc0139 | 9.362µm / 113keV | Native surface volume | Official researcher labels (2026-09-18 release) |
+| `20250831000000` | w040 | PHerc0139 | 9.362µm / 113keV | Native surface volume | Full papyrus footprint |
+| `20260108000000` | w041 | PHerc0139 | 9.362µm / 113keV | Native surface volume | Full papyrus footprint |
+| `20260302000000` | w039 | PHerc0139 | 9.362µm / 113keV | Native surface volume | Full papyrus footprint |
+| `20251111010954` | w068 | PHerc0172 | 7.91µm / 53keV | Isotropic XYZ resample to 9.362µm | |
+| `20251112000002` | w087 | PHerc0172 | 7.91µm / 53keV | Isotropic XYZ resample to 9.362µm | |
+| `20240304141531` | w013 | PHerc1667 | 2.399µm / 78keV | Level-2 XY (~9.6µm); 109 depths pooled to 28; left 25% crop | Pooled high-resolution surface |
+| `20240304144031` | w018 | PHerc1667 | 2.399µm / 78keV | Level-2 XY (~9.6µm); 109 depths pooled to 28 | Full-size pooled surface |
+| `20231201215900` | Cr1 Fr3 | PHerc1667 | 3.24µm / 70keV | dl.ash2txt flattened TIFF stack resampled in XYZ | |
+| `20250919125754` | patch 487 | PHerc0009B | 8.64µm / 116keV | Isotropic XYZ resample to 9.362µm | |
+| `20231210121321` | Paris4 | PHercParis4 | 2.4µm / 78keV | Level-2 XY (~9.6µm); 109 depths pooled to 28 | |
+| `20250628074500` | 500P2 front | PHerc0500P2 | 9.362µm / 113keV | Native surface volume (mesh traced on the 2.215µm / 111keV scan) | Clear labels transferred from 2.215µm |
+| `20260226000000` | seg46527 | PHerc0814 | 9.362µm / 113keV | Native surface volume | Eroded label only; no continuous label |
+| `20230301213755` | Fr143 | PHercParis2 | 3.24µm / 88keV | **High-energy rescan** through the 54keV exposed-surface PPM (fitted affine + deformation field) | Fragment deformed between scans |
+| `20230205142449` | Fr47 | PHercParis2 | 3.24µm / 88keV | **High-energy rescan** through the 54keV exposed-surface PPM (fitted affine) | Researcher inklabel copied unchanged |
+| `20231205222200` | Cr4 Fr8 | PHerc51 | 3.24µm / 88keV | **High-energy rescan** through the 53keV surface PPM (fitted affine) | |
+| `20230301213423` | Fr34 | PHercParis1 | 3.24µm / 88keV | **High-energy rescan** through the 54keV exposed-surface PPM (fitted affine) | |
+| `20250511003658` | tifxyz segment | PHerc0343P | 8.64µm / 116keV | 31-layer surface volume resampled in XYZ to 28 layers | |
+| `20260221022814` | auto-grown 405 | PHerc0841 | 9.366µm / 113keV | Native surface volume, upstream re-crop (2026-09-22) to 3760×4900; copied without resampling (0.04% off the 9.362µm grid) | |
+| `20260930144758` | w058 | PHerc1447 | 8.64µm / 116keV | Hugging Face 24-layer render; depth reversed, resampled in XYZ to 28 layers | Released `labels/inklabels.png`; fine-tune only |
+| `20260930144760` | w060 | PHerc1447 | 8.64µm / 116keV | Hugging Face 24-layer render; depth reversed, resampled in XYZ to 28 layers | Released `labels/inklabels.png`; fine-tune only |
+| `20260930144762` | w062 | PHerc1447 | 8.64µm / 116keV | Hugging Face 24-layer render; depth reversed, resampled in XYZ to 28 layers | Pseudo-label from held-out `loo_w062.png`; no train mask |
 
-| ID | Fragment | Physical scroll | Default split | Notes |
-|---|---|---|---|---|
-| `20260115000000` | w044 | PHerc0139 | y 80.55% | Established evaluation fragment |
-| `20250223000000` | w059 | PHerc0139 | x 75% | Mask restricted to labeled footprint |
-| `20260206000001` | w047 | PHerc0139 | x 75% | Mask restricted to labeled footprint |
-| `20260115000001` | w056 | PHerc0139 | y 50% | Established anchor fragment |
-| `20260210000000` | w058 | PHerc0139 | x 50% | Full papyrus footprint |
-| `20260227000000` | w052 | PHerc0139 | x 75% | Full papyrus footprint |
-| `20260318000000` | w049 | PHerc0139 | x 75% | Full papyrus footprint |
-| `20260325000000` | w046 | PHerc0139 | x 60% | Full papyrus footprint |
-| `20260108000000` | w041 | PHerc0139 | x 70% | Full papyrus footprint |
-| `20250831000000` | w040 | PHerc0139 | x 75% | Full papyrus footprint |
-| `20260302000000` | w039 | PHerc0139 | x 75% | Full papyrus footprint |
-| `20260306000000` | w038 | PHerc0139 | x 75% | Full papyrus footprint |
-| `20260310000000` | w037 | PHerc0139 | x 75% | Full papyrus footprint |
-| `20260303000000` | w034 | PHerc0139 | y 50% | Full papyrus footprint |
-| `20260317000000` | w035 | PHerc0139 | y 75% | Separately downloaded 1.1µm labels |
-| `20260226000000` | seg46527 | PHerc0814 | y 75% | Eroded label only; no continuous label |
-| `20250628074500` | 500P2 front | PHerc0500P2 | x 60% | Clear labels transferred from 2.215µm |
-| `20240304141531` | w013 | PHerc1667 | x 75% | Pooled high-resolution surface |
-| `20240304144031` | w018 | PHerc1667 | x 75% | Full-size pooled surface |
-| `20251112000002` | w087 | PHerc0172 | x 75% | Resampled from 7.91µm |
-| `20251111010954` | w068 | PHerc0172 | x 75% | Resampled from 7.91µm |
-| `20250919125754` | patch 487 | PHerc0009B | x 75% | Resampled to the training grid |
-| `20231210121321` | Paris4 | PHercParis4 | x 75% | 78keV surface pooled to 28 layers |
-| `20230301213755` | Fr143 | PHercParis2 | x 75% | 88keV scan rendered through the 54keV exposed-surface PPM at 9.362µm |
-| `20230205142449` | Fr47 | PHercParis2 | manual (pending) | 88keV scan rendered through the 54keV exposed-surface PPM; researcher inklabel copied unchanged |
-| `20231205222200` | Cr4 Fr8 | PHerc51 | x 75% | 88keV scan rendered through the 53keV exposed-surface PPM at 9.362µm |
-| `t20230301213423` | Fr34 | PHercParis1 | x 75% | 88keV scan rendered through the 54keV exposed-surface PPM at 9.362µm |
-| `20250511003658` | tifxyz segment | PHerc0343P | x 75% | 8.64µm / 116keV surface resampled to 28 layers |
-| `20231201215900` | Cr1 Fr3 | PHerc1667 | x 75% | 70keV flattened TIFF stack resampled from 3.24µm |
-| `20260221022814` | auto-grown 405 | PHerc0841 | x 75% | 9.366µm / 113keV surface cropped to `y=14656:21560, x=0:5248` |
+### Special rendering
+
+- **Native 1.2m surface volumes (9.362µm, 9.366µm, 8.64µm).** The published surface volumes are 2× bin-mean renders of 4.681µm / 4.683µm (113keV) and 4.32µm (116keV) ESRF scans (`source_zarr` in each volume's `.zattrs`).
+- **High-energy rescans (Fr143, Fr47, Cr4 Fr8, Fr34).** The labels were drawn on the low-energy (53/54keV) exposed-surface renders. We sample the 88keV scan instead, so these fragments sit closer to the high-energy test scans. See [High-energy fragments](#high-energy-fragments). Chunks missing from the published 88keV zarr are rebuilt from the raw slice TIFFs.
+- **Pooled 2.4µm surfaces (w013, w018, Paris4).** Level 2 of the pyramid gives 9.596µm (w013, w018) or 9.6µm (Paris4) in XY, kept as is. 109 native depth samples are pooled to 28 layers (~9.34µm in Z). The meshes were traced on older scans (3.24µm for PHerc1667, 7.91µm for Paris4).
+- **Resampled scans (PHerc0172, PHerc0009B, PHerc0343P, PHerc1447, Cr1 Fr3).** Resampled from the native voxel size to 9.362µm: linear interpolation in depth, area averaging in XY (linear when upsampling).
+- **PHerc1447 windings.** These come from the Hugging Face dataset `YoussefMoNader/ink-8um-pherc1447-surfaces` and get synthetic IDs. Their mesh normal points the opposite way, so the 24 layers are written in reversed order (`depth_reversed.json`, `depth_flipped=true`). The labels are copied into both `inklabels/` and `dilated_inklabels/` after XY resampling. `campaign_finetune_96.py` uses w058 and w060 with manual splits from `train_masks/`.
+
+### Legacy PHerc0139 windings
+
+These are still assembled (9.362µm / 113keV, native surface volumes). They have no `dilated_inklabels/` entry, so current campaigns and the visual guide skip them.
+
+| ID | Fragment | Notes |
+|---|---|---|
+| `20260206000001` | w047 | Mask restricted to labeled footprint |
+| `20260115000001` | w056 | Mesh-rendered from the raw volume (`old/render_9um_surface.py`) |
+| `20260210000000` | w058 | Full papyrus footprint |
+| `20260227000000` | w052 | Full papyrus footprint |
+| `20260318000000` | w049 | Full papyrus footprint |
+| `20260325000000` | w046 | Full papyrus footprint |
+| `20260306000000` | w038 | Full papyrus footprint |
+| `20260310000000` | w037 | Full papyrus footprint |
+| `20260303000000` | w034 | Full papyrus footprint |
 
 ### Holdout
 
-| ID | Fragment | Physical scroll | Purpose |
-|---|---|---|---|
-| `20251226000000` | w055 | PHerc0139 | Deliberately excluded from supervised training; checks whether a model reproduces known text rather than familiar texture |
-
-### PHerc1447 Fine-Tune Windings
-
-These three windings come from the released dataset `YoussefMoNader/ink-8um-pherc1447-surfaces` on Hugging Face. The source renders are native 8.64µm / 116keV 24-layer TIFF stacks; `assemble_training_segments.py` reverses their layer order into this repo's training orientation, resamples them to the standard 28-layer 9.362µm training frame, writes midslice masks, copies the released labels into both `inklabels/` and `dilated_inklabels/`, and precomputes `surface_labels/`.
-
-| Synthetic ID | Winding | Source labels | Notes |
-|---|---|---|---|
-| `20260930144758` | PHerc1447 w058 | `labels/inklabels.png` | Held-out winding render from the release; copied unchanged into `inklabels/` and `dilated_inklabels/` after XY resampling |
-| `20260930144760` | PHerc1447 w060 | `labels/inklabels.png` | Same assembly path as w058 |
-| `20260930144762` | PHerc1447 w062 | `predictions/loo_w062.png` | No manual label is released for w062; the held-out `loo_w062.png` prediction is copied into `inklabels/` and `dilated_inklabels/` for the finetune bootstrap |
+| ID | Fragment | Physical scroll | Scan | Purpose |
+|---|---|---|---|---|
+| `20251226000000` | w055 | PHerc0139 | 9.362µm / 113keV | Deliberately excluded from supervised training; checks whether a model reproduces known text rather than familiar texture |
 
 ## Test surfaces
 
@@ -122,7 +131,7 @@ Shape `(H,W)` and mask coverage are measured from the current files in `masks/`;
 | 10 | `20260925085345` | PHerc1447 | `(4901, 4621)` | 64.3% | 10.90 cm² | 8.640µm / 116keV | `auto_grown_20260925085345806_abf` (second surface) |
 | 11 | `20260928000001` | PHerc0800 | `(2321, 4141)` | 77.4% | 5.50 cm² | 8.640µm / 116keV | `PHerc0800_z9264_w040_abf` (expanded auto-winder segment) |
 | 12 | `20260928000002` | PHerc0125 | `(1161, 3141)` | 77.3% | 2.50 cm² | 9.362µm / 113keV | `PHerc0125_z15344_w040_abf` (expanded auto-winder segment) |
-| 13 | `20260928000003` | PHerc0211 | `(1941, 3641)` | 53.5% | 3.32 cm² | 9.362µm / 113keV | `PHerc0211_z7312_w080_abf` (expanded auto-winder segment) |
+| 13 | `20260928000003` | PHerc0211 | `(1941, 3641)` | 53.5% | 26.229 cm² | 9.362µm / 113keV | `PHerc0211_z7312_w080_abf` (expanded auto-winder segment) |
 
 `assemble_test_segments.py` renders each surface from its tifxyz coordinates and the listed raw CT volume. 8.640µm meshes are rendered in their native volume space; the scan column is the volume the mesh was built on.
 
@@ -262,6 +271,8 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 | `train.py` | Training loop, losses, metrics, checkpoints, and logging |
 | `campaign_archs_*.py` | Complete experiment definitions and campaign runners |
 | `campaign_finetune.py` | Fine-tunes the archs40 learned-upsampled checkpoint with PHerc0211 + PHerc1447 |
+| `campaign_finetune_96.py` | Fine-tunes the archs40 native-96 combined-surface checkpoint on PHerc1447 + selected scrolls |
+| `generate_scroll_visual_guide.py` | Contact sheet of the training corpus and test surfaces (`output/scroll_patch_guide.png`) |
 | `utils/config.py` | Shared configuration and registered train, holdout, and test IDs |
 | `utils/model.py` | 3D nnU-Net model and experimental architecture branches |
 | `utils/dataloader.py` | Labels, rings, splits, sampling, augmentation, and zarr loading |

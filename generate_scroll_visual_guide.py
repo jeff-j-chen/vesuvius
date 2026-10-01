@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,13 +15,15 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parent
-IMAGE_HEIGHT = 176
+IMAGE_HEIGHT = 160
 TEST_VIEW_WIDTH = 196
 CARD_GAP = 10
 GROUP_GAP = 14
 GROUP_PAD = 10
 GROUP_TITLE_HEIGHT = 38
-CARD_LABEL_HEIGHT = 64
+CARD_LABEL_HEIGHT = 138
+RENDER_LINES = 3
+MIN_TRAINING_CARD_WIDTH = 260
 TEST_CARD_LABEL_HEIGHT = 96
 SECTION_TITLE_HEIGHT = 54
 CANVAS_WIDTH = 3_008
@@ -38,43 +41,52 @@ class Patch:
     source: str = "labels"
     area: str = ""
     source_patch: str = ""
+    scan: str = ""
+    render: str = ""
+    notes: str = ""
 
 
-# campaign 33 training patches, grouped as in campaign_archs_33.CAMPAIGN33_SCROLL_DICT
-TRAINING_GROUPS = [
-    ("PHerc0139", [
-        Patch("20260115000000", "w044"),
-        Patch("20260317000000", "w035"),
-        Patch("20250223000000", "w059"),
-        Patch("20250108000005", "w030"),
-        Patch("20260112000000", "w043"),
-        Patch("20260126000000", "w045"),
-        Patch("20250831000000", "w040"),
-        Patch("20260108000000", "w041"),
-        Patch("20260302000000", "w039"),
-    ]),
-    ("PHerc0172", [
-        Patch("20251111010954", "w068"),
-        Patch("20251112000002", "w087"),
-    ]),
-    ("PHerc1667", [
-        Patch("20240304141531", "w013"),
-        Patch("20240304144031", "w018"),
-        Patch("20231201215900", "Cr1 Fr3", "mask_overlay"),
-    ]),
-    ("PHerc0009B", [Patch("20250919125754", "patch 487")]),
-    ("PHercParis4", [Patch("20231210121321", "Paris4")]),
-    ("PHerc0500P2", [Patch("20250628074500", "500P2 front")]),
-    ("PHerc0814", [Patch("20260226000000", "seg46527")]),
-    ("PHercParis2", [
-        Patch("20230301213755", "Fr143", "mask_overlay"),
-        Patch("20230205142449", "Fr47", "mask_overlay"),
-    ]),
-    ("PHerc51", [Patch("20231205222200", "Cr4 Fr8", "mask_overlay")]),
-    ("PHercParis1", [Patch("20230301213423", "Fr34", "mask_overlay")]),
-    ("PHerc0343P", [Patch("20250511003658", "tifxyz segment")]),
-    ("PHerc0841", [Patch("20260221022814", "auto-grown 405")]),
-]
+# fragments whose preview is the papyrus outline (no inklabels/2_4um reference, or it is unhelpful)
+MASK_OVERLAY_IDS = {
+    "20231201215900", "20230301213755", "20230205142449", "20231205222200", "20230301213423",
+    "20260930144758", "20260930144760", "20260930144762",
+}
+
+
+def _plain(cell: str) -> str:
+    """README cell -> ASCII text for OpenCV (no markdown, backticks, or micro signs)."""
+    text = re.sub(r"\*\*|`", "", cell).replace("µ", "u").replace("×", "x").replace("→", "->")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _training_groups_from_readme() -> list[tuple[str, list[Patch]]]:
+    """the README 'Fragments' table, grouped by physical scroll in table order."""
+    lines = (ROOT / "README.md").read_text(encoding="utf-8").splitlines()
+    start = lines.index("## Fragments")
+    groups: dict[str, list[Patch]] = {}
+    in_table = False
+    for line in lines[start + 1:]:
+        if line.startswith("| ID | Fragment | Physical scroll | Scan | Rendering | Notes |"):
+            in_table = True
+            continue
+        if in_table and not line.startswith("|"):
+            break
+        if not in_table or line.startswith("|---"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) != 6:
+            raise ValueError(f"README fragment row has {len(cells)} cells: {line}")
+        patch_id, name, scroll, scan, render, notes = map(_plain, cells)
+        source = "mask_overlay" if patch_id in MASK_OVERLAY_IDS else "labels"
+        groups.setdefault(scroll, []).append(
+            Patch(patch_id, name, source, scan=scan, render=render, notes=notes)
+        )
+    if not groups:
+        raise ValueError("README.md has no '## Fragments' table")
+    return list(groups.items())
+
+
+TRAINING_GROUPS = _training_groups_from_readme()
 LABEL_DIR = ROOT / "dilated_inklabels"
 
 TEST_GROUPS = [
@@ -127,7 +139,7 @@ TEST_GROUPS = [
         "PHerc0125_z15344_w040_abf",
     )]),
     ("PHerc0211", [Patch(
-        "20260928000003", "test surface 2", "mask", "3.32 cm^2",
+        "20260928000003", "test surface 2", "mask", "26.229 cm^2",
         "PHerc0211_z7312_w080_abf",
     )]),
 ]
@@ -289,6 +301,10 @@ def _render_card(patch: Patch) -> np.ndarray:
         0.58,
         2,
     )[0][0] + 14
+    if patch.source != "mask":
+        primary_width = max(primary_width, MIN_TRAINING_CARD_WIDTH, cv2.getTextSize(
+            patch.scan, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1,
+        )[0][0] + 14)
     width = max(
         preview_width,
         TEST_VIEW_WIDTH if patch.source == "mask" else primary_width,
@@ -306,9 +322,33 @@ def _render_card(patch: Patch) -> np.ndarray:
         _text_fit(card, f"source: {patch.source_patch}", (7, height + 79), width - 14,
                   scale=0.48, color=MUTED, thickness=1)
     else:
-        _text_fit(card, note, (7, height + 53), width - 14, scale=0.46,
-                  color=MUTED, thickness=1)
+        del note  # the legend explains the preview type; cards show the README columns
+        _text_fit(card, f"scan: {patch.scan}", (7, height + 52), width - 14,
+                  scale=0.5, color=TEXT, thickness=1)
+        render_lines = _wrap(patch.render, width - 14, 0.44, RENDER_LINES)
+        for index, line in enumerate(render_lines):
+            _text_fit(card, line, (7, height + 72 + 17 * index), width - 14,
+                      scale=0.44, color=TEXT, thickness=1)
+        if patch.notes:
+            _text_fit(card, patch.notes, (7, height + 72 + 17 * RENDER_LINES + 6), width - 14,
+                      scale=0.44, color=MUTED, thickness=1)
     return card
+
+
+def _wrap(text: str, max_width: int, scale: float, max_lines: int) -> list[str]:
+    """greedy word wrap; the last line keeps the remainder and is shrunk by _text_fit."""
+    words, lines, current = text.split(), [], ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        fits = cv2.getTextSize(candidate, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)[0][0] <= max_width
+        if fits or not current or len(lines) == max_lines - 1:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
 
 
 def _render_group(domain: str, patches: list[Patch]) -> list[np.ndarray]:
@@ -444,7 +484,8 @@ def generate_guide(output_path: Path) -> Path:
     )
     cv2.putText(
         title,
-        "black: 2.4um label     red: campaign 33 dilated label at 33% opacity     common preview height",
+        "black: researcher reference ink (inklabels/2_4um)     red: dilated training label at 33% opacity     "
+        "outlined: papyrus mask + dilated label     card text: README 'Fragments' table",
         (0, 68),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
@@ -454,12 +495,12 @@ def generate_guide(output_path: Path) -> Path:
     )
     cv2.rectangle(title, (0, 80), (32, 96), (0, 0, 0), -1)
     cv2.rectangle(title, (192, 80), (224, 96), ACCENT, -1)
-    cv2.putText(title, "2.4um", (42, 94), cv2.FONT_HERSHEY_SIMPLEX, 0.42, TEXT, 1, cv2.LINE_AA)
+    cv2.putText(title, "reference ink", (42, 94), cv2.FONT_HERSHEY_SIMPLEX, 0.42, TEXT, 1, cv2.LINE_AA)
     cv2.putText(title, "dilated label", (234, 94), cv2.FONT_HERSHEY_SIMPLEX, 0.42, TEXT, 1, cv2.LINE_AA)
 
     bands = [
         title,
-        *_section("TRAINING", "23 campaign 33 fragments grouped by physical scroll", TRAINING_GROUPS),
+        *_section("TRAINING", f"{sum(len(p) for _, p in TRAINING_GROUPS)} fragments from the README table, grouped by physical scroll", TRAINING_GROUPS),
         *_section(
             "TEST",
             "thirteen unlabeled discovery surfaces; papyrus masks, areas, and source patches shown",

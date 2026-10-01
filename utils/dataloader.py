@@ -2813,10 +2813,18 @@ class DataManager:
 
         manual_mask = None
         train_mask_path = None
+        train_only = int(self.scroll_id) in {
+            int(scroll_id)
+            for scroll_id in (getattr(self.c.data, "train_only_scroll_ids", ()) or ())
+        }
         if not bool(getattr(self.c.data, "simple_split", True)):
             train_mask_dir = str(getattr(self.c.data, "train_mask_dir", "./train_masks"))
             train_mask_path = os.path.join(train_mask_dir, f"{self.scroll_id}.png")
             manual_mask = imread_gray(train_mask_path)
+            if manual_mask is None and train_only:
+                # train-only scrolls need no mask; an existing one only contributes painted explicit labels
+                manual_mask = np.zeros(mask.shape, dtype=np.uint8)
+                train_mask_path = "<train-only: all train>"
             if manual_mask is None:
                 raise FileNotFoundError(
                     f"manual train mask not found for scroll {self.scroll_id}: {train_mask_path}"
@@ -2899,7 +2907,7 @@ class DataManager:
                     f"manual train mask shape {manual_mask.shape} does not match scroll mask "
                     f"{mask.shape} and labels {labels.shape} for scroll {self.scroll_id}"
                 )
-            normal_train = manual_mask >= 240
+            normal_train = (manual_mask >= 240) | train_only
             # paint-tool palette targets (119 negative, 185 positive, 255 train); brushes drift a few levels
             explicit_negative = (manual_mask >= 100) & (manual_mask <= 143)
             explicit_positive = np.abs(manual_mask.astype(np.int16) - 185) <= 6

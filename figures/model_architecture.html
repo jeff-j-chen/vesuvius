@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>archs40 holdout_n96_combined_surface_norm - architecture</title>
+<style>
+  html, body { margin: 0; background: #1b1c1f; }
+  svg { display: block; }
+  text { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #d4d4d6; }
+  .mono { font-family: "JetBrains Mono", "Consolas", "DejaVu Sans Mono", monospace; }
+  .hdr { font-size: 19px; letter-spacing: 4px; fill: #c9c9cc; }
+  .t1 { font-size: 23px; fill: #f2f2f3; }
+  .t1b { font-size: 23px; font-weight: 600; fill: #ffffff; }
+  .t2 { font-size: 18px; fill: #c7c7ca; }
+  .t3 { font-size: 15.5px; fill: #a9a9ad; }
+  .t4 { font-size: 13.5px; fill: #8e8e93; }
+  .dim { font-size: 18px; fill: #bdbdc1; }
+  .acc { fill: #ef6a43; }
+  .grn { fill: #7fc79a; }
+  .blu { fill: #79b4f0; }
+</style>
+</head>
+<body>
+<svg id="fig" xmlns="http://www.w3.org/2000/svg" width="1900" height="1136" viewBox="0 0 1900 1136"></svg>
+<script src="ring_data.js"></script>
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("fig");
+const ACC = "#ef6a43", BOX = "#26272b", EDGE = "#55565c", BAR = "#5b5d63", DASH = "#9a9aa0";
+
+function el(tag, attrs, parent = svg) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  parent.appendChild(e);
+  return e;
+}
+function text(x, y, s, cls = "t2", anchor = "middle", extra = {}) {
+  const t = el("text", { x, y, class: cls, "text-anchor": anchor, ...extra });
+  t.textContent = s;
+  return t;
+}
+function lines(x, y, arr, cls, dy, anchor = "middle") {
+  arr.forEach((s, i) => text(x, y + i * dy, s, cls, anchor));
+}
+function box(x, y, w, h, opts = {}) {
+  return el("rect", { x, y, width: w, height: h, rx: opts.rx ?? 9, fill: opts.fill ?? BOX,
+    stroke: opts.stroke ?? EDGE, "stroke-width": opts.sw ?? 1.6, "stroke-dasharray": opts.dash ?? "none" });
+}
+function arrow(x1, y1, x2, y2, color = ACC, w = 3) {
+  el("line", { x1, y1, x2, y2, stroke: color, "stroke-width": w, "marker-end": `url(#ah-${color.slice(1)})` });
+}
+function path(d, color = DASH, w = 1.6, dash = "none", marker = true) {
+  el("path", { d, fill: "none", stroke: color, "stroke-width": w, "stroke-dasharray": dash,
+    "marker-end": marker ? `url(#ah-${color.slice(1)})` : "none" });
+}
+function header(x1, x2, y, s) {
+  text(x1, y, s, "hdr mono", "start");
+  el("line", { x1, y1: y + 14, x2, y2: y + 14, stroke: "#45464b", "stroke-width": 2 });
+}
+
+const defs = el("defs", {});
+for (const c of [ACC, DASH, "#7fc79a", "#79b4f0", "#c7a0f0"]) {
+  const m = el("marker", { id: `ah-${c.slice(1)}`, viewBox: "0 0 10 10", refX: 9, refY: 5,
+    markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
+  el("path", { d: "M0,0 L10,5 L0,10 z", fill: c }, m);
+}
+
+// ---------------------------------------------------------------- title
+text(28, 40, "archs40 · holdout_n96_combined_surface_norm  —  early-2D nnU-Net ink detector (nnunet3d_lcndz, early_2d_unet, multitile 4×4)",
+  "t2", "start", { style: "font-size:20px;fill:#e6e6e8" });
+
+// ---------------------------------------------------------------- headers
+const HY = 92;
+header(28, 200, HY, "INPUT");
+header(232, 742, HY, "CUE + LOCAL 3D STEM");
+header(772, 1060, HY, "DEPTH COLLAPSE");
+header(1092, 1562, HY, "2D U-NET");
+header(1594, 1876, HY, "MULTITILE HEAD");
+
+const MY = 330;   // main flow centre line
+
+// ---------------------------------------------------------------- input volume
+for (let i = 7; i >= 0; i--) {
+  const o = i * 6.5;
+  el("rect", { x: 62 + o, y: MY - 66 - o, width: 104, height: 104, rx: 3,
+    fill: i === 0 ? "#34363b" : "#2d2f33", stroke: "#8a8b90", "stroke-width": 1.5 });
+}
+text(115, MY + 82, "surface volume patch", "t1");
+text(115, MY + 108, "8 slices, 96×96 px", "t3");
+text(115, MY + 130, "surface-relative depth window", "t4");
+text(115, MY + 149, "surface-anchor z-score norm", "t4");
+
+// teacher surface maps
+const TY = 560;
+for (const [i, lab] of [[0, "depth"], [1, "conf."]]) {
+  const gx = 58 + i * 64;
+  el("rect", { x: gx, y: TY, width: 54, height: 54, rx: 3, fill: i ? "#2f4a3a" : "#3a3550",
+    stroke: "#8a8b90", "stroke-width": 1.3 });
+  text(gx + 27, TY + 74, lab, "t4");
+}
+text(115, TY - 16, "literal surface label", "t3");
+text(115, TY + 100, "2 × 96 × 96", "t4 mono");
+
+// ---------------------------------------------------------------- cue stem
+box(240, MY - 92, 214, 184);
+text(347, MY - 56, "three cues", "t1b");
+lines(347, MY - 22, ["raw intensity", "LCN (5×5 local", "contrast norm.)", "∂z slice diff."], "t3", 22);
+arrow(200, MY - 14, 236, MY - 14);
+
+box(486, MY - 92, 250, 184);
+text(611, MY - 56, "gated cue stem", "t1b");
+lines(611, MY - 24, ["per cue: 3×3×3 conv (8) →", "IN → GELU → 1×1, residual",
+  "gate: MLP on cue mean/std", "→ softmax × 3 reweights cues"], "t3", 22);
+arrow(454, MY - 14, 482, MY - 14);
+
+// enc1 (below the cue boxes)
+const EY = MY + 128;
+box(352, EY, 384, 132, { stroke: "#7c7d83", sw: 2 });
+text(544, EY + 34, "enc1: two 3D conv layers", "t1b");
+text(544, EY + 64, "3×3×3 kernels · 32 channels", "t2");
+text(544, EY + 90, "IBN (½ InstanceNorm, ½ BatchNorm) · LeakyReLU", "t3");
+text(544, EY + 113, "then Dropout3d p=0.2", "t4");
+path(`M611,${MY + 92} L611,${EY - 4}`, ACC, 3);
+
+// additive side branches
+const SY = EY + 178;
+box(240, SY, 236, 112, { fill: "#232a26", stroke: "#4f7a5f" });
+text(358, SY + 28, "fiber coordinates", "t2 grn");
+lines(358, SY + 52, ["structure tensor on LCN: coherence,", "cos2θ, sin2θ, deviation from 31-px", "fibre trend → 1×1×1 conv (zero-init)"], "t4", 19);
+box(500, SY, 236, 112, { fill: "#24263a", stroke: "#5b63a0" });
+text(618, SY + 28, "surface teacher", "t2 blu");
+lines(618, SY + 52, ["depth, confidence, signed offset", "of each slice from the surface", "→ 1×1×1 conv (zero-init)"], "t4", 19);
+path(`M200,${TY + 27} L222,${TY + 27} L222,${SY + 150} L618,${SY + 150} L618,${SY + 116}`, "#79b4f0", 1.8);
+path(`M358,${SY} L358,${EY + 150} L470,${EY + 150} L470,${EY + 136}`, "#7fc79a", 1.8);
+path(`M618,${SY} L618,${EY + 136}`, "#79b4f0", 1.8);
+text(470, EY + 168, "⊕ added to enc1 output", "t4", "middle");
+text(358, SY + 136, "4 × 8 × 96 × 96", "t4 mono");
+text(694, SY + 136, "3 × 8 × 96 × 96", "t4 mono");
+
+// ---------------------------------------------------------------- depth collapse
+const DX = 780;
+path(`M736,${EY + 66} L758,${EY + 66} L758,${MY - 14} L${DX - 4},${MY - 14}`, ACC, 3, "none", false);
+// fork
+path(`M${DX - 4},${MY - 14} L${DX + 6},${MY - 14} L${DX + 6},${MY - 96} L${DX + 22},${MY - 96}`, ACC, 2.4);
+path(`M${DX + 6},${MY - 14} L${DX + 6},${MY + 66} L${DX + 22},${MY + 66}`, ACC, 2.4);
+box(DX + 26, MY - 152, 236, 112);
+text(DX + 144, MY - 118, "attention pooling", "t1");
+lines(DX + 144, MY - 90, ["Conv3d 32→1, softmax", "over 8 slices, weighted sum"], "t3", 22);
+box(DX + 26, MY + 10, 236, 112);
+text(DX + 144, MY + 44, "max pooling", "t1");
+lines(DX + 144, MY + 72, ["maximum over depth", "keeps strongest response"], "t3", 22);
+path(`M${DX + 262},${MY - 96} L${DX + 274},${MY - 96} L${DX + 274},${MY - 14}`, ACC, 2.4, "none", false);
+path(`M${DX + 262},${MY + 66} L${DX + 274},${MY + 66} L${DX + 274},${MY - 14}`, ACC, 2.4, "none", false);
+el("circle", { cx: DX + 274, cy: MY - 14, r: 4.5, fill: ACC });
+text(DX + 144, MY + 158, "concat → 64 ch → 1×1 conv", "t2");
+text(DX + 144, MY + 182, "= enc1 skip of the 2D U-Net", "t4");
+arrow(DX + 274, MY - 14, 1100, MY - 14);
+text(DX + 144, MY - 176, "pool over depth: 3D features → 2D map", "t2");
+
+// ---------------------------------------------------------------- 2D U-Net bars
+const ux0 = 1112, step = 62, cy = MY - 14;
+const levels = [
+  { c: 32, s: 96, h: 236 }, { c: 64, s: 48, h: 188 }, { c: 128, s: 24, h: 142 }, { c: 256, s: 12, h: 96 },
+];
+const order = [0, 1, 2, 3, 2, 1, 0];
+const barX = [];
+order.forEach((lv, i) => {
+  const L = levels[lv];
+  const x = ux0 + i * step, w = 10 + Math.log2(L.c / 16) * 7;
+  barX.push(x + w / 2);
+  el("rect", { x, y: cy - L.h / 2, width: w, height: L.h, rx: 3, fill: i === 3 ? "#6c6e75" : BAR });
+  if (i !== 3) {
+    text(x + w / 2, cy + L.h / 2 + 22, `${L.c}`, "t4 mono");
+    text(x + w / 2, cy + L.h / 2 + 40, `@${L.s}`, "t4 mono");
+  }
+});
+// skip connections
+[[0, 6, 136], [1, 5, 110], [2, 4, 84]].forEach(([a, b, up]) => {
+  const ya = cy - levels[order[a]].h / 2 - 4, yb = cy - levels[order[b]].h / 2 - 4;
+  const top = cy - up - 34;
+  path(`M${barX[a]},${ya} L${barX[a]},${top} L${barX[b]},${top} L${barX[b]},${yb}`, DASH, 1.6, "6 5");
+});
+text((barX[0] + barX[6]) / 2, cy - 186, "skip connections (concat, skip-drop 0.2)", "t2");
+text(barX[3], cy - 72, "bottleneck", "t4");
+text(barX[3], cy - 56, "256@12", "t4 mono");
+// level labels
+lines(1337, cy + 196, ["4 levels, two (3×3 conv · InstanceNorm · LeakyReLU) per block",
+  "encoder: 2×2 max-pool halves resolution",
+  "decoder: 2×2 transposed conv doubles it back",
+  "Dropout2d 0.2 after enc2 · 0.3 before head"], "t3", 24);
+text(1337, cy + 300, "channels @ spatial size", "t4");
+arrow(barX[6] + 18, cy, 1606, cy);
+
+// ---------------------------------------------------------------- head
+const HX = 1612;
+text(1735, MY - 140, "1×1 conv → logit map", "t2");
+text(1735, MY - 118, "1 × 96 × 96", "t4 mono");
+// logit map illustration from the ring-data letter (illustrative)
+const mapX = 1676, mapY = MY - 100, mapS = 120;
+el("rect", { x: mapX, y: mapY, width: mapS, height: mapS, fill: "#111", stroke: "#8a8b90", "stroke-width": 1.5 });
+if (window.RING && RING.mixed) {
+  const s = mapS / 96, w = RING.mixed;
+  const g = el("g", {});
+  const clip = el("clipPath", { id: "mapclip" }, defs);
+  el("rect", { x: mapX, y: mapY, width: mapS, height: mapS }, clip);
+  g.setAttribute("clip-path", "url(#mapclip)");
+  el("image", { href: RING.blur_png, x: mapX - (w.cx - 40) * s, y: mapY - (w.cy - 40) * s,
+    width: RING.tiles.ink[0].length * RING.tile * s, height: RING.tiles.ink.length * RING.tile * s,
+    style: "filter: blur(1.2px)", opacity: 0.95 }, g);
+}
+// center crop + grid
+const cs = mapS * 64 / 96, co = mapX + (mapS - cs) / 2, coy = mapY + (mapS - cs) / 2;
+el("rect", { x: co, y: coy, width: cs, height: cs, fill: "none", stroke: ACC, "stroke-width": 2 });
+for (let k = 1; k < 4; k++) {
+  el("line", { x1: co + k * cs / 4, y1: coy, x2: co + k * cs / 4, y2: coy + cs, stroke: ACC, "stroke-width": 0.9, opacity: 0.8 });
+  el("line", { x1: co, y1: coy + k * cs / 4, x2: co + cs, y2: coy + k * cs / 4, stroke: ACC, "stroke-width": 0.9, opacity: 0.8 });
+}
+lines(1735, MY + 42, ["centre 64×64 crop (target-aligned)", "→ 4×4 cells of 16×16 px"], "t3", 20);
+// LSE + output grid
+box(HX, MY + 92, 252, 86);
+text(1738, MY + 120, "log-sum-exp pool per cell", "t2");
+text(1738, MY + 146, "(1/r)·[logΣe^(r·x) − log 256]", "t3 mono", "middle", { style: "font-size:14px" });
+text(1738, MY + 166, "learned r = 2.39 (clamp 0.5–10)", "t4");
+arrow(1738, MY + 72, 1738, MY + 88);
+arrow(1738, MY + 178, 1738, MY + 200);
+const gX = 1690, gY = MY + 206, gs = 24;
+const vals = window.RING && RING.mixed ? RING.mixed.cells.map(c => c.label ? c.target : 0.05) : Array(16).fill(0.5);
+for (let i = 0; i < 16; i++) {
+  const v = vals[i];
+  el("rect", { x: gX + (i % 4) * gs, y: gY + Math.floor(i / 4) * gs, width: gs - 2, height: gs - 2, rx: 2,
+    fill: `rgb(${30 + v * 215},${30 + v * 215},${30 + v * 215})` });
+}
+text(1738, gY + 122, "ink probability, 16 cells", "t1");
+text(1738, gY + 146, "sigmoid of 16 logits", "t3");
+
+// ---------------------------------------------------------------- dims row
+const DY = 846;
+el("line", { x1: 28, y1: DY - 34, x2: 1876, y2: DY - 34, stroke: "#36373b", "stroke-width": 1 });
+[[115, "1 × 8 × 96 × 96"], [347, "3 × 8 × 96 × 96"], [611, "3 × 8 × 96 × 96"], [800, "32 × 8 × 96 × 96"],
+ [1018, "32 × 96 × 96"], [1300, "256 × 12 × 12"], [1500, "32 × 96 × 96"], [1650, "1 × 96 × 96"], [1810, "16"]]
+  .forEach(([x, s]) => text(x, DY, s, "dim mono"));
+text(950, DY + 30, "tensor shapes per sample: channels × depth (slices) × height × width", "t3");
+
+// ---------------------------------------------------------------- training-only + params
+const BY = 904;
+box(28, BY, 1188, 206, { fill: "#202124", stroke: "#45464b", dash: "7 5" });
+text(48, BY + 32, "TRAINING ONLY", "hdr mono", "start", { style: "font-size:16px" });
+const tr = [
+  ["RSC", "p=0.33 of samples: mute the 33% of dec1 channels (or positions) whose gradient most supports the correct cell logits, re-score"],
+  ["targets", "16 masked cell targets, soft BCE; ring negatives, edge-softened positives (see ring figure)"],
+  ["character bags", "bag-ranking loss λ=0.2, margin 0.5, top-50% of cells per character"],
+  ["reweighting", "patch GroupDRO (η=0.05) · per-domain sampling weights · flips, cutout, context replace, ctx/depth jitter"],
+  ["init", "MAE checkpoint (early-gated, fiber, native-96, surface-norm, 2k steps) · batch 96 · lr 1e-4 · 10 epochs"],
+];
+tr.forEach(([k, v], i) => {
+  text(48, BY + 66 + i * 27, k, "t3 acc", "start", { style: "font-size:15.5px;font-weight:600" });
+  text(196, BY + 66 + i * 27, v, "t3", "start");
+});
+
+box(1240, BY, 636, 206, { fill: "#202124", stroke: "#45464b" });
+text(1260, BY + 32, "PARAMETERS", "hdr mono", "start", { style: "font-size:16px" });
+const pr = [
+  ["cue stem + enc1 + fiber + surface", "31,478"],
+  ["depth attention + 1×1 fuse", "2,081"],
+  ["2D U-Net (enc2 … dec1)", "1,916,768"],
+  ["head 1×1 conv + LSE r", "34"],
+  ["active total", "1,950,361"],
+];
+pr.forEach(([k, v], i) => {
+  const bold = i === 4 ? "font-weight:700;fill:#fff" : "";
+  text(1260, BY + 66 + i * 25, k, "t3", "start", { style: bold });
+  text(1640, BY + 66 + i * 25, v, "t3 mono", "end", { style: bold });
+});
+lines(1856, BY + 66, ["state dict: 7,522,842", "5,572,481 belong to the", "unused 3D enc2/enc3/", "bottleneck/dec path", "(kept from MAE init)"], "t4", 22, "end");
+</script>
+</body>
+</html>

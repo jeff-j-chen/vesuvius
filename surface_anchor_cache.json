@@ -280,5 +280,323 @@
     "papyrus": 100.0,
     "surface_mad": 4.193425980700508,
     "tiles": 384
+  },
+  "20260930144762": {
+    "gap": 31.0,
+    "papyrus": 103.0,
+    "surface_mad": 4.193425980700508,
+    "tiles": 384
+  },
+  "PHerc0211_z10320_w020": {
+    "gap": 29.0,
+    "papyrus": 119.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z10320_w040": {
+    "gap": 29.0,
+    "papyrus": 121.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z10320_w060": {
+    "gap": 29.0,
+    "papyrus": 123.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z10320_w080": {
+    "gap": 32.0,
+    "papyrus": 125.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z10912_w020": {
+    "gap": 29.0,
+    "papyrus": 119.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z10912_w060": {
+    "gap": 32.0,
+    "papyrus": 129.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z10912_w080": {
+    "gap": 31.0,
+    "papyrus": 128.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z11520_w040": {
+    "gap": 32.0,
+    "papyrus": 121.0,
+    "surface_mad": 6.290138633875974,
+    "tiles": 384
+  },
+  "PHerc0211_z11520_w080": {
+    "gap": 29.0,
+    "papyrus": 127.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z12112_w040": {
+    "gap": 32.0,
+    "papyrus": 122.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 373
+  },
+  "PHerc0211_z12112_w060": {
+    "gap": 29.0,
+    "papyrus": 124.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z12112_w080": {
+    "gap": 31.0,
+    "papyrus": 129.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z12112_w100": {
+    "gap": 26.0,
+    "papyrus": 124.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z12720_w040": {
+    "gap": 34.0,
+    "papyrus": 123.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z12720_w060": {
+    "gap": 33.0,
+    "papyrus": 124.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z12720_w080": {
+    "gap": 31.0,
+    "papyrus": 126.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z13312_w060": {
+    "gap": 33.0,
+    "papyrus": 115.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z3712_w040": {
+    "gap": 38.0,
+    "papyrus": 128.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 351
+  },
+  "PHerc0211_z3712_w060": {
+    "gap": 42.0,
+    "papyrus": 132.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 280
+  },
+  "PHerc0211_z3712_w080": {
+    "gap": 32.0,
+    "papyrus": 123.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 250
+  },
+  "PHerc0211_z3712_w100": {
+    "gap": 26.0,
+    "papyrus": 122.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z4320_w040": {
+    "gap": 30.0,
+    "papyrus": 117.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z4320_w060": {
+    "gap": 30.0,
+    "papyrus": 124.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z4320_w080": {
+    "gap": 29.0,
+    "papyrus": 123.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z4912_w020": {
+    "gap": 27.0,
+    "papyrus": 115.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z4912_w040": {
+    "gap": 31.0,
+    "papyrus": 117.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z4912_w060": {
+    "gap": 30.0,
+    "papyrus": 123.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z4912_w080": {
+    "gap": 33.0,
+    "papyrus": 126.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z5520_w040": {
+    "gap": 32.0,
+    "papyrus": 118.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z5520_w060": {
+    "gap": 34.0,
+    "papyrus": 126.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z5520_w080": {
+    "gap": 32.0,
+    "papyrus": 127.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z6112_w040": {
+    "gap": 32.0,
+    "papyrus": 118.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z6112_w060": {
+    "gap": 33.0,
+    "papyrus": 123.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z6112_w080": {
+    "gap": 28.0,
+    "papyrus": 125.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z6720_w040": {
+    "gap": 32.0,
+    "papyrus": 119.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z6720_w060": {
+    "gap": 32.0,
+    "papyrus": 125.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z6720_w080": {
+    "gap": 27.0,
+    "papyrus": 122.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z7312_w040": {
+    "gap": 30.0,
+    "papyrus": 120.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z7312_w060": {
+    "gap": 35.0,
+    "papyrus": 122.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z7312_w080": {
+    "gap": 25.0,
+    "papyrus": 122.0,
+    "surface_mad": 9.435208625163536,
+    "tiles": 384
+  },
+  "PHerc0211_z7920_w040": {
+    "gap": 29.0,
+    "papyrus": 113.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z7920_w060": {
+    "gap": 30.0,
+    "papyrus": 121.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z7920_w080": {
+    "gap": 30.0,
+    "papyrus": 123.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z9120_w020": {
+    "gap": 24.0,
+    "papyrus": 114.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z9120_w040": {
+    "gap": 28.0,
+    "papyrus": 118.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z9120_w060": {
+    "gap": 31.0,
+    "papyrus": 124.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z9120_w080": {
+    "gap": 25.0,
+    "papyrus": 121.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z9712_w020": {
+    "gap": 25.0,
+    "papyrus": 122.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z9712_w040": {
+    "gap": 29.0,
+    "papyrus": 119.0,
+    "surface_mad": 7.338495297638495,
+    "tiles": 384
+  },
+  "PHerc0211_z9712_w060": {
+    "gap": 32.0,
+    "papyrus": 126.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "PHerc0211_z9712_w080": {
+    "gap": 24.0,
+    "papyrus": 121.0,
+    "surface_mad": 8.386851961401016,
+    "tiles": 384
+  },
+  "20260318000000": {
+    "gap": 23.0,
+    "papyrus": 87.0,
+    "surface_mad": 4.193425980700508,
+    "tiles": 384
   }
 }

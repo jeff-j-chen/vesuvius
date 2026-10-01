@@ -1,0 +1,557 @@
+[campaign_finetune] 2 run(s) queued (log -> ./runs_finetune)
+[campaign_finetune] ft_all: ctx=96 domains=['pherc1447', 'pherc0009b', 'pherc0139', 'pherc0500p2'] weights={'pherc1447': 1, 'pherc0009b': 1, 'pherc0139': 1, 'pherc0500p2': 1} simple_split=False ring=(2,2,4) multitile_pos_only=True fast_eval=False vis=[20260928000003] batch=96 lr=5e-05 epochs=8 encoder_lr_scale=1.0 freeze=('enc1.', 'enc2.') encoder_lr=1e-06 task_lr=5e-05 pcgrad=False patch_groupdro=True run=ft_all_01_05-17-40 init=/vesuvius/models/archs40/holdout_n96_combined_surface_norm/final.pth
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1790831861.603174  360942 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1790831861.606583  360942 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1790831861.614995  360942 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790831861.615013  360942 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790831861.615015  360942 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1790831861.615015  360942 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.10/dist-packages/tensorboard/compat/__init__.py", line 42, in tf
+    from tensorboard.compat import notf  # noqa: F401
+ImportError: cannot import name 'notf' from 'tensorboard.compat' (/usr/local/lib/python3.10/dist-packages/tensorboard/compat/__init__.py)
+
+During handling of the above exception, another exception occurred:
+
+AttributeError: 'MessageFactory' object has no attribute 'GetPrototype'
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.10/dist-packages/tensorboard/compat/__init__.py", line 42, in tf
+    from tensorboard.compat import notf  # noqa: F401
+ImportError: cannot import name 'notf' from 'tensorboard.compat' (/usr/local/lib/python3.10/dist-packages/tensorboard/compat/__init__.py)
+
+During handling of the above exception, another exception occurred:
+
+AttributeError: 'MessageFactory' object has no attribute 'GetPrototype'
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.10/dist-packages/tensorboard/compat/__init__.py", line 42, in tf
+    from tensorboard.compat import notf  # noqa: F401
+ImportError: cannot import name 'notf' from 'tensorboard.compat' (/usr/local/lib/python3.10/dist-packages/tensorboard/compat/__init__.py)
+
+During handling of the above exception, another exception occurred:
+
+AttributeError: 'MessageFactory' object has no attribute 'GetPrototype'
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.10/dist-packages/tensorboard/compat/__init__.py", line 42, in tf
+    from tensorboard.compat import notf  # noqa: F401
+ImportError: cannot import name 'notf' from 'tensorboard.compat' (/usr/local/lib/python3.10/dist-packages/tensorboard/compat/__init__.py)
+
+During handling of the above exception, another exception occurred:
+
+AttributeError: 'MessageFactory' object has no attribute 'GetPrototype'
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.10/dist-packages/tensorboard/compat/__init__.py", line 42, in tf
+    from tensorboard.compat import notf  # noqa: F401
+ImportError: cannot import name 'notf' from 'tensorboard.compat' (/usr/local/lib/python3.10/dist-packages/tensorboard/compat/__init__.py)
+
+During handling of the above exception, another exception occurred:
+
+AttributeError: 'MessageFactory' object has no attribute 'GetPrototype'
+[campaign29] rotating prepared RAM cache: 0 -> 6 dataset(s)
+Creating datasets...
+[multi-scroll] physical groups={'pherc1447': [20260930144758, 20260930144760], 'pherc0009b': [20250919125754], 'pherc0139': [20260115000000, 20260317000000], 'pherc0500p2': [20250628074500]} weights=[1, 1, 1, 1]
+[split] scroll 20260930144758: manual mask=./train_masks/20260930144758.png train_pixels=16.4% explicit_negative_pixels=239,615 explicit_positive_pixels=0
+[split] scroll 20260930144758: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=7038
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=3936  ring_tiles=4829  ratio=1.23
+[character-components] reference-matched: 9 label components -> 9 characters (9 reference components, 0 unmatched label components)
+[character-components] 9 components at 16px target resolution
+[manual-split] scroll 20260930144758: unit=16px train_ring=1990656px valid_ring=253184px train_only=False
+[character-sampling] scroll 20260930144758: 8 characters with positive and ring-negative windows
+[context-replace] scroll 20260930144758: 13080 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260930144758: manifest=1,579/7,854 spatial chunks (20.1%)
+[selective-cache] preload 20260930144758.zarr: new=1,579 requested=1,579 workers=8
+[selective-cache] 20260930144758.zarr 1,000/1,579
+[selective-cache] 20260930144758.zarr 1,579/1,579
+[selective-cache] ready 20260930144758.zarr: chunks=1,579 ram=0.34 GiB
+[multi-scroll] scroll 20260930144758: train_tiles=6667 valid_tiles=1464
+[split] scroll 20260930144760: manual mask=./train_masks/20260930144760.png train_pixels=15.9% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20260930144760: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=6661
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=3605  ring_tiles=4882  ratio=1.35
+[character-components] reference-matched: 10 label components -> 10 characters (10 reference components, 0 unmatched label components)
+[character-components] 10 components at 16px target resolution
+[manual-split] scroll 20260930144760: unit=16px train_ring=1820416px valid_ring=352256px train_only=False
+[character-sampling] scroll 20260930144760: 7 characters with positive and ring-negative windows
+[context-replace] scroll 20260930144760: 13026 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260930144760: manifest=1,630/8,118 spatial chunks (20.1%)
+[selective-cache] preload 20260930144760.zarr: new=1,630 requested=1,630 workers=8
+[selective-cache] 20260930144760.zarr 1,000/1,630
+[selective-cache] 20260930144760.zarr 1,630/1,630
+[selective-cache] ready 20260930144760.zarr: chunks=1,630 ram=0.35 GiB
+[multi-scroll] scroll 20260930144760: train_tiles=6667 valid_tiles=2091
+[split] scroll 20250919125754: manual mask=./train_masks/20250919125754.png train_pixels=5.8% explicit_negative_pixels=488,960 explicit_positive_pixels=0
+[split] scroll 20250919125754: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=5785
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2940  ring_tiles=4006  ratio=1.36
+[character-components] reference-matched: 16 label components -> 10 characters (10 reference components, 0 unmatched label components)
+[character-components] 10 components at 16px target resolution
+[character-split] majority rule: 0 crossing character(s) -> train, 1 -> valid
+[manual-split] scroll 20250919125754: unit=16px train_ring=1210112px valid_ring=568064px train_only=False
+[character-sampling] scroll 20250919125754: 7 characters with positive and ring-negative windows
+[context-replace] scroll 20250919125754: 3484 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20250919125754: manifest=960/8,466 spatial chunks (11.3%)
+[selective-cache] preload 20250919125754.zarr: new=960 requested=960 workers=8
+[selective-cache] 20250919125754.zarr 960/960
+[selective-cache] ready 20250919125754.zarr: chunks=960 ram=0.21 GiB
+[multi-scroll] scroll 20250919125754: train_tiles=6667 valid_tiles=3421
+[align] scroll 20260115000000: volume=(6040, 8160) mask=(6040, 8160) labels=(6040, 8160) -> common=(6029, 8141)
+[explicit-negative] scroll 20260115000000: overriding 2,393 ink-label pixels
+[split] scroll 20260115000000: manual mask=./train_masks/20260115000000.png train_pixels=4.2% explicit_negative_pixels=641,792 explicit_positive_pixels=164,775
+[split] scroll 20260115000000: axis=y train_frac=0.8055
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=4315
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=3235  ring_tiles=3237  ratio=1.00
+[character-components] reference-matched: 49 label components -> 49 characters (49 reference components, 0 unmatched label components)
+[character-components] 49 components at 16px target resolution
+[character-split] majority rule: 2 crossing character(s) -> train, 1 -> valid
+[manual-split] scroll 20260115000000: unit=16px train_ring=1235968px valid_ring=419584px train_only=False
+[character-sampling] scroll 20260115000000: 13 characters with positive and ring-negative windows
+[context-replace] scroll 20260115000000: 3769 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260115000000: manifest=1,630/12,160 spatial chunks (13.4%)
+[selective-cache] preload 20260115000000.zarr: new=1,630 requested=1,630 workers=8
+[selective-cache] 20260115000000.zarr 1,000/1,630
+[selective-cache] 20260115000000.zarr 1,630/1,630
+[selective-cache] ready 20260115000000.zarr: chunks=1,630 ram=0.35 GiB
+[multi-scroll] scroll 20260115000000: train_tiles=6667 valid_tiles=2516
+[split] scroll 20260317000000: manual mask=./train_masks/20260317000000.png train_pixels=8.0% explicit_negative_pixels=792,832 explicit_positive_pixels=185,900
+[split] scroll 20260317000000: axis=y train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=3911
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2986  ring_tiles=4147  ratio=1.39
+[character-components] reference-matched: 56 label components -> 56 characters (56 reference components, 0 unmatched label components)
+[character-components] 56 components at 16px target resolution
+[character-split] majority rule: 0 crossing character(s) -> train, 1 -> valid
+[manual-split] scroll 20260317000000: unit=16px train_ring=1307136px valid_ring=518912px train_only=False
+[character-sampling] scroll 20260317000000: 28 characters with positive and ring-negative windows
+[context-replace] scroll 20260317000000: 6011 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260317000000: manifest=2,234/7,462 spatial chunks (29.9%)
+[selective-cache] preload 20260317000000.zarr: new=2,234 requested=2,234 workers=8
+[selective-cache] 20260317000000.zarr 1,000/2,234
+[selective-cache] 20260317000000.zarr 2,000/2,234
+[selective-cache] 20260317000000.zarr 2,234/2,234
+[selective-cache] ready 20260317000000.zarr: chunks=2,234 ram=0.48 GiB
+[multi-scroll] scroll 20260317000000: train_tiles=6667 valid_tiles=3122
+[split] scroll 20250628074500: manual mask=./train_masks/20250628074500.png train_pixels=11.8% explicit_negative_pixels=862,976 explicit_positive_pixels=0
+[split] scroll 20250628074500: axis=x train_frac=0.6
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=7242
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=3609  ring_tiles=6541  ratio=1.81
+[character-components] reference-matched: 22 label components -> 22 characters (22 reference components, 0 unmatched label components)
+[character-components] 22 components at 16px target resolution
+[manual-split] scroll 20250628074500: unit=16px train_ring=1554944px valid_ring=1043456px train_only=False
+[character-sampling] scroll 20250628074500: 13 characters with positive and ring-negative windows
+[context-replace] scroll 20250628074500: 5354 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20250628074500: manifest=1,557/5,544 spatial chunks (28.1%)
+[selective-cache] preload 20250628074500.zarr: new=1,557 requested=1,557 workers=8
+[selective-cache] 20250628074500.zarr 1,000/1,557
+[selective-cache] 20250628074500.zarr 1,557/1,557
+[selective-cache] ready 20250628074500.zarr: chunks=1,557 ram=0.33 GiB
+[multi-scroll] scroll 20250628074500: train_tiles=6667 valid_tiles=6468
+[multi-scroll] merged train_tiles=40002 valid_tiles=19082
+Data setup done in 89.44s
+[campaign29] parent RAM cache ready: datasets=6 volumes=6 ram=2.05GiB controller_fds=16
+
+==============================================================================
+[campaign31] ft_all_01_05-17-40
+==============================================================================
+  pretrain=/vesuvius/models/archs40/holdout_n96_combined_surface_norm/final.pth batch=96 lr=5e-05 ds=1 early=True mid=False residual=False block_depth=2 extra=() depth=8 overlap=False
+  groupdro=False patchdro=True anchor=0.0 ema=False:0.995 pcgrad_gram=False:every1:ema0.0
+  window_offset=0 depth_entropy=0.0x0.0:amax lse_r_max=10.0 topk_pos=0.0 explicit_neg=0.0 forgetting=False seed=41
+[seed] fast mode (seed=41) — cudnn benchmark on, tiny run-to-run fp noise
+--- Configuration ---
+data: DataConfig(zarr_path='/vesuvius/ves_zarrs2', scrolls=[ScrollConfig(scroll_id=20260930144758, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260930144760, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250919125754, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260115000000, split_axis='y', train_split_frac=0.8055, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260317000000, split_axis='y', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250628074500, split_axis='x', train_split_frac=0.6, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0))], train_scroll_dict={'pherc1447': [20260930144758, 20260930144760], 'pherc0009b': [20250919125754], 'pherc0139': [20260115000000, 20260317000000], 'pherc0500p2': [20250628074500]}, train_scroll_weights=[1, 1, 1, 1], test_scroll_ids=[20260814140748, 20260717193517, 20260720090842, 20250703034159, 20260723112922, 20260921094413, 20260918132724, 20260922073234, 20260922161631, 20260925085345, 20260928000001, 20260928000002, 20260928000003], holdout_scroll_ids=[20251226000000], tile_size=16, depth=8, d_start=4, d_end=28, train_d_start=4, train_d_end=28, composite_method='maxproj', composite_d0=10, composite_d1=18, composite_display='raw', voxel_um=9.362, mask_memmap=False, mask_bitpack=True, preload_volumes=False, selective_chunk_preload=True, selective_chunk_workers=8, ram_safe_vis=False, ring_negatives=True, ring_label_source='closed', ring_close_r=2, ring_gap_r=2, ring_shell_r=4, simple_split=False, coordinate_hash_split=False, coordinate_hash_block_size=512, coordinate_hash_valid_fraction=0.25, coordinate_hash_seed=29, train_mask_dir='./train_masks', surface_label_dir='./surface_labels', context_size=96, context_downsample=1, eval_infer_bs=192, eval_prefetch=3, eval_chunk_gb=3.0, tta_mode='light', probe_rois={20240304141531: [ProbeROI(x=960, y=2688, label='easy', size=576), ProbeROI(x=3840, y=2784, label='hard', size=576)], 20250223000000: [ProbeROI(x=4320, y=3456, label='easy', size=576), ProbeROI(x=8352, y=2496, label='hard', size=576)], 20250628074500: [ProbeROI(x=1152, y=2784, label='easy', size=576), ProbeROI(x=1440, y=4800, label='hard', size=576)], 20250831000000: [ProbeROI(x=2208, y=1152, label='easy', size=576), ProbeROI(x=6720, y=576, label='hard', size=576)], 20260108000000: [ProbeROI(x=576, y=1824, label='easy', size=576), ProbeROI(x=5664, y=3072, label='hard', size=576)], 20260115000000: [ProbeROI(x=2976, y=4320, label='easy', size=576), ProbeROI(x=2496, y=4800, label='hard', size=576)], 20260115000001: [ProbeROI(x=5472, y=2688, label='easy', size=576), ProbeROI(x=8160, y=5376, label='hard', size=576)], 20260206000001: [ProbeROI(x=864, y=960, label='easy', size=576), ProbeROI(x=6336, y=2304, label='hard', size=576)], 20260210000000: [ProbeROI(x=4128, y=2592, label='easy', size=576), ProbeROI(x=4032, y=3168, label='hard', size=576)], 20260226000000: [ProbeROI(x=480, y=960, label='easy', size=576), ProbeROI(x=288, y=1536, label='hard', size=576)], 20260227000000: [ProbeROI(x=3552, y=3744, label='easy', size=576), ProbeROI(x=7296, y=3456, label='hard', size=576)], 20260302000000: [ProbeROI(x=3936, y=3744, label='easy', size=576), ProbeROI(x=6816, y=4320, label='hard', size=576)], 20260303000000: [ProbeROI(x=5280, y=2304, label='easy', size=576), ProbeROI(x=5760, y=3744, label='hard', size=576)], 20260306000000: [ProbeROI(x=2880, y=2496, label='easy', size=576), ProbeROI(x=5664, y=2976, label='hard', size=576)], 20260310000000: [ProbeROI(x=192, y=864, label='easy', size=576), ProbeROI(x=5184, y=1824, label='hard', size=576)], 20260317000000: [ProbeROI(x=2496, y=1728, label='easy', size=576), ProbeROI(x=1056, y=4608, label='hard', size=576)], 20260318000000: [ProbeROI(x=4128, y=960, label='easy', size=576), ProbeROI(x=7680, y=864, label='hard', size=576)], 20260325000000: [ProbeROI(x=2304, y=2688, label='easy', size=576), ProbeROI(x=5376, y=2976, label='hard', size=576)]}, vis_scroll_ids=[20260928000003], vis_preload_persistent=True, eval_stride=32, inklabel_dir='./dilated_inklabels', label_dilate_r=0, dot_inklabel_dir='', dot_scroll_whitelist=[], ctx_jitter=10, target_aware_ctx_jitter=True, depth_jitter=1, surface_relative_depth_window=True, surface_window_offset=0, surface_window_offset_by_scroll={}, holdout_domains=[], explicit_negative_share=0.0, far_negative_share=0.0, far_negative_min_dist=160, far_negative_forced_positive_dist=200, edge_soft_sigma=8.0, edge_soft_floor=0.55, norm_mode='surface_anchor', zarr_suffix={}, native_noise='', native_noise_scale=1.0, native_noise_ids=[], label_shift_frac=0.0, multitile_train_step=16, multitile_pos_only=True, multitile_ring_gate=True, ring_from_inklabel_dir=True, character_balanced_sampling=True, character_balance_scrolls=True, character_min_pixels=8, max_samples_per_epoch=6667)
+dl: DataloaderConfig(batch_size=96, num_workers=8, prefetch_factor=2, data_aug=True, rotation_prob=0.6, flip_prob=0.6, noise_prob=0.0, brightness_prob=0.0, contrast_prob=0.0, brightness_delta=0.15, contrast_delta=0.15, noise_std_min=0.001, noise_std_max=0.005, cutout_prob=0.2, cutout_max_frac=0.16, cutout_n_patches=3, depth_mask_prob=0.0, depth_mask_mode='zero', fda_prob=0.0, fda_beta=0.05, elastic_prob=0.0, elastic_alpha=15.0, elastic_sigma=5.0, depth_warp_prob=0.0, depth_warp_max=2.0, depth_warp_sigma=24.0, surface_atten_prob=0.0, surface_atten_min=0.1, surface_atten_max=0.35, surface_atten_sigma=2.0, acquisition_blur_prob=0.0, acquisition_blur_min=0.4, acquisition_blur_max=0.9, correlated_noise_prob=0.0, correlated_noise_min=0.003, correlated_noise_max=0.015, correlated_noise_sigma=6.0, phase_filter_prob=0.0, phase_filter_min=0.5, phase_filter_max=20.0, phase_filter_max_gain=4.0, tone_curve_prob=0.0, tone_curve_knots=6, tone_curve_concentration=0.5, resolution_degrade_prob=0.0, resolution_degrade_min=1.5, resolution_degrade_max=4.0, depth_scale_prob=0.0, depth_scale_min=0.6, depth_scale_max=1.6, fine_native_scroll_ids=None, scan_regime_prob=0.0, scan_regime_min=0.5, scan_regime_max=1.0, quality_transfer=None, randconv_prob=0.0, randconv_kernel_sizes=[1, 3, 5, 7], randconv_depth_kernel=1, randconv_layers_max=1, randconv_mix_min=0.0, cutout_protect_center=True, context_replace_prob=0.15, context_replace_keep_size=0, context_replace_margin=7, context_replace_feather=13, context_replace_min_mask_frac=0.8, context_replace_surface_align=True, context_replace_cross_prob=0.0, protected_rotation_prob=0.0, protected_elastic_prob=0.0, protected_elastic_alpha=16.0, protected_elastic_sigma=5.0, protected_warp_margin=4, protected_warp_feather=12)
+tra: TrainingConfig(n_epochs=8, aug_start_epoch=0, lr=5e-05, encoder_lr_scale=1.0, encoder_freeze_epochs=0, warmup_epochs=5, weight_decay=0.0, l1_lambda=0.0, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=15, log_dir='./runs_finetune', eval_int=8, eval_int_scrolls=1, test_int=999, probe_int=9999, loss_type='bce', gce_q=0.9, dice_weight=0.0, label_smooth_pos=0.0, label_smooth_neg=0.0, tta_consistency=False, tta_consistency_lambda=0.3, tta_consistency_mode='flips', tta_consistency_prob=1.0, tile_pos_weight=1.0, tile_pos_weight_auto=False, dann=False, dann_lambda=0.0, dann_n_domains=4, dann_grl_anneal=False, spill_reduction=False, spill_lambda=0.0, spill_depth_threshold=0.35, spill_active_depth_tau=0.08, spill_max_active_depth_frac=0.35, spill_min_depth_var=0.8, spill_prob=False, spill_entropy=False, spill_entropy_lambda=0.3, spill_max_depth_entropy=2.1, new_surface_lambda=0.2, new_surface_smooth_lambda=0.02, surface_target_sigma=0.75, seed=41, deterministic=False, epoch_cooldown_secs=0, val_cooldown_secs=0, eval_cooldown_secs=0, fig_chunk_cooldown_ms=0, save_vis=False, fast_eval_figure=False, test_on_final=False, supcon=False, supcon_lambda=0.1, supcon_temp=0.07, supcon_proj_dim=128, supcon_hidden_dim=256, supcon_curriculum=True, supcon_lambda_start=0.05, supcon_lambda_end=0.5, supcon_curriculum_epochs=8, supcon_cross_frag=False, supcon_ignore_same_domain_same_class=False, per_scroll_metrics=True, prototype_align=False, prototype_align_lambda=0.1, prototype_margin=0.5, coral_align=False, coral_align_lambda=0.1, coral_mean_weight=1.0, cdan=False, cdan_lambda=0.1, mldg=False, mldg_holdout_domain=-1, mldg_random_holdout=False, mldg_inner_lr=0.0005, mldg_beta=1.0, sagnet_lambda=0.1, mae_reconstruction=False, mae_reconstruction_lambda=0.1, mae_reconstruction_start_epoch=4, mae_reconstruction_mask_frac=0.5, mae_reconstruction_patch=4, entropy_min_lambda=0.0, entropy_min_batch_size=8, character_macro_metrics=True, character_score_threshold=0.5, character_calibrate_threshold=True, character_threshold_min=0.1, character_threshold_max=0.9, character_threshold_steps=33, character_recall_target=0.5, character_max_ring_fpr=0.1, character_checkpoint_metric='character_ap_macro', sanity_guard_epoch=0, sanity_min_character_ap=0.0, sanity_min_specificity=0.0, context_consistency=False, context_consistency_prob=0.25, context_consistency_lambda=0.1, depth_view_consistency=False, depth_view_consistency_prob=0.5, depth_view_consistency_lambda=0.2, depth_view_consistency_offset=2, character_bag_ranking=True, character_bag_margin=0.5, character_bag_topk_frac=0.5, character_bag_lambda=0.2, character_groupdro=False, character_groupdro_eta=0.05, character_groupdro_max_ratio=3.0, physical_domain_groupdro=False, physical_domain_groupdro_eta=0.05, physical_domain_groupdro_max_ratio=3.0, physical_patch_groupdro=True, physical_patch_groupdro_eta=0.05, physical_patch_groupdro_max_ratio=3.0, domain_vrex=False, domain_vrex_lambda=1.0, domain_vrex_warmup_epochs=2, domain_cvar=False, domain_cvar_alpha=0.25, pcgrad=False, pcgrad_lite=False, pcgrad_lite_max_domains=4, pcgrad_lite_scope='head', pcgrad_groups=0, pcgrad_gram=False, pcgrad_gram_interval=1, pcgrad_gram_ema=0.0, and_mask=False, and_mask_groups=4, and_mask_threshold=0.5, fish=False, fish_meta_step=0.5, spectral_decoupling_lambda=0.0, rsc_prob=0.33, rsc_drop_frac=0.33, fishr_lambda=0.0, fishr_warmup_epochs=1, private_head_shared_weight=0.5, private_head_l2=0.01, cross_scroll_rank_lambda=0.0, cross_scroll_rank_pairs=4096, pu_lambda=0.0, pu_prior=0.03, support_drop='', support_min_fraction=0.25, mid_depth_entropy_lambda=0.0, topk_positive_fraction=0.0, character_forgetting=False, character_forgetting_path='', character_forgetting_max_weight=4.0, model_ema=False, model_ema_decay=0.995, model_ema_start_epoch=0, mae_anchor_lambda=0.0, domain_gradient_mode='', domain_gradient_threshold=0.0, domain_gradient_strength=4.0, domain_gradient_ema=0.9, domain_gradient_blend=1.0, character_cvar=False, character_cvar_alpha=0.25, clam_instance=False, clam_instance_k=4, clam_instance_lambda=0.1, sam_rho=0.0, elr=False, elr_start_epoch=5, elr_beta=0.7, elr_lambda=0.1, depth_shift_aux=False, depth_shift_aux_lambda=0.1, depth_shift_aux_classes=3, text_region_lambda=0.5)
+model: ModelConfig(arch='nnunet3d_lcndz', compile_model=False, require_architecture_init=True, conv1_drop=0.2, conv2_drop=0.2, head_drop=0.3, attn_mil=False, attn_entropy_weight=0.03, feature_attn_mil=False, feature_depth_fusion=False, minimum_support_k=0, minimum_support_kernel=3, weldon_k=0, weldon_top_k=0, weldon_bottom_k=0, weldon_top_weight=0.5, weldon_multi_k=False, weldon_top_k2=0, weldon_bottom_k2=0, weldon_multi_mix=0.5, weldon_depth_support_k=0, fiber_coordinate_branch=True, surface_relief_input=False, input_denoise_sigma=0.0, input_denoiser='', input_upsampler='', input_tile_norm='', private_domain_heads=False, private_head_detach_shared=False, early_2d_unet=True, early_2d_channels_mult=1.0, mid_2d_unet=False, mid_2d_channels_mult=1.0, residual_2d_unet=False, two_d_block_depth=2, two_d_bottleneck_channels=0, two_d_extra_levels=0, two_d_extra_channels=(), factorized_2plus1d=False, residual_unet=False, gated_stems=True, raw_only_stem=False, cue_dropout=0.0, explicit_depth_channels=False, overlapping_depth_windows=False, overlapping_depth_window_size=4, overlapping_depth_window_stride=2, mid_depth_entropy_floor=0.0, mid_depth_max_mode='amax', mid_depth_topk_frac=0.5, mt_lse_r_max=10.0, planar_early_convs=False, text_region_gate=False, multi_depth_collapse=False, two_d_strided_down=False, depth_antialias=False, sparse_deep_supervision=False, sparse_deep_supervision_dec2_weight=0.3, sparse_deep_supervision_dec3_weight=0.1, depth_attention_2d_head=False, divided_attention=False, divided_attention_spatial=False, divided_attention_heads=4, divided_attention_window=8, mednext_adapters=False, mednext_kernel=5, mednext_expansion=2, mixstyle=False, mixstyle_prob=0.8, mixstyle_alpha=0.1, sagnet=False, dual_scale=False, dual_scale_local_size=64, dual_scale_mix=0.25, dual_scale_deep=False, dual_scale_local_only=False, dual_scale_outer_size=0, dual_scale_outer_mix=0.0, dual_scale_adaptive_gate=False, dual_scale_gate_max=1.0, scan_film=False, scan_film_bands=8, scan_film_hidden=32, depth_profile_expert=False, depth_profile_mix=0.5, depth_profile_hidden=16, depth_profile_pool=5, expert_dropout=0.0, style_film=False, style_film_hidden=64, mae_reconstruction_head=False, learned_surface=False, new_learned_surface=False, better_surface=False, surface_teacher_input=True, surface_canonicalize=False, surface_canonical_depth=24, surface_guided_mil=False, surface_guided_mix=0.5, surface_band_sigma=1.5, use_ibn=False, norm_mode='ibn_full', use_prototype=False, prototype_ema=0.99, skip_drop=0.2, use_depth_profile=False, no_dz=False, channels_mult=1.0, allow_depth4=False, multitile=True, multitile_subtile=16, multitile_grid=4)
+hm: HardMiningConfig(enabled=False, hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1, dir='./hard_negs')
+device: cuda
+model_dir: models/finetune/ft_all_01_05-17-40
+exp_name: ft_all_01_05-17-40
+run_name: ft_all_01_05-17-40
+init_weights: /vesuvius/models/archs40/holdout_n96_combined_surface_norm/final.pth
+save_final: models/finetune/ft_all_01_05-17-40/final.pth
+---------------------
+Creating datasets...
+[multi-scroll] physical groups={'pherc1447': [20260930144758, 20260930144760], 'pherc0009b': [20250919125754], 'pherc0139': [20260115000000, 20260317000000], 'pherc0500p2': [20250628074500]} weights=[1, 1, 1, 1]
+[dataset-cache] scroll 20260930144758: reusing prepared RAM assets
+[selective-cache] scroll 20260930144758: prepared manifest already bound
+[multi-scroll] scroll 20260930144758: train_tiles=6667 valid_tiles=1464
+[dataset-cache] scroll 20260930144760: reusing prepared RAM assets
+[selective-cache] scroll 20260930144760: prepared manifest already bound
+[multi-scroll] scroll 20260930144760: train_tiles=6667 valid_tiles=2091
+[dataset-cache] scroll 20250919125754: reusing prepared RAM assets
+[selective-cache] scroll 20250919125754: prepared manifest already bound
+[multi-scroll] scroll 20250919125754: train_tiles=6667 valid_tiles=3421
+[dataset-cache] scroll 20260115000000: reusing prepared RAM assets
+[selective-cache] scroll 20260115000000: prepared manifest already bound
+[multi-scroll] scroll 20260115000000: train_tiles=6667 valid_tiles=2516
+[dataset-cache] scroll 20260317000000: reusing prepared RAM assets
+[selective-cache] scroll 20260317000000: prepared manifest already bound
+[multi-scroll] scroll 20260317000000: train_tiles=6667 valid_tiles=3122
+[dataset-cache] scroll 20250628074500: reusing prepared RAM assets
+[selective-cache] scroll 20250628074500: prepared manifest already bound
+[multi-scroll] scroll 20250628074500: train_tiles=6667 valid_tiles=6468
+[multi-scroll] merged train_tiles=40002 valid_tiles=19082
+Data setup done in 0.00s
+Creating model and loss... l1 lambda 0.0... Model parameters (nnunet3d_lcndz): 7,522,842
+[init-weights] loaded 189/189 tensors from /vesuvius/models/archs40/holdout_n96_combined_surface_norm/final.pth (shape-skipped=0 missing=0 unexpected=0)
+[optimizer] task: 4,007,034 params lr=5.00e-05, encoder: 3,319,296 params lr=1.00e-06, frozen: 196,512 params
+ done in 0.73s
+Initializing Tensorboard...
+[test] test_int=999 > n_epochs=8 and test_on_final=False -> skipping test-frag load
+TensorBoard logs will be saved to: ./runs_finetune/ft_all_01_05-17-40
+To view, run: tensorboard --logdir=./runs_finetune
+[split] scroll 20260928000003: manual mask=./train_masks/20260928000003.png train_pixels=7.6% explicit_negative_pixels=73,468 explicit_positive_pixels=0
+[vis-preload] scroll 20260928000003: loading full volume into RAM
+[vis-preload] scroll 20260928000003: ready 2.46 GiB
+[config] saved run config -> ./runs_finetune/ft_all_01_05-17-40/config.json
+[config] saved run config -> models/finetune/ft_all_01_05-17-40/config.json
+/vesuvius/train.py:617: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = GradScaler(enabled=self.c.device == "cuda")
+
+--- Epoch 1/8 ---
+[mae-preserve] encoder enabled: lr=2.000e-07
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:   0%|          | 1/416 [00:07<48:50,  7.06s/it]Training:  11%|█         | 44/416 [00:12<01:24,  4.38it/s]Training:  21%|██        | 88/416 [00:17<00:53,  6.19it/s]Training:  32%|███▏      | 132/416 [00:22<00:39,  7.12it/s]Training:  42%|████▏     | 176/416 [00:27<00:31,  7.67it/s]Training:  53%|█████▎    | 220/416 [00:32<00:24,  7.99it/s]Training:  63%|██████▎   | 263/416 [00:37<00:18,  8.18it/s]Training:  74%|███████▍  | 307/416 [00:42<00:13,  8.33it/s]Training:  84%|████████▍ | 351/416 [00:47<00:07,  8.42it/s]Training:  95%|█████████▍| 395/416 [00:52<00:02,  8.50it/s]Training: 100%|██████████| 416/416 [00:55<00:00,  7.55it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  82%|████████▏ | 163/199 [00:05<00:01, 32.59it/s]Validating: 200it [00:06, 30.05it/s]                         
+New best character model saved! Val character_ap_macro: 0.6452
+New best F1 model saved! Val F1: 0.6040
+New best loss model saved! Val Loss: 0.6802
+[METRICS] epoch=1 train_loss=0.6170 val_loss=0.6802 train_f1=0.8118 val_character_success=0.0000
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:  10%|█         | 42/416 [00:05<00:45,  8.25it/s]Training:  21%|██        | 86/416 [00:10<00:38,  8.50it/s]Training:  31%|███▏      | 130/416 [00:15<00:33,  8.57it/s]Training:  42%|████▏     | 174/416 [00:20<00:28,  8.60it/s]Training:  52%|█████▏    | 218/416 [00:25<00:22,  8.62it/s]Training:  63%|██████▎   | 262/416 [00:30<00:17,  8.64it/s]Training:  74%|███████▎  | 306/416 [00:35<00:12,  8.64it/s]Training:  84%|████████▍ | 349/416 [00:40<00:07,  8.63it/s]Training:  94%|█████████▍| 393/416 [00:45<00:02,  8.63it/s]Training: 100%|██████████| 416/416 [00:48<00:00,  8.61it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  89%|████████▉ | 178/199 [00:05<00:00, 35.45it/s]Validating: 200it [00:05, 35.72it/s]                         
+New best character model saved! Val character_ap_macro: 0.6486
+New best F1 model saved! Val F1: 0.6154
+New best loss model saved! Val Loss: 0.6514
+[METRICS] epoch=2 train_loss=0.6019 val_loss=0.6514 train_f1=0.8186 val_character_success=0.0000
+Logging metrics for epoch: 2
+
+--- Epoch 3/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:  10%|█         | 42/416 [00:05<00:45,  8.22it/s]Training:  21%|██        | 86/416 [00:10<00:38,  8.50it/s]Training:  31%|███       | 128/416 [00:15<00:34,  8.40it/s]Training:  41%|████      | 169/416 [00:20<00:29,  8.31it/s]Training:  50%|█████     | 210/416 [00:25<00:25,  8.24it/s]Training:  61%|██████    | 254/416 [00:30<00:19,  8.38it/s]Training:  71%|███████   | 296/416 [00:35<00:14,  8.37it/s]Training:  82%|████████▏ | 340/416 [00:40<00:08,  8.47it/s]Training:  92%|█████████▏| 384/416 [00:45<00:03,  8.57it/s]Training: 100%|██████████| 416/416 [00:49<00:00,  8.46it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  83%|████████▎ | 166/199 [00:05<00:00, 33.19it/s]Validating: 200it [00:05, 33.45it/s]                         
+New best character model saved! Val character_ap_macro: 0.6581
+New best F1 model saved! Val F1: 0.6157
+[METRICS] epoch=3 train_loss=0.5919 val_loss=0.6718 train_f1=0.8227 val_character_success=0.0000
+Logging metrics for epoch: 3
+
+--- Epoch 4/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:  10%|█         | 42/416 [00:05<00:45,  8.21it/s]Training:  21%|██        | 86/416 [00:10<00:39,  8.44it/s]Training:  31%|███▏      | 130/416 [00:15<00:33,  8.55it/s]Training:  42%|████▏     | 174/416 [00:20<00:28,  8.60it/s]Training:  52%|█████▏    | 218/416 [00:25<00:22,  8.63it/s]Training:  63%|██████▎   | 262/416 [00:30<00:17,  8.68it/s]Training:  74%|███████▎  | 306/416 [00:35<00:12,  8.72it/s]Training:  84%|████████▍ | 350/416 [00:40<00:07,  8.74it/s]Training:  95%|█████████▍| 395/416 [00:45<00:02,  8.76it/s]Training: 100%|██████████| 416/416 [00:47<00:00,  8.67it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  89%|████████▉ | 178/199 [00:05<00:00, 35.44it/s]Validating: 200it [00:05, 35.73it/s]                         
+[METRICS] epoch=4 train_loss=0.5787 val_loss=0.6810 train_f1=0.8240 val_character_success=0.0000
+Logging metrics for epoch: 4
+
+--- Epoch 5/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:  10%|█         | 42/416 [00:05<00:44,  8.33it/s]Training:  21%|██        | 86/416 [00:10<00:38,  8.56it/s]Training:  31%|███▏      | 130/416 [00:15<00:33,  8.62it/s]Training:  42%|████▏     | 174/416 [00:20<00:27,  8.65it/s]Training:  52%|█████▏    | 218/416 [00:25<00:22,  8.66it/s]Training:  63%|██████▎   | 262/416 [00:30<00:17,  8.67it/s]Training:  74%|███████▎  | 306/416 [00:35<00:12,  8.67it/s]Training:  84%|████████▍ | 350/416 [00:40<00:07,  8.66it/s]Training:  95%|█████████▍| 394/416 [00:45<00:02,  8.68it/s]Training: 100%|██████████| 416/416 [00:48<00:00,  8.65it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  88%|████████▊ | 175/199 [00:05<00:00, 34.82it/s]Validating: 200it [00:05, 35.15it/s]                         
+New best character model saved! Val character_ap_macro: 0.6590
+New best F1 model saved! Val F1: 0.6263
+New best loss model saved! Val Loss: 0.6403
+[METRICS] epoch=5 train_loss=0.5638 val_loss=0.6403 train_f1=0.8263 val_character_success=0.0000
+Logging metrics for epoch: 5
+
+--- Epoch 6/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:  10%|█         | 42/416 [00:05<00:45,  8.24it/s]Training:  21%|██        | 86/416 [00:10<00:38,  8.48it/s]Training:  31%|███▏      | 130/416 [00:15<00:33,  8.55it/s]Training:  42%|████▏     | 174/416 [00:20<00:27,  8.65it/s]Training:  53%|█████▎    | 219/416 [00:25<00:22,  8.70it/s]Training:  63%|██████▎   | 263/416 [00:30<00:17,  8.73it/s]Training:  74%|███████▍  | 307/416 [00:35<00:12,  8.74it/s]Training:  84%|████████▍ | 351/416 [00:40<00:07,  8.75it/s]Training:  95%|█████████▌| 396/416 [00:45<00:02,  8.77it/s]Training: 100%|██████████| 416/416 [00:47<00:00,  8.70it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  89%|████████▉ | 177/199 [00:05<00:00, 35.25it/s]Validating: 200it [00:05, 35.56it/s]                         
+[METRICS] epoch=6 train_loss=0.5583 val_loss=0.7016 train_f1=0.8282 val_character_success=0.0000
+Logging metrics for epoch: 6
+
+--- Epoch 7/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:  10%|█         | 42/416 [00:05<00:44,  8.33it/s]Training:  21%|██        | 86/416 [00:10<00:38,  8.60it/s]Training:  31%|███▏      | 130/416 [00:15<00:32,  8.69it/s]Training:  42%|████▏     | 174/416 [00:20<00:27,  8.72it/s]Training:  52%|█████▏    | 218/416 [00:25<00:22,  8.75it/s]Training:  63%|██████▎   | 262/416 [00:30<00:17,  8.76it/s]Training:  74%|███████▍  | 307/416 [00:35<00:12,  8.78it/s]Training:  84%|████████▍ | 351/416 [00:40<00:07,  8.77it/s]Training:  95%|█████████▍| 395/416 [00:45<00:02,  8.73it/s]Training: 100%|██████████| 416/416 [00:47<00:00,  8.72it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  89%|████████▉ | 178/199 [00:05<00:00, 35.41it/s]Validating: 200it [00:05, 35.71it/s]                         
+[METRICS] epoch=7 train_loss=0.5484 val_loss=0.6975 train_f1=0.8316 val_character_success=0.0000
+Logging metrics for epoch: 7
+
+--- Epoch 8/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:  10%|█         | 42/416 [00:05<00:44,  8.34it/s]Training:  21%|██        | 86/416 [00:10<00:38,  8.55it/s]Training:  31%|███▏      | 130/416 [00:15<00:33,  8.62it/s]Training:  42%|████▏     | 174/416 [00:20<00:27,  8.68it/s]Training:  52%|█████▏    | 218/416 [00:25<00:22,  8.71it/s]Training:  63%|██████▎   | 262/416 [00:30<00:17,  8.74it/s]Training:  74%|███████▍  | 307/416 [00:35<00:12,  8.76it/s]Training:  84%|████████▍ | 351/416 [00:40<00:07,  8.76it/s]Training:  95%|█████████▍| 395/416 [00:45<00:02,  8.76it/s]Training: 100%|██████████| 416/416 [00:47<00:00,  8.71it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  88%|████████▊ | 176/199 [00:05<00:00, 35.15it/s]Validating: 200it [00:05, 35.48it/s]                         
+New best character model saved! Val character_ap_macro: 0.6696
+New best F1 model saved! Val F1: 0.6286
+[METRICS] epoch=8 train_loss=0.5395 val_loss=0.6816 train_f1=0.8352 val_character_success=0.0000
+Logging metrics for epoch: 8
+Starting evaluation figure generation...
+[predict] reading 29493 tiles in 233 row-strips (eval)
+Read eval:   0%|          | 0/233 [00:00<?, ?it/s]Read eval:  11%|█         | 25/233 [00:00<00:00, 241.67it/s]Read eval:  21%|██▏       | 50/233 [00:00<00:01, 122.03it/s]Read eval:  28%|██▊       | 66/233 [00:00<00:01, 92.78it/s] Read eval:  33%|███▎      | 78/233 [00:00<00:02, 70.81it/s]Read eval:  37%|███▋      | 87/233 [00:01<00:02, 61.43it/s]Read eval:  40%|████      | 94/233 [00:01<00:02, 54.58it/s]Read eval:  43%|████▎     | 100/233 [00:01<00:02, 50.69it/s]
+Predict chunk:   0%|          | 0/54 [00:00<?, ?it/s][A
+Predict chunk:   2%|▏         | 1/54 [00:00<00:41,  1.28it/s][A
+Predict chunk:   6%|▌         | 3/54 [00:00<00:12,  3.99it/s][A
+Predict chunk:   9%|▉         | 5/54 [00:01<00:07,  6.45it/s][A
+Predict chunk:  13%|█▎        | 7/54 [00:01<00:05,  8.57it/s][A
+Predict chunk:  17%|█▋        | 9/54 [00:01<00:04, 10.31it/s][A
+Predict chunk:  20%|██        | 11/54 [00:01<00:03, 11.67it/s][A
+Predict chunk:  24%|██▍       | 13/54 [00:01<00:03, 12.72it/s][A
+Predict chunk:  28%|██▊       | 15/54 [00:01<00:02, 13.50it/s][A
+Predict chunk:  31%|███▏      | 17/54 [00:01<00:02, 14.08it/s][A
+Predict chunk:  35%|███▌      | 19/54 [00:01<00:02, 14.49it/s][A
+Predict chunk:  39%|███▉      | 21/54 [00:02<00:02, 14.79it/s][A
+Predict chunk:  43%|████▎     | 23/54 [00:02<00:02, 15.00it/s][A
+Predict chunk:  46%|████▋     | 25/54 [00:02<00:01, 15.13it/s][A
+Predict chunk:  50%|█████     | 27/54 [00:02<00:01, 15.25it/s][A
+Predict chunk:  54%|█████▎    | 29/54 [00:02<00:01, 15.33it/s][A
+Predict chunk:  57%|█████▋    | 31/54 [00:02<00:01, 15.38it/s][A
+Predict chunk:  61%|██████    | 33/54 [00:02<00:01, 15.42it/s][A
+Predict chunk:  65%|██████▍   | 35/54 [00:02<00:01, 15.45it/s][A
+Predict chunk:  69%|██████▊   | 37/54 [00:03<00:01, 15.47it/s][A
+Predict chunk:  72%|███████▏  | 39/54 [00:03<00:00, 15.49it/s][A
+Predict chunk:  76%|███████▌  | 41/54 [00:03<00:00, 15.49it/s][A
+Predict chunk:  80%|███████▉  | 43/54 [00:03<00:00, 15.50it/s][A
+Predict chunk:  83%|████████▎ | 45/54 [00:03<00:00, 15.50it/s][A
+Predict chunk:  87%|████████▋ | 47/54 [00:03<00:00, 15.50it/s][A
+Predict chunk:  91%|█████████ | 49/54 [00:03<00:00, 15.50it/s][A
+Predict chunk:  94%|█████████▍| 51/54 [00:04<00:00, 15.50it/s][A
+Predict chunk:  98%|█████████▊| 53/54 [00:04<00:00, 15.51it/s][A
+                                                              [ARead eval:  45%|████▌     | 106/233 [00:05<00:21,  5.77it/s]Read eval:  48%|████▊     | 111/233 [00:05<00:17,  6.97it/s]Read eval:  50%|█████     | 117/233 [00:06<00:13,  8.86it/s]Read eval:  53%|█████▎    | 123/233 [00:06<00:09, 11.21it/s]Read eval:  55%|█████▌    | 129/233 [00:06<00:07, 13.96it/s]Read eval:  58%|█████▊    | 135/233 [00:06<00:05, 17.05it/s]Read eval:  61%|██████    | 141/233 [00:06<00:04, 20.33it/s]Read eval:  63%|██████▎   | 147/233 [00:06<00:03, 23.71it/s]Read eval:  65%|██████▌   | 152/233 [00:06<00:02, 27.40it/s]
+Predict chunk:   0%|          | 0/54 [00:00<?, ?it/s][A
+Predict chunk:   4%|▎         | 2/54 [00:00<00:03, 13.79it/s][A
+Predict chunk:   7%|▋         | 4/54 [00:00<00:03, 14.77it/s][A
+Predict chunk:  11%|█         | 6/54 [00:00<00:03, 15.10it/s][A
+Predict chunk:  15%|█▍        | 8/54 [00:00<00:03, 15.28it/s][A
+Predict chunk:  19%|█▊        | 10/54 [00:00<00:02, 15.37it/s][A
+Predict chunk:  22%|██▏       | 12/54 [00:00<00:02, 15.42it/s][A
+Predict chunk:  26%|██▌       | 14/54 [00:00<00:02, 15.46it/s][A
+Predict chunk:  30%|██▉       | 16/54 [00:01<00:02, 15.49it/s][A
+Predict chunk:  33%|███▎      | 18/54 [00:01<00:02, 15.50it/s][A
+Predict chunk:  37%|███▋      | 20/54 [00:01<00:02, 15.51it/s][A
+Predict chunk:  41%|████      | 22/54 [00:01<00:02, 15.52it/s][A
+Predict chunk:  44%|████▍     | 24/54 [00:01<00:01, 15.52it/s][A
+Predict chunk:  48%|████▊     | 26/54 [00:01<00:01, 15.52it/s][A
+Predict chunk:  52%|█████▏    | 28/54 [00:01<00:01, 15.52it/s][A
+Predict chunk:  56%|█████▌    | 30/54 [00:01<00:01, 15.51it/s][A
+Predict chunk:  59%|█████▉    | 32/54 [00:02<00:01, 15.51it/s][A
+Predict chunk:  63%|██████▎   | 34/54 [00:02<00:01, 15.51it/s][A
+Predict chunk:  67%|██████▋   | 36/54 [00:02<00:01, 15.51it/s][A
+Predict chunk:  70%|███████   | 38/54 [00:02<00:01, 15.52it/s][A
+Predict chunk:  74%|███████▍  | 40/54 [00:02<00:00, 15.51it/s][A
+Predict chunk:  78%|███████▊  | 42/54 [00:02<00:00, 15.50it/s][A
+Predict chunk:  81%|████████▏ | 44/54 [00:02<00:00, 15.51it/s][A
+Predict chunk:  85%|████████▌ | 46/54 [00:02<00:00, 15.50it/s][A
+Predict chunk:  89%|████████▉ | 48/54 [00:03<00:00, 15.50it/s][A
+Predict chunk:  93%|█████████▎| 50/54 [00:03<00:00, 15.50it/s][A
+Predict chunk:  96%|█████████▋| 52/54 [00:03<00:00, 15.50it/s][A
+Predict chunk: 100%|██████████| 54/54 [00:04<00:00,  6.74it/s][A
+                                                              [ARead eval:  67%|██████▋   | 157/233 [00:11<00:19,  3.95it/s]Read eval:  70%|███████   | 164/233 [00:11<00:11,  5.80it/s]Read eval:  73%|███████▎  | 170/233 [00:11<00:08,  7.80it/s]Read eval:  76%|███████▌  | 176/233 [00:11<00:05, 10.27it/s]Read eval:  78%|███████▊  | 182/233 [00:11<00:03, 13.63it/s]Read eval:  81%|████████  | 188/233 [00:11<00:02, 17.74it/s]Read eval:  83%|████████▎ | 194/233 [00:11<00:01, 22.40it/s]Read eval:  86%|████████▌ | 200/233 [00:12<00:01, 27.45it/s]Read eval:  90%|████████▉ | 209/233 [00:12<00:00, 36.04it/s]Read eval:  94%|█████████▎| 218/233 [00:12<00:00, 45.24it/s]                                                            Predict chunk:   0%|          | 0/47 [00:00<?, ?it/s]Predict chunk:   4%|▍         | 2/47 [00:00<00:02, 15.45it/s]Predict chunk:   9%|▊         | 4/47 [00:00<00:02, 15.48it/s]Predict chunk:  13%|█▎        | 6/47 [00:00<00:02, 15.47it/s]Predict chunk:  17%|█▋        | 8/47 [00:00<00:02, 15.48it/s]Predict chunk:  21%|██▏       | 10/47 [00:00<00:02, 15.49it/s]Predict chunk:  26%|██▌       | 12/47 [00:00<00:02, 15.49it/s]Predict chunk:  30%|██▉       | 14/47 [00:00<00:02, 15.50it/s]Predict chunk:  34%|███▍      | 16/47 [00:01<00:01, 15.50it/s]Predict chunk:  38%|███▊      | 18/47 [00:01<00:01, 15.50it/s]Predict chunk:  43%|████▎     | 20/47 [00:01<00:01, 15.50it/s]Predict chunk:  47%|████▋     | 22/47 [00:01<00:01, 15.50it/s]Predict chunk:  51%|█████     | 24/47 [00:01<00:01, 15.50it/s]Predict chunk:  55%|█████▌    | 26/47 [00:01<00:01, 15.50it/s]Predict chunk:  60%|█████▉    | 28/47 [00:01<00:01, 15.49it/s]Predict chunk:  64%|██████▍   | 30/47 [00:01<00:01, 15.49it/s]Predict chunk:  68%|██████▊   | 32/47 [00:02<00:00, 15.49it/s]Predict chunk:  72%|███████▏  | 34/47 [00:02<00:00, 15.49it/s]Predict chunk:  77%|███████▋  | 36/47 [00:02<00:00, 15.50it/s]Predict chunk:  81%|████████  | 38/47 [00:02<00:00, 15.49it/s]Predict chunk:  85%|████████▌ | 40/47 [00:02<00:00, 15.49it/s]Predict chunk:  89%|████████▉ | 42/47 [00:02<00:00, 15.46it/s]Predict chunk:  94%|█████████▎| 44/47 [00:02<00:00, 15.47it/s]Predict chunk:  98%|█████████▊| 46/47 [00:02<00:00, 15.48it/s]                                                              [predict] eval done in  15.8s  predict  11.8s (74.5%)  read/wait   4.0s (25.5%)  [prefetch x3]
+[eval-fig] full-size -> ./runs_finetune/ft_all_01_05-17-40/eval_figs/eval_s20260928000003_ep08.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+[save-final] wrote final model to models/finetune/ft_all_01_05-17-40/final.pth
+TensorBoard logs saved to: ./runs_finetune/ft_all_01_05-17-40
+Training completed.
+[campaign31] isolated arm pid=361811 status=0 exit=0 controller_fds=16->16
+[campaign_finetune] ft_all_pcgrad: ctx=96 domains=['pherc1447', 'pherc0009b', 'pherc0139', 'pherc0500p2'] weights={'pherc1447': 1, 'pherc0009b': 1, 'pherc0139': 1, 'pherc0500p2': 1} simple_split=False ring=(2,2,4) multitile_pos_only=True fast_eval=False vis=[20260928000003] batch=96 lr=5e-05 epochs=8 encoder_lr_scale=1.0 freeze=('enc1.', 'enc2.') encoder_lr=1e-06 task_lr=5e-05 pcgrad=True patch_groupdro=False run=ft_all_pcgrad_01_05-27-07 init=/vesuvius/models/archs40/holdout_n96_combined_surface_norm/final.pth
+Creating datasets...
+[multi-scroll] physical groups={'pherc1447': [20260930144758, 20260930144760], 'pherc0009b': [20250919125754], 'pherc0139': [20260115000000, 20260317000000], 'pherc0500p2': [20250628074500]} weights=[1, 1, 1, 1]
+[dataset-cache] scroll 20260930144758: reusing prepared RAM assets
+[selective-cache] scroll 20260930144758: prepared manifest already bound
+[multi-scroll] scroll 20260930144758: train_tiles=6667 valid_tiles=1464
+[dataset-cache] scroll 20260930144760: reusing prepared RAM assets
+[selective-cache] scroll 20260930144760: prepared manifest already bound
+[multi-scroll] scroll 20260930144760: train_tiles=6667 valid_tiles=2091
+[dataset-cache] scroll 20250919125754: reusing prepared RAM assets
+[selective-cache] scroll 20250919125754: prepared manifest already bound
+[multi-scroll] scroll 20250919125754: train_tiles=6667 valid_tiles=3421
+[dataset-cache] scroll 20260115000000: reusing prepared RAM assets
+[selective-cache] scroll 20260115000000: prepared manifest already bound
+[multi-scroll] scroll 20260115000000: train_tiles=6667 valid_tiles=2516
+[dataset-cache] scroll 20260317000000: reusing prepared RAM assets
+[selective-cache] scroll 20260317000000: prepared manifest already bound
+[multi-scroll] scroll 20260317000000: train_tiles=6667 valid_tiles=3122
+[dataset-cache] scroll 20250628074500: reusing prepared RAM assets
+[selective-cache] scroll 20250628074500: prepared manifest already bound
+[multi-scroll] scroll 20250628074500: train_tiles=6667 valid_tiles=6468
+[multi-scroll] merged train_tiles=40002 valid_tiles=19082
+Data setup done in 0.00s
+[campaign29] parent RAM cache ready: datasets=6 volumes=6 ram=2.05GiB controller_fds=16
+
+==============================================================================
+[campaign31] ft_all_pcgrad_01_05-27-07
+==============================================================================
+  pretrain=/vesuvius/models/archs40/holdout_n96_combined_surface_norm/final.pth batch=96 lr=5e-05 ds=1 early=True mid=False residual=False block_depth=2 extra=() depth=8 overlap=False
+  groupdro=False patchdro=False anchor=0.0 ema=False:0.995 pcgrad_gram=False:every1:ema0.0
+  window_offset=0 depth_entropy=0.0x0.0:amax lse_r_max=10.0 topk_pos=0.0 explicit_neg=0.0 forgetting=False seed=41
+[seed] fast mode (seed=41) — cudnn benchmark on, tiny run-to-run fp noise
+--- Configuration ---
+data: DataConfig(zarr_path='/vesuvius/ves_zarrs2', scrolls=[ScrollConfig(scroll_id=20260930144758, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260930144760, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250919125754, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260115000000, split_axis='y', train_split_frac=0.8055, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260317000000, split_axis='y', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250628074500, split_axis='x', train_split_frac=0.6, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0))], train_scroll_dict={'pherc1447': [20260930144758, 20260930144760], 'pherc0009b': [20250919125754], 'pherc0139': [20260115000000, 20260317000000], 'pherc0500p2': [20250628074500]}, train_scroll_weights=[1, 1, 1, 1], test_scroll_ids=[20260814140748, 20260717193517, 20260720090842, 20250703034159, 20260723112922, 20260921094413, 20260918132724, 20260922073234, 20260922161631, 20260925085345, 20260928000001, 20260928000002, 20260928000003], holdout_scroll_ids=[20251226000000], tile_size=16, depth=8, d_start=4, d_end=28, train_d_start=4, train_d_end=28, composite_method='maxproj', composite_d0=10, composite_d1=18, composite_display='raw', voxel_um=9.362, mask_memmap=False, mask_bitpack=True, preload_volumes=False, selective_chunk_preload=True, selective_chunk_workers=8, ram_safe_vis=False, ring_negatives=True, ring_label_source='closed', ring_close_r=2, ring_gap_r=2, ring_shell_r=4, simple_split=False, coordinate_hash_split=False, coordinate_hash_block_size=512, coordinate_hash_valid_fraction=0.25, coordinate_hash_seed=29, train_mask_dir='./train_masks', surface_label_dir='./surface_labels', context_size=96, context_downsample=1, eval_infer_bs=192, eval_prefetch=3, eval_chunk_gb=3.0, tta_mode='light', probe_rois={20240304141531: [ProbeROI(x=960, y=2688, label='easy', size=576), ProbeROI(x=3840, y=2784, label='hard', size=576)], 20250223000000: [ProbeROI(x=4320, y=3456, label='easy', size=576), ProbeROI(x=8352, y=2496, label='hard', size=576)], 20250628074500: [ProbeROI(x=1152, y=2784, label='easy', size=576), ProbeROI(x=1440, y=4800, label='hard', size=576)], 20250831000000: [ProbeROI(x=2208, y=1152, label='easy', size=576), ProbeROI(x=6720, y=576, label='hard', size=576)], 20260108000000: [ProbeROI(x=576, y=1824, label='easy', size=576), ProbeROI(x=5664, y=3072, label='hard', size=576)], 20260115000000: [ProbeROI(x=2976, y=4320, label='easy', size=576), ProbeROI(x=2496, y=4800, label='hard', size=576)], 20260115000001: [ProbeROI(x=5472, y=2688, label='easy', size=576), ProbeROI(x=8160, y=5376, label='hard', size=576)], 20260206000001: [ProbeROI(x=864, y=960, label='easy', size=576), ProbeROI(x=6336, y=2304, label='hard', size=576)], 20260210000000: [ProbeROI(x=4128, y=2592, label='easy', size=576), ProbeROI(x=4032, y=3168, label='hard', size=576)], 20260226000000: [ProbeROI(x=480, y=960, label='easy', size=576), ProbeROI(x=288, y=1536, label='hard', size=576)], 20260227000000: [ProbeROI(x=3552, y=3744, label='easy', size=576), ProbeROI(x=7296, y=3456, label='hard', size=576)], 20260302000000: [ProbeROI(x=3936, y=3744, label='easy', size=576), ProbeROI(x=6816, y=4320, label='hard', size=576)], 20260303000000: [ProbeROI(x=5280, y=2304, label='easy', size=576), ProbeROI(x=5760, y=3744, label='hard', size=576)], 20260306000000: [ProbeROI(x=2880, y=2496, label='easy', size=576), ProbeROI(x=5664, y=2976, label='hard', size=576)], 20260310000000: [ProbeROI(x=192, y=864, label='easy', size=576), ProbeROI(x=5184, y=1824, label='hard', size=576)], 20260317000000: [ProbeROI(x=2496, y=1728, label='easy', size=576), ProbeROI(x=1056, y=4608, label='hard', size=576)], 20260318000000: [ProbeROI(x=4128, y=960, label='easy', size=576), ProbeROI(x=7680, y=864, label='hard', size=576)], 20260325000000: [ProbeROI(x=2304, y=2688, label='easy', size=576), ProbeROI(x=5376, y=2976, label='hard', size=576)]}, vis_scroll_ids=[20260928000003], vis_preload_persistent=True, eval_stride=32, inklabel_dir='./dilated_inklabels', label_dilate_r=0, dot_inklabel_dir='', dot_scroll_whitelist=[], ctx_jitter=10, target_aware_ctx_jitter=True, depth_jitter=1, surface_relative_depth_window=True, surface_window_offset=0, surface_window_offset_by_scroll={}, holdout_domains=[], explicit_negative_share=0.0, far_negative_share=0.0, far_negative_min_dist=160, far_negative_forced_positive_dist=200, edge_soft_sigma=8.0, edge_soft_floor=0.55, norm_mode='surface_anchor', zarr_suffix={}, native_noise='', native_noise_scale=1.0, native_noise_ids=[], label_shift_frac=0.0, multitile_train_step=16, multitile_pos_only=True, multitile_ring_gate=True, ring_from_inklabel_dir=True, character_balanced_sampling=True, character_balance_scrolls=True, character_min_pixels=8, max_samples_per_epoch=6667)
+dl: DataloaderConfig(batch_size=96, num_workers=8, prefetch_factor=2, data_aug=True, rotation_prob=0.6, flip_prob=0.6, noise_prob=0.0, brightness_prob=0.0, contrast_prob=0.0, brightness_delta=0.15, contrast_delta=0.15, noise_std_min=0.001, noise_std_max=0.005, cutout_prob=0.2, cutout_max_frac=0.16, cutout_n_patches=3, depth_mask_prob=0.0, depth_mask_mode='zero', fda_prob=0.0, fda_beta=0.05, elastic_prob=0.0, elastic_alpha=15.0, elastic_sigma=5.0, depth_warp_prob=0.0, depth_warp_max=2.0, depth_warp_sigma=24.0, surface_atten_prob=0.0, surface_atten_min=0.1, surface_atten_max=0.35, surface_atten_sigma=2.0, acquisition_blur_prob=0.0, acquisition_blur_min=0.4, acquisition_blur_max=0.9, correlated_noise_prob=0.0, correlated_noise_min=0.003, correlated_noise_max=0.015, correlated_noise_sigma=6.0, phase_filter_prob=0.0, phase_filter_min=0.5, phase_filter_max=20.0, phase_filter_max_gain=4.0, tone_curve_prob=0.0, tone_curve_knots=6, tone_curve_concentration=0.5, resolution_degrade_prob=0.0, resolution_degrade_min=1.5, resolution_degrade_max=4.0, depth_scale_prob=0.0, depth_scale_min=0.6, depth_scale_max=1.6, fine_native_scroll_ids=None, scan_regime_prob=0.0, scan_regime_min=0.5, scan_regime_max=1.0, quality_transfer=None, randconv_prob=0.0, randconv_kernel_sizes=[1, 3, 5, 7], randconv_depth_kernel=1, randconv_layers_max=1, randconv_mix_min=0.0, cutout_protect_center=True, context_replace_prob=0.15, context_replace_keep_size=0, context_replace_margin=7, context_replace_feather=13, context_replace_min_mask_frac=0.8, context_replace_surface_align=True, context_replace_cross_prob=0.0, protected_rotation_prob=0.0, protected_elastic_prob=0.0, protected_elastic_alpha=16.0, protected_elastic_sigma=5.0, protected_warp_margin=4, protected_warp_feather=12)
+tra: TrainingConfig(n_epochs=8, aug_start_epoch=0, lr=5e-05, encoder_lr_scale=1.0, encoder_freeze_epochs=0, warmup_epochs=5, weight_decay=0.0, l1_lambda=0.0, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=15, log_dir='./runs_finetune', eval_int=8, eval_int_scrolls=1, test_int=999, probe_int=9999, loss_type='bce', gce_q=0.9, dice_weight=0.0, label_smooth_pos=0.0, label_smooth_neg=0.0, tta_consistency=False, tta_consistency_lambda=0.3, tta_consistency_mode='flips', tta_consistency_prob=1.0, tile_pos_weight=1.0, tile_pos_weight_auto=False, dann=False, dann_lambda=0.0, dann_n_domains=4, dann_grl_anneal=False, spill_reduction=False, spill_lambda=0.0, spill_depth_threshold=0.35, spill_active_depth_tau=0.08, spill_max_active_depth_frac=0.35, spill_min_depth_var=0.8, spill_prob=False, spill_entropy=False, spill_entropy_lambda=0.3, spill_max_depth_entropy=2.1, new_surface_lambda=0.2, new_surface_smooth_lambda=0.02, surface_target_sigma=0.75, seed=41, deterministic=False, epoch_cooldown_secs=0, val_cooldown_secs=0, eval_cooldown_secs=0, fig_chunk_cooldown_ms=0, save_vis=False, fast_eval_figure=False, test_on_final=False, supcon=False, supcon_lambda=0.1, supcon_temp=0.07, supcon_proj_dim=128, supcon_hidden_dim=256, supcon_curriculum=True, supcon_lambda_start=0.05, supcon_lambda_end=0.5, supcon_curriculum_epochs=8, supcon_cross_frag=False, supcon_ignore_same_domain_same_class=False, per_scroll_metrics=True, prototype_align=False, prototype_align_lambda=0.1, prototype_margin=0.5, coral_align=False, coral_align_lambda=0.1, coral_mean_weight=1.0, cdan=False, cdan_lambda=0.1, mldg=False, mldg_holdout_domain=-1, mldg_random_holdout=False, mldg_inner_lr=0.0005, mldg_beta=1.0, sagnet_lambda=0.1, mae_reconstruction=False, mae_reconstruction_lambda=0.1, mae_reconstruction_start_epoch=4, mae_reconstruction_mask_frac=0.5, mae_reconstruction_patch=4, entropy_min_lambda=0.0, entropy_min_batch_size=8, character_macro_metrics=True, character_score_threshold=0.5, character_calibrate_threshold=True, character_threshold_min=0.1, character_threshold_max=0.9, character_threshold_steps=33, character_recall_target=0.5, character_max_ring_fpr=0.1, character_checkpoint_metric='character_ap_macro', sanity_guard_epoch=0, sanity_min_character_ap=0.0, sanity_min_specificity=0.0, context_consistency=False, context_consistency_prob=0.25, context_consistency_lambda=0.1, depth_view_consistency=False, depth_view_consistency_prob=0.5, depth_view_consistency_lambda=0.2, depth_view_consistency_offset=2, character_bag_ranking=True, character_bag_margin=0.5, character_bag_topk_frac=0.5, character_bag_lambda=0.2, character_groupdro=False, character_groupdro_eta=0.05, character_groupdro_max_ratio=3.0, physical_domain_groupdro=False, physical_domain_groupdro_eta=0.05, physical_domain_groupdro_max_ratio=3.0, physical_patch_groupdro=False, physical_patch_groupdro_eta=0.05, physical_patch_groupdro_max_ratio=3.0, domain_vrex=False, domain_vrex_lambda=1.0, domain_vrex_warmup_epochs=2, domain_cvar=False, domain_cvar_alpha=0.25, pcgrad=True, pcgrad_lite=False, pcgrad_lite_max_domains=4, pcgrad_lite_scope='head', pcgrad_groups=0, pcgrad_gram=False, pcgrad_gram_interval=1, pcgrad_gram_ema=0.0, and_mask=False, and_mask_groups=4, and_mask_threshold=0.5, fish=False, fish_meta_step=0.5, spectral_decoupling_lambda=0.0, rsc_prob=0.33, rsc_drop_frac=0.33, fishr_lambda=0.0, fishr_warmup_epochs=1, private_head_shared_weight=0.5, private_head_l2=0.01, cross_scroll_rank_lambda=0.0, cross_scroll_rank_pairs=4096, pu_lambda=0.0, pu_prior=0.03, support_drop='', support_min_fraction=0.25, mid_depth_entropy_lambda=0.0, topk_positive_fraction=0.0, character_forgetting=False, character_forgetting_path='', character_forgetting_max_weight=4.0, model_ema=False, model_ema_decay=0.995, model_ema_start_epoch=0, mae_anchor_lambda=0.0, domain_gradient_mode='', domain_gradient_threshold=0.0, domain_gradient_strength=4.0, domain_gradient_ema=0.9, domain_gradient_blend=1.0, character_cvar=False, character_cvar_alpha=0.25, clam_instance=False, clam_instance_k=4, clam_instance_lambda=0.1, sam_rho=0.0, elr=False, elr_start_epoch=5, elr_beta=0.7, elr_lambda=0.1, depth_shift_aux=False, depth_shift_aux_lambda=0.1, depth_shift_aux_classes=3, text_region_lambda=0.5)
+model: ModelConfig(arch='nnunet3d_lcndz', compile_model=False, require_architecture_init=True, conv1_drop=0.2, conv2_drop=0.2, head_drop=0.3, attn_mil=False, attn_entropy_weight=0.03, feature_attn_mil=False, feature_depth_fusion=False, minimum_support_k=0, minimum_support_kernel=3, weldon_k=0, weldon_top_k=0, weldon_bottom_k=0, weldon_top_weight=0.5, weldon_multi_k=False, weldon_top_k2=0, weldon_bottom_k2=0, weldon_multi_mix=0.5, weldon_depth_support_k=0, fiber_coordinate_branch=True, surface_relief_input=False, input_denoise_sigma=0.0, input_denoiser='', input_upsampler='', input_tile_norm='', private_domain_heads=False, private_head_detach_shared=False, early_2d_unet=True, early_2d_channels_mult=1.0, mid_2d_unet=False, mid_2d_channels_mult=1.0, residual_2d_unet=False, two_d_block_depth=2, two_d_bottleneck_channels=0, two_d_extra_levels=0, two_d_extra_channels=(), factorized_2plus1d=False, residual_unet=False, gated_stems=True, raw_only_stem=False, cue_dropout=0.0, explicit_depth_channels=False, overlapping_depth_windows=False, overlapping_depth_window_size=4, overlapping_depth_window_stride=2, mid_depth_entropy_floor=0.0, mid_depth_max_mode='amax', mid_depth_topk_frac=0.5, mt_lse_r_max=10.0, planar_early_convs=False, text_region_gate=False, multi_depth_collapse=False, two_d_strided_down=False, depth_antialias=False, sparse_deep_supervision=False, sparse_deep_supervision_dec2_weight=0.3, sparse_deep_supervision_dec3_weight=0.1, depth_attention_2d_head=False, divided_attention=False, divided_attention_spatial=False, divided_attention_heads=4, divided_attention_window=8, mednext_adapters=False, mednext_kernel=5, mednext_expansion=2, mixstyle=False, mixstyle_prob=0.8, mixstyle_alpha=0.1, sagnet=False, dual_scale=False, dual_scale_local_size=64, dual_scale_mix=0.25, dual_scale_deep=False, dual_scale_local_only=False, dual_scale_outer_size=0, dual_scale_outer_mix=0.0, dual_scale_adaptive_gate=False, dual_scale_gate_max=1.0, scan_film=False, scan_film_bands=8, scan_film_hidden=32, depth_profile_expert=False, depth_profile_mix=0.5, depth_profile_hidden=16, depth_profile_pool=5, expert_dropout=0.0, style_film=False, style_film_hidden=64, mae_reconstruction_head=False, learned_surface=False, new_learned_surface=False, better_surface=False, surface_teacher_input=True, surface_canonicalize=False, surface_canonical_depth=24, surface_guided_mil=False, surface_guided_mix=0.5, surface_band_sigma=1.5, use_ibn=False, norm_mode='ibn_full', use_prototype=False, prototype_ema=0.99, skip_drop=0.2, use_depth_profile=False, no_dz=False, channels_mult=1.0, allow_depth4=False, multitile=True, multitile_subtile=16, multitile_grid=4)
+hm: HardMiningConfig(enabled=False, hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1, dir='./hard_negs')
+device: cuda
+model_dir: models/finetune/ft_all_pcgrad_01_05-27-07
+exp_name: ft_all_pcgrad_01_05-27-07
+run_name: ft_all_pcgrad_01_05-27-07
+init_weights: /vesuvius/models/archs40/holdout_n96_combined_surface_norm/final.pth
+save_final: models/finetune/ft_all_pcgrad_01_05-27-07/final.pth
+---------------------
+Creating datasets...
+[multi-scroll] physical groups={'pherc1447': [20260930144758, 20260930144760], 'pherc0009b': [20250919125754], 'pherc0139': [20260115000000, 20260317000000], 'pherc0500p2': [20250628074500]} weights=[1, 1, 1, 1]
+[dataset-cache] scroll 20260930144758: reusing prepared RAM assets
+[selective-cache] scroll 20260930144758: prepared manifest already bound
+[multi-scroll] scroll 20260930144758: train_tiles=6667 valid_tiles=1464
+[dataset-cache] scroll 20260930144760: reusing prepared RAM assets
+[selective-cache] scroll 20260930144760: prepared manifest already bound
+[multi-scroll] scroll 20260930144760: train_tiles=6667 valid_tiles=2091
+[dataset-cache] scroll 20250919125754: reusing prepared RAM assets
+[selective-cache] scroll 20250919125754: prepared manifest already bound
+[multi-scroll] scroll 20250919125754: train_tiles=6667 valid_tiles=3421
+[dataset-cache] scroll 20260115000000: reusing prepared RAM assets
+[selective-cache] scroll 20260115000000: prepared manifest already bound
+[multi-scroll] scroll 20260115000000: train_tiles=6667 valid_tiles=2516
+[dataset-cache] scroll 20260317000000: reusing prepared RAM assets
+[selective-cache] scroll 20260317000000: prepared manifest already bound
+[multi-scroll] scroll 20260317000000: train_tiles=6667 valid_tiles=3122
+[dataset-cache] scroll 20250628074500: reusing prepared RAM assets
+[selective-cache] scroll 20250628074500: prepared manifest already bound
+[multi-scroll] scroll 20250628074500: train_tiles=6667 valid_tiles=6468
+[multi-scroll] merged train_tiles=40002 valid_tiles=19082
+Data setup done in 0.00s
+Creating model and loss... l1 lambda 0.0... Model parameters (nnunet3d_lcndz): 7,522,842
+[init-weights] loaded 189/189 tensors from /vesuvius/models/archs40/holdout_n96_combined_surface_norm/final.pth (shape-skipped=0 missing=0 unexpected=0)
+[optimizer] task: 4,007,034 params lr=5.00e-05, encoder: 3,319,296 params lr=1.00e-06, frozen: 196,512 params
+ done in 0.68s
+Initializing Tensorboard...
+[test] test_int=999 > n_epochs=8 and test_on_final=False -> skipping test-frag load
+TensorBoard logs will be saved to: ./runs_finetune/ft_all_pcgrad_01_05-27-07
+To view, run: tensorboard --logdir=./runs_finetune
+[split] scroll 20260928000003: manual mask=./train_masks/20260928000003.png train_pixels=7.6% explicit_negative_pixels=73,468 explicit_positive_pixels=0
+[vis-preload] scroll 20260928000003: loading full volume into RAM
+[vis-preload] scroll 20260928000003: ready 2.46 GiB
+[config] saved run config -> ./runs_finetune/ft_all_pcgrad_01_05-27-07/config.json
+[config] saved run config -> models/finetune/ft_all_pcgrad_01_05-27-07/config.json
+/vesuvius/train.py:617: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = GradScaler(enabled=self.c.device == "cuda")
+
+--- Epoch 1/8 ---
+[mae-preserve] encoder enabled: lr=2.000e-07
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:   0%|          | 1/416 [00:07<49:11,  7.11s/it]Training:   3%|▎         | 14/416 [00:12<05:00,  1.34it/s]Training:   6%|▋         | 27/416 [00:17<03:34,  1.82it/s]Training:  10%|▉         | 40/416 [00:22<03:02,  2.06it/s]Training:  13%|█▎        | 53/416 [00:28<02:44,  2.20it/s]Training:  16%|█▌        | 66/416 [00:33<02:32,  2.29it/s]Training:  19%|█▉        | 79/416 [00:38<02:24,  2.34it/s]Training:  22%|██▏       | 92/416 [00:44<02:15,  2.38it/s]Training:  25%|██▌       | 105/416 [00:49<02:08,  2.41it/s]Training:  28%|██▊       | 118/416 [00:54<02:02,  2.43it/s]Training:  31%|███▏      | 131/416 [00:59<01:56,  2.44it/s]Training:  35%|███▍      | 144/416 [01:05<01:50,  2.45it/s]Training:  38%|███▊      | 157/416 [01:10<01:45,  2.46it/s]Training:  41%|████      | 170/416 [01:15<01:39,  2.46it/s]Training:  44%|████▍     | 183/416 [01:20<01:34,  2.46it/s]Training:  47%|████▋     | 196/416 [01:26<01:29,  2.46it/s]Training:  50%|█████     | 209/416 [01:31<01:24,  2.45it/s]Training:  53%|█████▎    | 222/416 [01:36<01:19,  2.45it/s]Training:  56%|█████▋    | 235/416 [01:42<01:13,  2.46it/s]Training:  60%|█████▉    | 248/416 [01:47<01:08,  2.46it/s]Training:  63%|██████▎   | 261/416 [01:52<01:03,  2.44it/s]Training:  66%|██████▌   | 274/416 [01:57<00:57,  2.45it/s]Training:  69%|██████▉   | 287/416 [02:03<00:52,  2.45it/s]Training:  72%|███████▏  | 300/416 [02:08<00:47,  2.46it/s]Training:  75%|███████▌  | 313/416 [02:13<00:41,  2.46it/s]Training:  78%|███████▊  | 326/416 [02:19<00:36,  2.47it/s]Training:  81%|████████▏ | 339/416 [02:24<00:31,  2.47it/s]Training:  85%|████████▍ | 352/416 [02:29<00:25,  2.47it/s]Training:  88%|████████▊ | 365/416 [02:34<00:20,  2.47it/s]Training:  91%|█████████ | 378/416 [02:40<00:15,  2.47it/s]Training:  94%|█████████▍| 391/416 [02:45<00:10,  2.47it/s]Training:  97%|█████████▋| 404/416 [02:50<00:04,  2.47it/s]Training: 100%|██████████| 416/416 [02:55<00:00,  2.37it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  82%|████████▏ | 164/199 [00:05<00:01, 32.79it/s]Validating: 200it [00:06, 30.92it/s]                         
+New best character model saved! Val character_ap_macro: 0.6452
+New best F1 model saved! Val F1: 0.6130
+New best loss model saved! Val Loss: 0.6566
+[METRICS] epoch=1 train_loss=0.5716 val_loss=0.6566 train_f1=0.8098 val_character_success=0.0000
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:   3%|▎         | 12/416 [00:05<02:51,  2.35it/s]Training:   6%|▌         | 25/416 [00:10<02:40,  2.43it/s]Training:   9%|▉         | 38/416 [00:15<02:34,  2.45it/s]Training:  12%|█▏        | 51/416 [00:20<02:28,  2.46it/s]Training:  15%|█▌        | 64/416 [00:26<02:25,  2.42it/s]Training:  19%|█▊        | 77/416 [00:31<02:19,  2.43it/s]Training:  22%|██▏       | 90/416 [00:36<02:13,  2.44it/s]Training:  25%|██▍       | 103/416 [00:42<02:08,  2.44it/s]Training:  28%|██▊       | 116/416 [00:47<02:02,  2.45it/s]Training:  31%|███       | 129/416 [00:52<01:56,  2.46it/s]Training:  34%|███▍      | 142/416 [00:58<01:51,  2.46it/s]Training:  37%|███▋      | 155/416 [01:03<01:45,  2.47it/s]Training:  40%|████      | 168/416 [01:08<01:40,  2.47it/s]Training:  44%|████▎     | 181/416 [01:13<01:35,  2.47it/s]Training:  47%|████▋     | 194/416 [01:19<01:30,  2.47it/s]Training:  50%|████▉     | 207/416 [01:24<01:24,  2.47it/s]Training:  53%|█████▎    | 220/416 [01:29<01:19,  2.47it/s]Training:  56%|█████▌    | 233/416 [01:34<01:14,  2.47it/s]Training:  59%|█████▉    | 246/416 [01:40<01:08,  2.47it/s]Training:  62%|██████▏   | 259/416 [01:45<01:03,  2.47it/s]Training:  65%|██████▌   | 272/416 [01:50<00:58,  2.48it/s]Training:  69%|██████▊   | 285/416 [01:55<00:52,  2.48it/s]Training:  72%|███████▏  | 298/416 [02:01<00:47,  2.48it/s]Training:  75%|███████▍  | 311/416 [02:06<00:42,  2.48it/s]Training:  78%|███████▊  | 324/416 [02:11<00:37,  2.47it/s]Training:  81%|████████  | 337/416 [02:16<00:31,  2.47it/s]Training:  84%|████████▍ | 350/416 [02:22<00:26,  2.47it/s]Training:  87%|████████▋ | 363/416 [02:27<00:21,  2.47it/s]Training:  90%|█████████ | 376/416 [02:32<00:16,  2.47it/s]Training:  94%|█████████▎| 389/416 [02:37<00:10,  2.48it/s]Training:  97%|█████████▋| 402/416 [02:43<00:05,  2.48it/s]Training: 100%|█████████▉| 415/416 [02:48<00:00,  2.48it/s]Training: 100%|██████████| 416/416 [02:48<00:00,  2.46it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  89%|████████▉ | 177/199 [00:05<00:00, 35.30it/s]Validating: 200it [00:05, 35.59it/s]                         
+New best character model saved! Val character_ap_macro: 0.6457
+New best F1 model saved! Val F1: 0.6153
+New best loss model saved! Val Loss: 0.6480
+[METRICS] epoch=2 train_loss=0.5609 val_loss=0.6480 train_f1=0.8154 val_character_success=0.0000
+Logging metrics for epoch: 2
+
+--- Epoch 3/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:   3%|▎         | 12/416 [00:05<02:52,  2.34it/s]Training:   6%|▌         | 25/416 [00:10<02:41,  2.42it/s]Training:   9%|▉         | 38/416 [00:15<02:34,  2.44it/s]Training:  12%|█▏        | 51/416 [00:20<02:28,  2.45it/s]Training:  15%|█▌        | 64/416 [00:26<02:23,  2.46it/s]Training:  19%|█▊        | 77/416 [00:31<02:17,  2.47it/s]Training:  22%|██▏       | 90/416 [00:36<02:11,  2.47it/s]Training:  25%|██▍       | 103/416 [00:41<02:06,  2.47it/s]Training:  28%|██▊       | 116/416 [00:47<02:01,  2.47it/s]Training:  31%|███       | 129/416 [00:52<01:56,  2.47it/s]Training:  34%|███▍      | 142/416 [00:57<01:50,  2.47it/s]Training:  37%|███▋      | 155/416 [01:02<01:45,  2.47it/s]Training:  40%|████      | 168/416 [01:08<01:40,  2.47it/s]Training:  44%|████▎     | 181/416 [01:13<01:34,  2.48it/s]Training:  47%|████▋     | 194/416 [01:18<01:29,  2.48it/s]Training:  50%|████▉     | 207/416 [01:23<01:24,  2.48it/s]Training:  53%|█████▎    | 220/416 [01:29<01:19,  2.47it/s]Training:  56%|█████▌    | 233/416 [01:34<01:14,  2.47it/s]Training:  59%|█████▉    | 246/416 [01:39<01:08,  2.47it/s]Training:  62%|██████▏   | 259/416 [01:44<01:03,  2.47it/s]Training:  65%|██████▌   | 272/416 [01:50<00:58,  2.47it/s]Training:  69%|██████▊   | 285/416 [01:55<00:52,  2.47it/s]Training:  72%|███████▏  | 298/416 [02:00<00:47,  2.47it/s]Training:  75%|███████▍  | 311/416 [02:05<00:42,  2.47it/s]Training:  78%|███████▊  | 324/416 [02:11<00:37,  2.47it/s]Training:  81%|████████  | 337/416 [02:16<00:31,  2.47it/s]Training:  84%|████████▍ | 350/416 [02:21<00:26,  2.47it/s]Training:  87%|████████▋ | 363/416 [02:26<00:21,  2.47it/s]Training:  90%|█████████ | 376/416 [02:32<00:16,  2.47it/s]Training:  94%|█████████▎| 389/416 [02:37<00:10,  2.47it/s]Training:  97%|█████████▋| 402/416 [02:42<00:05,  2.47it/s]Training: 100%|█████████▉| 415/416 [02:48<00:00,  2.47it/s]Training: 100%|██████████| 416/416 [02:48<00:00,  2.47it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  89%|████████▉ | 177/199 [00:05<00:00, 35.26it/s]Validating: 200it [00:05, 35.56it/s]                         
+New best character model saved! Val character_ap_macro: 0.6548
+New best F1 model saved! Val F1: 0.6176
+[METRICS] epoch=3 train_loss=0.5490 val_loss=0.6730 train_f1=0.8221 val_character_success=0.0000
+Logging metrics for epoch: 3
+
+--- Epoch 4/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:   3%|▎         | 12/416 [00:05<02:51,  2.35it/s]Training:   6%|▌         | 25/416 [00:10<02:41,  2.42it/s]Training:   9%|▉         | 38/416 [00:15<02:34,  2.45it/s]Training:  12%|█▏        | 51/416 [00:20<02:28,  2.46it/s]Training:  15%|█▌        | 64/416 [00:26<02:22,  2.47it/s]Training:  19%|█▊        | 77/416 [00:31<02:17,  2.47it/s]Training:  22%|██▏       | 90/416 [00:36<02:11,  2.47it/s]Training:  25%|██▍       | 103/416 [00:41<02:06,  2.47it/s]Training:  28%|██▊       | 116/416 [00:47<02:01,  2.47it/s]Training:  31%|███       | 129/416 [00:52<01:56,  2.47it/s]Training:  34%|███▍      | 142/416 [00:57<01:50,  2.47it/s]Training:  37%|███▋      | 155/416 [01:02<01:45,  2.47it/s]Training:  40%|████      | 168/416 [01:08<01:40,  2.47it/s]Training:  44%|████▎     | 181/416 [01:13<01:35,  2.47it/s]Training:  47%|████▋     | 194/416 [01:18<01:29,  2.47it/s]Training:  50%|████▉     | 207/416 [01:23<01:24,  2.47it/s]Training:  53%|█████▎    | 220/416 [01:29<01:19,  2.47it/s]Training:  56%|█████▌    | 233/416 [01:34<01:14,  2.47it/s]Training:  59%|█████▉    | 246/416 [01:39<01:08,  2.47it/s]Training:  62%|██████▏   | 259/416 [01:44<01:03,  2.47it/s]Training:  65%|██████▌   | 272/416 [01:50<00:58,  2.47it/s]Training:  69%|██████▊   | 285/416 [01:55<00:53,  2.47it/s]Training:  72%|███████▏  | 298/416 [02:00<00:47,  2.47it/s]Training:  75%|███████▍  | 311/416 [02:06<00:42,  2.47it/s]Training:  78%|███████▊  | 324/416 [02:11<00:37,  2.47it/s]Training:  81%|████████  | 337/416 [02:16<00:31,  2.48it/s]Training:  84%|████████▍ | 350/416 [02:21<00:26,  2.48it/s]Training:  87%|████████▋ | 363/416 [02:27<00:21,  2.46it/s]Training:  90%|█████████ | 376/416 [02:32<00:16,  2.47it/s]Training:  94%|█████████▎| 389/416 [02:37<00:10,  2.47it/s]Training:  97%|█████████▋| 402/416 [02:42<00:05,  2.47it/s]Training: 100%|█████████▉| 415/416 [02:48<00:00,  2.47it/s]Training: 100%|██████████| 416/416 [02:48<00:00,  2.47it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  89%|████████▉ | 177/199 [00:05<00:00, 35.29it/s]Validating: 200it [00:05, 35.60it/s]                         
+New best character model saved! Val character_ap_macro: 0.6552
+[METRICS] epoch=4 train_loss=0.5386 val_loss=0.6756 train_f1=0.8266 val_character_success=0.0000
+Logging metrics for epoch: 4
+
+--- Epoch 5/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:   3%|▎         | 12/416 [00:05<02:52,  2.35it/s]Training:   6%|▌         | 25/416 [00:10<02:41,  2.42it/s]Training:   9%|▉         | 38/416 [00:15<02:34,  2.44it/s]Training:  12%|█▏        | 51/416 [00:20<02:28,  2.46it/s]Training:  15%|█▌        | 64/416 [00:26<02:22,  2.46it/s]Training:  19%|█▊        | 77/416 [00:31<02:17,  2.47it/s]Training:  22%|██▏       | 90/416 [00:36<02:12,  2.47it/s]Training:  25%|██▍       | 103/416 [00:41<02:06,  2.47it/s]Training:  28%|██▊       | 116/416 [00:47<02:01,  2.47it/s]Training:  31%|███       | 129/416 [00:52<01:55,  2.48it/s]Training:  34%|███▍      | 142/416 [00:57<01:50,  2.48it/s]Training:  37%|███▋      | 155/416 [01:02<01:45,  2.48it/s]Training:  40%|████      | 168/416 [01:08<01:40,  2.48it/s]Training:  44%|████▎     | 181/416 [01:13<01:34,  2.48it/s]Training:  47%|████▋     | 194/416 [01:18<01:29,  2.48it/s]Training:  50%|████▉     | 207/416 [01:23<01:24,  2.48it/s]Training:  53%|█████▎    | 220/416 [01:29<01:19,  2.48it/s]Training:  56%|█████▌    | 233/416 [01:34<01:13,  2.47it/s]Training:  59%|█████▉    | 246/416 [01:39<01:08,  2.47it/s]Training:  62%|██████▏   | 259/416 [01:44<01:03,  2.47it/s]Training:  65%|██████▌   | 272/416 [01:50<00:58,  2.47it/s]Training:  69%|██████▊   | 285/416 [01:55<00:52,  2.47it/s]Training:  72%|███████▏  | 298/416 [02:00<00:47,  2.47it/s]Training:  75%|███████▍  | 311/416 [02:05<00:42,  2.47it/s]Training:  78%|███████▊  | 324/416 [02:11<00:37,  2.47it/s]Training:  81%|████████  | 337/416 [02:16<00:31,  2.47it/s]Training:  84%|████████▍ | 350/416 [02:21<00:26,  2.47it/s]Training:  87%|████████▋ | 363/416 [02:26<00:21,  2.47it/s]Training:  90%|█████████ | 376/416 [02:32<00:16,  2.47it/s]Training:  94%|█████████▎| 389/416 [02:37<00:10,  2.47it/s]Training:  97%|█████████▋| 402/416 [02:42<00:05,  2.48it/s]Training: 100%|█████████▉| 415/416 [02:47<00:00,  2.48it/s]Training: 100%|██████████| 416/416 [02:48<00:00,  2.47it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  89%|████████▉ | 177/199 [00:05<00:00, 35.29it/s]Validating: 200it [00:05, 35.60it/s]                         
+New best F1 model saved! Val F1: 0.6235
+New best loss model saved! Val Loss: 0.6398
+[METRICS] epoch=5 train_loss=0.5258 val_loss=0.6398 train_f1=0.8302 val_character_success=0.0000
+Logging metrics for epoch: 5
+
+--- Epoch 6/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:   3%|▎         | 12/416 [00:05<02:51,  2.36it/s]Training:   6%|▌         | 25/416 [00:10<02:41,  2.43it/s]Training:   9%|▉         | 38/416 [00:15<02:34,  2.45it/s]Training:  12%|█▏        | 51/416 [00:20<02:28,  2.46it/s]Training:  15%|█▌        | 64/416 [00:26<02:22,  2.46it/s]Training:  19%|█▊        | 77/416 [00:31<02:17,  2.47it/s]Training:  22%|██▏       | 90/416 [00:36<02:12,  2.47it/s]Training:  25%|██▍       | 103/416 [00:41<02:06,  2.47it/s]Training:  28%|██▊       | 116/416 [00:47<02:01,  2.47it/s]Training:  31%|███       | 129/416 [00:52<01:56,  2.47it/s]Training:  34%|███▍      | 142/416 [00:57<01:50,  2.47it/s]Training:  37%|███▋      | 155/416 [01:02<01:45,  2.47it/s]Training:  40%|████      | 168/416 [01:08<01:40,  2.47it/s]Training:  44%|████▎     | 181/416 [01:13<01:34,  2.48it/s]Training:  47%|████▋     | 194/416 [01:18<01:29,  2.48it/s]Training:  50%|████▉     | 207/416 [01:23<01:24,  2.48it/s]Training:  53%|█████▎    | 220/416 [01:29<01:19,  2.47it/s]Training:  56%|█████▌    | 233/416 [01:34<01:13,  2.47it/s]Training:  59%|█████▉    | 246/416 [01:39<01:08,  2.47it/s]Training:  62%|██████▏   | 259/416 [01:44<01:03,  2.47it/s]Training:  65%|██████▌   | 272/416 [01:50<00:58,  2.47it/s]Training:  69%|██████▊   | 285/416 [01:55<00:52,  2.47it/s]Training:  72%|███████▏  | 298/416 [02:00<00:47,  2.47it/s]Training:  75%|███████▍  | 311/416 [02:05<00:42,  2.47it/s]Training:  78%|███████▊  | 324/416 [02:11<00:37,  2.47it/s]Training:  81%|████████  | 337/416 [02:16<00:31,  2.47it/s]Training:  84%|████████▍ | 350/416 [02:21<00:26,  2.47it/s]Training:  87%|████████▋ | 363/416 [02:26<00:21,  2.47it/s]Training:  90%|█████████ | 376/416 [02:32<00:16,  2.47it/s]Training:  94%|█████████▎| 389/416 [02:37<00:10,  2.47it/s]Training:  97%|█████████▋| 402/416 [02:42<00:05,  2.47it/s]Training: 100%|█████████▉| 415/416 [02:47<00:00,  2.47it/s]Training: 100%|██████████| 416/416 [02:48<00:00,  2.47it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  89%|████████▉ | 177/199 [00:05<00:00, 35.33it/s]Validating: 200it [00:05, 35.63it/s]                         
+[METRICS] epoch=6 train_loss=0.5204 val_loss=0.6429 train_f1=0.8342 val_character_success=0.0000
+Logging metrics for epoch: 6
+
+--- Epoch 7/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:   3%|▎         | 12/416 [00:05<02:52,  2.34it/s]Training:   6%|▌         | 25/416 [00:10<02:41,  2.41it/s]Training:   9%|▉         | 38/416 [00:15<02:35,  2.44it/s]Training:  12%|█▏        | 51/416 [00:20<02:28,  2.45it/s]Training:  15%|█▌        | 64/416 [00:26<02:23,  2.45it/s]Training:  19%|█▊        | 77/416 [00:31<02:17,  2.46it/s]Training:  22%|██▏       | 90/416 [00:36<02:12,  2.46it/s]Training:  25%|██▍       | 103/416 [00:42<02:07,  2.46it/s]Training:  28%|██▊       | 116/416 [00:47<02:02,  2.46it/s]Training:  31%|███       | 129/416 [00:52<01:56,  2.46it/s]Training:  34%|███▍      | 142/416 [00:57<01:51,  2.46it/s]Training:  37%|███▋      | 155/416 [01:03<01:46,  2.46it/s]Training:  40%|████      | 168/416 [01:08<01:40,  2.46it/s]Training:  44%|████▎     | 181/416 [01:13<01:35,  2.46it/s]Training:  47%|████▋     | 194/416 [01:19<01:30,  2.46it/s]Training:  50%|████▉     | 207/416 [01:24<01:24,  2.46it/s]Training:  53%|█████▎    | 220/416 [01:29<01:19,  2.46it/s]Training:  56%|█████▌    | 233/416 [01:34<01:14,  2.46it/s]Training:  59%|█████▉    | 246/416 [01:40<01:09,  2.46it/s]Training:  62%|██████▏   | 259/416 [01:45<01:03,  2.46it/s]Training:  65%|██████▌   | 272/416 [01:50<00:58,  2.46it/s]Training:  69%|██████▊   | 285/416 [01:56<00:53,  2.46it/s]Training:  72%|███████▏  | 298/416 [02:01<00:48,  2.46it/s]Training:  75%|███████▍  | 311/416 [02:06<00:42,  2.46it/s]Training:  78%|███████▊  | 324/416 [02:11<00:37,  2.46it/s]Training:  81%|████████  | 337/416 [02:17<00:32,  2.46it/s]Training:  84%|████████▍ | 350/416 [02:22<00:26,  2.46it/s]Training:  87%|████████▋ | 363/416 [02:27<00:21,  2.46it/s]Training:  90%|█████████ | 376/416 [02:33<00:16,  2.46it/s]Training:  94%|█████████▎| 389/416 [02:38<00:10,  2.46it/s]Training:  97%|█████████▋| 402/416 [02:43<00:05,  2.46it/s]Training: 100%|█████████▉| 415/416 [02:48<00:00,  2.46it/s]Training: 100%|██████████| 416/416 [02:49<00:00,  2.46it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  88%|████████▊ | 176/199 [00:05<00:00, 35.11it/s]Validating: 200it [00:05, 35.43it/s]                         
+[METRICS] epoch=7 train_loss=0.5103 val_loss=0.7061 train_f1=0.8356 val_character_success=0.0000
+Logging metrics for epoch: 7
+
+--- Epoch 8/8 ---
+Training:   0%|          | 0/416 [00:00<?, ?it/s]Training:   3%|▎         | 12/416 [00:05<02:51,  2.35it/s]Training:   6%|▌         | 25/416 [00:10<02:41,  2.42it/s]Training:   9%|▉         | 38/416 [00:15<02:35,  2.44it/s]Training:  12%|█▏        | 51/416 [00:20<02:29,  2.44it/s]Training:  15%|█▌        | 64/416 [00:26<02:23,  2.45it/s]Training:  19%|█▊        | 77/416 [00:31<02:18,  2.45it/s]Training:  22%|██▏       | 90/416 [00:36<02:12,  2.45it/s]Training:  25%|██▍       | 103/416 [00:42<02:07,  2.46it/s]Training:  28%|██▊       | 116/416 [00:47<02:02,  2.46it/s]Training:  31%|███       | 129/416 [00:52<01:57,  2.45it/s]Training:  34%|███▍      | 142/416 [00:58<01:51,  2.45it/s]Training:  37%|███▋      | 155/416 [01:03<01:46,  2.44it/s]Training:  40%|████      | 168/416 [01:08<01:41,  2.45it/s]Training:  44%|████▎     | 181/416 [01:13<01:35,  2.45it/s]Training:  47%|████▋     | 194/416 [01:19<01:30,  2.46it/s]Training:  50%|████▉     | 207/416 [01:24<01:25,  2.46it/s]Training:  53%|█████▎    | 220/416 [01:29<01:19,  2.46it/s]Training:  56%|█████▌    | 233/416 [01:35<01:14,  2.46it/s]Training:  59%|█████▉    | 246/416 [01:40<01:09,  2.46it/s]Training:  62%|██████▏   | 259/416 [01:45<01:03,  2.46it/s]Training:  65%|██████▌   | 272/416 [01:50<00:58,  2.46it/s]Training:  69%|██████▊   | 285/416 [01:56<00:53,  2.46it/s]Training:  72%|███████▏  | 298/416 [02:01<00:48,  2.46it/s]Training:  75%|███████▍  | 311/416 [02:06<00:42,  2.46it/s]Training:  78%|███████▊  | 324/416 [02:12<00:37,  2.46it/s]Training:  81%|████████  | 337/416 [02:17<00:32,  2.46it/s]Training:  84%|████████▍ | 350/416 [02:22<00:26,  2.46it/s]Training:  87%|████████▋ | 363/416 [02:28<00:21,  2.46it/s]Training:  90%|█████████ | 376/416 [02:33<00:16,  2.46it/s]Training:  94%|█████████▎| 389/416 [02:38<00:10,  2.46it/s]Training:  97%|█████████▋| 402/416 [02:43<00:05,  2.46it/s]Training: 100%|█████████▉| 415/416 [02:49<00:00,  2.46it/s]Training: 100%|██████████| 416/416 [02:49<00:00,  2.45it/s]
+Validating:   0%|          | 0/199 [00:00<?, ?it/s]Validating:  89%|████████▉ | 177/199 [00:05<00:00, 35.35it/s]Validating: 200it [00:05, 34.58it/s]                         
+New best character model saved! Val character_ap_macro: 0.6634
+New best F1 model saved! Val F1: 0.6359
+New best loss model saved! Val Loss: 0.6006
+[METRICS] epoch=8 train_loss=0.4999 val_loss=0.6006 train_f1=0.8407 val_character_success=0.0000
+Logging metrics for epoch: 8
+Starting evaluation figure generation...
+[predict] reading 29493 tiles in 233 row-strips (eval)
+Read eval:   0%|          | 0/233 [00:00<?, ?it/s]Read eval:  15%|█▌        | 36/233 [00:00<00:00, 338.72it/s]Read eval:  30%|███       | 70/233 [00:00<00:01, 131.31it/s]Read eval:  39%|███▊      | 90/233 [00:00<00:01, 73.93it/s] 
+Predict chunk:   0%|          | 0/54 [00:00<?, ?it/s][A
+Predict chunk:   2%|▏         | 1/54 [00:00<00:40,  1.31it/s][A
+Predict chunk:   6%|▌         | 3/54 [00:00<00:12,  4.06it/s][A
+Predict chunk:   9%|▉         | 5/54 [00:01<00:07,  6.51it/s][A
+Predict chunk:  13%|█▎        | 7/54 [00:01<00:05,  8.63it/s][A
+Predict chunk:  17%|█▋        | 9/54 [00:01<00:04, 10.28it/s][A
+Predict chunk:  20%|██        | 11/54 [00:01<00:03, 11.63it/s][A
+Predict chunk:  24%|██▍       | 13/54 [00:01<00:03, 12.70it/s][A
+Predict chunk:  28%|██▊       | 15/54 [00:01<00:02, 13.49it/s][A
+Predict chunk:  31%|███▏      | 17/54 [00:01<00:02, 14.07it/s][A
+Predict chunk:  35%|███▌      | 19/54 [00:01<00:02, 14.48it/s][A
+Predict chunk:  39%|███▉      | 21/54 [00:02<00:02, 14.79it/s][A
+Predict chunk:  43%|████▎     | 23/54 [00:02<00:02, 14.98it/s][A
+Predict chunk:  46%|████▋     | 25/54 [00:02<00:01, 15.14it/s][A
+Predict chunk:  50%|█████     | 27/54 [00:02<00:01, 15.24it/s][A
+Predict chunk:  54%|█████▎    | 29/54 [00:02<00:01, 15.33it/s][A
+Predict chunk:  57%|█████▋    | 31/54 [00:02<00:01, 15.39it/s][A
+Predict chunk:  61%|██████    | 33/54 [00:02<00:01, 15.42it/s][A
+Predict chunk:  65%|██████▍   | 35/54 [00:02<00:01, 15.45it/s][A
+Predict chunk:  69%|██████▊   | 37/54 [00:03<00:01, 15.46it/s][A
+Predict chunk:  72%|███████▏  | 39/54 [00:03<00:00, 15.46it/s][A
+Predict chunk:  76%|███████▌  | 41/54 [00:03<00:00, 15.48it/s][A
+Predict chunk:  80%|███████▉  | 43/54 [00:03<00:00, 15.49it/s][A
+Predict chunk:  83%|████████▎ | 45/54 [00:03<00:00, 15.51it/s][A
+Predict chunk:  87%|████████▋ | 47/54 [00:03<00:00, 15.51it/s][A
+Predict chunk:  91%|█████████ | 49/54 [00:03<00:00, 15.51it/s][A
+Predict chunk:  94%|█████████▍| 51/54 [00:03<00:00, 15.50it/s][A
+Predict chunk:  98%|█████████▊| 53/54 [00:04<00:00, 15.49it/s][A
+                                                              [ARead eval:  44%|████▍     | 103/233 [00:05<00:11, 11.07it/s]Read eval:  48%|████▊     | 111/233 [00:05<00:09, 12.49it/s]Read eval:  51%|█████     | 118/233 [00:05<00:08, 14.17it/s]Read eval:  53%|█████▎    | 124/233 [00:06<00:06, 15.83it/s]Read eval:  55%|█████▌    | 129/233 [00:06<00:05, 17.63it/s]Read eval:  58%|█████▊    | 134/233 [00:06<00:04, 19.80it/s]Read eval:  60%|█████▉    | 139/233 [00:06<00:04, 21.44it/s]Read eval:  62%|██████▏   | 144/233 [00:06<00:03, 24.50it/s]Read eval:  64%|██████▍   | 149/233 [00:06<00:03, 26.46it/s]Read eval:  66%|██████▌   | 154/233 [00:06<00:02, 27.44it/s]
+Predict chunk:   0%|          | 0/54 [00:00<?, ?it/s][A
+Predict chunk:   4%|▎         | 2/54 [00:00<00:03, 13.26it/s][A
+Predict chunk:   7%|▋         | 4/54 [00:00<00:03, 14.47it/s][A
+Predict chunk:  11%|█         | 6/54 [00:00<00:03, 14.89it/s][A
+Predict chunk:  15%|█▍        | 8/54 [00:00<00:03, 15.10it/s][A
+Predict chunk:  19%|█▊        | 10/54 [00:00<00:02, 15.22it/s][A
+Predict chunk:  22%|██▏       | 12/54 [00:00<00:02, 15.31it/s][A
+Predict chunk:  26%|██▌       | 14/54 [00:00<00:02, 15.16it/s][A
+Predict chunk:  30%|██▉       | 16/54 [00:01<00:02, 15.25it/s][A
+Predict chunk:  33%|███▎      | 18/54 [00:01<00:02, 15.33it/s][A
+Predict chunk:  37%|███▋      | 20/54 [00:01<00:02, 15.38it/s][A
+Predict chunk:  41%|████      | 22/54 [00:01<00:02, 15.34it/s][A
+Predict chunk:  44%|████▍     | 24/54 [00:01<00:01, 15.39it/s][A
+Predict chunk:  48%|████▊     | 26/54 [00:01<00:01, 15.41it/s][A
+Predict chunk:  52%|█████▏    | 28/54 [00:01<00:01, 15.43it/s][A
+Predict chunk:  56%|█████▌    | 30/54 [00:01<00:01, 15.44it/s][A
+Predict chunk:  59%|█████▉    | 32/54 [00:02<00:01, 15.46it/s][A
+Predict chunk:  63%|██████▎   | 34/54 [00:02<00:01, 15.29it/s][A
+Predict chunk:  67%|██████▋   | 36/54 [00:02<00:01, 15.19it/s][A
+Predict chunk:  70%|███████   | 38/54 [00:02<00:01, 15.29it/s][A
+Predict chunk:  74%|███████▍  | 40/54 [00:02<00:00, 15.25it/s][A
+Predict chunk:  78%|███████▊  | 42/54 [00:02<00:00, 15.32it/s][A
+Predict chunk:  81%|████████▏ | 44/54 [00:02<00:00, 15.36it/s][A
+Predict chunk:  85%|████████▌ | 46/54 [00:03<00:00, 15.41it/s][A
+Predict chunk:  89%|████████▉ | 48/54 [00:03<00:00, 15.43it/s][A
+Predict chunk:  93%|█████████▎| 50/54 [00:03<00:00, 15.44it/s][A
+Predict chunk:  96%|█████████▋| 52/54 [00:03<00:00, 15.46it/s][A
+Predict chunk: 100%|██████████| 54/54 [00:04<00:00,  6.77it/s][A
+                                                              [ARead eval:  68%|██████▊   | 158/233 [00:11<00:20,  3.73it/s]Read eval:  70%|███████   | 164/233 [00:11<00:12,  5.32it/s]Read eval:  73%|███████▎  | 170/233 [00:11<00:08,  7.35it/s]Read eval:  76%|███████▌  | 176/233 [00:11<00:05,  9.87it/s]Read eval:  78%|███████▊  | 182/233 [00:11<00:03, 13.20it/s]Read eval:  81%|████████  | 188/233 [00:11<00:02, 17.34it/s]Read eval:  83%|████████▎ | 194/233 [00:11<00:01, 21.88it/s]Read eval:  86%|████████▌ | 200/233 [00:11<00:01, 26.79it/s]Read eval:  89%|████████▉ | 207/233 [00:12<00:00, 32.36it/s]Read eval:  93%|█████████▎| 216/233 [00:12<00:00, 40.87it/s]                                                            Predict chunk:   0%|          | 0/47 [00:00<?, ?it/s]Predict chunk:   4%|▍         | 2/47 [00:00<00:02, 15.47it/s]Predict chunk:   9%|▊         | 4/47 [00:00<00:02, 15.30it/s]Predict chunk:  13%|█▎        | 6/47 [00:00<00:02, 15.10it/s]Predict chunk:  17%|█▋        | 8/47 [00:00<00:02, 15.26it/s]Predict chunk:  21%|██▏       | 10/47 [00:00<00:02, 15.30it/s]Predict chunk:  26%|██▌       | 12/47 [00:00<00:02, 15.37it/s]Predict chunk:  30%|██▉       | 14/47 [00:00<00:02, 15.37it/s]Predict chunk:  34%|███▍      | 16/47 [00:01<00:02, 15.37it/s]Predict chunk:  38%|███▊      | 18/47 [00:01<00:01, 15.38it/s]Predict chunk:  43%|████▎     | 20/47 [00:01<00:01, 15.29it/s]Predict chunk:  47%|████▋     | 22/47 [00:01<00:01, 15.32it/s]Predict chunk:  51%|█████     | 24/47 [00:01<00:01, 15.27it/s]Predict chunk:  55%|█████▌    | 26/47 [00:01<00:01, 15.03it/s]Predict chunk:  60%|█████▉    | 28/47 [00:01<00:01, 15.14it/s]Predict chunk:  64%|██████▍   | 30/47 [00:01<00:01, 15.13it/s]Predict chunk:  68%|██████▊   | 32/47 [00:02<00:01, 14.98it/s]Predict chunk:  72%|███████▏  | 34/47 [00:02<00:00, 15.11it/s]Predict chunk:  77%|███████▋  | 36/47 [00:02<00:00, 15.16it/s]Predict chunk:  81%|████████  | 38/47 [00:02<00:00, 15.13it/s]Predict chunk:  85%|████████▌ | 40/47 [00:02<00:00, 15.24it/s]Predict chunk:  89%|████████▉ | 42/47 [00:02<00:00, 15.28it/s]Predict chunk:  94%|█████████▎| 44/47 [00:02<00:00, 15.35it/s]Predict chunk:  98%|█████████▊| 46/47 [00:03<00:00, 15.37it/s]                                                              [predict] eval done in  15.8s  predict  11.8s (74.9%)  read/wait   4.0s (25.1%)  [prefetch x3]
+[eval-fig] full-size -> ./runs_finetune/ft_all_pcgrad_01_05-27-07/eval_figs/eval_s20260928000003_ep08.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+[save-final] wrote final model to models/finetune/ft_all_pcgrad_01_05-27-07/final.pth
+TensorBoard logs saved to: ./runs_finetune/ft_all_pcgrad_01_05-27-07
+Training completed.
+[campaign31] isolated arm pid=368274 status=0 exit=0 controller_fds=16->16
+
+==============================================================================
+[campaign_finetune] SUMMARY
+==============================================================================
+  ft_all: OK
+  ft_all_pcgrad: OK

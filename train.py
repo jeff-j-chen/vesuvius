@@ -1558,13 +1558,17 @@ class Trainer:
             if not run_dir:
                 print("[config] no run dir resolved -- skipping config dump", flush=True)
                 return
-            config_data = dataclasses.asdict(self.c) if dataclasses.is_dataclass(self.c) else vars(self.c)
+            config_data = dataclasses.asdict(self.c) if dataclasses.is_dataclass(self.c) else dict(vars(self.c))
+            config_data["run_dir"] = os.path.abspath(run_dir)
             text = json.dumps(config_data, indent=2, default=str, sort_keys=True)
-            os.makedirs(run_dir, exist_ok=True)
-            with open(os.path.join(run_dir, "config.json"), "w", encoding="utf-8") as handle:
-                handle.write(text)
+            # the model-dir copy lets inference start from a checkpoint path alone
+            targets = [run_dir] + ([self.c.model_dir] if getattr(self.c, "model_dir", None) else [])
+            for target in targets:
+                os.makedirs(target, exist_ok=True)
+                with open(os.path.join(target, "config.json"), "w", encoding="utf-8") as handle:
+                    handle.write(text)
+                print(f"[config] saved run config -> {os.path.join(target, 'config.json')}", flush=True)
             self.vis.writer.add_text("config", "```json\n" + text + "\n```", 0)
-            print(f"[config] saved run config -> {os.path.join(run_dir, 'config.json')}", flush=True)
         except Exception as exc:
             print(f"[config] WARN could not dump run config: {exc}", flush=True)
 
@@ -3934,6 +3938,85 @@ class Trainer:
         print("Training completed.")
 
 
+def _is_lfs_pointer(path: str) -> bool:
+    if not os.path.isfile(path) or os.path.getsize(path) > 1024:
+        return False
+    with open(path, "rb") as handle:
+        return handle.read(64).startswith(b"version https://git-lfs")
+
+
+def _zarr_download_commands(scroll_ids) -> list[str]:
+    import assemble_test_segments
+    import assemble_training_segments
+
+    training_names = {str(zid): name for name, _segment, zid in assemble_training_segments.SEGMENTS}
+    test_ids = {str(fragment[0]) for fragment in assemble_test_segments.FRAGMENTS}
+    names = [training_names[str(sid)] for sid in scroll_ids if str(sid) in training_names]
+    tests = [str(sid) for sid in scroll_ids if str(sid) in test_ids]
+    unknown = [str(sid) for sid in scroll_ids if str(sid) not in training_names and str(sid) not in test_ids]
+    commands = []
+    if names:
+        command = f"python3 assemble_training_segments.py --only {','.join(names)}"
+        if any(name in assemble_training_segments.RESCAN_88KEV for name in names):
+            command += "   # needs R2_PUBLIC_URL for the 88 keV fragments, or add --no-r2"
+        commands.append(command)
+    if tests:
+        commands.append("python3 assemble_test_segments.py " + " ".join(f"--only {sid}" for sid in tests))
+    if unknown:
+        commands.append(f"# no assembler knows {unknown}; obtain these zarrs manually")
+    return commands
+
+
+def preflight_inputs(config) -> None:
+    """raise before any data loading if a zarr, label, or checkpoint is missing, with the command that fetches it."""
+    suffixes = {str(key): value for key, value in (config.data.zarr_suffix or {}).items()}
+    train_ids = [int(sid) for sid in config.scroll_ids()]
+    scroll_ids = list(dict.fromkeys([*train_ids, *(int(sid) for sid in config.data.vis_scroll_ids or [])]))
+    missing_zarrs, missing_files, lfs_pointers = [], [], []
+    for sid in scroll_ids:
+        if not os.path.isdir(os.path.join(config.data.zarr_path, f"{sid}{suffixes.get(str(sid), '')}.zarr")):
+            missing_zarrs.append(sid)
+        paths = [
+            os.path.join("masks", f"{sid}.png"),
+            os.path.join(config.data.inklabel_dir, f"{sid}.png"),
+            os.path.join(config.data.surface_label_dir, str(sid), "depth.npy"),
+            os.path.join(config.data.surface_label_dir, str(sid), "confidence.npy"),
+        ]
+        if sid in train_ids and not config.data.simple_split:
+            paths.append(os.path.join(config.data.train_mask_dir, f"{sid}.png"))
+        for path in paths:
+            if not os.path.exists(path):
+                missing_files.append(path)
+            elif _is_lfs_pointer(path):
+                lfs_pointers.append(path)
+    if config.init_weights:
+        if not os.path.isfile(config.init_weights):
+            missing_files.append(config.init_weights)
+        elif _is_lfs_pointer(config.init_weights):
+            lfs_pointers.append(config.init_weights)
+
+    problems = []
+    if missing_zarrs:
+        problems.append(
+            f"{len(missing_zarrs)} zarr(s) missing under {config.data.zarr_path}: {missing_zarrs}\n"
+            "  download/render them with:\n    " + "\n    ".join(_zarr_download_commands(missing_zarrs))
+            + "\n  (set VESUVIUS_ZARR_PATH if your zarrs live elsewhere)"
+        )
+    if missing_files:
+        problems.append(
+            f"{len(missing_files)} repo file(s) missing:\n    " + "\n    ".join(missing_files)
+            + "\n  these are tracked in git: re-clone or `git checkout -- <path>`, then `git lfs pull`"
+        )
+    if lfs_pointers:
+        problems.append(
+            f"{len(lfs_pointers)} file(s) are git-lfs pointers, not data:\n    " + "\n    ".join(lfs_pointers)
+            + "\n  run `git lfs install && git lfs pull`"
+        )
+    if problems:
+        raise FileNotFoundError("input preflight failed\n" + "\n".join(problems))
+    print(f"[preflight] {len(scroll_ids)} scroll(s) and init weights present", flush=True)
+
+
 def main() -> None:
     import argparse
 
@@ -3945,17 +4028,41 @@ def main() -> None:
         default="",
         help="experiment name (used for TensorBoard log dir and checkpoint naming)",
     )
+    parser.add_argument("--dry-run", action="store_true", help="check inputs and print the config, then exit")
     args = parser.parse_args()
 
+    # defaults = campaign_archs_40 holdout_n96_combined_surface_norm; finetune.py loads config.save_final
     config = Config()
     if args.experiment_name:
         config.exp_name = args.experiment_name
 
     repo_root = os.path.dirname(os.path.abspath(__file__))
+    # data, label, and cache paths in the config are repo-relative
+    os.chdir(repo_root)
     if not os.path.isabs(config.tra.log_dir):
         config.tra.log_dir = os.path.normpath(os.path.join(repo_root, config.tra.log_dir))
     if not os.path.isabs(config.model_dir):
         config.model_dir = os.path.normpath(os.path.join(repo_root, config.model_dir))
+
+    preflight_inputs(config)
+    if args.dry_run:
+        print(
+            f"[dry-run] ctx={config.data.context_size} ds={config.data.context_downsample} "
+            f"norm={config.data.norm_mode} domains={dict(zip(config.data.train_scroll_dict, config.data.train_scroll_weights))} "
+            f"scrolls={len(config.data.scrolls)} vis={config.data.vis_scroll_ids} epochs={config.tra.n_epochs} "
+            f"batch={config.dl.batch_size} lr={config.tra.lr} init={config.init_weights} -> {config.save_final}",
+            flush=True,
+        )
+        return
+
+    if config.data.norm_mode == "surface_anchor":
+        from utils.norm import ensure_surface_anchors
+
+        ensure_surface_anchors(
+            dict.fromkeys([*config.scroll_ids(), *(config.data.vis_scroll_ids or [])]),
+            config.data.zarr_path,
+            surface_dir=config.data.surface_label_dir,
+        )
 
     trainer = Trainer(config)
     trainer.run()

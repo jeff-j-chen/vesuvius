@@ -709,7 +709,9 @@ class TensorboardVisualizer:
         )
         self.probe_log_interval = max(1, int(getattr(config.tra, "probe_int", 5)))
 
-        if config.exp_name is None:
+        if getattr(config, "run_name", None):
+            experiment_name = str(config.run_name)
+        elif config.exp_name is None:
             if self.mode == 'finetune':
                 experiment_name = f"finetune_{datetime.now().strftime('%d.%m_%H-%M-%S')}"
             else:

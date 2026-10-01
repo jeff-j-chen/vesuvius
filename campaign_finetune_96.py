@@ -1,32 +1,30 @@
 """campaign_finetune_96.py -- fine-tune the archs40 native-96 combined-surface model.
 
-This starts from the campaign-40 `holdout_n96_combined_surface_norm` checkpoint and keeps the
-same training fragments as archs40, then adds two new physical domains:
+This starts from the campaign-40 `holdout_n96_combined_surface_norm` checkpoint and fine-tunes on
+the low-res / high-energy target domain only:
 
-- PHerc0211: 20260928000003 (train-only, no validation split)
-- PHerc1447: 20260930144758 / 20260930144760
+- PHerc1447: 20260930144758 / 20260930144760 (manual train/val split from train_masks)
+- PHerc0211: 20260928000003 (manual train/val split from train_masks, like every other scroll)
 
-Unlike the archs40 campaigns, this runner keeps the repository train masks
-(`simple_split=False`). That lets PHerc0211 stay train-only via `train_only_scroll_ids`
-without producing validation metrics for that scroll.
+Runs (tids), all ring (2,2,4) with enc1/enc2 frozen, enc3+bottleneck lr=1e-6, decoder+head lr=5e-5:
+- ft_all_pioychi_h   PHerc1447 + PHerc0009B + PHerc0139 w044/w035 + PHerc0500P2 + PHerc0211
+                     (PHerc0211 weight 2, the rest weight 1); visualized on PHerc0211 and PHerc1447 w060
+Older (commented out):
+- ft_all             PHerc1447 + PHerc0009B + PHerc0139 w044/w035 + PHerc0500P2 (the six-scroll set
+                     minus PHerc0343P / PHerc0841), all weight 1; PHerc0211 is held out and is the
+                     only visualized scroll
+- ft_all_pcgrad      same, with full PCGrad (one task per physical domain). PCGrad replaces patch
+                     GroupDRO, which the trainer treats as mutually exclusive.
+- ft_1447_<scroll>   PHerc1447 + one added scroll (both weight 1), visualized on the added scroll
+                     and PHerc0211 (vis-only, preloaded to RAM). <scroll> is one of
+                     pherc0841, pherc0009b, pherc0139_w044, pherc0139_w035, pherc0343p, pherc0500p2.
 
-Runs (tids):
-1. holdout_n96_combined_surface_norm            ring (2,2,4)
-2. holdout_n96_combined_surface_norm_c0g0s4     ring (0,0,4), multitile_pos_only=False (this run only)
-3. holdout_n96_combined_surface_norm_f12        ring (2,2,4), enc1/enc2 frozen,
-                                                enc3+bottleneck lr=1e-6, decoder+head lr=5e-5
-
-`--fewer` restricts training to the six-fragment bootstrap subset:
-
-- PHerc0211: 20260928000003
-- PHerc1447: 20260930144758 / 20260930144760
-- PHerc0841: 20260221022814
-- PHerc0009B: 20250919125754
-- PHerc0139 w044: 20260115000000
+Each run's log folder `runs_finetune/<tid>_<timestamp>` has the same name as its checkpoint folder
+`models/finetune/<tid>_<timestamp>`, and config.json is saved in both.
 
 Usage:
     python3 campaign_finetune_96.py --dry-run
-    python3 campaign_finetune_96.py --fewer
+    python3 campaign_finetune_96.py --only ft_all_pcgrad
 """
 from __future__ import annotations
 
@@ -35,6 +33,7 @@ import contextlib
 import gc
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 os.environ["PYTORCH_NVML_BASED_CUDA_CHECK"] = "1"
@@ -45,7 +44,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 import campaign_archs_29 as campaign29
 import campaign_archs_31 as campaign31
 import campaign_archs_40 as campaign40
-from utils.config import ScrollConfig, startup_output
+from utils.config import DEFAULT_SCROLLS, ScrollConfig, startup_output
 from utils.norm import ensure_surface_anchors
 
 
@@ -57,14 +56,22 @@ DEFAULT_INIT_WEIGHTS = "/vesuvius/models/archs40/holdout_n96_combined_surface_no
 PHERC0211_ID = 20260928000003
 PHERC1447_IDS = (20260930144758, 20260930144760)
 PHERC0841_ID = 20260221022814
-PHERC9B_ID = 20250919125754
-PHERC0139_W044_ID = 20260115000000
+PHERC0211_DOMAIN = campaign40.NEW_DOMAIN
 PHERC1447_DOMAIN = "pherc1447"
 ENCODER_LR_SCALE = 0.25
-DEFAULT_VIS_SCROLL_IDS = [PHERC0211_ID, PHERC1447_IDS[1], PHERC0139_W044_ID]
-FEWER_VIS_SCROLL_IDS = [PHERC0211_ID, PHERC1447_IDS[1], PHERC0841_ID]
+VIS_SCROLL_IDS = [PHERC0211_ID, PHERC1447_IDS[1]]
+# (tid suffix, domain, scroll id) for the PHerc1447 + one-scroll tests
+ADDED_SCROLLS = (
+    ("pherc0841", "pherc0841", PHERC0841_ID),
+    ("pherc0009b", "pherc0009b", 20250919125754),
+    ("pherc0139_w044", "pherc0139", 20260115000000),
+    ("pherc0139_w035", "pherc0139", 20260317000000),
+    ("pherc0343p", "pherc0343p", 20250511003658),
+    ("pherc0500p2", "pherc0500p2", 20250628074500),
+)
 SCROLL_WEIGHT_BY_ID = {
-    PHERC0211_ID: 3,
+    PHERC0211_ID: 2,
+    **{scroll_id: 1 for _, _, scroll_id in ADDED_SCROLLS},
 }
 
 # test 3: absolute learning rates. enc1/enc2 are fully frozen (requires_grad=False and excluded
@@ -76,42 +83,39 @@ FREEZE12_LAYER_LR = {
     "task_lr": 5e-5,
 }
 
-DEFAULT_TRAIN_SCROLL_DICT = {
-    **campaign40.BASE_SCROLL_DICT,
-    campaign40.NEW_DOMAIN: [PHERC0211_ID],
-    PHERC1447_DOMAIN: list(PHERC1447_IDS),
+SCROLL_CONFIGS = {
+    PHERC0211_ID: ScrollConfig(PHERC0211_ID, split_axis="x", train_split_frac=1.0),
+    PHERC1447_IDS[0]: ScrollConfig(PHERC1447_IDS[0], split_axis="x", train_split_frac=0.75),
+    PHERC1447_IDS[1]: ScrollConfig(PHERC1447_IDS[1], split_axis="x", train_split_frac=0.75),
+    **{
+        int(scroll.scroll_id): scroll
+        for scroll in DEFAULT_SCROLLS
+        if int(scroll.scroll_id) in {scroll_id for _, _, scroll_id in ADDED_SCROLLS}
+    },
 }
-DEFAULT_SCROLLS = [
-    *campaign40.SCROLLS_BASE,
-    ScrollConfig(PHERC0211_ID, split_axis="x", train_split_frac=1.0),
-    ScrollConfig(PHERC1447_IDS[0], split_axis="x", train_split_frac=0.75),
-    ScrollConfig(PHERC1447_IDS[1], split_axis="x", train_split_frac=0.75),
-]
-
-FEWER_TRAIN_SCROLL_DICT = {
-    campaign40.NEW_DOMAIN: [PHERC0211_ID],
+TRAIN_1447 = {PHERC1447_DOMAIN: list(PHERC1447_IDS)}
+TRAIN_1447_0211 = {PHERC1447_DOMAIN: list(PHERC1447_IDS), PHERC0211_DOMAIN: [PHERC0211_ID]}
+# the six-scroll set minus PHerc0343P and PHerc0841; PHerc0211 stays held out
+TRAIN_ALL = {
     PHERC1447_DOMAIN: list(PHERC1447_IDS),
-    "pherc0841": [PHERC0841_ID],
-    "pherc0009b": [PHERC9B_ID],
-    "pherc0139": [PHERC0139_W044_ID],
+    "pherc0009b": [20250919125754],
+    "pherc0139": [20260115000000, 20260317000000],
+    "pherc0500p2": [20250628074500],
 }
-FEWER_SCROLLS = [
-    ScrollConfig(PHERC0211_ID, split_axis="x", train_split_frac=1.0),
-    ScrollConfig(PHERC1447_IDS[0], split_axis="x", train_split_frac=0.75),
-    ScrollConfig(PHERC1447_IDS[1], split_axis="x", train_split_frac=0.75),
-    ScrollConfig(PHERC0841_ID, split_axis="x", train_split_frac=0.75),
-    ScrollConfig(PHERC9B_ID, split_axis="x", train_split_frac=0.75),
-    ScrollConfig(PHERC0139_W044_ID, split_axis="y", train_split_frac=0.8055),
-]
+TRAIN_ALL_0211 = {**TRAIN_ALL, PHERC0211_DOMAIN: [PHERC0211_ID]}
+VIS_0211_ONLY = [PHERC0211_ID]
 
 
-def _train_scroll_weights(train_scroll_dict: dict[str, list[int]]) -> list[int]:
+def _train_scroll_weights(
+    train_scroll_dict: dict[str, list[int]],
+    overrides: dict[int, int] = SCROLL_WEIGHT_BY_ID,
+) -> list[int]:
     """domain weights derived from per-scroll overrides, falling back to campaign-40 defaults."""
     weights = []
     for domain, scroll_ids in train_scroll_dict.items():
         default = int(campaign40.REGIME_WEIGHT_BY_DOMAIN.get(domain, 1))
         chosen = {
-            int(SCROLL_WEIGHT_BY_ID.get(int(scroll_id), default))
+            int(overrides.get(int(scroll_id), default))
             for scroll_id in scroll_ids
         }
         if len(chosen) != 1:
@@ -127,7 +131,7 @@ def _check_weights(config, test: dict) -> None:
     """post-condition: the weights on the final config match the exposed per-scroll/domain weights."""
     domains = list(config.data.train_scroll_dict)
     weights = [int(w) for w in config.data.train_scroll_weights]
-    expected = _train_scroll_weights(config.data.train_scroll_dict)
+    expected = _train_scroll_weights(config.data.train_scroll_dict, test["weight_overrides"])
     if len(weights) != len(domains):
         raise ValueError(f"{test['tid']}: {len(weights)} weights for {len(domains)} domains")
     if weights != expected:
@@ -139,20 +143,23 @@ def _check_weights(config, test: dict) -> None:
 
 
 def _test(
+    tid: str,
+    train_scroll_dict: dict[str, list[int]],
     init_weights: str,
-    fewer: bool,
-    tid_suffix: str,
     close_r: int,
     gap_r: int,
     shell_r: int,
     *,
     multitile_pos_only: bool | None = None,
     layer_lr: dict | None = None,
+    pcgrad: bool = False,
+    vis_scroll_ids: list[int] | None = None,
+    scroll_configs: dict[int, ScrollConfig] = SCROLL_CONFIGS,
+    weight_overrides: dict[int, int] = SCROLL_WEIGHT_BY_ID,
 ) -> dict:
-    train_scroll_dict = FEWER_TRAIN_SCROLL_DICT if fewer else DEFAULT_TRAIN_SCROLL_DICT
-    scrolls = FEWER_SCROLLS if fewer else DEFAULT_SCROLLS
+    scrolls = [scroll_configs[int(sid)] for sid in campaign40._scroll_ids_from_dict(train_scroll_dict)]
     test = campaign40._test(
-        f"holdout_n96_combined_surface_norm{tid_suffix}",
+        tid,
         campaign40.SURFACE_FIBER_MAE_KEY,
         train_scroll_dict,
         scrolls,
@@ -164,17 +171,17 @@ def _test(
         },
         **campaign40.SCRATCH_TRAINING,
     )
-    test["tag"] = (
-        f"AI_{tid_suffix}"
-        if fewer else f"finetune_holdout_n96_combined_surface_norm{tid_suffix}"
-    )
+    test["tag"] = tid
     test["ring_close_r"] = int(close_r)
     test["ring_gap_r"] = int(gap_r)
     test["ring_shell_r"] = int(shell_r)
-    test["train_scroll_weights"] = _train_scroll_weights(train_scroll_dict)
+    test["weight_overrides"] = dict(weight_overrides)
+    test["train_scroll_weights"] = _train_scroll_weights(train_scroll_dict, weight_overrides)
     # None -> leave whatever campaign40 / DataConfig default is in place
     test["multitile_pos_only"] = None if multitile_pos_only is None else bool(multitile_pos_only)
     test["layer_lr"] = dict(layer_lr) if layer_lr else None
+    test["pcgrad"] = bool(pcgrad)
+    test["vis_scroll_ids"] = list(vis_scroll_ids or VIS_SCROLL_IDS)
     return test
 
 
@@ -206,6 +213,15 @@ def _campaign40_paths():
 def build_config(test: dict):
     with _campaign40_paths():
         config = campaign40.build_config(test)
+    # campaign31 pre-creates MODEL_DIR/<tid>; checkpoints go to MODEL_DIR/<run_name> instead
+    with contextlib.suppress(OSError):
+        (ROOT / config.model_dir).rmdir()
+    run_name = f"{test['tid']}_{datetime.now():%d_%H-%M-%S}"
+    config.exp_name = config.run_name = run_name
+    config.model_dir = os.path.join(MODEL_DIR, run_name)
+    config.save_final = os.path.join(config.model_dir, "final.pth")
+    if config.tra.character_forgetting:
+        config.tra.character_forgetting_path = os.path.join(config.model_dir, "character_forgetting.json")
     config.data.scrolls = list(test["scrolls"])
     config.data.train_scroll_dict = {
         domain: list(ids) for domain, ids in test["train_scroll_dict"].items()
@@ -216,7 +232,7 @@ def build_config(test: dict):
     config.data.inklabel_dir = INKLABEL_DIR
     config.data.vis_scroll_ids = list(test["vis_scroll_ids"])
     config.data.vis_preload_persistent = True
-    config.data.train_only_scroll_ids = [PHERC0211_ID]
+    config.data.train_only_scroll_ids = []
     config.data.ring_close_r = int(test["ring_close_r"])
     config.data.ring_gap_r = int(test["ring_gap_r"])
     config.data.ring_shell_r = int(test["ring_shell_r"])
@@ -227,8 +243,9 @@ def build_config(test: dict):
             raise AttributeError("DataConfig has no attribute 'multitile_pos_only'")
         config.data.multitile_pos_only = bool(test["multitile_pos_only"])
 
-    config.tra.n_epochs = 10
-    config.tra.eval_int = 10
+    config.tra.n_epochs = 8
+    config.tra.eval_int = 8
+    config.tra.save_int = 1
     config.tra.eval_int_scrolls = len(test["vis_scroll_ids"])
     config.tra.test_int = 999
     config.tra.fast_eval_figure = False
@@ -247,6 +264,16 @@ def build_config(test: dict):
         config.tra.lr = config.tra.task_lr          # base lr == decoder+head lr
         config.tra.encoder_lr_scale = 1.0           # superseded by encoder_lr
         config.tra.encoder_freeze_epochs = 0
+
+    if test.get("pcgrad"):
+        # full PCGrad: one task gradient per physical domain, projected against every other domain
+        config.tra.pcgrad = True
+        config.tra.pcgrad_groups = 0
+        config.tra.pcgrad_lite = False
+        config.tra.pcgrad_gram = False
+        # mutually exclusive with PCGrad in the trainer
+        config.tra.physical_patch_groupdro = False
+        config.tra.physical_domain_groupdro = False
 
     _check_weights(config, test)
     return config
@@ -286,22 +313,33 @@ def preflight_inputs(selected: list[dict], dry_run: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="fine-tune archs40 native-96 combined-surface model with PHerc0211 + PHerc1447")
+    parser = argparse.ArgumentParser(description="fine-tune archs40 native-96 combined-surface model on PHerc1447 (+ PHerc0211)")
     parser.add_argument("--only", type=str, default=None)
-    parser.add_argument("--fewer", action="store_true",
-                        help="restrict training to PHerc0211, PHerc1447 w058/w060, PHerc0841 auto-grown 405, PHerc0009B 487, and PHerc0139 w044")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--init-weights", default=DEFAULT_INIT_WEIGHTS,
                         help="starting checkpoint (default: archs40 holdout_n96_combined_surface_norm final.pth)")
     args = parser.parse_args()
 
     selected = [
-        _test(args.init_weights, args.fewer, "", 2, 2, 4),
-        _test(args.init_weights, args.fewer, "_c0g0s4", 0, 0, 4, multitile_pos_only=False),
-        _test(args.init_weights, args.fewer, "_f12", 2, 2, 4, layer_lr=FREEZE12_LAYER_LR),
+        # _test("ft_1447", TRAIN_1447, args.init_weights, 2, 2, 4, layer_lr=FREEZE12_LAYER_LR),
+        _test("ft_all_pioychi_h", TRAIN_ALL_0211, args.init_weights, 2, 2, 4, layer_lr=FREEZE12_LAYER_LR),
+        # PHerc0211 visualized but not trained
+        # *(
+        #     _test(tid, TRAIN_ALL, args.init_weights, 2, 2, 4, layer_lr=FREEZE12_LAYER_LR, pcgrad=pcgrad,
+        #           vis_scroll_ids=VIS_0211_ONLY)
+        #     for tid, pcgrad in (("ft_all", False), ("ft_all_pcgrad", True))
+        # ),
     ]
+    # for suffix, domain, scroll_id in ADDED_SCROLLS:
+    #     test = _test(
+    #         f"ft_1447_{suffix}",
+    #         {PHERC1447_DOMAIN: list(PHERC1447_IDS), domain: [scroll_id]},
+    #         args.init_weights, 2, 2, 4, layer_lr=FREEZE12_LAYER_LR,
+    #     )
+    #     test["vis_scroll_ids"] = [scroll_id, PHERC0211_ID]
+    #     selected.append(test)
     for test in selected:
-        test["vis_scroll_ids"] = list(FEWER_VIS_SCROLL_IDS if args.fewer else DEFAULT_VIS_SCROLL_IDS)
+        test.setdefault("vis_scroll_ids", list(VIS_SCROLL_IDS))
     if args.only:
         wanted = {value.strip() for value in args.only.split(",") if value.strip()}
         selected = [test for test in selected if test["tid"] in wanted]
@@ -330,7 +368,9 @@ def main() -> None:
                 f"batch={config.dl.batch_size} lr={config.tra.lr} epochs={config.tra.n_epochs} "
                 f"encoder_lr_scale={config.tra.encoder_lr_scale} "
                 f"freeze={config.tra.freeze_prefixes} encoder_lr={config.tra.encoder_lr} "
-                f"task_lr={config.tra.task_lr} fewer={args.fewer} init={config.init_weights}",
+                f"task_lr={config.tra.task_lr} pcgrad={config.tra.pcgrad} "
+                f"patch_groupdro={config.tra.physical_patch_groupdro} "
+                f"run={config.run_name} init={config.init_weights}",
                 flush=True,
             )
         if args.dry_run:

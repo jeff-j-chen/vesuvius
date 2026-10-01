@@ -33,6 +33,36 @@ class _ErrorLinesOnly(io.TextIOBase):
         self._target.flush()
 
 
+def resolve_run_config(checkpoint, repo_root=None) -> tuple[dict, str]:
+    """saved run config for a checkpoint: <checkpoint dir>/config.json, else the newest runs*/<run>/config.json
+    whose model_dir is the checkpoint's directory (older runs predate the model-dir copy)."""
+    checkpoint = os.path.realpath(str(checkpoint))
+    model_dir = os.path.dirname(checkpoint)
+    repo_root = os.path.realpath(str(repo_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    local = os.path.join(model_dir, "config.json")
+    if os.path.isfile(local):
+        with open(local, "r", encoding="utf-8") as handle:
+            return json.load(handle), local
+    import glob
+
+    matches = []
+    for path in glob.glob(os.path.join(repo_root, "runs*", "*", "config.json")):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        saved_dir = data.get("model_dir")
+        if saved_dir and os.path.realpath(os.path.join(repo_root, saved_dir)) == model_dir:
+            matches.append((os.path.getmtime(path), path, data))
+    if not matches:
+        raise FileNotFoundError(f"no config.json next to {checkpoint} and no run log with model_dir={model_dir}")
+    matches.sort(key=lambda item: item[0])
+    if len(matches) > 1:
+        print(f"[run-config] {len(matches)} runs share {model_dir}; using the newest: {matches[-1][1]}", flush=True)
+    return matches[-1][2], matches[-1][1]
+
+
 @contextlib.contextmanager
 def startup_output():
     """silence start-of-run stdout unless LOG_LEVEL is INFO."""
@@ -123,6 +153,20 @@ DEFAULT_TRAIN_SCROLL_DICT = {
     "pherc0841": [20260221022814],
 }
 
+# campaign-40 holdout_n96_combined_surface_norm training set: DEFAULT_SCROLLS plus six more PHerc0139 segments.
+# DEFAULT_SCROLLS / DEFAULT_TRAIN_SCROLL_DICT stay as-is because MAE pretraining specs are keyed on them.
+_EXTRA_PHERC0139_IDS = (20250108000005, 20260112000000, 20260126000000, 20250831000000, 20260108000000, 20260302000000)
+TRAIN_SCROLLS: List[ScrollConfig] = [
+    *DEFAULT_SCROLLS[:3],
+    *(ScrollConfig(scroll_id, split_axis="x", train_split_frac=0.75) for scroll_id in _EXTRA_PHERC0139_IDS),
+    *DEFAULT_SCROLLS[3:],
+]
+TRAIN_SCROLL_DICT = {
+    name: list(scroll_ids) + (list(_EXTRA_PHERC0139_IDS) if name == "pherc0139" else [])
+    for name, scroll_ids in DEFAULT_TRAIN_SCROLL_DICT.items()
+}
+TRAIN_SCROLL_WEIGHT_BY_DOMAIN = {"pherc0139": 2, "pherc0343p": 4, "pherc0500p2": 3, "pherc0814": 5}
+
 DEFAULT_TEST_SCROLL_IDS = (
     20260814140748,
     20260717193517,
@@ -148,14 +192,14 @@ class DataConfig:
             "/vesuvius/ves_zarrs2" if os.name == "posix" else r"C:\Users\ChenJeff\Documents\ves_zarrs2",
         )
     )
-    scrolls: List[ScrollConfig] = field(default_factory=lambda: list(DEFAULT_SCROLLS))
+    scrolls: List[ScrollConfig] = field(default_factory=lambda: list(TRAIN_SCROLLS))
     train_scroll_dict: Optional[Dict[str, List[int]]] = field(
         default_factory=lambda: {
-            name: list(scroll_ids) for name, scroll_ids in DEFAULT_TRAIN_SCROLL_DICT.items()
+            name: list(scroll_ids) for name, scroll_ids in TRAIN_SCROLL_DICT.items()
         }
     )
     train_scroll_weights: Optional[List[int]] = field(
-        default_factory=lambda: [4] + [1] * (len(DEFAULT_TRAIN_SCROLL_DICT) - 1)
+        default_factory=lambda: [TRAIN_SCROLL_WEIGHT_BY_DOMAIN.get(name, 1) for name in TRAIN_SCROLL_DICT]
     )
     test_scroll_ids: List[int] = field(
         default_factory=lambda: list(DEFAULT_TEST_SCROLL_IDS)
@@ -188,26 +232,26 @@ class DataConfig:
     ring_shell_r: int = 4
     simple_split: bool = False  # true: axis/fraction split; false: train_masks/<scroll_id>.png
     coordinate_hash_split: bool = False
-    coordinate_hash_block_size: int = 256
+    coordinate_hash_block_size: int = 512
     coordinate_hash_valid_fraction: float = 0.25
-    coordinate_hash_seed: int = 41
+    coordinate_hash_seed: int = 29
     train_mask_dir: str = "./train_masks"
     surface_label_dir: str = "./surface_labels"
-    context_size: int = 192
-    context_downsample: int = 2
+    context_size: int = 96
+    context_downsample: int = 1
     eval_infer_bs: int = 192
     eval_prefetch: int = 3   # >0 reads eval rows in N background threads to overlap disk i/o with gpu inference (0=serial)
     eval_chunk_gb: float = 3.0  # bounded host-RAM target for the final W044 figure
     tta_mode: str = "light"  # eval TTA view set: "light"=id+hflip (2x), "flips"=id+h+v+180 (4x), "dihedral"=+/-90 too (6x)
     probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
-    vis_scroll_ids: Optional[List[int]] = field(default_factory=lambda: [20260115000000])
-    vis_preload_persistent: bool = False  # keep each visualized scroll volume in RAM for the whole run
+    vis_scroll_ids: Optional[List[int]] = field(default_factory=lambda: [20260221022814, 20250919125754, 20260928000003])
+    vis_preload_persistent: bool = True  # keep each visualized scroll volume in RAM for the whole run
     eval_stride: int = 32  # figure/inference window step in px; must not exceed the multitile center (grid*subtile)
-    inklabel_dir: str = "./inklabels"
+    inklabel_dir: str = "./dilated_inklabels"
     label_dilate_r: int = 0
     dot_inklabel_dir: str = ""  # optional dir of binary dot labels; only positives are added to train
     dot_scroll_whitelist: List[int] = field(default_factory=list)  # if non-empty, load dots ONLY for these scroll ids
-    ctx_jitter: int = 32  # max pixel jitter for context window; varies surrounding context during training
+    ctx_jitter: int = 10  # max pixel jitter for context window; varies surrounding context during training
     target_aware_ctx_jitter: bool = True
     depth_jitter: int = 1  # max slice jitter for depth window start; attacks depth-profile position memorization
     surface_relative_depth_window: bool = True  # center the source window on the literal map
@@ -220,11 +264,11 @@ class DataConfig:
     far_negative_forced_positive_dist: int = 200  # px far background must keep from any train-mask forced positive
     # training-only soft positives: a positive cell's target is the max of its gaussian-blurred
     # ink label, floored at edge_soft_floor (>0.5 so the cell still counts as positive). 0 = off
-    edge_soft_sigma: float = 0.0
-    edge_soft_floor: float = 0.6
+    edge_soft_sigma: float = 8.0
+    edge_soft_floor: float = 0.55
     # "global": whole-volume z-score and raw min/max; "surface_anchor": gap -> 0.1, surface papyrus -> 0.5;
     # "raw255": raw / 255 (for model.input_tile_norm)
-    norm_mode: str = "global"
+    norm_mode: str = "surface_anchor"
     # scroll id -> zarr/norm-key suffix, e.g. {"20231210121321": ".translated"} reads <id>.translated.zarr
     zarr_suffix: dict = field(default_factory=dict)
     # plan R.3: crossres/build_noise_bank.py output added to training crops of these scrolls ("" = off)
@@ -250,7 +294,7 @@ class DataConfig:
 @dataclass
 class DataloaderConfig:
     batch_size: int = 96
-    num_workers: int = 12
+    num_workers: int = 8
     prefetch_factor: int = 2
     data_aug: bool = True
     rotation_prob: float = 0.6
@@ -262,7 +306,7 @@ class DataloaderConfig:
     contrast_delta: float = 0.15
     noise_std_min: float = 0.001
     noise_std_max: float = 0.005
-    cutout_prob: float = 0.5
+    cutout_prob: float = 0.2
     cutout_max_frac: float = 0.16
     cutout_n_patches: int = 3
     depth_mask_prob: float = 0.0
@@ -319,10 +363,10 @@ class DataloaderConfig:
     randconv_layers_max: int = 1
     randconv_mix_min: float = 0.0
     cutout_protect_center: bool = True
-    context_replace_prob: float = 0.35
+    context_replace_prob: float = 0.15
     context_replace_keep_size: int = 0  # 0 = prediction center + 2*margin
-    context_replace_margin: int = 20
-    context_replace_feather: int = 40
+    context_replace_margin: int = 7
+    context_replace_feather: int = 13
     context_replace_min_mask_frac: float = 0.8
     context_replace_surface_align: bool = True
     context_replace_cross_prob: float = 0.0  # share of replacements drawing the donor from another physical domain
@@ -338,8 +382,8 @@ class DataloaderConfig:
 @dataclass
 class TrainingConfig:
     n_epochs: int = 10
-    aug_start_epoch: int = 5  # dataset transforms switch on at this epoch
-    lr: float = 1.5e-4
+    aug_start_epoch: int = 0  # dataset transforms switch on at this epoch
+    lr: float = 1e-4
     encoder_lr_scale: float = 1.0
     encoder_freeze_epochs: int = 0
     warmup_epochs: int = 5
@@ -349,16 +393,16 @@ class TrainingConfig:
     patience: int = 5
     lr_decay: float = 0.5
     save_int: int = 15
-    log_dir: str = "./runs_archs28"
+    log_dir: str = "./runs_train"
     eval_int: int = 10
-    eval_int_scrolls: int = 1
-    test_int: int = 9999
+    eval_int_scrolls: int = 3
+    test_int: int = 999
     probe_int: int = 9999
     loss_type: str = "bce"
     gce_q: float = 0.9
     dice_weight: float = 0.0  # loss = (1 - w) * primary + w * soft Dice over supervised cells
-    label_smooth_pos: float = 0.1
-    label_smooth_neg: float = 0.05
+    label_smooth_pos: float = 0.0
+    label_smooth_neg: float = 0.0
     tta_consistency: bool = False
     tta_consistency_lambda: float = 0.3
     tta_consistency_mode: str = "flips"
@@ -388,8 +432,8 @@ class TrainingConfig:
     val_cooldown_secs: int = 0
     eval_cooldown_secs: int = 0
     fig_chunk_cooldown_ms: int = 0
-    save_vis: bool = True
-    fast_eval_figure: bool = True
+    save_vis: bool = False
+    fast_eval_figure: bool = False
     test_on_final: bool = False
 
     supcon: bool = False
@@ -427,7 +471,7 @@ class TrainingConfig:
     entropy_min_batch_size: int = 8  # unlabeled samples per step; kept small to avoid OOM
     character_macro_metrics: bool = True
     character_score_threshold: float = 0.5
-    character_calibrate_threshold: bool = False
+    character_calibrate_threshold: bool = True
     character_threshold_min: float = 0.1
     character_threshold_max: float = 0.9
     character_threshold_steps: int = 33
@@ -444,7 +488,7 @@ class TrainingConfig:
     depth_view_consistency_prob: float = 0.5
     depth_view_consistency_lambda: float = 0.2
     depth_view_consistency_offset: int = 2
-    character_bag_ranking: bool = False
+    character_bag_ranking: bool = True
     character_bag_margin: float = 0.5
     character_bag_topk_frac: float = 0.5
     character_bag_lambda: float = 0.2
@@ -454,7 +498,7 @@ class TrainingConfig:
     physical_domain_groupdro: bool = False
     physical_domain_groupdro_eta: float = 0.05
     physical_domain_groupdro_max_ratio: float = 3.0
-    physical_patch_groupdro: bool = False
+    physical_patch_groupdro: bool = True
     physical_patch_groupdro_eta: float = 0.05
     physical_patch_groupdro_max_ratio: float = 3.0
     domain_vrex: bool = False
@@ -483,7 +527,7 @@ class TrainingConfig:
     spectral_decoupling_lambda: float = 0.0
     # RSC: on this share of samples, mute the head-input channels (or positions) most responsible
     # for the correct-class logit and train on the rest
-    rsc_prob: float = 0.0
+    rsc_prob: float = 0.33
     rsc_drop_frac: float = 0.33
     # Fishr on the output head: match per-domain variances of per-sample head gradients
     fishr_lambda: float = 0.0
@@ -508,7 +552,7 @@ class TrainingConfig:
     character_forgetting_path: str = ""
     character_forgetting_max_weight: float = 4.0
     model_ema: bool = False
-    model_ema_decay: float = 0.999
+    model_ema_decay: float = 0.995
     model_ema_start_epoch: int = 0
     mae_anchor_lambda: float = 0.0
     domain_gradient_mode: str = ""
@@ -536,9 +580,9 @@ class ModelConfig:
     arch: str = "nnunet3d_lcndz"
     compile_model: bool = False
     require_architecture_init: bool = True
-    conv1_drop: float = 0.05
-    conv2_drop: float = 0.05
-    head_drop: float = 0.1
+    conv1_drop: float = 0.2
+    conv2_drop: float = 0.2
+    head_drop: float = 0.3
     attn_mil: bool = False
     attn_entropy_weight: float = 0.03
     feature_attn_mil: bool = False
@@ -554,7 +598,7 @@ class ModelConfig:
     weldon_bottom_k2: int = 0
     weldon_multi_mix: float = 0.5
     weldon_depth_support_k: int = 0
-    fiber_coordinate_branch: bool = False
+    fiber_coordinate_branch: bool = True
     # papyrus-air boundary geometry (flaking / missing top layer) added at the early-2D enc1
     surface_relief_input: bool = False
     # fixed in-plane gaussian on the (downsampled) input; 0.6 px cuts white-noise variance ~4x like 2x2 pooling
@@ -569,9 +613,9 @@ class ModelConfig:
     private_domain_heads: bool = False
     # private loss sees the shared logits detached: the private head only shapes shared features, never takes over calibration
     private_head_detach_shared: bool = False
-    early_2d_unet: bool = False
+    early_2d_unet: bool = True
     early_2d_channels_mult: float = 1.0
-    mid_2d_unet: bool = True
+    mid_2d_unet: bool = False
     mid_2d_channels_mult: float = 1.0
     residual_2d_unet: bool = False
     two_d_block_depth: int = 2
@@ -676,10 +720,13 @@ class Config:
     model: ModelConfig = field(default_factory=ModelConfig)
     hm: HardMiningConfig = field(default_factory=HardMiningConfig)
     device: str = field(default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu")
-    model_dir: str = "models/archs28/mid_3d2d_gated"
-    exp_name: Optional[str] = None
-    init_weights: Optional[str] = "models/mae_nnunet_192_depth8_campaign26_mid_3d2d_full_ibn_2k.pth"
-    save_final: Optional[str] = "models/archs28/mid_3d2d_gated/final.pth"
+    # train.py writes here; finetune.py reads <model_dir>/final.pth
+    model_dir: str = "models/train/holdout_n96_combined_surface_norm"
+    exp_name: Optional[str] = "holdout_n96_combined_surface_norm"
+    # exact log folder name (no timestamp appended); campaigns set it equal to the model_dir name
+    run_name: Optional[str] = None
+    init_weights: Optional[str] = "models/mae_nnunet_192_campaign34_early_gated_fiber_native96_surfacenorm_campaign40_2k.pth"
+    save_final: Optional[str] = "models/train/holdout_n96_combined_surface_norm/final.pth"
 
     def scroll_ids(self) -> List[int]:
         return [scroll.scroll_id for scroll in self.data.scrolls]
