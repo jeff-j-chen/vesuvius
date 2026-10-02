@@ -181,6 +181,7 @@ DEFAULT_TEST_SCROLL_IDS = (
     20260928000001,  # PHerc0800_z9264_w040_abf
     20260928000002,  # PHerc0125_z15344_w040_abf
     20260928000003,  # PHerc0211_z7312_w080_abf
+    20260928000004,  # PHerc0211_z5520_w040_abf
 )
 
 
@@ -230,6 +231,8 @@ class DataConfig:
     ring_close_r: int = 2
     ring_gap_r: int = 2
     ring_shell_r: int = 4
+    # scrolls whose labels give positives only: no ring negatives are built around their ink
+    ring_free_scroll_ids: List[int] = field(default_factory=list)
     simple_split: bool = False  # true: axis/fraction split; false: train_masks/<scroll_id>.png
     coordinate_hash_split: bool = False
     coordinate_hash_block_size: int = 512
@@ -246,6 +249,8 @@ class DataConfig:
     probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
     vis_scroll_ids: Optional[List[int]] = field(default_factory=lambda: [20260221022814, 20250919125754, 20260928000003])
     vis_preload_persistent: bool = True  # keep each visualized scroll volume in RAM for the whole run
+    # vis-only scrolls without ink labels or train masks: zero labels, no train region (never mined or trained)
+    label_free_vis_scroll_ids: List[int] = field(default_factory=list)
     eval_stride: int = 32  # figure/inference window step in px; must not exceed the multitile center (grid*subtile)
     inklabel_dir: str = "./dilated_inklabels"
     label_dilate_r: int = 0
@@ -383,7 +388,7 @@ class DataloaderConfig:
 class TrainingConfig:
     n_epochs: int = 10
     aug_start_epoch: int = 0  # dataset transforms switch on at this epoch
-    lr: float = 1e-4
+    lr: float = 1.5e-4
     encoder_lr_scale: float = 1.0
     encoder_freeze_epochs: int = 0
     warmup_epochs: int = 5
@@ -542,7 +547,9 @@ class TrainingConfig:
     # non-negative PU risk (Kiryo et al. 2017) on far-background cells (label -2), treated as
     # unlabelled with this ink prior instead of as negatives; needs data.far_negative_share > 0
     pu_lambda: float = 0.0
-    pu_prior: float = 0.03
+    pu_prior: float = 0.03  # share of positive 16 px cells among far-background cells, not pixel share
+    pu_beta: float = 0.0  # Kiryo's beta/gamma: below -beta the PU risk takes a gamma-scaled ascent step
+    pu_gamma: float = 1.0
     # drop cells whose fitted surface shows no papyrus from the loss: "" off, "pos" positives, "both"
     support_drop: str = ""
     support_min_fraction: float = 0.25

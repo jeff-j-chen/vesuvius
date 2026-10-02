@@ -597,6 +597,13 @@ class Trainer:
             bool(getattr(config.tra, "spill_entropy", False)),
         ]):
             raise ValueError("SAM currently supports primary, DANN, SupCon, CLAM, and ELR losses only")
+        if float(getattr(config.tra, "pu_lambda", 0.0)) > 0:
+            if float(getattr(config.data, "far_negative_share", 0.0)) <= 0:
+                raise ValueError("tra.pu_lambda needs data.far_negative_share > 0 to supply unlabelled cells")
+            if not 0.0 < float(getattr(config.tra, "pu_prior", 0.03)) < 1.0:
+                raise ValueError("tra.pu_prior must lie in (0, 1)")
+            if float(getattr(config.tra, "sam_rho", 0.0)) > 0:
+                raise ValueError("the SAM objective treats far-background cells as negatives; it cannot run with nnPU")
         set_seed(
             int(getattr(config.tra, "seed", 41)),
             deterministic=bool(getattr(config.tra, "deterministic", False)),
@@ -677,6 +684,8 @@ class Trainer:
             "cross_scroll_rank_loss": 0.0,
             "private_head_loss": 0.0,
             "pu_loss": 0.0,
+            "pu_risk": 0.0,
+            "pu_unlabeled_mean_prob": 0.0,
             "unsupported_pos_frac": 0.0,
             "unsupported_neg_frac": 0.0,
             "and_mask_kept_frac": 0.0,
@@ -2088,9 +2097,11 @@ class Trainer:
                 )
             pu_lambda = float(getattr(self.c.tra, "pu_lambda", 0.0))
             pu_unlabeled = None
+            labelled_mask = mask
             if pu_lambda > 0 and outputs.shape == mask.shape:
-                # far-background cells may hold unlabelled ink: they leave the BCE for the PU risk
+                # far-background cells may hold unlabelled ink: they leave every negative-treating loss
                 pu_unlabeled = (labels < -1.5) & (mask > 0)
+                labelled_mask = mask * (~pu_unlabeled).to(mask.dtype)
                 loss_mask = loss_mask * (~pu_unlabeled).to(loss_mask.dtype)
             support_drop = str(getattr(self.c.tra, "support_drop", "") or "")
             if support_drop:
@@ -2323,7 +2334,7 @@ class Trainer:
             ]):
                 group_ids, group_losses = _character_group_losses(
                     per_target_loss,
-                    mask,
+                    labelled_mask,
                     character_ids_device,
                 )
             if bool(getattr(self.c.tra, "character_groupdro", False)):
@@ -2458,7 +2469,7 @@ class Trainer:
                 for deep_output, deep_weight in zip(deep_scores, deep_weights):
                     deep_target_loss = self.criterion(deep_output, targets)
                     deep_loss = deep_loss + deep_weight * (
-                        deep_target_loss * mask
+                        deep_target_loss * labelled_mask
                     ).sum() / denom
                 loss = loss + deep_loss
                 self._last_deep_supervision_loss = float(deep_loss.detach())
@@ -2469,7 +2480,7 @@ class Trainer:
                 clam_loss_value = clam_instance_loss(
                     instances,
                     labels,
-                    mask,
+                    labelled_mask,
                     int(getattr(self.c.tra, "clam_instance_k", 4)),
                 )
                 loss = loss + float(
@@ -2478,7 +2489,7 @@ class Trainer:
             elr_loss_value, elr_temporal = self._elr_regularizer(
                 outputs,
                 labels,
-                mask,
+                labelled_mask,
                 character_ids_device,
                 epoch,
             )
@@ -2494,7 +2505,7 @@ class Trainer:
                 bag_rank_loss_value, _ = character_bag_ranking_loss(
                     outputs,
                     labels,
-                    mask,
+                    labelled_mask,
                     character_ids_device,
                     margin=float(getattr(self.c.tra, "character_bag_margin", 0.5)),
                     topk_frac=float(getattr(self.c.tra, "character_bag_topk_frac", 0.5)),
@@ -2505,14 +2516,23 @@ class Trainer:
                 pu_positive = (labels > 0.5) & (mask > 0)
                 if pu_unlabeled.any() and pu_positive.any():
                     logits = outputs.float()
-                    # negative-class risk of U minus the share of it that hidden positives explain, floored at 0
-                    pu_loss = torch.clamp(
+                    # negative-class risk of U minus the share of it that hidden positives explain
+                    pu_risk = (
                         F.softplus(logits[pu_unlabeled]).mean()
-                        - float(getattr(self.c.tra, "pu_prior", 0.03)) * F.softplus(logits[pu_positive]).mean(),
-                        min=0.0,
+                        - float(getattr(self.c.tra, "pu_prior", 0.03)) * F.softplus(logits[pu_positive]).mean()
+                    )
+                    pu_beta = float(getattr(self.c.tra, "pu_beta", 0.0))
+                    # Kiryo et al.: below -beta the network is overfitting U, so step back up instead
+                    pu_loss = (
+                        pu_risk if float(pu_risk.detach()) >= -pu_beta
+                        else -float(getattr(self.c.tra, "pu_gamma", 1.0)) * pu_risk
                     )
                     loss = loss + pu_lambda * pu_loss
                     self._last_dg_losses["pu_loss"] = float(pu_loss.detach())
+                    self._last_dg_losses["pu_risk"] = float(pu_risk.detach())
+                    self._last_dg_losses["pu_unlabeled_mean_prob"] = float(
+                        torch.sigmoid(logits[pu_unlabeled]).mean().detach()
+                    )
 
             tta_lambda = float(getattr(self.c.tra, "tta_consistency_lambda", 0.0))
             _tta_on = getattr(self.c.tra, "tta_consistency", False) and tta_lambda > 0
@@ -3762,6 +3782,9 @@ class Trainer:
             ("private_head_loss", "CrossScroll/PrivateHeadLoss"),
             ("and_mask_kept_frac", "CrossScroll/ANDMaskKeptFraction"),
             ("spectral_decoupling_penalty", "CrossScroll/SpectralDecoupling"),
+            ("pu_loss", "PU/Loss"),
+            ("pu_risk", "PU/Risk"),
+            ("pu_unlabeled_mean_prob", "PU/UnlabeledMeanProb"),
         ):
             if key in train_metrics:
                 self.vis.writer.add_scalar(tag, train_metrics[key], epoch)

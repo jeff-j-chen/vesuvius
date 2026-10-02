@@ -390,6 +390,9 @@ FRAGMENTS = [
     ("20260928000003", "PHerc0211_z7312_w080_abf",
      f"{BUCKET}/PHerc0211/volumes/20250821151803-9.362um-1.2m-113keV-masked.zarr/0",
      "19416,7948,7948"),
+    ("20260928000004", "PHerc0211_z5520_w040_abf",
+     f"{BUCKET}/PHerc0211/volumes/20250821151803-9.362um-1.2m-113keV-masked.zarr/0",
+     "19416,7948,7948"),
 ]
 
 

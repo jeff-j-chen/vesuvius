@@ -16,6 +16,8 @@ Arms include the campaign-39 cross-resolution and translated-volume variants, pl
 | arm                                           | what it changes                          |
 |-----------------------------------------------|------------------------------------------|
 | holdout_n96_combined_surface_norm             | scratch MAE baseline without PHerc0211   |
+| holdout_n96_combined_surface_norm_nnpu        | same, far background (share 0.15) enters |
+|                                               | as unlabelled under non-negative PU risk |
 | holdout_n96_combined_surface_norm_pherc0211   | same, plus PHerc0211 in train + pretrain |
 
 The scratch baselines pretrain before fine-tuning starts. The moved cross-resolution arms consume the
@@ -61,10 +63,14 @@ NEW_DOMAIN = "pherc0211"
 NEW_SCROLL_ID = 20260928000003
 VIS_SCROLL_IDS = [20260221022814, 20250919125754, NEW_SCROLL_ID]
 SMOKE_SCROLL = 20260226000000  # pherc0814
-BASE_TEST_SCROLL_IDS = tuple(
-    int(scroll_id) for scroll_id in DEFAULT_TEST_SCROLL_IDS if int(scroll_id) != NEW_SCROLL_ID
+# the existing campaign-40 MAEs predate test segment 20260928000004 (PHerc0211_z5520_w040_abf)
+CAMPAIGN_TEST_SCROLL_IDS = tuple(
+    int(scroll_id) for scroll_id in DEFAULT_TEST_SCROLL_IDS if int(scroll_id) != 20260928000004
 )
-SCRATCH_TRAINING = {"batch_size": 96, "lr": 1e-4}
+BASE_TEST_SCROLL_IDS = tuple(
+    scroll_id for scroll_id in CAMPAIGN_TEST_SCROLL_IDS if scroll_id != NEW_SCROLL_ID
+)
+SCRATCH_TRAINING = {"batch_size": 95, "lr": 1.5e-4}
 CROSSRES_TRAINING = {"batch_size": 32, "lr": 1e-4}
 BASE_MAE = "models/c39_mae_base.pth"
 LEARNED_UPSAMPLER = "models/c39_upsampler_learned.pth"
@@ -196,6 +202,13 @@ COMBINED_SURFACE = {
     **DROPOUT_AUGS,
     "data.norm_mode": "surface_anchor",
 }
+# any-ink 16 px cells within 64 px of labelled ink run 0.27-0.38 (median 0.345; pixels 0.26); far background holds less
+PU_PRIOR = 0.2
+NNPU = {
+    "data.far_negative_share": 0.15,
+    "tra.pu_lambda": 1.0,
+    "tra.pu_prior": PU_PRIOR,
+}
 
 
 def _scroll_ids_from_dict(train_scroll_dict: dict[str, list[int]]) -> tuple[int, ...]:
@@ -207,7 +220,7 @@ def _scroll_ids_from_dict(train_scroll_dict: dict[str, list[int]]) -> tuple[int,
 
 
 def _pretrain_scroll_ids(train_scroll_dict: dict[str, list[int]]) -> tuple[int, ...]:
-    test_scroll_ids = DEFAULT_TEST_SCROLL_IDS if NEW_DOMAIN in train_scroll_dict else BASE_TEST_SCROLL_IDS
+    test_scroll_ids = CAMPAIGN_TEST_SCROLL_IDS if NEW_DOMAIN in train_scroll_dict else BASE_TEST_SCROLL_IDS
     return tuple(dict.fromkeys(
         [*(_scroll_ids_from_dict(train_scroll_dict))]
         + [int(scroll_id) for scroll_id in test_scroll_ids]
@@ -254,7 +267,7 @@ def _test(
     init_weights: str | None = None,
     upsampler: str | None = None,
     batch_size: int = 96,
-    lr: float = 1.5e-4,
+    lr: float = 1e-4,
 ) -> dict:
     test = campaign34._test(
         tid,
@@ -280,12 +293,28 @@ def _test(
     return test
 
 
+# every arm reads the same native crop: 8 surface-relative slices x 96 x 96 px at 9.36 um
+# (d 4-28 of the 28-layer zarr), and the multitile head predicts a 4 x 4 grid of ink logits,
+# one per 16 x 16 native px sub-tile (the central 64 x 64 px of the crop).
+# "network input" is what the backbone actually sees after any frozen input module.
 TESTS = [
+    # scratch baseline. init: campaign-40 MAE pretrained from scratch on native crops.
+    # original 8 x 96 x 96 -> network input 8 x 96 x 96 (unchanged) -> head 4 x 4 logits.
     _test(
         "holdout_n96_combined_surface_norm",
         SURFACE_FIBER_MAE_KEY,
         BASE_SCROLL_DICT,
         SCROLLS_BASE,
+        **SCRATCH_TRAINING,
+    ),
+    # baseline + nnPU: far-background windows are unlabelled, not negatives (new prepared-data cache key).
+    # original 8 x 96 x 96 -> network input 8 x 96 x 96 (unchanged) -> head 4 x 4 logits.
+    _test(
+        "holdout_n96_combined_surface_norm_nnpu",
+        SURFACE_FIBER_MAE_KEY,
+        BASE_SCROLL_DICT,
+        SCROLLS_BASE,
+        changes=NNPU,
         **SCRATCH_TRAINING,
     ),
     # _test(
@@ -295,6 +324,10 @@ TESTS = [
     #     SCROLLS_WITH_0211,
     #     **SCRATCH_TRAINING,
     # ),
+    # plan U, learned. init: c39 MAE trained on upsampled crops. a frozen learned upsampler (trilinear +
+    # learned residual; x4 depth then /2 pool, x2 in x/y) feeds the full upsampled crop to the backbone.
+    # original 8 x 96 x 96 -> network input 16 x 192 x 192 -> head 4 x 4 logits (32 px network sub-tiles
+    # = 16 native px, labels stay on the native grid).
     _test(
         "holdout_n96_upsampled_learned",
         SURFACE_FIBER_MAE_KEY,
@@ -304,6 +337,8 @@ TESTS = [
         upsampler=LEARNED_UPSAMPLER,
         **CROSSRES_TRAINING,
     ),
+    # plan U, trilinear: same as upsampled_learned, but the frozen upsampler is plain trilinear.
+    # original 8 x 96 x 96 -> network input 16 x 192 x 192 -> head 4 x 4 logits.
     _test(
         "holdout_n96_upsampled_trilinear",
         SURFACE_FIBER_MAE_KEY,
@@ -313,6 +348,9 @@ TESTS = [
         upsampler="trilinear",
         **CROSSRES_TRAINING,
     ),
+    # cross-res depth. init: c39 MAE whose pretraining added a throwaway super-resolution head predicting
+    # 4 sub-slices per slice from paired 2.4 um scans; that head is discarded, only the backbone is kept.
+    # original 8 x 96 x 96 -> network input 8 x 96 x 96 (native) -> head 4 x 4 logits.
     _test(
         "holdout_n96_crossres_depth",
         SURFACE_FIBER_MAE_KEY,
@@ -321,6 +359,8 @@ TESTS = [
         init_weights=CROSSRES_DEPTH_MAE,
         **CROSSRES_TRAINING,
     ),
+    # cross-res xyz: same as crossres_depth, but the discarded SR head also predicted 2x in x/y.
+    # original 8 x 96 x 96 -> network input 8 x 96 x 96 (native) -> head 4 x 4 logits.
     _test(
         "holdout_n96_crossres_xyz",
         SURFACE_FIBER_MAE_KEY,
@@ -329,6 +369,8 @@ TESTS = [
         init_weights=CROSSRES_XYZ_MAE,
         **CROSSRES_TRAINING,
     ),
+    # slab. init: c39 MAE that also hid whole runs of 1-3 slices (no paired data, no SR head).
+    # original 8 x 96 x 96 -> network input 8 x 96 x 96 (native) -> head 4 x 4 logits.
     _test(
         "holdout_n96_slab",
         SURFACE_FIBER_MAE_KEY,
@@ -337,6 +379,9 @@ TESTS = [
         init_weights=SLAB_MAE,
         **CROSSRES_TRAINING,
     ),
+    # plan R, downsampled. init: scratch campaign-40 MAE. the 8 fine-scan training scrolls (2.4 / 3.24 um
+    # originals) are swapped for .translated siblings made by the learned degrader (synthetic 9.36 um).
+    # original 8 x 96 x 96 -> network input 8 x 96 x 96 (native) -> head 4 x 4 logits.
     _test(
         "holdout_n96_downsampled",
         SURFACE_FIBER_MAE_KEY,
@@ -345,6 +390,8 @@ TESTS = [
         changes=DOWNSAMPLED,
         **CROSSRES_TRAINING,
     ),
+    # plan R + noise: downsampled, plus native-scan noise residuals added to the translated scrolls' crops.
+    # original 8 x 96 x 96 -> network input 8 x 96 x 96 (native) -> head 4 x 4 logits.
     _test(
         "holdout_n96_downsampled_noise",
         SURFACE_FIBER_MAE_KEY,
@@ -353,6 +400,8 @@ TESTS = [
         changes={**DOWNSAMPLED, **NATIVE_NOISE},
         **CROSSRES_TRAINING,
     ),
+    # plan R + U trilinear: translated fine scans, then the trilinear-upsampled MAE and frozen upsampler.
+    # original 8 x 96 x 96 -> network input 16 x 192 x 192 -> head 4 x 4 logits.
     _test(
         "holdout_n96_downsampled_upsampled_trilinear",
         SURFACE_FIBER_MAE_KEY,
@@ -363,6 +412,8 @@ TESTS = [
         upsampler="trilinear",
         **CROSSRES_TRAINING,
     ),
+    # plan R + U learned: translated fine scans, then the learned-upsampled MAE and frozen upsampler.
+    # original 8 x 96 x 96 -> network input 16 x 192 x 192 -> head 4 x 4 logits.
     _test(
         "holdout_n96_downsampled_upsampled_learned",
         SURFACE_FIBER_MAE_KEY,

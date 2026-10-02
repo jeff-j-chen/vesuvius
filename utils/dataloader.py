@@ -1346,6 +1346,11 @@ class InkVolumeDataset(IterableDataset):
                 self._character_neg_coords.setdefault(int(negative_ids[0]), []).append(coord)
 
         valid_chars = sorted(set(self._character_pos_coords) & set(self._character_neg_coords))
+        ring_free = int(self.scroll_id) in {
+            int(s) for s in (getattr(self.c.data, "ring_free_scroll_ids", ()) or ())
+        }
+        if ring_free:
+            valid_chars = sorted(self._character_pos_coords)
         self._character_ids = valid_chars
         if not valid_chars:
             if not self.shuffle:
@@ -1353,7 +1358,7 @@ class InkVolumeDataset(IterableDataset):
             raise ValueError(f"no characters have both positive and ring-negative windows for {self.scroll_id}")
         print(
             f"[character-sampling] scroll {self.scroll_id}: {len(valid_chars)} characters "
-            f"with positive and ring-negative windows"
+            + ("with positive windows (ring-free)" if ring_free else "with positive and ring-negative windows")
         )
 
     def _fetch_character_ids(self, y_off, x_off, labels, valid):
@@ -1418,7 +1423,7 @@ class InkVolumeDataset(IterableDataset):
                 cycle = list(np.random.choice(character_ids, size=len(character_ids), p=weights))
             for component_id in cycle:
                 positive = self._character_pos_coords[component_id]
-                negative = self._character_neg_coords[component_id]
+                negative = self._character_neg_coords.get(component_id, [])
                 coords.append(positive[np.random.randint(len(positive))])
                 if len(coords) >= target:
                     break
@@ -1428,8 +1433,13 @@ class InkVolumeDataset(IterableDataset):
                 elif explicit_share > 0 and np.random.random() < explicit_share:
                     explicit = self._explicit_neg_coords
                     coords.append(explicit[np.random.randint(len(explicit))])
-                else:
+                elif negative:
                     coords.append(negative[np.random.randint(len(negative))])
+                else:
+                    # ring-free characters pair with unlabelled far background or explicit negatives
+                    fallback = self._far_neg_coords or self._explicit_neg_coords
+                    if fallback:
+                        coords.append(fallback[np.random.randint(len(fallback))])
                 if len(coords) >= target:
                     break
         return coords
@@ -2674,7 +2684,7 @@ class DataManager:
             "zarr_path", "tile_size", "depth", "d_start", "d_end", "train_d_start",
             "train_d_end", "mask_memmap", "mask_bitpack", "preload_volumes",
             "ring_negatives", "ring_label_source", "ring_from_inklabel_dir", "ring_close_r", "ring_gap_r",
-            "ring_shell_r", "simple_split", "coordinate_hash_split",
+            "ring_shell_r", "ring_free_scroll_ids", "simple_split", "coordinate_hash_split",
             "coordinate_hash_block_size", "coordinate_hash_valid_fraction",
             "coordinate_hash_seed", "train_mask_dir", "surface_label_dir",
             "inklabel_dir", "label_dilate_r", "context_size", "context_downsample", "ctx_jitter",
@@ -2684,7 +2694,7 @@ class DataManager:
             "character_min_pixels", "max_samples_per_epoch",
             "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
             "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "vis_scroll_ids", "norm_mode",
-            "train_only_scroll_ids",
+            "train_only_scroll_ids", "label_free_vis_scroll_ids",
             "zarr_suffix",
         )
         dataloader_fields = (
@@ -2788,6 +2798,12 @@ class DataManager:
         labels = imread_gray(f"{lbl_dir}/{self.scroll_id}.png")
 
         mask = imread_gray(f"./masks/{self.scroll_id}.png")
+        label_free = int(self.scroll_id) in {
+            int(scroll_id)
+            for scroll_id in (getattr(self.c.data, "label_free_vis_scroll_ids", ()) or ())
+        }
+        if label_free and mask is not None:
+            labels = np.zeros(mask.shape, dtype=np.uint8)
 
         if labels is None:
             raise FileNotFoundError(f"labels not found for scroll {self.scroll_id}")
@@ -2821,6 +2837,9 @@ class DataManager:
             train_mask_dir = str(getattr(self.c.data, "train_mask_dir", "./train_masks"))
             train_mask_path = os.path.join(train_mask_dir, f"{self.scroll_id}.png")
             manual_mask = imread_gray(train_mask_path)
+            if label_free:
+                manual_mask = np.zeros(mask.shape, dtype=np.uint8)
+                train_mask_path = "<label-free vis: no train region>"
             if manual_mask is None and train_only:
                 # train-only scrolls need no mask; an existing one only contributes painted explicit labels
                 manual_mask = np.zeros(mask.shape, dtype=np.uint8)
@@ -3725,6 +3744,8 @@ class DataManager:
             dilated = cv2.dilate(ink_tile_ring, kernel)
             ring    = ((dilated - ink_tile_ring) > 0) & (mask_tile > 0)
 
+        if int(self.scroll_id) in {int(s) for s in (getattr(self.c.data, "ring_free_scroll_ids", ()) or ())}:
+            ring = np.zeros_like(ring)
         ring_count = int(ring.sum())
         print(f"[ring_negatives] source='{ring_source}' tile_radius={best_r}  "
               f"ink_tiles={ink_count}  ring_tiles={ring_count}  "

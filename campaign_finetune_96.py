@@ -1,15 +1,25 @@
 """campaign_finetune_96.py -- fine-tune the archs40 native-96 combined-surface model.
 
-This starts from the campaign-40 `holdout_n96_combined_surface_norm` checkpoint and fine-tunes on
-the low-res / high-energy target domain only:
+This starts from the campaign-40 `holdout_n96_combined_surface_norm_nnpu` checkpoint and fine-tunes on
+the low-res / high-energy target domain only, keeping its nnPU objective (`nnpu=True`):
 
 - PHerc1447: 20260930144758 / 20260930144760 (manual train/val split from train_masks)
 - PHerc0211: 20260928000003 (manual train/val split from train_masks, like every other scroll)
+- PHerc0211_z5520_w040_abf: 20260928000004 -- visualization only (RAM-preloaded, no labels, never trained)
 
 Runs (tids), all ring (2,2,4) with enc1/enc2 frozen, enc3+bottleneck lr=1e-6, decoder+head lr=5e-5:
+- ft_six             PHerc1447 x2 + PHerc0139 w044/w035 + PHerc0009B + PHerc0500P2 + PHerc0841, all
+                     weight 1; both PHerc0211 fragments vis-only
+- ft_six_0211_pioy   ft_six plus PHerc0211 (20260928000003) in training at weight 3; both PHerc0211
+                     fragments still visualized
+- ft_1447_0211       PHerc1447 + PHerc0211 (PHerc0211 weight 2, PHerc1447 weight 1); figures only for
+                     the two PHerc0211 fragments (20260928000003, 20260928000004)
+- ft_six_vis0211     PHerc1447 x2 + PHerc0139 w044/w035 + PHerc0009B + PHerc0500P2 + PHerc0841 (no
+                     PHerc0343P), all weight 1; both PHerc0211 fragments vis-only; 20 epochs, eval at 10 and 20
+- ft_six_vis0211_nofreeze  same, nothing frozen (whole encoder at 1e-6)
+Older (commented out):
 - ft_all_pioychi_h   PHerc1447 + PHerc0009B + PHerc0139 w044/w035 + PHerc0500P2 + PHerc0211
                      (PHerc0211 weight 2, the rest weight 1); visualized on PHerc0211 and PHerc1447 w060
-Older (commented out):
 - ft_all             PHerc1447 + PHerc0009B + PHerc0139 w044/w035 + PHerc0500P2 (the six-scroll set
                      minus PHerc0343P / PHerc0841), all weight 1; PHerc0211 is held out and is the
                      only visualized scroll
@@ -49,17 +59,20 @@ from utils.norm import ensure_surface_anchors
 
 
 ROOT = Path(__file__).resolve().parent
-LOG_DIR = "./runs_finetune"
+LOG_DIR = "./runs_finetune2"
 MODEL_DIR = "models/finetune"
 INKLABEL_DIR = "./dilated_inklabels"
-DEFAULT_INIT_WEIGHTS = "/vesuvius/models/archs40/holdout_n96_combined_surface_norm/final.pth"
+DEFAULT_INIT_WEIGHTS = "/vesuvius/models/archs40/holdout_n96_combined_surface_norm_nnpu/final.pth"
 PHERC0211_ID = 20260928000003
+# PHerc0211_z5520_w040_abf: visualized every run, never trained
+PHERC0211_VIS_ONLY_ID = 20260928000004
 PHERC1447_IDS = (20260930144758, 20260930144760)
 PHERC0841_ID = 20260221022814
 PHERC0211_DOMAIN = campaign40.NEW_DOMAIN
 PHERC1447_DOMAIN = "pherc1447"
 ENCODER_LR_SCALE = 0.25
-VIS_SCROLL_IDS = [PHERC0211_ID, PHERC1447_IDS[1]]
+VIS_SCROLL_IDS = [PHERC0211_ID, PHERC0211_VIS_ONLY_ID]
+LABEL_FREE_VIS_IDS = [PHERC0211_VIS_ONLY_ID]
 # (tid suffix, domain, scroll id) for the PHerc1447 + one-scroll tests
 ADDED_SCROLLS = (
     ("pherc0841", "pherc0841", PHERC0841_ID),
@@ -70,8 +83,8 @@ ADDED_SCROLLS = (
     ("pherc0500p2", "pherc0500p2", 20250628074500),
 )
 SCROLL_WEIGHT_BY_ID = {
-    PHERC0211_ID: 2,
-    **{scroll_id: 1 for _, _, scroll_id in ADDED_SCROLLS},
+    PHERC0211_ID: 1,
+    **{scroll_id: 2 for _, _, scroll_id in ADDED_SCROLLS},
 }
 
 # test 3: absolute learning rates. enc1/enc2 are fully frozen (requires_grad=False and excluded
@@ -82,6 +95,7 @@ FREEZE12_LAYER_LR = {
     "encoder_lr": 1e-6,
     "task_lr": 5e-5,
 }
+NOFREEZE_LAYER_LR = {**FREEZE12_LAYER_LR, "freeze_prefixes": ()}
 
 SCROLL_CONFIGS = {
     PHERC0211_ID: ScrollConfig(PHERC0211_ID, split_axis="x", train_split_frac=1.0),
@@ -103,6 +117,10 @@ TRAIN_ALL = {
     "pherc0500p2": [20250628074500],
 }
 TRAIN_ALL_0211 = {**TRAIN_ALL, PHERC0211_DOMAIN: [PHERC0211_ID]}
+# both PHerc1447, both PHerc0139, PHerc0009B, PHerc0500P2, PHerc0841; no PHerc0343P or PHerc0211
+TRAIN_SIX_0841 = {**TRAIN_ALL, "pherc0841": [PHERC0841_ID]}
+TRAIN_SIX_0841_0211 = {**TRAIN_SIX_0841, PHERC0211_DOMAIN: [PHERC0211_ID]}
+PHERC0211_X3_WEIGHTS = {**SCROLL_WEIGHT_BY_ID, PHERC0211_ID: 3}
 VIS_0211_ONLY = [PHERC0211_ID]
 
 
@@ -153,7 +171,11 @@ def _test(
     multitile_pos_only: bool | None = None,
     layer_lr: dict | None = None,
     pcgrad: bool = False,
+    nnpu: bool = False,
     vis_scroll_ids: list[int] | None = None,
+    vis_only_ids: list[int] | None = None,
+    n_epochs: int = 8,
+    eval_int: int | None = None,
     scroll_configs: dict[int, ScrollConfig] = SCROLL_CONFIGS,
     weight_overrides: dict[int, int] = SCROLL_WEIGHT_BY_ID,
 ) -> dict:
@@ -168,6 +190,7 @@ def _test(
             "data.ring_close_r": int(close_r),
             "data.ring_gap_r": int(gap_r),
             "data.ring_shell_r": int(shell_r),
+            **(campaign40.NNPU if nnpu else {}),
         },
         **campaign40.SCRATCH_TRAINING,
     )
@@ -182,6 +205,10 @@ def _test(
     test["layer_lr"] = dict(layer_lr) if layer_lr else None
     test["pcgrad"] = bool(pcgrad)
     test["vis_scroll_ids"] = list(vis_scroll_ids or VIS_SCROLL_IDS)
+    # visualized scrolls that must never be trained, on top of LABEL_FREE_VIS_IDS
+    test["vis_only_ids"] = list(vis_only_ids or [])
+    test["n_epochs"] = int(n_epochs)
+    test["eval_int"] = int(eval_int if eval_int is not None else n_epochs)
     return test
 
 
@@ -232,10 +259,13 @@ def build_config(test: dict):
     config.data.inklabel_dir = INKLABEL_DIR
     config.data.vis_scroll_ids = list(test["vis_scroll_ids"])
     config.data.vis_preload_persistent = True
+    config.data.label_free_vis_scroll_ids = list(LABEL_FREE_VIS_IDS)
     config.data.train_only_scroll_ids = []
     config.data.ring_close_r = int(test["ring_close_r"])
     config.data.ring_gap_r = int(test["ring_gap_r"])
     config.data.ring_shell_r = int(test["ring_shell_r"])
+    # PHerc0211 letters are best guesses: their neighbours may be unlabelled ink, not ring negatives
+    config.data.ring_free_scroll_ids = [PHERC0211_ID]
 
     # per-test override of DataConfig.multitile_pos_only (only set when the test asks for it)
     if test.get("multitile_pos_only") is not None:
@@ -243,8 +273,8 @@ def build_config(test: dict):
             raise AttributeError("DataConfig has no attribute 'multitile_pos_only'")
         config.data.multitile_pos_only = bool(test["multitile_pos_only"])
 
-    config.tra.n_epochs = 8
-    config.tra.eval_int = 8
+    config.tra.n_epochs = int(test["n_epochs"])
+    config.tra.eval_int = int(test["eval_int"])
     config.tra.save_int = 1
     config.tra.eval_int_scrolls = len(test["vis_scroll_ids"])
     config.tra.test_int = 999
@@ -276,6 +306,11 @@ def build_config(test: dict):
         config.tra.physical_domain_groupdro = False
 
     _check_weights(config, test)
+    trained = {int(sid) for ids in config.data.train_scroll_dict.values() for sid in ids}
+    trained |= {int(scroll.scroll_id) for scroll in config.data.scrolls}
+    leaked = trained & (set(LABEL_FREE_VIS_IDS) | {int(sid) for sid in test.get("vis_only_ids", [])})
+    if leaked:
+        raise ValueError(f"{test['tid']}: vis-only scrolls {sorted(leaked)} must not be trained")
     return config
 
 
@@ -295,6 +330,16 @@ def preflight_inputs(selected: list[dict], dry_run: bool) -> None:
         missing = [str(path) for path in required if not path.exists()]
         if missing:
             failures.append(f"{scroll_id}: {', '.join(missing)}")
+    for scroll_id in LABEL_FREE_VIS_IDS:
+        required = (
+            zarr_root / f"{scroll_id}.zarr",
+            ROOT / "masks" / f"{scroll_id}.png",
+            ROOT / "surface_labels" / str(scroll_id) / "depth.npy",
+            ROOT / "surface_labels" / str(scroll_id) / "confidence.npy",
+        )
+        missing = [str(path) for path in required if not path.exists()]
+        if missing:
+            failures.append(f"{scroll_id} (vis-only): {', '.join(missing)}")
     external = []
     for test in selected:
         for path in campaign40._external_files(test):
@@ -321,8 +366,13 @@ def main() -> None:
     args = parser.parse_args()
 
     selected = [
+        # _test("ft_six", TRAIN_SIX_0841, args.init_weights, 2, 2, 4, layer_lr=FREEZE12_LAYER_LR, nnpu=True,
+        #       vis_scroll_ids=VIS_SCROLL_IDS, vis_only_ids=VIS_SCROLL_IDS),
+        _test("ft_six_0211_ynl", TRAIN_SIX_0841_0211, args.init_weights, 2, 2, 4, layer_lr=FREEZE12_LAYER_LR,
+              nnpu=True, vis_scroll_ids=VIS_SCROLL_IDS, vis_only_ids=[PHERC0211_VIS_ONLY_ID],
+              weight_overrides=PHERC0211_X3_WEIGHTS),
         # _test("ft_1447", TRAIN_1447, args.init_weights, 2, 2, 4, layer_lr=FREEZE12_LAYER_LR),
-        _test("ft_all_pioychi_h", TRAIN_ALL_0211, args.init_weights, 2, 2, 4, layer_lr=FREEZE12_LAYER_LR),
+        # _test("ft_all_pioychi_h", TRAIN_ALL_0211, args.init_weights, 2, 2, 4, layer_lr=FREEZE12_LAYER_LR),
         # PHerc0211 visualized but not trained
         # *(
         #     _test(tid, TRAIN_ALL, args.init_weights, 2, 2, 4, layer_lr=FREEZE12_LAYER_LR, pcgrad=pcgrad,
@@ -369,6 +419,7 @@ def main() -> None:
                 f"encoder_lr_scale={config.tra.encoder_lr_scale} "
                 f"freeze={config.tra.freeze_prefixes} encoder_lr={config.tra.encoder_lr} "
                 f"task_lr={config.tra.task_lr} pcgrad={config.tra.pcgrad} "
+                f"pu={config.tra.pu_lambda}/{config.tra.pu_prior} far_share={config.data.far_negative_share} "
                 f"patch_groupdro={config.tra.physical_patch_groupdro} "
                 f"run={config.run_name} init={config.init_weights}",
                 flush=True,

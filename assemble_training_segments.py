@@ -316,6 +316,7 @@ def _r2_fetch(url, output=None, tries=5):
         try:
             headers = _r2_signed_headers(url) if R2_AUTH else {}
             headers.pop("host", None)
+            headers["User-Agent"] = R2_USER_AGENT
             with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=120) as response:
                 if output is None:
                     return response.read().decode("utf-8")
@@ -361,10 +362,15 @@ def _r2_put(url, path, tries=3):
     raise RuntimeError(f"R2 PUT {url} failed: {error}")
 
 
+DEFAULT_R2_PUBLIC_URL = "https://pub-ae80fe7f9acf4b90962bbde50cfdce8a.r2.dev"
+# Cloudflare answers the default Python-urllib User-Agent with 403 (error 1010)
+R2_USER_AGENT = "vesuvius-assemble/1.0"
+
+
 def configure_r2():
-    """set R2_AUTH from the environment and return the bucket root url; ValueError if unset."""
+    """set R2_AUTH from the environment and return the bucket root url (R2_PUBLIC_URL, else the public default)."""
     global R2_AUTH
-    public = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
+    public = (os.getenv("R2_PUBLIC_URL", "").strip() or DEFAULT_R2_PUBLIC_URL).rstrip("/")
     if not public:
         raise ValueError("R2_PUBLIC_URL must be set (e.g. https://pub-<hash>.r2.dev)")
     if public.endswith(".r2.cloudflarestorage.com"):
