@@ -1721,7 +1721,7 @@ class InkVolumeDataset(IterableDataset):
         has_context = context > self.tile_size
         pad = (context - self.tile_size) // 2 if has_context else 0
         jitter = int(getattr(self.c.data, "ctx_jitter", 0)) if self.shuffle else 0
-        for _, y_offset, x_offset in self.block_coords:
+        for _, y_offset, x_offset in [*self.block_coords, *self._far_neg_coords]:
             y = self.y_start + int(y_offset)
             x = self.x_start + int(x_offset)
             if has_context:

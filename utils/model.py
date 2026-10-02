@@ -854,6 +854,12 @@ class NnUnet3dLcndz(nn.Module):
         self._upsampled_depth_ratio = 1.0
         if self._input_upsampler_path:
             config = self._build_input_upsampler(config)
+        self._input_generator_path = str(getattr(config.model, "input_generator", "") or "")
+        self.input_generator = None
+        if self._input_generator_path:
+            if self._input_upsampler_path:
+                raise ValueError("input_generator and input_upsampler are mutually exclusive")
+            config = self._build_input_generator(config)
         self._downsample = max(1, int(getattr(config.data, "context_downsample", 1)))
         sigma = float(getattr(config.model, "input_denoise_sigma", 0.0))
         if sigma > 0:
@@ -1583,9 +1589,22 @@ class NnUnet3dLcndz(nn.Module):
         network.model.multitile_subtile = int(config.model.multitile_subtile) * scale
         return network
 
+    def _build_input_generator(self, config: Config) -> Config:
+        """frozen crossres generator + learned depth mix; returns the config at the network depth."""
+        import copy
+        from utils.input_generator import GeneratedDepthInput
+        native_depth = int(config.data.depth)
+        self.input_generator = GeneratedDepthInput(self._input_generator_path, out_depth=2 * native_depth)
+        if self.input_generator.depth != native_depth:
+            raise ValueError(f"generator was trained on {self.input_generator.depth} slices, data.depth is {native_depth}")
+        self._upsampled_depth_ratio = self.input_generator.out_depth / native_depth
+        network = copy.deepcopy(config)
+        network.data.depth = self.input_generator.out_depth
+        return network
+
     def _native_to_network_depth(self, depth: torch.Tensor | None) -> torch.Tensor | None:
         """native slice index -> upsampled slice index (voxel centres, align_corners=False); -1 stays invalid."""
-        if depth is None or self.input_upsampler is None:
+        if depth is None or self._upsampled_depth_ratio == 1.0:
             return depth
         ratio = self._upsampled_depth_ratio
         return torch.where(depth >= 0, (depth + 0.5) * ratio - 0.5, depth)
@@ -1605,6 +1624,8 @@ class NnUnet3dLcndz(nn.Module):
             # normalise, then upsample, as in the upsampled-crop MAE
             with torch.no_grad():
                 x = self.input_upsampler.network_input(x.float())
+        if self.input_generator is not None:
+            x = self.input_generator(x)
         if self._downsample > 1:
             x = F.avg_pool3d(
                 x,
@@ -3000,6 +3021,12 @@ def create_model(config: Config):
         model.input_upsampler.load_state_dict(load_upsampler(model._input_upsampler_path).state_dict())
         model.input_upsampler.requires_grad_(False)
         model.input_upsampler.eval()
+    if model.input_generator is not None:
+        # model.apply re-initialised the generator and the mix; rebuild both from the checkpoint
+        from utils.input_generator import GeneratedDepthInput
+        model.input_generator = GeneratedDepthInput(
+            model._input_generator_path, out_depth=model.input_generator.out_depth,
+        ).to(config.device)
 
     params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model parameters ({arch}): {params:,}")

@@ -1,0 +1,587 @@
+[assemble] 3 fragment(s): ['w087', 'w068', 'paris4']  (concurrent_fragments=3, workers/frag=32, chunks=(8,64,64))
+
+======================================================================
+[w087] w087 (20251112000002)  id=20251112000002
+======================================================================
+
+======================================================================
+[w068] w068 (20251111010954)  id=20251111010954
+======================================================================
+
+======================================================================
+[paris4] paris4 (20231210121321)  id=20231210121321
+======================================================================
+/usr/local/lib/python3.10/dist-packages/zarr/creation.py:614: UserWarning: ignoring keyword argument 'zarr_format'
+  compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+  [1/3] isotropic resample (33, 12420, 9620) @7.910um -> (28, 10494, 8128) @9.362um
+  [1/3] level-2 pool (109, 12750, 9995) crop=(0, 12750, 0, 9995) depth=109->28 output=(28, 12750, 9995)
+  [1/3] isotropic resample (33, 13080, 14920) @7.910um -> (28, 11051, 12606) @9.362um
+  [resample] rows 108/10494
+  [pool] rows 128/12750
+  [resample] rows 108/11051
+  [resample] rows 216/10494
+  [pool] rows 256/12750
+  [resample] rows 216/11051
+  [resample] rows 324/10494
+  [pool] rows 384/12750
+  [resample] rows 433/10494
+  [resample] rows 324/11051
+  [pool] rows 512/12750
+  [resample] rows 541/10494
+  [resample] rows 433/11051
+  [pool] rows 640/12750
+  [resample] rows 649/10494
+  [resample] rows 541/11051
+  [pool] rows 768/12750
+  [resample] rows 757/10494
+  [pool] rows 896/12750
+  [resample] rows 649/11051
+  [resample] rows 865/10494
+  [pool] rows 1024/12750
+  [resample] rows 973/10494
+  [resample] rows 757/11051
+  [pool] rows 1152/12750
+  [resample] rows 1082/10494
+  [resample] rows 865/11051
+  [pool] rows 1280/12750
+  [resample] rows 1190/10494
+  [pool] rows 1408/12750
+  [resample] rows 973/11051
+  [resample] rows 1298/10494
+  [pool] rows 1536/12750
+  [resample] rows 1406/10494
+  [resample] rows 1081/11051
+  [pool] rows 1664/12750
+  [resample] rows 1514/10494
+  [pool] rows 1792/12750
+  [resample] rows 1190/11051
+  [resample] rows 1622/10494
+  [pool] rows 1920/12750
+  [resample] rows 1730/10494
+  [resample] rows 1298/11051
+  [pool] rows 2048/12750
+  [resample] rows 1839/10494
+  [pool] rows 2176/12750
+  [resample] rows 1406/11051
+  [resample] rows 1947/10494
+  [pool] rows 2304/12750
+  [resample] rows 2055/10494
+  [resample] rows 1514/11051
+  [pool] rows 2432/12750
+  [resample] rows 2163/10494
+  [pool] rows 2560/12750
+  [resample] rows 2271/10494
+  [resample] rows 1622/11051
+  [pool] rows 2688/12750
+  [resample] rows 2379/10494
+  [resample] rows 1730/11051
+  [pool] rows 2816/12750
+  [resample] rows 2487/10494
+  [resample] rows 1838/11051
+  [resample] rows 2596/10494
+  [pool] rows 2944/12750
+  [resample] rows 2704/10494
+  [pool] rows 3072/12750
+  [resample] rows 1947/11051
+  [resample] rows 2812/10494
+  [pool] rows 3200/12750
+  [resample] rows 2055/11051
+  [pool] rows 3328/12750
+  [resample] rows 2920/10494
+  [pool] rows 3456/12750
+  [resample] rows 2163/11051
+  [resample] rows 3028/10494
+  [pool] rows 3584/12750
+  [resample] rows 3136/10494
+  [resample] rows 2271/11051
+  [resample] rows 3245/10494
+  [pool] rows 3712/12750
+  [resample] rows 3353/10494
+  [resample] rows 2379/11051
+  [pool] rows 3840/12750
+  [resample] rows 3461/10494
+  [pool] rows 3968/12750
+  [resample] rows 2487/11051
+  [resample] rows 3569/10494
+  [pool] rows 4096/12750
+  [resample] rows 3677/10494
+  [resample] rows 2595/11051
+  [pool] rows 4224/12750
+  [resample] rows 3785/10494
+  [pool] rows 4352/12750
+  [resample] rows 3893/10494
+  [resample] rows 2704/11051
+  [pool] rows 4480/12750
+  [resample] rows 4002/10494
+  [resample] rows 2812/11051
+  [pool] rows 4608/12750
+  [resample] rows 4110/10494
+  [pool] rows 4736/12750
+  [resample] rows 2920/11051
+  [resample] rows 4218/10494
+  [pool] rows 4864/12750
+  [resample] rows 4326/10494
+  [resample] rows 3028/11051
+  [pool] rows 4992/12750
+  [resample] rows 4434/10494
+  [resample] rows 3136/11051
+  [resample] rows 4542/10494
+  [pool] rows 5120/12750
+  [resample] rows 3244/11051
+  [resample] rows 4650/10494
+  [pool] rows 5248/12750
+  [resample] rows 4759/10494
+  [pool] rows 5376/12750
+  [resample] rows 3352/11051
+  [resample] rows 4867/10494
+  [pool] rows 5504/12750
+  [resample] rows 4975/10494
+  [resample] rows 3461/11051
+  [pool] rows 5632/12750
+  [resample] rows 5083/10494
+  [pool] rows 5760/12750
+  [resample] rows 3569/11051
+  [resample] rows 5191/10494
+  [pool] rows 5888/12750
+  [resample] rows 5299/10494
+  [resample] rows 3677/11051
+  [pool] rows 6016/12750
+  [resample] rows 5408/10494
+  [pool] rows 6144/12750
+  [resample] rows 5516/10494
+  [resample] rows 3785/11051
+  [resample] rows 5624/10494
+  [pool] rows 6272/12750
+  [resample] rows 3893/11051
+  [resample] rows 5732/10494
+  [pool] rows 6400/12750
+  [resample] rows 5840/10494
+  [resample] rows 4001/11051
+  [pool] rows 6528/12750
+  [resample] rows 5948/10494
+  [resample] rows 4109/11051
+  [pool] rows 6656/12750
+  [resample] rows 6056/10494
+  [pool] rows 6784/12750
+  [resample] rows 4218/11051
+  [resample] rows 6165/10494
+  [pool] rows 6912/12750
+  [resample] rows 6273/10494
+  [resample] rows 4326/11051
+  [pool] rows 7040/12750
+  [resample] rows 6381/10494
+  [pool] rows 7168/12750
+  [resample] rows 6489/10494
+  [resample] rows 4434/11051
+  [pool] rows 7296/12750
+  [resample] rows 6597/10494
+  [resample] rows 4542/11051
+  [pool] rows 7424/12750
+  [resample] rows 6705/10494
+  [resample] rows 4650/11051
+  [pool] rows 7552/12750
+  [resample] rows 6813/10494
+  [resample] rows 4758/11051
+  [pool] rows 7680/12750
+  [resample] rows 6922/10494
+  [pool] rows 7808/12750
+  [resample] rows 7030/10494
+  [resample] rows 4866/11051
+  [pool] rows 7936/12750
+  [resample] rows 7138/10494
+  [resample] rows 4975/11051
+  [pool] rows 8064/12750
+  [resample] rows 7246/10494
+  [resample] rows 5083/11051
+  [pool] rows 8192/12750
+  [resample] rows 7354/10494
+  [pool] rows 8320/12750
+  [resample] rows 7462/10494
+  [resample] rows 5191/11051
+  [pool] rows 8448/12750
+  [resample] rows 7571/10494
+  [resample] rows 5299/11051
+  [pool] rows 8576/12750
+  [resample] rows 7679/10494
+  [resample] rows 5407/11051
+  [pool] rows 8704/12750
+  [resample] rows 7787/10494
+  [pool] rows 8832/12750
+  [resample] rows 5515/11051
+  [resample] rows 7895/10494
+  [pool] rows 8960/12750
+  [resample] rows 5624/11051
+  [resample] rows 8003/10494
+  [pool] rows 9088/12750
+  [resample] rows 8111/10494
+  [pool] rows 9216/12750
+  [resample] rows 5732/11051
+  [resample] rows 8219/10494
+  [pool] rows 9344/12750
+  [resample] rows 8328/10494
+  [resample] rows 5840/11051
+  [pool] rows 9472/12750
+  [resample] rows 8436/10494
+  [resample] rows 5948/11051
+  [pool] rows 9600/12750
+  [resample] rows 8544/10494
+  [resample] rows 6056/11051
+  [pool] rows 9728/12750
+  [resample] rows 8652/10494
+  [pool] rows 9856/12750
+  [resample] rows 8760/10494
+  [resample] rows 6164/11051
+  [pool] rows 9984/12750
+  [resample] rows 8868/10494
+  [resample] rows 6272/11051
+  [pool] rows 10112/12750
+  [resample] rows 8977/10494
+  [resample] rows 6381/11051
+  [pool] rows 10240/12750
+  [resample] rows 9085/10494
+  [pool] rows 10368/12750
+  [resample] rows 6489/11051
+  [resample] rows 9193/10494
+  [pool] rows 10496/12750
+  [resample] rows 9301/10494
+  [pool] rows 10624/12750
+  [resample] rows 6597/11051
+  [resample] rows 9409/10494
+  [pool] rows 10752/12750
+  [resample] rows 9517/10494
+  [resample] rows 6705/11051
+  [pool] rows 10880/12750
+  [resample] rows 9625/10494
+  [pool] rows 11008/12750
+  [resample] rows 9734/10494
+  [resample] rows 6813/11051
+  [pool] rows 11136/12750
+  [resample] rows 9842/10494
+  [pool] rows 11264/12750
+  [resample] rows 6921/11051
+  [resample] rows 9950/10494
+  [pool] rows 11392/12750
+  [resample] rows 7029/11051
+  [resample] rows 10058/10494
+  [pool] rows 11520/12750
+  [resample] rows 10166/10494
+  [resample] rows 7138/11051
+  [pool] rows 11648/12750
+  [resample] rows 10274/10494
+  [pool] rows 11776/12750
+  [resample] rows 10382/10494
+  [resample] rows 7246/11051
+  [pool] rows 11904/12750
+  [resample] rows 10491/10494
+  [resample] rows 10494/10494
+  [resample] rows 7354/11051
+  [pool] rows 12032/12750
+  [pool] rows 12160/12750
+  [resample] rows 7462/11051
+  [pool] rows 12288/12750
+  [resample] rows 7570/11051
+  [mask] wrote masks/20251112000002.png from midslice valid_frac=0.856
+  [resample] wrote /vesuvius/ves_zarrs2/20251112000002.zarr shape=(28, 10494, 8128)
+  [pool] rows 12416/12750
+  [2/4] mask present: masks/20251112000002.png  valid=0.8561
+  [2/4] dilated labels present: dilated_inklabels/20251112000002.png  valid=0.0238
+  $ /usr/bin/python3 precompute_norm.py --scroll-id 20251112000002 --zarr-path /vesuvius/ves_zarrs2
+  [resample] rows 7678/11051
+  [pool] rows 12544/12750
+[norm] 20251112000002 vol=(28,10494,8128) chunk_z=8 mask_valid=0.856
+  [resample] rows 7786/11051
+  [pool] rows 12672/12750
+  [pool] rows 12750/12750
+  [resample] rows 7895/11051
+  [resample] rows 8003/11051
+[norm]   z 0:8 done  n=584139232
+  [resample] rows 8111/11051
+  [mask] wrote masks/20231210121321.png from midslice valid_frac=0.862
+  [pool] wrote /vesuvius/ves_zarrs2/20231210121321.zarr shape=(28, 12750, 9995)
+  [resample] rows 8219/11051
+  [2/4] mask present: masks/20231210121321.png  valid=0.8623
+  [2/4] dilated labels present: dilated_inklabels/20231210121321.png  valid=0.0276
+  $ /usr/bin/python3 precompute_norm.py --scroll-id 20231210121321 --zarr-path /vesuvius/ves_zarrs2
+  [resample] rows 8327/11051
+[norm] 20231210121321 vol=(28,12750,9995) chunk_z=8 mask_valid=0.862
+  [resample] rows 8435/11051
+[norm]   z 8:16 done  n=1168278464
+  [resample] rows 8543/11051
+  [resample] rows 8652/11051
+  [resample] rows 8760/11051
+  [resample] rows 8868/11051
+[norm]   z 16:24 done  n=1752417696
+  [resample] rows 8976/11051
+[norm]   z 0:8 done  n=879130120
+  [resample] rows 9084/11051
+[norm]   z 24:28 done  n=2044487312
+[norm] 20251112000002 mean=151.0713 std=21.5726 norm_min=-7.0029 norm_max=4.8176
+  [4/4] --skip-surface -> skip
+[done] [w087] w087 (20251112000002)
+  [resample] rows 9192/11051
+  [resample] rows 9300/11051
+  [resample] rows 9409/11051
+  [resample] rows 9517/11051
+[norm]   z 8:16 done  n=1758260240
+  [resample] rows 9625/11051
+  [resample] rows 9733/11051
+  [resample] rows 9841/11051
+  [resample] rows 9949/11051
+  [resample] rows 10057/11051
+  [resample] rows 10166/11051
+[norm]   z 16:24 done  n=2637390360
+  [resample] rows 10274/11051
+  [resample] rows 10382/11051
+  [resample] rows 10490/11051
+  [resample] rows 10598/11051
+[norm]   z 24:28 done  n=3076955420
+[norm] 20231210121321 mean=78.1073 std=34.9392 norm_min=-2.2355 norm_max=5.0629
+  [4/4] --skip-surface -> skip
+[done] [paris4] paris4 (20231210121321)
+  [resample] rows 10706/11051
+  [resample] rows 10814/11051
+  [resample] rows 10923/11051
+  [resample] rows 11031/11051
+  [resample] rows 11051/11051
+  [mask] wrote masks/20251111010954.png from midslice valid_frac=0.916
+  [resample] wrote /vesuvius/ves_zarrs2/20251111010954.zarr shape=(28, 11051, 12606)
+  [2/4] mask present: masks/20251111010954.png  valid=0.9161
+  [2/4] dilated labels present: dilated_inklabels/20251111010954.png  valid=0.0058
+  $ /usr/bin/python3 precompute_norm.py --scroll-id 20251111010954 --zarr-path /vesuvius/ves_zarrs2
+[norm] 20251111010954 vol=(28,11051,12606) chunk_z=8 mask_valid=0.916
+[norm]   z 0:8 done  n=1020925368
+[norm]   z 8:16 done  n=2041850736
+[norm]   z 16:24 done  n=3062776104
+[norm]   z 24:28 done  n=3573238788
+[norm] 20251111010954 mean=150.7678 std=23.0953 norm_min=-6.5281 norm_max=4.5131
+  [4/4] --skip-surface -> skip
+[done] [w068] w068 (20251111010954)
+
+======================================================================
+[assemble] SUMMARY
+======================================================================
+  w087: OK
+  paris4: OK
+  w068: OK
+
+======================================================================
+[assemble] INTEGRITY SWEEP (37 scrolls)
+======================================================================
+  OK   w044         20260115000000  cov=1.00
+  [91mFAIL w059         20250223000000  MISSING zarr[0m
+  [91mFAIL w047         20260206000001  MISSING zarr[0m
+  [91mFAIL w056         20260115000001  MISSING zarr[0m
+  [91mFAIL w058         20260210000000  MISSING zarr[0m
+  [91mFAIL w052         20260227000000  MISSING zarr[0m
+  [91mFAIL w049         20260318000000  MISSING zarr[0m
+  [91mFAIL w046         20260325000000  MISSING zarr[0m
+  [91mFAIL w041         20260108000000  MISSING zarr[0m
+  [91mFAIL w040         20250831000000  MISSING zarr[0m
+  [91mFAIL w039         20260302000000  MISSING zarr[0m
+  [91mFAIL w038         20260306000000  MISSING zarr[0m
+  [91mFAIL w037         20260310000000  MISSING zarr[0m
+  [91mFAIL w034         20260303000000  MISSING zarr[0m
+  OK   w035         20260317000000  cov=1.00
+  [91mFAIL w030         20250108000005  MISSING zarr[0m
+  [91mFAIL w043         20260112000000  MISSING zarr[0m
+  [91mFAIL w045         20260126000000  MISSING zarr[0m
+  [91mFAIL w055         20251226000000  MISSING zarr[0m
+  [91mFAIL seg46527     20260226000000  MISSING zarr[0m
+  OK   500P2_front  20250628074500  cov=1.00
+  [91mFAIL w013         20240304141531  MISSING zarr[0m
+  OK   w087         20251112000002  cov=1.00
+  OK   w068         20251111010954  cov=1.00
+  [91mFAIL w018         20240304144031  MISSING zarr[0m
+  OK   p9b_487      20250919125754  cov=1.00
+  OK   ph1447_w058  20260930144758  cov=1.00
+  OK   ph1447_w060  20260930144760  cov=1.00
+  [91mFAIL ph1447_w062  20260930144762  MISSING zarr[0m
+  OK   paris4       20231210121321  cov=1.00
+  [91mFAIL paris2_fr143 20230301213755  MISSING zarr[0m
+  [91mFAIL paris2_fr47  20230205142449  MISSING zarr[0m
+  [91mFAIL scroll6_fr8  20231205222200  MISSING zarr[0m
+  [91mFAIL paris1_fr34  20230301213423  MISSING zarr[0m
+  [91mFAIL p343         20250511003658  MISSING zarr[0m
+  [91mFAIL cr1fr3       20231201215900  MISSING zarr[0m
+  OK   p841         20260221022814  cov=1.00
+
+[91m[assemble] 27 scroll(s) FAILED integrity: ['w059', 'w047', 'w056', 'w058', 'w052', 'w049', 'w046', 'w041', 'w040', 'w039', 'w038', 'w037', 'w034', 'w030', 'w043', 'w045', 'w055', 'seg46527', 'w013', 'w018', 'ph1447_w062', 'paris2_fr143', 'paris2_fr47', 'scroll6_fr8', 'paris1_fr34', 'p343', 'cr1fr3']
+  fix with: python assemble_training_segments.py --force --only w059,w047,w056,w058,w052,w049,w046,w041,w040,w039,w038,w037,w034,w030,w043,w045,w055,seg46527,w013,w018,ph1447_w062,paris2_fr143,paris2_fr47,scroll6_fr8,paris1_fr34,p343,cr1fr3[0m
+
+======================================================================
+[translate] w087 (20251112000002)
+======================================================================
+/usr/local/lib/python3.10/dist-packages/zarr/creation.py:614: UserWarning: ignoring keyword argument 'zarr_format'
+  compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+[degrader] /vesuvius/ves_zarrs2/20251112000002.zarr -> /vesuvius/ves_zarrs2/20251112000002.translated.zarr: input median/MAD 150.00/25.20, {'width': 48, 'layers': 8, 'ref_median': 0.290283203125, 'ref_mad': 0.1804395009765625}, device cuda
+[degrader] rows 256/10494
+[degrader] rows 512/10494
+[degrader] rows 768/10494
+[degrader] rows 1024/10494
+[degrader] rows 1280/10494
+[degrader] rows 1536/10494
+[degrader] rows 1792/10494
+[degrader] rows 2048/10494
+[degrader] rows 2304/10494
+[degrader] rows 2560/10494
+[degrader] rows 2816/10494
+[degrader] rows 3072/10494
+[degrader] rows 3328/10494
+[degrader] rows 3584/10494
+[degrader] rows 3840/10494
+[degrader] rows 4096/10494
+[degrader] rows 4352/10494
+[degrader] rows 4608/10494
+[degrader] rows 4864/10494
+[degrader] rows 5120/10494
+[degrader] rows 5376/10494
+[degrader] rows 5632/10494
+[degrader] rows 5888/10494
+[degrader] rows 6144/10494
+[degrader] rows 6400/10494
+[degrader] rows 6656/10494
+[degrader] rows 6912/10494
+[degrader] rows 7168/10494
+[degrader] rows 7424/10494
+[degrader] rows 7680/10494
+[degrader] rows 7936/10494
+[degrader] rows 8192/10494
+[degrader] rows 8448/10494
+[degrader] rows 8704/10494
+[degrader] rows 8960/10494
+[degrader] rows 9216/10494
+[degrader] rows 9472/10494
+[degrader] rows 9728/10494
+[degrader] rows 9984/10494
+[degrader] rows 10240/10494
+[degrader] rows 10494/10494
+[norm] 20251112000002.translated vol=(28,10494,8128) chunk_z=8 mask_valid=0.856
+[norm]   z 0:8 done  n=584139232
+[norm]   z 8:16 done  n=1168278464
+[norm]   z 16:24 done  n=1752417696
+[norm]   z 24:28 done  n=2044487312
+[norm] 20251112000002.translated mean=84.1503 std=40.7276 norm_min=-2.0662 norm_max=4.1949
+[anchor] 20251112000002.translated {'gap': 14.0, 'papyrus': 87.0, 'surface_mad': 7.338495596510227, 'tiles': 384}
+
+======================================================================
+[translate] w068 (20251111010954)
+======================================================================
+[degrader] /vesuvius/ves_zarrs2/20251111010954.zarr -> /vesuvius/ves_zarrs2/20251111010954.translated.zarr: input median/MAD 147.00/26.69, {'width': 48, 'layers': 8, 'ref_median': 0.290283203125, 'ref_mad': 0.1804395009765625}, device cuda
+[degrader] rows 256/11051
+[degrader] rows 512/11051
+[degrader] rows 768/11051
+[degrader] rows 1024/11051
+[degrader] rows 1280/11051
+[degrader] rows 1536/11051
+[degrader] rows 1792/11051
+[degrader] rows 2048/11051
+[degrader] rows 2304/11051
+[degrader] rows 2560/11051
+[degrader] rows 2816/11051
+[degrader] rows 3072/11051
+[degrader] rows 3328/11051
+[degrader] rows 3584/11051
+[degrader] rows 3840/11051
+[degrader] rows 4096/11051
+[degrader] rows 4352/11051
+[degrader] rows 4608/11051
+[degrader] rows 4864/11051
+[degrader] rows 5120/11051
+[degrader] rows 5376/11051
+[degrader] rows 5632/11051
+[degrader] rows 5888/11051
+[degrader] rows 6144/11051
+[degrader] rows 6400/11051
+[degrader] rows 6656/11051
+[degrader] rows 6912/11051
+[degrader] rows 7168/11051
+[degrader] rows 7424/11051
+[degrader] rows 7680/11051
+[degrader] rows 7936/11051
+[degrader] rows 8192/11051
+[degrader] rows 8448/11051
+[degrader] rows 8704/11051
+[degrader] rows 8960/11051
+[degrader] rows 9216/11051
+[degrader] rows 9472/11051
+[degrader] rows 9728/11051
+[degrader] rows 9984/11051
+[degrader] rows 10240/11051
+[degrader] rows 10496/11051
+[degrader] rows 10752/11051
+[degrader] rows 11008/11051
+[degrader] rows 11051/11051
+[norm] 20251111010954.translated vol=(28,11051,12606) chunk_z=8 mask_valid=0.916
+[norm]   z 0:8 done  n=1020925368
+[norm]   z 8:16 done  n=2041850736
+[norm]   z 16:24 done  n=3062776104
+[norm]   z 24:28 done  n=3573238788
+[norm] 20251111010954.translated mean=86.0372 std=40.4302 norm_min=-2.1280 norm_max=4.1791
+[anchor] 20251111010954.translated {'gap': 17.0, 'papyrus': 87.0, 'surface_mad': 6.2901390827230514, 'tiles': 384}
+
+======================================================================
+[translate] paris4 (20231210121321)
+======================================================================
+[degrader] /vesuvius/ves_zarrs2/20231210121321.zarr -> /vesuvius/ves_zarrs2/20231210121321.translated.zarr: input median/MAD 76.00/47.44, {'width': 48, 'layers': 8, 'ref_median': 0.290283203125, 'ref_mad': 0.1804395009765625}, device cuda
+[degrader] rows 256/12750
+[degrader] rows 512/12750
+[degrader] rows 768/12750
+[degrader] rows 1024/12750
+[degrader] rows 1280/12750
+[degrader] rows 1536/12750
+[degrader] rows 1792/12750
+[degrader] rows 2048/12750
+[degrader] rows 2304/12750
+[degrader] rows 2560/12750
+[degrader] rows 2816/12750
+[degrader] rows 3072/12750
+[degrader] rows 3328/12750
+[degrader] rows 3584/12750
+[degrader] rows 3840/12750
+[degrader] rows 4096/12750
+[degrader] rows 4352/12750
+[degrader] rows 4608/12750
+[degrader] rows 4864/12750
+[degrader] rows 5120/12750
+[degrader] rows 5376/12750
+[degrader] rows 5632/12750
+[degrader] rows 5888/12750
+[degrader] rows 6144/12750
+[degrader] rows 6400/12750
+[degrader] rows 6656/12750
+[degrader] rows 6912/12750
+[degrader] rows 7168/12750
+[degrader] rows 7424/12750
+[degrader] rows 7680/12750
+[degrader] rows 7936/12750
+[degrader] rows 8192/12750
+[degrader] rows 8448/12750
+[degrader] rows 8704/12750
+[degrader] rows 8960/12750
+[degrader] rows 9216/12750
+[degrader] rows 9472/12750
+[degrader] rows 9728/12750
+[degrader] rows 9984/12750
+[degrader] rows 10240/12750
+[degrader] rows 10496/12750
+[degrader] rows 10752/12750
+[degrader] rows 11008/12750
+[degrader] rows 11264/12750
+[degrader] rows 11520/12750
+[degrader] rows 11776/12750
+[degrader] rows 12032/12750
+[degrader] rows 12288/12750
+[degrader] rows 12544/12750
+[degrader] rows 12750/12750
+[norm] 20231210121321.translated vol=(28,12750,9995) chunk_z=8 mask_valid=0.862
+[norm]   z 0:8 done  n=879130120
+[norm]   z 8:16 done  n=1758260240
+[norm]   z 16:24 done  n=2637390360
+[norm]   z 24:28 done  n=3076955420
+[norm] 20231210121321.translated mean=86.1448 std=37.0905 norm_min=-2.3226 norm_max=4.5525
+[anchor] 20231210121321.translated {'gap': 32.0, 'papyrus': 94.0, 'surface_mad': 4.193426055148701, 'tiles': 384}
+
+[translate] SUMMARY
+  w087: OK
+  w068: OK
+  paris4: OK

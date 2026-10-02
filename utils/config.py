@@ -614,6 +614,8 @@ class ModelConfig:
     # frozen utils/upsampler.py checkpoint (or "trilinear") applied to the normalised crop before the backbone;
     # the network grid becomes scale x wider and depth_factor / depth_pool x deeper, labels stay native
     input_upsampler: str = ""
+    # crossres generator checkpoint (utils/input_generator.py): 8 real + 32 predicted slices mixed to 16 network slices
+    input_generator: str = ""
     # "clip200": v8-in input (with data.norm_mode "raw255"): raw clipped to [0, 200] / 255, z-scored per crop
     input_tile_norm: str = ""
     # per-physical-domain residual output heads used only in training; inference uses the shared head
