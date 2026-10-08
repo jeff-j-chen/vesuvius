@@ -1,0 +1,22 @@
+nohup: ignoring input
+[depth] 11 segments, x4 depth, x1 xy: fitting filters
+Model parameters (nnunet3d_lcndz): 7,522,618
+
+[depth] MSE on held-out tiles (24 crops per segment)
+method                   MSE  vs trilinear  vs global filter
+trilinear            0.01076         +0.0%             -7.6%
+linear3_global       0.01000         +7.1%             +0.0%
+linear3_segment      0.00885        +17.8%            +11.5%
+D head               0.01036         +3.7%             -3.6%
+[xyz] 11 segments, x4 depth, x2 xy: fitting filters
+Model parameters (nnunet3d_lcndz): 7,522,618
+
+[xyz] MSE on held-out tiles (24 crops per segment)
+method                   MSE  vs trilinear  vs global filter
+trilinear            0.01136         +0.0%             -6.4%
+linear3_global       0.01068         +6.0%             +0.0%
+linear3_segment      0.00952        +16.2%            +10.8%
+X head               0.01097         +3.5%             -2.7%
+upsampler            0.01006        +11.4%             +5.8%
+
+wrote /vesuvius/crossres/eval_baselines.json

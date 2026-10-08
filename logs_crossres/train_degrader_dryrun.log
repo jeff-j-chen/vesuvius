@@ -1,0 +1,2 @@
+[degrader] train [('w044', 16), ('w059', 52), ('w030', 14), ('w043', 27), ('w045', 50), ('w040', 93), ('w041', 57), ('w039', 17), ('w035', 27), ('seg46527', 5)] monitor ['p841'] (all); NCC >= 0.5; reference median/MAD 0.2903/0.1804; params=376,177
+[degrader] dry-run batch (4, 1, 28, 128, 128) loss=0.03644 (untrained == pooled) monitor {"mse_translated": 0.01392, "mse_pooled": 0.01392, "ratio": 1.0, "spectrum_translated": 0.27635, "slice_stats_translated": 0.11021, "spectrum_pooled": 0.27635, "slice_stats_pooled": 0.11021}

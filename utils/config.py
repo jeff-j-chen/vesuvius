@@ -1,0 +1,747 @@
+"""config.py -- current training configuration for the nnunet3d_lcndz path."""
+from __future__ import annotations
+
+import contextlib
+import io
+import json
+import os
+import sys
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
+
+import torch
+
+# "INFO": print the full config, dataset building, and cache progress at the start of a run.
+# "ERROR": start-of-run output is silenced except lines containing ERROR (exceptions still raise).
+LOG_LEVEL = "INFO"
+
+
+class _ErrorLinesOnly(io.TextIOBase):
+    def __init__(self, target):
+        self._target = target
+        self._pending = ""
+
+    def write(self, text):
+        self._pending += text
+        *lines, self._pending = self._pending.split("\n")
+        for line in lines:
+            if "ERROR" in line:
+                self._target.write(line + "\n")
+        return len(text)
+
+    def flush(self):
+        self._target.flush()
+
+
+def resolve_run_config(checkpoint, repo_root=None) -> tuple[dict, str]:
+    """saved run config for a checkpoint: <checkpoint dir>/config.json, else the newest runs*/<run>/config.json
+    whose model_dir is the checkpoint's directory (older runs predate the model-dir copy)."""
+    checkpoint = os.path.realpath(str(checkpoint))
+    model_dir = os.path.dirname(checkpoint)
+    repo_root = os.path.realpath(str(repo_root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    local = os.path.join(model_dir, "config.json")
+    if os.path.isfile(local):
+        with open(local, "r", encoding="utf-8") as handle:
+            return json.load(handle), local
+    import glob
+
+    matches = []
+    for path in glob.glob(os.path.join(repo_root, "runs*", "*", "config.json")):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        saved_dir = data.get("model_dir")
+        if saved_dir and os.path.realpath(os.path.join(repo_root, saved_dir)) == model_dir:
+            matches.append((os.path.getmtime(path), path, data))
+    if not matches:
+        raise FileNotFoundError(f"no config.json next to {checkpoint} and no run log with model_dir={model_dir}")
+    matches.sort(key=lambda item: item[0])
+    if len(matches) > 1:
+        print(f"[run-config] {len(matches)} runs share {model_dir}; using the newest: {matches[-1][1]}", flush=True)
+    return matches[-1][2], matches[-1][1]
+
+
+@contextlib.contextmanager
+def startup_output():
+    """silence start-of-run stdout unless LOG_LEVEL is INFO."""
+    if str(LOG_LEVEL).upper() == "INFO":
+        yield
+        return
+    with contextlib.redirect_stdout(_ErrorLinesOnly(sys.stdout)):
+        yield
+
+
+@dataclass
+class ScrollConfig:
+    scroll_id: int
+    split_axis: str = "y"
+    train_split_frac: float = 0.8055
+    crop_x_frac: tuple[float, float] = (0.0, 1.0)
+    crop_y_frac: tuple[float, float] = (0.0, 1.0)
+
+
+@dataclass
+class ProbeROI:
+    x: int
+    y: int
+    label: str = ""
+    size: int = 576
+
+
+def _load_probe_rois(cache_path: str = "probe_rois.json") -> Dict[int, List[ProbeROI]]:
+    """load probe rois from the cache written by roi.py."""
+    if not os.path.isfile(cache_path):
+        return {}
+    try:
+        with open(cache_path, encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except Exception:
+        return {}
+
+    out: Dict[int, List[ProbeROI]] = {}
+    for scroll_id, boxes in (raw or {}).items():
+        try:
+            sid = int(scroll_id)
+        except (TypeError, ValueError):
+            continue
+        rois: List[ProbeROI] = []
+        for label in ("easy", "hard"):
+            box = (boxes or {}).get(label)
+            if not box or "x" not in box or "y" not in box:
+                continue
+            rois.append(ProbeROI(int(box["x"]), int(box["y"]), label, int(box.get("size", 576))))
+        if rois:
+            out[sid] = rois
+    return out
+
+
+DEFAULT_SCROLLS: List[ScrollConfig] = [
+    ScrollConfig(20260115000000, split_axis="y", train_split_frac=0.8055),
+    ScrollConfig(20260317000000, split_axis="y", train_split_frac=0.75),
+    ScrollConfig(20250223000000, split_axis="x", train_split_frac=0.75),
+    ScrollConfig(20251111010954, split_axis="x", train_split_frac=0.75),  # w068 PHerc0172
+    ScrollConfig(20251112000002, split_axis="x", train_split_frac=0.75),  # w087 PHerc0172
+    ScrollConfig(20240304141531, split_axis="x", train_split_frac=0.75),  # w013 PHerc1667
+    ScrollConfig(20240304144031, split_axis="x", train_split_frac=0.75),  # w018 PHerc1667
+    ScrollConfig(20231201215900, split_axis="x", train_split_frac=0.75),  # PHerc1667 Cr1 Fr3
+    ScrollConfig(20250919125754, split_axis="x", train_split_frac=0.75),  # PHerc0009B 487
+    ScrollConfig(20231210121321, split_axis="x", train_split_frac=0.75),  # PHercParis4
+    ScrollConfig(20250628074500, split_axis="x", train_split_frac=0.6),
+    ScrollConfig(20260226000000, split_axis="y", train_split_frac=0.75),
+    ScrollConfig(20230301213755, split_axis="x", train_split_frac=0.75),  # PHercParis2 Fr143
+    ScrollConfig(20230205142449, split_axis="x", train_split_frac=0.75),  # PHercParis2 Fr47
+    ScrollConfig(20231205222200, split_axis="x", train_split_frac=0.75),  # PHerc51 Cr4 Fr8
+    ScrollConfig(20230301213423, split_axis="x", train_split_frac=0.75),  # PHercParis1 Fr34
+    ScrollConfig(20250511003658, split_axis="x", train_split_frac=0.75),  # PHerc0343P
+    ScrollConfig(20260221022814, split_axis="x", train_split_frac=0.75),  # PHerc0841
+]
+
+DEFAULT_TRAIN_SCROLL_DICT = {
+    "pherc0139": [20260115000000, 20260317000000, 20250223000000],
+    "pherc0172": [20251111010954, 20251112000002],
+    "pherc1667": [20240304141531, 20240304144031, 20231201215900],
+    "pherc0009b": [20250919125754],
+    "phercparis4": [20231210121321],
+    "pherc0500p2": [20250628074500],
+    "pherc0814": [20260226000000],
+    "phercparis2_fr143": [20230301213755, 20230205142449],  # Fr143, Fr47
+    "pherc51cr4_fr8": [20231205222200],
+    "phercparis1_fr34": [20230301213423],
+    "pherc0343p": [20250511003658],
+    "pherc0841": [20260221022814],
+}
+
+# campaign-40 holdout_n96_combined_surface_norm training set: DEFAULT_SCROLLS plus six more PHerc0139 segments.
+# DEFAULT_SCROLLS / DEFAULT_TRAIN_SCROLL_DICT stay as-is because MAE pretraining specs are keyed on them.
+_EXTRA_PHERC0139_IDS = (20250108000005, 20260112000000, 20260126000000, 20250831000000, 20260108000000, 20260302000000)
+TRAIN_SCROLLS: List[ScrollConfig] = [
+    *DEFAULT_SCROLLS[:3],
+    *(ScrollConfig(scroll_id, split_axis="x", train_split_frac=0.75) for scroll_id in _EXTRA_PHERC0139_IDS),
+    *DEFAULT_SCROLLS[3:],
+]
+TRAIN_SCROLL_DICT = {
+    name: list(scroll_ids) + (list(_EXTRA_PHERC0139_IDS) if name == "pherc0139" else [])
+    for name, scroll_ids in DEFAULT_TRAIN_SCROLL_DICT.items()
+}
+TRAIN_SCROLL_WEIGHT_BY_DOMAIN = {"pherc0139": 2, "pherc0343p": 4, "pherc0500p2": 3, "pherc0814": 5}
+
+DEFAULT_TEST_SCROLL_IDS = (
+    20260814140748,
+    20260717193517,
+    20260720090842,
+    20250703034159,
+    20260723112922,
+    20260921094413,  # PHerc0846A
+    20260918132724,  # PHerc0175A
+    20260922073234,  # PHerc0306B
+    20260922161631,  # PHerc0800
+    20260925085345,  # PHerc1447 (second surface)
+    20260928000001,  # PHerc0800_z9264_w040_abf
+    20260928000002,  # PHerc0125_z15344_w040_abf
+    20260928000003,  # PHerc0211_z7312_w080_abf
+    20260928000004,  # PHerc0211_z5520_w040_abf
+)
+
+
+@dataclass
+class DataConfig:
+    zarr_path: str = field(
+        default_factory=lambda: os.getenv(
+            "VESUVIUS_ZARR_PATH",
+            "/vesuvius/ves_zarrs2" if os.name == "posix" else r"C:\Users\ChenJeff\Documents\ves_zarrs2",
+        )
+    )
+    scrolls: List[ScrollConfig] = field(default_factory=lambda: list(TRAIN_SCROLLS))
+    train_scroll_dict: Optional[Dict[str, List[int]]] = field(
+        default_factory=lambda: {
+            name: list(scroll_ids) for name, scroll_ids in TRAIN_SCROLL_DICT.items()
+        }
+    )
+    train_scroll_weights: Optional[List[int]] = field(
+        default_factory=lambda: [TRAIN_SCROLL_WEIGHT_BY_DOMAIN.get(name, 1) for name in TRAIN_SCROLL_DICT]
+    )
+    test_scroll_ids: List[int] = field(
+        default_factory=lambda: list(DEFAULT_TEST_SCROLL_IDS)
+    )
+    holdout_scroll_ids: List[int] = field(default_factory=lambda: [20251226000000])
+
+    tile_size: int = 16
+    depth: int = 8
+    d_start: int = 4
+    d_end: int = 28
+    train_d_start: int = 4
+    train_d_end: int = 28
+
+    composite_method: str = "maxproj"
+    composite_d0: int = 10
+    composite_d1: int = 18
+    composite_display: str = "raw"
+    voxel_um: float = 9.362
+
+    mask_memmap: bool = False
+    mask_bitpack: bool = True
+    preload_volumes: bool = False
+    selective_chunk_preload: bool = True
+    selective_chunk_workers: int = 8
+    ram_safe_vis: bool = False
+    ring_negatives: bool = True
+    ring_label_source: str = "closed"
+    ring_close_r: int = 2
+    ring_gap_r: int = 2
+    ring_shell_r: int = 4
+    # scrolls whose labels give positives only: no ring negatives are built around their ink
+    ring_free_scroll_ids: List[int] = field(default_factory=list)
+    simple_split: bool = False  # true: axis/fraction split; false: train_masks/<scroll_id>.png
+    coordinate_hash_split: bool = False
+    coordinate_hash_block_size: int = 512
+    coordinate_hash_valid_fraction: float = 0.25
+    coordinate_hash_seed: int = 29
+    train_mask_dir: str = "./train_masks"
+    surface_label_dir: str = "./surface_labels"
+    context_size: int = 96
+    context_downsample: int = 1
+    eval_infer_bs: int = 192
+    eval_prefetch: int = 3   # >0 reads eval rows in N background threads to overlap disk i/o with gpu inference (0=serial)
+    eval_chunk_gb: float = 3.0  # bounded host-RAM target for the final W044 figure
+    tta_mode: str = "light"  # eval TTA view set: "light"=id+hflip (2x), "flips"=id+h+v+180 (4x), "dihedral"=+/-90 too (6x)
+    probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
+    vis_scroll_ids: Optional[List[int]] = field(default_factory=lambda: [20260221022814, 20250919125754, 20260928000003])
+    vis_preload_persistent: bool = True  # keep each visualized scroll volume in RAM for the whole run
+    # vis-only scrolls without ink labels or train masks: zero labels, no train region (never mined or trained)
+    label_free_vis_scroll_ids: List[int] = field(default_factory=list)
+    eval_stride: int = 32  # figure/inference window step in px; must not exceed the multitile center (grid*subtile)
+    inklabel_dir: str = "./dilated_inklabels"
+    label_dilate_r: int = 0
+    dot_inklabel_dir: str = ""  # optional dir of binary dot labels; only positives are added to train
+    dot_scroll_whitelist: List[int] = field(default_factory=list)  # if non-empty, load dots ONLY for these scroll ids
+    ctx_jitter: int = 10  # max pixel jitter for context window; varies surrounding context during training
+    target_aware_ctx_jitter: bool = True
+    depth_jitter: int = 1  # max slice jitter for depth window start; attacks depth-profile position memorization
+    surface_relative_depth_window: bool = True  # center the source window on the literal map
+    surface_window_offset: int = 0  # constant slice shift of the surface-centered window (train and eval)
+    surface_window_offset_by_scroll: dict = field(default_factory=dict)  # scroll id -> offset; overrides the constant
+    holdout_domains: List[str] = field(default_factory=list)  # train_scroll_dict names excluded from training only
+    explicit_negative_share: float = 0.0  # fraction of character negative draws taken from hand-drawn explicit negatives
+    far_negative_share: float = 0.0  # fraction of character negative draws taken from far-background papyrus windows
+    far_negative_min_dist: int = 160  # px from any ink label before unlabeled papyrus counts as far background
+    far_negative_forced_positive_dist: int = 200  # px far background must keep from any train-mask forced positive
+    # training-only soft positives: a positive cell's target is the max of its gaussian-blurred
+    # ink label, floored at edge_soft_floor (>0.5 so the cell still counts as positive). 0 = off
+    edge_soft_sigma: float = 8.0
+    edge_soft_floor: float = 0.55
+    # "global": whole-volume z-score and raw min/max; "surface_anchor": gap -> 0.1, surface papyrus -> 0.5;
+    # "raw255": raw / 255 (for model.input_tile_norm)
+    norm_mode: str = "surface_anchor"
+    # scroll id -> zarr/norm-key suffix, e.g. {"20231210121321": ".translated"} reads <id>.translated.zarr
+    zarr_suffix: dict = field(default_factory=dict)
+    # plan R.3: crossres/build_noise_bank.py output added to training crops of these scrolls ("" = off)
+    native_noise: str = ""
+    native_noise_scale: float = 1.0
+    native_noise_ids: List[int] = field(default_factory=list)
+    # control: roll training-scroll labels by this fraction of the height (visualized scrolls keep theirs)
+    label_shift_frac: float = 0.0
+    multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
+    multitile_pos_only: bool = True  # in ink-containing windows, supervise ONLY ink sub-tiles (mask out non-ink ones to avoid labelling unlabelled-ink neighbours as negatives); ink-free ring windows still give negatives
+    multitile_ring_gate: bool = True  # with pos_only=False, still emit only sub-tiles inside the ring/supervision mask (False = legacy all-in-window targets)
+    ring_from_inklabel_dir: bool = True  # closed ring seeds from inklabel_dir minus train_mask forced pixels (False = legacy ./inklabels/<id>.png)
+    character_balanced_sampling: bool = True
+    character_balance_scrolls: bool = True
+    character_min_pixels: int = 8
+    max_samples_per_epoch: Optional[int] = 6667
+
+    @property
+    def test_scroll_id(self) -> Optional[int]:
+        return self.test_scroll_ids[0] if self.test_scroll_ids else None
+
+
+@dataclass
+class DataloaderConfig:
+    batch_size: int = 96
+    num_workers: int = 8
+    prefetch_factor: int = 2
+    data_aug: bool = True
+    rotation_prob: float = 0.6
+    flip_prob: float = 0.6
+    noise_prob: float = 0.0
+    brightness_prob: float = 0.0
+    contrast_prob: float = 0.0
+    brightness_delta: float = 0.15
+    contrast_delta: float = 0.15
+    noise_std_min: float = 0.001
+    noise_std_max: float = 0.005
+    cutout_prob: float = 0.2
+    cutout_max_frac: float = 0.16
+    cutout_n_patches: int = 3
+    depth_mask_prob: float = 0.0
+    depth_mask_mode: str = "zero"  # zero: each slice zeroed independently; interp: one slice per sample -> neighbour mean
+    fda_prob: float = 0.0
+    fda_beta: float = 0.05  # fraction of low-freq spectrum to swap
+    elastic_prob: float = 0.0
+    elastic_alpha: float = 15.0  # displacement magnitude in pixels
+    elastic_sigma: float = 5.0   # gaussian smoothing sigma for displacement field
+    depth_warp_prob: float = 0.0
+    depth_warp_max: float = 2.0
+    depth_warp_sigma: float = 24.0
+    surface_atten_prob: float = 0.0
+    surface_atten_min: float = 0.1
+    surface_atten_max: float = 0.35
+    surface_atten_sigma: float = 2.0
+    acquisition_blur_prob: float = 0.0
+    acquisition_blur_min: float = 0.4
+    acquisition_blur_max: float = 0.9
+    correlated_noise_prob: float = 0.0
+    correlated_noise_min: float = 0.003
+    correlated_noise_max: float = 0.015
+    correlated_noise_sigma: float = 6.0
+    # propagation phase contrast: paganin-like low-pass or edge-enhancing fringes (gamma in px^2)
+    phase_filter_prob: float = 0.0
+    phase_filter_min: float = 0.5
+    phase_filter_max: float = 20.0
+    phase_filter_max_gain: float = 4.0
+    # random monotonic intensity transfer; low concentration gives extreme curves
+    tone_curve_prob: float = 0.0
+    tone_curve_knots: int = 6
+    tone_curve_concentration: float = 0.5
+    # area-downsample then linear-upsample in XY to mimic a coarser native scan
+    resolution_degrade_prob: float = 0.0
+    resolution_degrade_min: float = 1.5
+    resolution_degrade_max: float = 4.0
+    # stretch or compress the depth axis about the window centre (sheet/ink-layer thickness)
+    depth_scale_prob: float = 0.0
+    depth_scale_min: float = 0.6
+    depth_scale_max: float = 1.6
+    # scrolls resampled down from a finer native scan; None treats every scroll as fine
+    fine_native_scroll_ids: Optional[List[int]] = None
+    # push samples toward the other scan regime (2.4um/22cm/78keV <-> 9um/1.2m/110keV)
+    scan_regime_prob: float = 0.0
+    scan_regime_min: float = 0.5
+    scan_regime_max: float = 1.0
+    # deterministic per-scroll radial XY amplitude transfer (scroll id -> gains over |k| in
+    # [0, 0.5] cycles/px), applied to every train/valid crop to match a reference scan quality
+    quality_transfer: Optional[Dict[str, List[float]]] = None
+    # random convolution texture randomisation (RandConv)
+    randconv_prob: float = 0.0
+    randconv_kernel_sizes: List[int] = field(default_factory=lambda: [1, 3, 5, 7])
+    randconv_depth_kernel: int = 1
+    randconv_layers_max: int = 1
+    randconv_mix_min: float = 0.0
+    cutout_protect_center: bool = True
+    context_replace_prob: float = 0.15
+    context_replace_keep_size: int = 0  # 0 = prediction center + 2*margin
+    context_replace_margin: int = 7
+    context_replace_feather: int = 13
+    context_replace_min_mask_frac: float = 0.8
+    context_replace_surface_align: bool = True
+    context_replace_cross_prob: float = 0.0  # share of replacements drawing the donor from another physical domain
+    # context-only warps; the prediction centre plus margin is left exactly in place
+    protected_rotation_prob: float = 0.0
+    protected_elastic_prob: float = 0.0
+    protected_elastic_alpha: float = 16.0  # peak displacement in px
+    protected_elastic_sigma: float = 5.0
+    protected_warp_margin: int = 4
+    protected_warp_feather: int = 12
+
+
+@dataclass
+class TrainingConfig:
+    n_epochs: int = 10
+    aug_start_epoch: int = 0  # dataset transforms switch on at this epoch
+    lr: float = 1.5e-4
+    encoder_lr_scale: float = 1.0
+    encoder_freeze_epochs: int = 0
+    warmup_epochs: int = 5
+    weight_decay: float = 0.0
+    l1_lambda: float = 0.0
+    grad_norm: float = 0.5
+    patience: int = 5
+    lr_decay: float = 0.5
+    save_int: int = 15
+    log_dir: str = "./runs_train"
+    eval_int: int = 10
+    eval_int_scrolls: int = 3
+    test_int: int = 999
+    probe_int: int = 9999
+    loss_type: str = "bce"
+    gce_q: float = 0.9
+    dice_weight: float = 0.0  # loss = (1 - w) * primary + w * soft Dice over supervised cells
+    label_smooth_pos: float = 0.0
+    label_smooth_neg: float = 0.0
+    tta_consistency: bool = False
+    tta_consistency_lambda: float = 0.3
+    tta_consistency_mode: str = "flips"
+    tta_consistency_prob: float = 1.0  # fraction of steps that run the consistency 2nd forward; <1 trades signal for speed
+    tile_pos_weight: float = 1.0  # >0 up-weights positive tiles in the loss; needed for multitile (8px sub-tile imbalance ~5:1)
+    tile_pos_weight_auto: bool = False  # when tile_pos_weight==0, compute pos_weight from data (neg/pos over supervised units) and cache per scroll+mode
+    dann: bool = False
+    dann_lambda: float = 0.0
+    dann_n_domains: int = 12
+    dann_grl_anneal: bool = False
+    spill_reduction: bool = False
+    spill_lambda: float = 0.0
+    spill_depth_threshold: float = 0.35
+    spill_active_depth_tau: float = 0.08
+    spill_max_active_depth_frac: float = 0.35
+    spill_min_depth_var: float = 0.8
+    spill_prob: bool = False  # old probability-based active-depth-fraction approach
+    spill_entropy: bool = False
+    spill_entropy_lambda: float = 0.3
+    spill_max_depth_entropy: float = 2.1
+    new_surface_lambda: float = 0.2
+    new_surface_smooth_lambda: float = 0.02
+    surface_target_sigma: float = 0.75
+    seed: int = 41
+    deterministic: bool = False
+    epoch_cooldown_secs: int = 0
+    val_cooldown_secs: int = 0
+    eval_cooldown_secs: int = 0
+    fig_chunk_cooldown_ms: int = 0
+    save_vis: bool = False
+    fast_eval_figure: bool = False
+    test_on_final: bool = False
+
+    supcon: bool = False
+    supcon_lambda: float = 0.1
+    supcon_temp: float = 0.07
+    supcon_proj_dim: int = 128
+    supcon_hidden_dim: int = 256
+    supcon_curriculum: bool = True
+    supcon_lambda_start: float = 0.05
+    supcon_lambda_end: float = 0.5
+    supcon_curriculum_epochs: int = 8
+    supcon_cross_frag: bool = False  # restrict supcon positives to cross-fragment pairs only
+    supcon_ignore_same_domain_same_class: bool = False
+    per_scroll_metrics: bool = True
+    prototype_align: bool = False
+    prototype_align_lambda: float = 0.1
+    prototype_margin: float = 0.5
+    coral_align: bool = False
+    coral_align_lambda: float = 0.1
+    coral_mean_weight: float = 1.0
+    cdan: bool = False
+    cdan_lambda: float = 0.1
+    mldg: bool = False
+    mldg_holdout_domain: int = -1
+    mldg_random_holdout: bool = False
+    mldg_inner_lr: float = 5e-4
+    mldg_beta: float = 1.0
+    sagnet_lambda: float = 0.1
+    mae_reconstruction: bool = False
+    mae_reconstruction_lambda: float = 0.1
+    mae_reconstruction_start_epoch: int = 4
+    mae_reconstruction_mask_frac: float = 0.5
+    mae_reconstruction_patch: int = 4
+    entropy_min_lambda: float = 0.0  # weight for entropy reward on unlabeled (validation) tiles
+    entropy_min_batch_size: int = 8  # unlabeled samples per step; kept small to avoid OOM
+    character_macro_metrics: bool = True
+    character_score_threshold: float = 0.5
+    character_calibrate_threshold: bool = True
+    character_threshold_min: float = 0.1
+    character_threshold_max: float = 0.9
+    character_threshold_steps: int = 33
+    character_recall_target: float = 0.5
+    character_max_ring_fpr: float = 0.1
+    character_checkpoint_metric: str = "character_ap_macro"
+    sanity_guard_epoch: int = 0
+    sanity_min_character_ap: float = 0.0
+    sanity_min_specificity: float = 0.0
+    context_consistency: bool = False
+    context_consistency_prob: float = 0.25
+    context_consistency_lambda: float = 0.1
+    depth_view_consistency: bool = False
+    depth_view_consistency_prob: float = 0.5
+    depth_view_consistency_lambda: float = 0.2
+    depth_view_consistency_offset: int = 2
+    character_bag_ranking: bool = True
+    character_bag_margin: float = 0.5
+    character_bag_topk_frac: float = 0.5
+    character_bag_lambda: float = 0.2
+    character_groupdro: bool = False
+    character_groupdro_eta: float = 0.05
+    character_groupdro_max_ratio: float = 3.0
+    physical_domain_groupdro: bool = False
+    physical_domain_groupdro_eta: float = 0.05
+    physical_domain_groupdro_max_ratio: float = 3.0
+    physical_patch_groupdro: bool = True
+    physical_patch_groupdro_eta: float = 0.05
+    physical_patch_groupdro_max_ratio: float = 3.0
+    domain_vrex: bool = False
+    domain_vrex_lambda: float = 1.0
+    domain_vrex_warmup_epochs: int = 2
+    domain_cvar: bool = False
+    domain_cvar_alpha: float = 0.25
+    pcgrad: bool = False
+    pcgrad_lite: bool = False
+    pcgrad_lite_max_domains: int = 4
+    pcgrad_lite_scope: str = "head"
+    pcgrad_groups: int = 0  # full pcgrad over this many random domain groups per step; 0 = one task per domain
+    pcgrad_gram: bool = False
+    pcgrad_gram_interval: int = 1  # 0 never measures conflicts: equal domain weights only
+    pcgrad_gram_ema: float = 0.0
+    # AND-mask: per-step random domain groups, each run as its own sub-batch; only coordinates
+    # where at least and_mask_threshold of the groups agree in gradient sign are updated
+    and_mask: bool = False
+    and_mask_groups: int = 4
+    and_mask_threshold: float = 0.5
+    # Fish: sequential inner optimizer steps over the same domain groups, then a partial meta step
+    # back toward the start; with and_mask the meta step keeps only sign-agreeing coordinates
+    fish: bool = False
+    fish_meta_step: float = 0.5
+    # spectral decoupling: L2 on supervised cell logits so one easy cue cannot starve the rest
+    spectral_decoupling_lambda: float = 0.0
+    # RSC: on this share of samples, mute the head-input channels (or positions) most responsible
+    # for the correct-class logit and train on the rest
+    rsc_prob: float = 0.33
+    rsc_drop_frac: float = 0.33
+    # Fishr on the output head: match per-domain variances of per-sample head gradients
+    fishr_lambda: float = 0.0
+    fishr_warmup_epochs: int = 1
+    # private per-domain heads (model.private_domain_heads): loss on shared+private logits plus
+    # this weight on the shared head alone, and an L2 on the private residual
+    private_head_shared_weight: float = 0.5
+    private_head_l2: float = 0.01
+    # pairwise logistic ranking of ink cells above negative cells from a different physical domain
+    cross_scroll_rank_lambda: float = 0.0
+    cross_scroll_rank_pairs: int = 4096
+    # non-negative PU risk (Kiryo et al. 2017) on far-background cells (label -2), treated as
+    # unlabelled with this ink prior instead of as negatives; needs data.far_negative_share > 0
+    pu_lambda: float = 0.0
+    pu_prior: float = 0.03  # share of positive 16 px cells among far-background cells, not pixel share
+    pu_beta: float = 0.0  # Kiryo's beta/gamma: below -beta the PU risk takes a gamma-scaled ascent step
+    pu_gamma: float = 1.0
+    # drop cells whose fitted surface shows no papyrus from the loss: "" off, "pos" positives, "both"
+    support_drop: str = ""
+    support_min_fraction: float = 0.25
+    mid_depth_entropy_lambda: float = 0.0
+    topk_positive_fraction: float = 0.0  # 0 disables; else supervise only each character's top positives
+    character_forgetting: bool = False
+    character_forgetting_path: str = ""
+    character_forgetting_max_weight: float = 4.0
+    model_ema: bool = False
+    model_ema_decay: float = 0.995
+    model_ema_start_epoch: int = 0
+    mae_anchor_lambda: float = 0.0
+    domain_gradient_mode: str = ""
+    domain_gradient_threshold: float = 0.0
+    domain_gradient_strength: float = 4.0
+    domain_gradient_ema: float = 0.9
+    domain_gradient_blend: float = 1.0
+    character_cvar: bool = False
+    character_cvar_alpha: float = 0.25
+    clam_instance: bool = False
+    clam_instance_k: int = 4
+    clam_instance_lambda: float = 0.1
+    sam_rho: float = 0.0
+    elr: bool = False
+    elr_start_epoch: int = 5
+    elr_beta: float = 0.7
+    elr_lambda: float = 0.1
+    depth_shift_aux: bool = False
+    depth_shift_aux_lambda: float = 0.1
+    depth_shift_aux_classes: int = 3
+    text_region_lambda: float = 0.5  # weight of the text-region auxiliary loss when the gate is enabled
+
+@dataclass
+class ModelConfig:
+    arch: str = "nnunet3d_lcndz"
+    compile_model: bool = False
+    require_architecture_init: bool = True
+    conv1_drop: float = 0.2
+    conv2_drop: float = 0.2
+    head_drop: float = 0.3
+    attn_mil: bool = False
+    attn_entropy_weight: float = 0.03
+    feature_attn_mil: bool = False
+    feature_depth_fusion: bool = False
+    minimum_support_k: int = 0
+    minimum_support_kernel: int = 3
+    weldon_k: int = 0
+    weldon_top_k: int = 0
+    weldon_bottom_k: int = 0
+    weldon_top_weight: float = 0.5
+    weldon_multi_k: bool = False
+    weldon_top_k2: int = 0
+    weldon_bottom_k2: int = 0
+    weldon_multi_mix: float = 0.5
+    weldon_depth_support_k: int = 0
+    fiber_coordinate_branch: bool = True
+    # papyrus-air boundary geometry (flaking / missing top layer) added at the early-2D enc1
+    surface_relief_input: bool = False
+    # fixed in-plane gaussian on the (downsampled) input; 0.6 px cuts white-noise variance ~4x like 2x2 pooling
+    input_denoise_sigma: float = 0.0
+    input_denoiser: str = ""
+    # frozen utils/upsampler.py checkpoint (or "trilinear") applied to the normalised crop before the backbone;
+    # the network grid becomes scale x wider and depth_factor / depth_pool x deeper, labels stay native
+    input_upsampler: str = ""
+    # crossres generator checkpoint (utils/input_generator.py): 8 real + 32 predicted slices mixed to 16 network slices
+    input_generator: str = ""
+    # "clip200": v8-in input (with data.norm_mode "raw255"): raw clipped to [0, 200] / 255, z-scored per crop
+    input_tile_norm: str = ""
+    # per-physical-domain residual output heads used only in training; inference uses the shared head
+    private_domain_heads: bool = False
+    # private loss sees the shared logits detached: the private head only shapes shared features, never takes over calibration
+    private_head_detach_shared: bool = False
+    early_2d_unet: bool = True
+    early_2d_channels_mult: float = 1.0
+    mid_2d_unet: bool = False
+    mid_2d_channels_mult: float = 1.0
+    residual_2d_unet: bool = False
+    two_d_block_depth: int = 2
+    two_d_bottleneck_channels: int = 0
+    two_d_extra_levels: int = 0
+    two_d_extra_channels: tuple[int, ...] = ()
+    factorized_2plus1d: bool = False
+    residual_unet: bool = False
+    gated_stems: bool = True
+    raw_only_stem: bool = False
+    cue_dropout: float = 0.0
+    explicit_depth_channels: bool = False
+    overlapping_depth_windows: bool = False
+    overlapping_depth_window_size: int = 4
+    overlapping_depth_window_stride: int = 2
+    mid_depth_entropy_floor: float = 0.0  # fraction of log(depth) below which mid depth attention is penalized
+    mid_depth_max_mode: str = "amax"  # amax or topk peak branch at the mid depth collapse
+    mid_depth_topk_frac: float = 0.5
+    mt_lse_r_max: float = 10.0  # upper clamp on the multitile lse temperature (2d heads)
+    planar_early_convs: bool = False  # early-2d only: stem and enc1 convs never mix slices
+    text_region_gate: bool = False  # early-2d only: coarse bottleneck head gates ink logits by text-region probability
+    multi_depth_collapse: bool = False  # early-2d only: volumetric enc2/enc3 max-collapsed into the 2D stages
+    two_d_strided_down: bool = False  # early-2d only: stride-2 convs replace max-pooling between 2D stages
+    depth_antialias: bool = False
+    sparse_deep_supervision: bool = False
+    sparse_deep_supervision_dec2_weight: float = 0.3
+    sparse_deep_supervision_dec3_weight: float = 0.1
+    depth_attention_2d_head: bool = False
+    divided_attention: bool = False
+    divided_attention_spatial: bool = False
+    divided_attention_heads: int = 4
+    divided_attention_window: int = 8
+    mednext_adapters: bool = False
+    mednext_kernel: int = 5
+    mednext_expansion: int = 2
+    mixstyle: bool = False
+    mixstyle_prob: float = 0.8
+    mixstyle_alpha: float = 0.1
+    sagnet: bool = False
+    dual_scale: bool = False
+    dual_scale_local_size: int = 64
+    dual_scale_mix: float = 0.25
+    dual_scale_deep: bool = False
+    dual_scale_local_only: bool = False
+    dual_scale_outer_size: int = 0
+    dual_scale_outer_mix: float = 0.0
+    dual_scale_adaptive_gate: bool = False
+    dual_scale_gate_max: float = 1.0
+    # early-2D only: FiLM on the stem from each window's measured scan statistics
+    # (intensity, depth gradient, radial power spectrum), so ink appearance can depend on the scanner
+    scan_film: bool = False
+    scan_film_bands: int = 8
+    scan_film_hidden: int = 32
+    # per-pixel expert on each pixel's own slice column (no in-plane context), added to the score
+    depth_profile_expert: bool = False
+    depth_profile_mix: float = 0.5
+    depth_profile_hidden: int = 16
+    # fixed in-plane box average (px) before the column model; 5 px ~ 47 um, well below stroke width
+    depth_profile_pool: int = 5
+    # per-sample probability of dropping the main score, and separately the expert scores, in training
+    expert_dropout: float = 0.0
+    style_film: bool = False
+    style_film_hidden: int = 64
+    mae_reconstruction_head: bool = False
+    learned_surface: bool = False
+    new_learned_surface: bool = False
+    better_surface: bool = False
+    surface_teacher_input: bool = True
+    surface_canonicalize: bool = False
+    surface_canonical_depth: int = 24
+    surface_guided_mil: bool = False
+    surface_guided_mix: float = 0.5
+    surface_band_sigma: float = 1.5
+    use_ibn: bool = False  # IBN-a: IN+BN hybrid in shallow encoder blocks
+    norm_mode: str = "ibn_full"  # auto follows use_ibn; explicit: instance, ibn, ibn_full, batch
+    use_prototype: bool = False  # replace bag-score with online prototype cosine classifier
+    prototype_ema: float = 0.99
+    skip_drop: float = 0.2  # prob of zeroing each skip connection; forces bottleneck reliance
+    use_depth_profile: bool = False  # replace bag-score with depth-profile-only MLP (no spatial info)
+    no_dz: bool = False  # zero the dz input channel; tests whether depth gradient or raw signal carries ink
+    channels_mult: float = 1.0  # width multiplier on the 32/64/128/256 channel ladder (0.5 = half)
+    allow_depth4: bool = False  # preserve depth at the third pool for four-slice experiments
+    multitile: bool = True       # predict a grid of sub-tiles over the center instead of one 16px tile
+    multitile_subtile: int = 16    # px per sub-tile prediction
+    multitile_grid: int = 4       # grid side: 4 -> 16 predictions over a 64px center
+
+
+@dataclass
+class HardMiningConfig:
+    enabled: bool = False
+    hn_cutoff: float = 0.8
+    hp_cutoff: float = 0.45
+    hm_frac: float = 0.1
+    dir: str = "./hard_negs"
+
+
+@dataclass
+class Config:
+    data: DataConfig = field(default_factory=DataConfig)
+    dl: DataloaderConfig = field(default_factory=DataloaderConfig)
+    tra: TrainingConfig = field(default_factory=TrainingConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    hm: HardMiningConfig = field(default_factory=HardMiningConfig)
+    device: str = field(default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu")
+    # train.py writes here; finetune.py reads <model_dir>/final.pth
+    model_dir: str = "models/train/holdout_n96_combined_surface_norm"
+    exp_name: Optional[str] = "holdout_n96_combined_surface_norm"
+    # exact log folder name (no timestamp appended); campaigns set it equal to the model_dir name
+    run_name: Optional[str] = None
+    init_weights: Optional[str] = "models/mae_nnunet_192_campaign34_early_gated_fiber_native96_surfacenorm_campaign40_2k.pth"
+    save_final: Optional[str] = "models/train/holdout_n96_combined_surface_norm/final.pth"
+
+    def scroll_ids(self) -> List[int]:
+        return [scroll.scroll_id for scroll in self.data.scrolls]
+
+    def split_overrides(self) -> dict:
+        return {
+            scroll.scroll_id: {"axis": scroll.split_axis, "frac": scroll.train_split_frac}
+            for scroll in self.data.scrolls
+        }

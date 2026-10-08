@@ -1,0 +1,14 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+torchaudio==2.11.0+cu128
+opencv-python
+matplotlib
+scikit-learn
+scikit-image
+seaborn
+tensorflow
+tensorboard
+numpy==1.26.4
+vesuvius
+ipykernel

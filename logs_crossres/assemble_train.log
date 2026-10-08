@@ -1,0 +1,395 @@
+nohup: ignoring input
+[assemble] 11 fragment(s): ['w013', 'w087', 'w068', 'w018', 'paris4', 'paris2_fr143', 'paris2_fr47', 'scroll6_fr8', 'paris1_fr34', 'p343', 'cr1fr3']  (concurrent_fragments=6, workers/frag=24, chunks=(8,64,64))
+
+======================================================================
+[w013] w013 (20240304141531)  id=20240304141531
+======================================================================
+
+======================================================================
+[w087] w087 (20251112000002)  id=20251112000002
+======================================================================
+
+======================================================================
+[w068] w068 (20251111010954)  id=20251111010954
+======================================================================
+
+======================================================================
+[w018] w018 (20240304144031)  id=20240304144031
+======================================================================
+
+======================================================================
+[paris4] paris4 (20231210121321)  id=20231210121321
+======================================================================
+
+======================================================================
+[paris2_fr143] paris2_fr143 (20230301213755)  id=20230301213755
+======================================================================
+Traceback (most recent call last):
+  File "/vesuvius/assemble_training_segments.py", line 1415, in process_fragment
+    step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
+  File "/vesuvius/assemble_training_segments.py", line 1315, in step1_volume
+    _assemble_pooled_surface(
+  File "/vesuvius/assemble_training_segments.py", line 1199, in _assemble_pooled_surface
+    source = zarr.open(source_url, mode="r")
+  File "/usr/local/lib/python3.10/dist-packages/zarr/convenience.py", line 109, in open
+    _store: BaseStore = normalize_store_arg(
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "/vesuvius/assemble_training_segments.py", line 1415, in process_fragment
+    step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
+  File "/usr/local/lib/python3.10/dist-packages/zarr/storage.py", line 201, in normalize_store_arg
+    return normalize_store(store, storage_options, mode)
+  File "/vesuvius/assemble_training_segments.py", line 1415, in process_fragment
+    step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
+  File "/usr/local/lib/python3.10/dist-packages/zarr/storage.py", line 171, in _normalize_store_arg_v2
+    return FSStore(store, mode=mode, **(storage_options or {}))
+  File "/usr/local/lib/python3.10/dist-packages/zarr/storage.py", line 1384, in __init__
+    self.map = fsspec.get_mapper(url, **{**mapper_options, **storage_options})
+  File "/vesuvius/assemble_training_segments.py", line 1327, in step1_volume
+    _assemble_resampled_volume(
+  File "/vesuvius/assemble_training_segments.py", line 1315, in step1_volume
+    _assemble_pooled_surface(
+  File "/vesuvius/assemble_training_segments.py", line 1069, in _assemble_resampled_volume
+    source = zarr.open(source_url, mode="r")
+  File "/usr/local/lib/python3.10/dist-packages/zarr/convenience.py", line 109, in open
+    _store: BaseStore = normalize_store_arg(
+  File "/vesuvius/assemble_training_segments.py", line 1415, in process_fragment
+    step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
+  File "/usr/local/lib/python3.10/dist-packages/zarr/storage.py", line 201, in normalize_store_arg
+    return normalize_store(store, storage_options, mode)
+  File "/usr/local/lib/python3.10/dist-packages/zarr/storage.py", line 171, in _normalize_store_arg_v2
+    return FSStore(store, mode=mode, **(storage_options or {}))
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/mapping.py", line 237, in get_mapper
+    fs, urlpath = url_to_fs(url, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/core.py", line 363, in url_to_fs
+    chain = _un_chain(url, kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/core.py", line 325, in _un_chain
+    cls = get_filesystem_class(protocol)
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/registry.py", line 216, in get_filesystem_class
+    register_implementation(protocol, _import_class(bit["class"]))
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/registry.py", line 48, in register_implementation
+    raise ValueError(
+  File "/usr/local/lib/python3.10/dist-packages/zarr/storage.py", line 1384, in __init__
+    self.map = fsspec.get_mapper(url, **{**mapper_options, **storage_options})
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/mapping.py", line 237, in get_mapper
+    fs, urlpath = url_to_fs(url, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/core.py", line 363, in url_to_fs
+    chain = _un_chain(url, kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/core.py", line 325, in _un_chain
+    cls = get_filesystem_class(protocol)
+ValueError: Name (https) already in the registry and clobber is False
+  [1/3] w013 source=https://vesuvius-challenge-open-data.s3.amazonaws.com/PHerc1667/segments/20240304141531-w013_20240304141531_flatboi/surface-volumes/2.399um-0.22m-78keV-volume-20251217075048.zarr/2 pool=109->28 output=(28, 10400, 4975)
+[FAIL] [w087] w087 (20251112000002): Name (https) already in the registry and clobber is False
+[FAIL] [w068] w068 (20251111010954): Name (https) already in the registry and clobber is False
+[FAIL] [paris4] paris4 (20231210121321): Name (https) already in the registry and clobber is False
+[FAIL] [w018] w018 (20240304144031): Name (https) already in the registry and clobber is False
+
+======================================================================
+[paris2_fr47] paris2_fr47 (20230205142449)  id=20230205142449
+======================================================================
+  File "/vesuvius/assemble_training_segments.py", line 1327, in step1_volume
+    _assemble_resampled_volume(
+  File "/vesuvius/assemble_training_segments.py", line 1069, in _assemble_resampled_volume
+    source = zarr.open(source_url, mode="r")
+  File "/usr/local/lib/python3.10/dist-packages/zarr/convenience.py", line 109, in open
+    _store: BaseStore = normalize_store_arg(
+  File "/usr/local/lib/python3.10/dist-packages/zarr/storage.py", line 201, in normalize_store_arg
+    return normalize_store(store, storage_options, mode)
+  File "/usr/local/lib/python3.10/dist-packages/zarr/storage.py", line 171, in _normalize_store_arg_v2
+    return FSStore(store, mode=mode, **(storage_options or {}))
+  File "/usr/local/lib/python3.10/dist-packages/zarr/storage.py", line 1384, in __init__
+    self.map = fsspec.get_mapper(url, **{**mapper_options, **storage_options})
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/mapping.py", line 237, in get_mapper
+    fs, urlpath = url_to_fs(url, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/core.py", line 363, in url_to_fs
+    chain = _un_chain(url, kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/core.py", line 325, in _un_chain
+    cls = get_filesystem_class(protocol)
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/registry.py", line 216, in get_filesystem_class
+    register_implementation(protocol, _import_class(bit["class"]))
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/registry.py", line 48, in register_implementation
+    raise ValueError(
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/registry.py", line 216, in get_filesystem_class
+    register_implementation(protocol, _import_class(bit["class"]))
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/registry.py", line 48, in register_implementation
+    raise ValueError(
+ValueError: Name (https) already in the registry and clobber is False
+
+======================================================================
+[scroll6_fr8] scroll6_fr8 (20231205222200)  id=20231205222200
+======================================================================
+  File "/vesuvius/assemble_training_segments.py", line 1199, in _assemble_pooled_surface
+    source = zarr.open(source_url, mode="r")
+  File "/usr/local/lib/python3.10/dist-packages/zarr/convenience.py", line 109, in open
+    _store: BaseStore = normalize_store_arg(
+  File "/usr/local/lib/python3.10/dist-packages/zarr/storage.py", line 201, in normalize_store_arg
+    return normalize_store(store, storage_options, mode)
+ValueError: Name (https) already in the registry and clobber is False
+
+======================================================================
+[paris1_fr34] paris1_fr34 (20230301213423)  id=20230301213423
+======================================================================
+  File "/usr/local/lib/python3.10/dist-packages/zarr/storage.py", line 171, in _normalize_store_arg_v2
+    return FSStore(store, mode=mode, **(storage_options or {}))
+  File "/usr/local/lib/python3.10/dist-packages/zarr/storage.py", line 1384, in __init__
+    self.map = fsspec.get_mapper(url, **{**mapper_options, **storage_options})
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/mapping.py", line 237, in get_mapper
+    fs, urlpath = url_to_fs(url, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/core.py", line 363, in url_to_fs
+    chain = _un_chain(url, kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/core.py", line 325, in _un_chain
+    cls = get_filesystem_class(protocol)
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/registry.py", line 216, in get_filesystem_class
+    register_implementation(protocol, _import_class(bit["class"]))
+  File "/usr/local/lib/python3.10/dist-packages/fsspec/registry.py", line 48, in register_implementation
+    raise ValueError(
+ValueError: Name (https) already in the registry and clobber is False
+
+======================================================================
+[p343] p343 (20250511003658)  id=20250511003658
+======================================================================
+  $ curl -L --fail --retry 5 --retry-delay 2 -o _ves_tmp/rescan_20230205142449/mask.png https://dl.ash2txt.org/fragments/Frag1/PHercParis2Fr47.volpkg/working/54keV_exposed_surface/mask.png
+  $ curl -L --fail --retry 5 --retry-delay 2 -o _ves_tmp/rescan_20230301213755/mask.png https://dl.ash2txt.org/fragments/Frag2/PHercParis2Fr143.volpkg/working/54keV_exposed_surface/mask.png
+  $ curl -L --fail --retry 5 --retry-delay 2 -o _ves_tmp/rescan_20230301213423/mask.png https://dl.ash2txt.org/fragments/Frag3/PHercParis1Fr34.volpkg/working/54keV_exposed_surface/mask.png
+  $ curl -L --fail --retry 5 --retry-delay 2 -o _ves_tmp/rescan_20231205222200/mask.png https://dl.ash2txt.org/fragments/Frag6/PHerc51Cr4Fr8.volpkg/working/PHerc0051Cr04Fr08_53keV_3.24um/surface_processing/mask.png
+  % Total    % Received % Xferd   A v%e rTaogtea lS p e e d%   R eTciemiev e d   %T iXmfee r d     ATviemrea g eC uSrpreeendt 
+    T i m e         T i m e           T i m e     C u r r e n t 
+  D l o a d     U p l o a d       T o t a l       S p e n t        DLleofatd    SUppeleoda
+d     T0o t a l    0  S p e n0t         L0e f t    0S p e e d 
+0      0    0      0      0  0- - : - - :0- -   - -0: - - : - -0  - - : - - :0- -          00 --:--:-- --:--:-- --:--:--     0  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  0  103k    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100  103k  100  103k    0     0   141k      0 --:--:-- --:--:-- --:--:--  141k
+100 61652  100 61652    0     0  74553      0 --:--:-- --:--:-- --:--:-- 74548
+100 40713  100 40713    0     0  49271      0 --:--:-- --:--:-- --:--:-- 49229
+/usr/local/lib/python3.10/dist-packages/zarr/creation.py:614: UserWarning: ignoring keyword argument 'zarr_format'
+  compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+100  109k  100  109k    0     0   113k      0 --:--:-- --:--:-- --:--:--  113k
+  [1/3] isotropic resample (31, 3440, 2060) @8.640um -> (28, 3175, 1901) @9.362um
+  [1/3] 88 keV rescan -> (28, 2632, 1817); empty layers [0, 1, 2, 25, 26, 27]
+  [1/3] 88 keV rescan -> (28, 2831, 2191); empty layers [0, 1, 2, 25, 26, 27]
+  [1/3] 88 keV rescan -> (28, 3064, 2147); empty layers [0, 1, 2, 25, 26, 27]
+  [1/3] 88 keV rescan -> (28, 5132, 3290); empty layers [0, 1, 2, 25, 26, 27]
+  [resample] rows 118/3175
+  [resample] rows 236/3175
+  [resample] rows 354/3175
+  [resample] rows 473/3175
+  [resample] rows 591/3175
+  [resample] rows 709/3175
+  [resample] rows 827/3175
+  [resample] rows 945/3175
+  [resample] rows 1063/3175
+  [resample] rows 1181/3175
+  [resample] rows 1300/3175
+  [resample] rows 1418/3175
+  [resample] rows 1536/3175
+  [resample] rows 1654/3175
+  [resample] rows 1772/3175
+  [resample] rows 1890/3175
+  [resample] rows 2008/3175
+  [resample] rows 2127/3175
+  [resample] rows 2245/3175
+  [resample] rows 2363/3175
+  [resample] rows 2481/3175
+  [resample] rows 2599/3175
+  [resample] rows 2717/3175
+  [resample] rows 2835/3175
+  [w013] rows 10/82
+  [resample] rows 2953/3175
+  [resample] rows 3072/3175
+  [resample] rows 3175/3175
+  [mask] wrote masks/20250511003658.png from midslice valid_frac=0.613
+  [resample] wrote /vesuvius/ves_zarrs2/20250511003658.zarr shape=(28, 3175, 1901)
+  [2/3] eroded labels present: eroded_inklabels/20250511003658.png  valid=0.0143
+  [3/3] --skip-norm -> skip
+[done] [p343] p343 (20250511003658)
+
+======================================================================
+[cr1fr3] cr1fr3 (20231201215900)  id=20231201215900
+======================================================================
+/usr/local/lib/python3.10/dist-packages/zarr/creation.py:614: UserWarning: ignoring keyword argument 'zarr_format'
+  compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+  [1/3] dl.ash2txt resample (65, 7309, 4560) @3.240um -> (28, 2529, 1578) @9.362um; valid target depths=3..24
+  [dlash] rows 512/7309
+  [dlash] rows 1024/7309
+  [dlash] rows 1536/7309
+  [w013] rows 20/82
+  [dlash] rows 2048/7309
+  [dlash] rows 2560/7309
+  [dlash] rows 3072/7309
+  [w013] rows 30/82
+  [dlash] rows 3584/7309
+  [dlash] rows 4096/7309
+  [w013] rows 40/82
+  [dlash] rows 4608/7309
+  [dlash] rows 5120/7309
+  [w013] rows 50/82
+  [dlash] rows 5632/7309
+  [dlash] rows 6144/7309
+  [w013] rows 60/82
+  [dlash] rows 6656/7309
+  [dlash] rows 7168/7309
+  [dlash] rows 7309/7309
+  [dlash] wrote /vesuvius/ves_zarrs2/20231201215900.zarr shape=(28, 2529, 1578)
+  $ curl -L --fail --retry 5 --retry-delay 2 -o _ves_tmp/dlash_20231201215900/mask.png https://dl.ash2txt.org/fragments/Frag5/PHerc1667Cr1Fr3.volpkg/working/PHerc1667Cr01Fr03_70keV_3.24um/surface_processing/mask.png
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100 81169  100 81169    0     0    98k      0 --:--:-- --:--:-- --:--:--   98k
+  [mask] wrote masks/20231201215900.png shape=(2529, 1578)
+  [verify] cr1fr3: shape=(28, 2529, 1578) mask/midslice=0.99990
+  [2/3] eroded labels present: eroded_inklabels/20231201215900.png  valid=0.0280
+  [3/3] --skip-norm -> skip
+[done] [cr1fr3] cr1fr3 (20231201215900)
+  [w013] rows 70/82
+  [rescan] 3556 chunks under the surface, 1305 missing from the published zarr
+  [rescan] tif fill row 1/95 (z32 y4, 31 chunks, 19s)
+  [rescan] tif fill row 2/95 (z32 y5, 42 chunks, 43s)
+  [rescan] tif fill row 3/95 (z32 y6, 15 chunks, 92s)
+  [rescan] tif fill row 4/95 (z32 y7, 3 chunks, 147s)
+  [rescan] tif fill row 5/95 (z32 y8, 1 chunks, 181s)
+  [rescan] tif fill row 6/95 (z33 y3, 3 chunks, 212s)
+  [rescan] tif fill row 7/95 (z33 y4, 27 chunks, 253s)
+  [rescan] tif fill row 8/95 (z33 y5, 36 chunks, 292s)
+  [rescan] 4084 chunks under the surface, 0 missing from the published zarr
+/usr/local/lib/python3.10/dist-packages/zarr/creation.py:614: UserWarning: ignoring keyword argument 'zarr_format'
+  compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+  [rescan] tif fill row 9/95 (z33 y6, 17 chunks, 324s)
+  [rescan] tif fill row 10/95 (z33 y7, 2 chunks, 352s)
+  [rescan] tile 18/414 (60s)
+  [rescan] tif fill row 11/95 (z34 y3, 7 chunks, 378s)
+  [rescan] tif fill row 12/95 (z34 y4, 24 chunks, 413s)
+  [rescan] 5197 chunks under the surface, 0 missing from the published zarr
+/usr/local/lib/python3.10/dist-packages/zarr/creation.py:614: UserWarning: ignoring keyword argument 'zarr_format'
+  compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+  [w013] rows 80/82
+  [w013] rows 82/82
+  [w013] wrote /vesuvius/ves_zarrs2/20240304141531.zarr and masks/20240304141531.png
+  [labels] skip_labels -> keeping existing eroded_inklabels
+  [3/3] --skip-norm -> skip
+[done] [w013] w013 (20240304141531)
+  [rescan] tif fill row 13/95 (z34 y5, 35 chunks, 437s)
+  [rescan] tile 17/408 (32s)
+  [rescan] tif fill row 14/95 (z34 y6, 17 chunks, 461s)
+  [rescan] tif fill row 15/95 (z34 y7, 1 chunks, 477s)
+  [rescan] tif fill row 16/95 (z35 y3, 10 chunks, 501s)
+  [rescan] tif fill row 17/95 (z35 y4, 24 chunks, 522s)
+  [rescan] tile 85/408 (114s)
+  [rescan] tif fill row 18/95 (z35 y5, 31 chunks, 553s)
+  [rescan] tif fill row 19/95 (z35 y6, 18 chunks, 570s)
+  [rescan] tile 90/414 (258s)
+  [rescan] tif fill row 20/95 (z35 y7, 3 chunks, 589s)
+  [rescan] tif fill row 21/95 (z36 y3, 11 chunks, 613s)
+  [rescan] tif fill row 22/95 (z36 y4, 23 chunks, 632s)
+  [rescan] tif fill row 23/95 (z36 y5, 25 chunks, 659s)
+  [rescan] tif fill row 24/95 (z36 y6, 16 chunks, 683s)
+  [rescan] tif fill row 25/95 (z36 y7, 5 chunks, 700s)
+  [rescan] tile 153/408 (280s)
+  [rescan] tif fill row 26/95 (z37 y3, 12 chunks, 726s)
+  [rescan] tif fill row 27/95 (z37 y4, 21 chunks, 742s)
+  [rescan] tile 162/414 (426s)
+  [rescan] tif fill row 28/95 (z37 y5, 24 chunks, 765s)
+  [rescan] tif fill row 29/95 (z37 y6, 15 chunks, 840s)
+  [rescan] tif fill row 30/95 (z37 y7, 4 chunks, 886s)
+  [rescan] tif fill row 31/95 (z38 y3, 11 chunks, 990s)
+  [rescan] tif fill row 32/95 (z38 y4, 22 chunks, 1010s)
+  [rescan] tif fill row 33/95 (z38 y5, 21 chunks, 1068s)
+  [rescan] tif fill row 34/95 (z38 y6, 13 chunks, 1114s)
+  [rescan] tile 234/414 (802s)
+  [rescan] tile 221/408 (707s)
+  [rescan] tif fill row 35/95 (z38 y7, 5 chunks, 1141s)
+  [rescan] tif fill row 36/95 (z39 y3, 11 chunks, 1174s)
+  [rescan] tif fill row 37/95 (z39 y4, 23 chunks, 1205s)
+  [rescan] tif fill row 38/95 (z39 y5, 19 chunks, 1246s)
+  [rescan] tif fill row 39/95 (z39 y6, 12 chunks, 1280s)
+  [rescan] tif fill row 40/95 (z39 y7, 5 chunks, 1308s)
+  [rescan] tif fill row 41/95 (z40 y3, 13 chunks, 1345s)
+  [rescan] tif fill row 42/95 (z40 y4, 22 chunks, 1385s)
+  [rescan] tile 306/414 (1079s)
+  [rescan] tif fill row 43/95 (z40 y5, 15 chunks, 1416s)
+  [rescan] tif fill row 44/95 (z40 y6, 12 chunks, 1453s)
+  [rescan] tif fill row 45/95 (z40 y7, 5 chunks, 1477s)
+  [rescan] tile 289/408 (1074s)
+  [rescan] tif fill row 46/95 (z41 y3, 14 chunks, 1512s)
+  [rescan] tif fill row 47/95 (z41 y4, 20 chunks, 1556s)
+  [rescan] tif fill row 48/95 (z41 y5, 13 chunks, 1588s)
+  [rescan] tif fill row 49/95 (z41 y6, 13 chunks, 1625s)
+  [rescan] tif fill row 50/95 (z41 y7, 6 chunks, 1655s)
+  [rescan] 12517 chunks under the surface, 0 missing from the published zarr
+/usr/local/lib/python3.10/dist-packages/zarr/creation.py:614: UserWarning: ignoring keyword argument 'zarr_format'
+  compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+  [rescan] tif fill row 51/95 (z42 y3, 13 chunks, 1687s)
+  [rescan] tile 378/414 (1372s)
+  [rescan] tif fill row 52/95 (z42 y4, 20 chunks, 1711s)
+  [rescan] tile 26/1066 (43s)
+  [rescan] tile 414/414 (1407s)
+  [1/3] wrote /vesuvius/ves_zarrs2/20230205142449.zarr + masks/20230205142449.png (footprint 0.561, 0.9970 of the source mask)
+  [rescan] tif fill row 53/95 (z42 y5, 11 chunks, 1737s)
+  [rescan] tif fill row 54/95 (z42 y6, 12 chunks, 1755s)
+  [rescan] tile 357/408 (1345s)
+  [rescan] tif fill row 55/95 (z42 y7, 6 chunks, 1776s)
+  [rescan] tif fill row 56/95 (z43 y3, 14 chunks, 1799s)
+  [verify] paris2_fr47: shape=(28, 2831, 2191) mask/midslice=1.00000
+  [2/3] eroded labels present: eroded_inklabels/20230205142449.png  valid=0.0979
+  [3/3] --skip-norm -> skip
+[done] [paris2_fr47] paris2_fr47 (20230205142449)
+  [rescan] tif fill row 57/95 (z43 y4, 19 chunks, 1827s)
+  [rescan] tif fill row 58/95 (z43 y5, 9 chunks, 1845s)
+  [rescan] tif fill row 59/95 (z43 y6, 11 chunks, 1863s)
+  [rescan] tile 130/1066 (186s)
+  [rescan] tif fill row 60/95 (z43 y7, 7 chunks, 1881s)
+  [rescan] tile 408/408 (1471s)
+  [1/3] wrote /vesuvius/ves_zarrs2/20231205222200.zarr + masks/20231205222200.png (footprint 0.671, 0.9991 of the source mask)
+  [rescan] tif fill row 61/95 (z44 y3, 14 chunks, 1897s)
+  [rescan] tif fill row 62/95 (z44 y4, 17 chunks, 1913s)
+  [verify] scroll6_fr8: shape=(28, 3064, 2147) mask/midslice=1.00000
+  [2/3] eroded labels present: eroded_inklabels/20231205222200.png  valid=0.0372
+  [3/3] --skip-norm -> skip
+[done] [scroll6_fr8] scroll6_fr8 (20231205222200)
+  [rescan] tif fill row 63/95 (z44 y5, 11 chunks, 1930s)
+  [rescan] tif fill row 64/95 (z44 y6, 13 chunks, 1950s)
+  [rescan] tile 234/1066 (277s)
+  [rescan] tif fill row 65/95 (z44 y7, 8 chunks, 1963s)
+  [rescan] tif fill row 66/95 (z45 y3, 12 chunks, 1982s)
+  [rescan] tif fill row 67/95 (z45 y4, 13 chunks, 1998s)
+  [rescan] tif fill row 68/95 (z45 y5, 12 chunks, 2015s)
+  [rescan] tif fill row 69/95 (z45 y6, 14 chunks, 2030s)
+  [rescan] tile 338/1066 (360s)
+  [rescan] tif fill row 70/95 (z45 y7, 5 chunks, 2046s)
+  [rescan] tif fill row 71/95 (z46 y3, 10 chunks, 2061s)
+  [rescan] tif fill row 72/95 (z46 y4, 13 chunks, 2078s)
+  [rescan] tif fill row 73/95 (z46 y5, 17 chunks, 2097s)
+  [rescan] tif fill row 74/95 (z46 y6, 15 chunks, 2113s)
+  [rescan] tif fill row 75/95 (z46 y7, 2 chunks, 2128s)
+  [rescan] tif fill row 76/95 (z47 y3, 9 chunks, 2144s)
+  [rescan] tile 442/1066 (465s)
+  [rescan] tif fill row 77/95 (z47 y4, 11 chunks, 2161s)
+  [rescan] tif fill row 78/95 (z47 y5, 18 chunks, 2175s)
+  [rescan] tif fill row 79/95 (z47 y6, 16 chunks, 2195s)
+  [rescan] tif fill row 80/95 (z48 y3, 8 chunks, 2217s)
+  [rescan] tif fill row 81/95 (z48 y4, 17 chunks, 2236s)
+  [rescan] tif fill row 82/95 (z48 y5, 18 chunks, 2257s)
+  [rescan] tif fill row 83/95 (z48 y6, 10 chunks, 2273s)
+  [rescan] tif fill row 84/95 (z49 y3, 5 chunks, 2291s)
+  [rescan] tile 546/1066 (623s)
+  [rescan] tif fill row 85/95 (z49 y4, 14 chunks, 2310s)
+  [rescan] tif fill row 86/95 (z49 y5, 16 chunks, 2327s)
+  [rescan] tif fill row 87/95 (z49 y6, 6 chunks, 2342s)
+  [rescan] tif fill row 88/95 (z50 y3, 5 chunks, 2355s)
+  [rescan] tif fill row 89/95 (z50 y4, 12 chunks, 2373s)
+  [rescan] tif fill row 90/95 (z50 y5, 17 chunks, 2387s)
+  [rescan] tif fill row 91/95 (z50 y6, 9 chunks, 2403s)
+  [rescan] tif fill row 92/95 (z51 y4, 9 chunks, 2421s)
+  [rescan] tif fill row 93/95 (z51 y5, 17 chunks, 2436s)
+  [rescan] tif fill row 94/95 (z51 y6, 10 chunks, 2453s)
+  [rescan] tile 650/1066 (786s)
+  [rescan] tif fill row 95/95 (z51 y7, 2 chunks, 2468s)
+/usr/local/lib/python3.10/dist-packages/zarr/creation.py:614: UserWarning: ignoring keyword argument 'zarr_format'
+  compressor, fill_value = _kwargs_compat(compressor, fill_value, kwargs)
+  [rescan] tile 15/315 (31s)
+  [rescan] tile 75/315 (136s)
+  [rescan] tile 754/1066 (1014s)
+  [rescan] tile 135/315 (304s)
+  [rescan] tile 858/1066 (1212s)
+  [rescan] tile 195/315 (500s)

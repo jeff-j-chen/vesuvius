@@ -1,0 +1,34 @@
+#*.pth
+# keep MAE pretraining bases (warm-start weights) tracked despite the blanket *.pth ignore
+#!models/mae_*.pth
+*.npz
+.venv
+__pycache__/
+*.pyc
+*.tar
+ves_3zars.tar
+ves_zarrs2/
+# cross-resolution tile stores are rebuilt by crossres/build_pairs.py; their meta.json files stay tracked
+crossres/pairs/**/pairs.zarr/
+runs_old/
+runs/
+.vscode/*
+_ves_tmp/
+PHerc0813_spiral_dataset/*
+# atlas extras are synced through R2 (assemble_test_segments.py --include-extras), never git
+tifxyz/atlas/
+masks/extras/
+surface_labels/extras/
+output/surface_review/extras/
+output/composite_cache/extras/
+output/test_visualizations/*/extras/
+crossres/pairs/*
+crossres/sanity/*
+models/v8in/
+# run outputs stay local to keep LFS under quota; already-tracked files are unaffected
+models/*/
+runs_*/
+runs_*.log
+!runs_finetune2/
+output/surface_review/
+output/test_visualizations/

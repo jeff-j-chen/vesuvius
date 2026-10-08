@@ -1,0 +1,24 @@
+{
+    "bbox": [
+        [
+            1939.7789306640625,
+            2658.826171875,
+            1198.26904296875
+        ],
+        [
+            6998.98681640625,
+            3825.97705078125,
+            3977.55615234375
+        ]
+    ],
+    "format": "tifxyz",
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "type": "seg",
+    "uuid": "auto_grown_20260723112922652_merged_flatboi",
+    "vc3d_segment_display_id": "auto_grown_20260723112922652_merged",
+    "vc3d_segment_folder": "patches",
+    "vc3d_segment_folder_default_palette": true
+}

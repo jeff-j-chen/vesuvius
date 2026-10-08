@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>closed-ring supervision + edge softening</title>
+<style>
+  html, body { margin: 0; background: #1b1c1f; }
+  svg { display: block; }
+  text { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #d4d4d6; }
+  .mono { font-family: "JetBrains Mono", "Consolas", "DejaVu Sans Mono", monospace; }
+  .hdr { font-size: 17px; letter-spacing: 4px; fill: #c9c9cc; }
+  .t1 { font-size: 21px; fill: #f2f2f3; }
+  .t1b { font-size: 21px; font-weight: 600; fill: #ffffff; }
+  .t2 { font-size: 17px; fill: #c7c7ca; }
+  .t3 { font-size: 15px; fill: #a9a9ad; }
+  .t4 { font-size: 13px; fill: #8e8e93; }
+  .cell { font-size: 15px; font-weight: 600; }
+</style>
+</head>
+<body>
+<svg id="fig" xmlns="http://www.w3.org/2000/svg" width="1900" height="1290" viewBox="0 0 1900 1290"></svg>
+<script src="ring_data.js"></script>
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("fig");
+const R = window.RING;
+const T = R.tile, NY = R.tiles.ink.length, NX = R.tiles.ink[0].length;
+const C = {
+  pos: "#ef6a43", close: "#f2c14e", gap: "#6d6e75", ring: "#4aa3df", off: "#121315",
+  paper: "#2a2b2f", edge: "#55565c", drop: "#e2445c", text: "#d4d4d6",
+};
+
+function el(tag, attrs, parent = svg) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  parent.appendChild(e);
+  return e;
+}
+function text(x, y, s, cls = "t2", anchor = "middle", extra = {}, parent = svg) {
+  const t = el("text", { x, y, class: cls, "text-anchor": anchor, ...extra }, parent);
+  t.textContent = s;
+  return t;
+}
+function lines(x, y, arr, cls, dy, anchor = "middle") {
+  arr.forEach((s, i) => text(x, y + i * dy, s, cls, anchor));
+}
+function header(x1, x2, y, s) {
+  text(x1, y, s, "hdr mono", "start");
+  el("line", { x1, y1: y + 12, x2, y2: y + 12, stroke: "#45464b", "stroke-width": 2 });
+}
+const defs = el("defs", {});
+const hatch = el("pattern", { id: "hatch", width: 6, height: 6, patternUnits: "userSpaceOnUse",
+  patternTransform: "rotate(45)" }, defs);
+el("rect", { width: 6, height: 6, fill: "#3a3b40" }, hatch);
+el("line", { x1: 0, y1: 0, x2: 0, y2: 6, stroke: "#7a7b82", "stroke-width": 2 }, hatch);
+const m = el("marker", { id: "ah", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7,
+  orient: "auto-start-reverse" }, defs);
+el("path", { d: "M0,0 L10,5 L0,10 z", fill: C.pos }, m);
+
+const tile = (name, y, x) => R.tiles[name][y][x];
+function status(y, x) {
+  if (!tile("mask", y, x)) return "off";
+  if (tile("ink", y, x)) return "pos";
+  if (tile("ring", y, x)) return "ring";
+  if (tile("exclusion", y, x)) return "gap";
+  return "none";
+}
+
+// one stage panel: tile maps drawn at scale s (screen px per image px)
+function panel(x, y, s, painter, withLabel = true, labelOpacity = 0.55) {
+  const g = el("g", { transform: `translate(${x},${y})` });
+  const w = NX * T * s, h = NY * T * s;
+  const clip = el("clipPath", { id: `clip${x}_${y}` }, defs);
+  el("rect", { width: w, height: h }, clip);
+  g.setAttribute("clip-path", `url(#clip${x}_${y})`);
+  el("rect", { width: w, height: h, fill: C.paper }, g);
+  for (let ty = 0; ty < NY; ty++) {
+    for (let tx = 0; tx < NX; tx++) {
+      const fill = painter(ty, tx);
+      if (fill) el("rect", { x: tx * T * s, y: ty * T * s, width: T * s + 0.3, height: T * s + 0.3, fill }, g);
+    }
+  }
+  if (withLabel) el("image", { href: R.label_png, width: w, height: h, opacity: labelOpacity }, g);
+  // faint tile lattice
+  const grid = [];
+  for (let k = 1; k < NX; k++) grid.push(`M${k * T * s},0V${h}`);
+  for (let k = 1; k < NY; k++) grid.push(`M0,${k * T * s}H${w}`);
+  el("path", { d: grid.join(""), stroke: "#000", "stroke-opacity": 0.35, "stroke-width": 0.6 }, g);
+  el("rect", { x, y, width: w, height: h, fill: "none", stroke: C.edge, "stroke-width": 1.5 });
+  return { g, w, h };
+}
+
+// ------------------------------------------------------------------ title
+text(28, 38, `Closed-ring supervision + edge softening  —  ${R.scroll} (${R.scroll_id}), one Δ from dilated_inklabels`,
+  "t2", "start", { style: "font-size:20px;fill:#e6e6e8" });
+text(28, 62, `tile lattice T = ${T} px · ring_close_r = ${R.close_r} · ring_gap_r = ${R.gap_r} · ring_shell_r = ${R.shell_r} (tile units) · edge_soft_sigma = ${R.sigma} px · edge_soft_floor = ${R.floor} · crop origin y=${R.origin[0]}, x=${R.origin[1]} (${NX * T}×${NY * T} px)`,
+  "t3", "start");
+
+// ------------------------------------------------------------------ row 1: stages
+const S1 = 0.47, PY = 128, PW = NX * T * S1, GAP = (1844 - 5 * PW) / 4;
+const stages = [
+  { h: "LABEL", t: "ink label", sub: ["white = drawn inklabel", "blue = dilated label (training truth)"],
+    p: () => null, lab: 1.0 },
+  { h: "STEP 1", t: "ink tiles", sub: [`16-px tiles with any ink pixel`, `= positive base tiles (${R.counts.ink_tiles})`],
+    p: (y, x) => tile("ink", y, x) ? C.pos : (tile("mask", y, x) ? null : C.off) },
+  { h: "STEP 2", t: `close r = ${R.close_r}`, sub: [`5×5-tile dilate → erode fills`, `counters + gaps (+${R.counts.closed_tiles - R.counts.ink_tiles} tiles)`],
+    p: (y, x) => tile("closed", y, x) ? (tile("seed", y, x) ? C.pos : C.close) : (tile("mask", y, x) ? null : C.off) },
+  { h: "STEP 3", t: `gap r = ${R.gap_r}`, sub: [`dilate 5×5 → exclusion zone;`, `the 32-px air gap is never labelled`],
+    p: (y, x) => tile("exclusion", y, x) ? (tile("closed", y, x) ? (tile("seed", y, x) ? C.pos : C.close) : "url(#hatch)") : (tile("mask", y, x) ? null : C.off) },
+  { h: "STEP 4", t: `shell r = ${R.shell_r}`, sub: [`9×9 dilation minus exclusion`, `= ring negatives (${R.counts.ring_tiles} tiles)`],
+    p: (y, x) => tile("ring", y, x) ? C.ring : tile("exclusion", y, x) ? (tile("closed", y, x) ? (tile("seed", y, x) ? C.pos : C.close) : "url(#hatch)") : (tile("mask", y, x) ? null : C.off) },
+];
+stages.forEach((st, i) => {
+  const x = 28 + i * (PW + GAP);
+  text(x, PY - 30, st.h, "hdr mono", "start", { style: "font-size:15px" });
+  text(x + PW, PY - 30, st.t, "t1b", "end", { style: "font-size:18px" });
+  el("line", { x1: x, y1: PY - 20, x2: x + PW, y2: PY - 20, stroke: "#45464b", "stroke-width": 2 });
+  panel(x, PY, S1, st.p, true, st.lab ?? 0.5);
+  lines(x + PW / 2, PY + NY * T * S1 + 24, st.sub, "t3", 19);
+  if (i < 4) {
+    const ax = x + PW + 6, ay = PY + NY * T * S1 / 2;
+    el("line", { x1: ax, y1: ay, x2: ax + GAP - 12, y2: ay, stroke: C.pos, "stroke-width": 2.5, "marker-end": "url(#ah)" });
+  }
+});
+
+// ------------------------------------------------------------------ row 2 left: final map + windows
+const R2 = 500, S2 = 0.96;
+header(28, 28 + NX * T * S2, R2, "FINAL SUPERVISION MASK  +  TWO TRAINING SAMPLES");
+const finalFill = (y, x) => ({ pos: C.pos, ring: C.ring, gap: "url(#hatch)", off: C.off, none: null })[status(y, x)];
+const fp = panel(28, R2 + 30, S2, finalFill, true, 0.6);
+function drawWindow(wd, name, color) {
+  const g = el("g", { transform: `translate(28,${R2 + 30})` });
+  const s = S2, ctx0x = wd.cx + T / 2 - R.ctx / 2, ctx0y = wd.cy + T / 2 - R.ctx / 2;
+  el("rect", { x: ctx0x * s, y: ctx0y * s, width: R.ctx * s, height: R.ctx * s, fill: "none", stroke: color,
+    "stroke-width": 2, "stroke-dasharray": "6 4" }, g);
+  el("rect", { x: wd.x0 * s, y: wd.y0 * s, width: R.grid * R.sub * s, height: R.grid * R.sub * s, fill: "none",
+    stroke: color, "stroke-width": 2.6 }, g);
+  for (let k = 1; k < R.grid; k++) {
+    el("line", { x1: (wd.x0 + k * R.sub) * s, y1: wd.y0 * s, x2: (wd.x0 + k * R.sub) * s, y2: (wd.y0 + R.grid * R.sub) * s, stroke: color, "stroke-width": 1 }, g);
+    el("line", { x1: wd.x0 * s, y1: (wd.y0 + k * R.sub) * s, x2: (wd.x0 + R.grid * R.sub) * s, y2: (wd.y0 + k * R.sub) * s, stroke: color, "stroke-width": 1 }, g);
+  }
+  el("rect", { x: (ctx0x) * s, y: (ctx0y - 26) * s - 2, width: 26, height: 24, rx: 4, fill: color }, g);
+  text(ctx0x * s + 13, (ctx0y - 26) * s + 16, name, "t2", "middle", { style: "font-weight:700;fill:#111" }, g);
+}
+drawWindow(R.mixed, "A", "#ffffff");
+drawWindow(R.ringwin, "B", "#b6f0c4");
+
+// legend under final map
+const LY = R2 + 30 + NY * T * S2 + 28;
+[[C.pos, "positive tile (dilated ink)"], [C.ring, "ring negative"], ["url(#hatch)", "gap: unlabelled"],
+ [C.close, "closed hole (unlabelled)"], [C.off, "off scroll mask"]].forEach(([f, s], i) => {
+  const x = 28 + (i % 3) * 232, y = LY + Math.floor(i / 3) * 26;
+  el("rect", { x, y: y - 13, width: 16, height: 16, rx: 2, fill: f, stroke: "#777", "stroke-width": 0.8 });
+  text(x + 24, y, s, "t3", "start");
+});
+text(28, LY + 56, "dashed = 96-px context fed to the model · solid = 64-px multitile centre, 4×4 cells of 16 px",
+  "t4", "start");
+
+// ------------------------------------------------------------------ row 2 right: sample breakdowns
+const ZX = 770, ZS = 3.0, ZW = R.ctx * ZS;
+function sample(wd, x, y, name, title, notes) {
+  text(x, y - 12, `SAMPLE ${name}`, "hdr mono", "start", { style: "font-size:15px" });
+  text(x + ZW, y - 12, title, "t2", "end", { style: "fill:#f0f0f0" });
+  const g = el("g", { transform: `translate(${x},${y})` });
+  const clip = el("clipPath", { id: `zc${name}` }, defs);
+  el("rect", { width: ZW, height: ZW }, clip);
+  g.setAttribute("clip-path", `url(#zc${name})`);
+  const ctx0x = wd.cx + T / 2 - R.ctx / 2, ctx0y = wd.cy + T / 2 - R.ctx / 2;
+  const tx0 = Math.floor(ctx0x / T), ty0 = Math.floor(ctx0y / T);
+  el("rect", { width: ZW, height: ZW, fill: C.paper }, g);
+  for (let ty = ty0; ty <= ty0 + 7; ty++) {
+    for (let tx = tx0; tx <= tx0 + 7; tx++) {
+      if (ty < 0 || tx < 0 || ty >= NY || tx >= NX) continue;
+      const f = finalFill(ty, tx);
+      if (f) el("rect", { x: (tx * T - ctx0x) * ZS, y: (ty * T - ctx0y) * ZS, width: T * ZS, height: T * ZS, fill: f, opacity: 0.55 }, g);
+    }
+  }
+  el("image", { href: R.blur_png, x: -ctx0x * ZS, y: -ctx0y * ZS, width: NX * T * ZS, height: NY * T * ZS, opacity: 0.22 }, g);
+  el("image", { href: R.label_png, x: -ctx0x * ZS, y: -ctx0y * ZS, width: NX * T * ZS, height: NY * T * ZS, opacity: 0.75 }, g);
+  // tile lattice
+  const lat = [];
+  for (let k = 0; k <= 8; k++) {
+    lat.push(`M${(tx0 * T + k * T - ctx0x) * ZS},0V${ZW}`);
+    lat.push(`M0,${(ty0 * T + k * T - ctx0y) * ZS}H${ZW}`);
+  }
+  el("path", { d: lat.join(""), stroke: "#000", "stroke-opacity": 0.5, "stroke-width": 1 }, g);
+  // cells
+  const cx0 = (wd.x0 - ctx0x) * ZS, cy0 = (wd.y0 - ctx0y) * ZS, cs = R.sub * ZS;
+  wd.cells.forEach((c) => {
+    const x1 = cx0 + c.ix * cs, y1 = cy0 + c.iy * cs;
+    let fill = "none", stroke = "#ddd", label = "–", col = "#cfcfcf";
+    if (c.used && c.label > 0) { fill = `rgba(239,106,67,${0.35 + 0.5 * c.target})`; label = c.target === 1 ? "1" : c.target.toFixed(3); col = "#fff"; }
+    else if (c.used) { fill = "rgba(74,163,223,0.75)"; label = "0"; col = "#fff"; }
+    else if (c.dropped) { fill = "rgba(226,68,92,0.45)"; label = "drop"; }
+    else { fill = "rgba(20,20,22,0.55)"; label = "ign"; col = "#bbb"; if (c.label > 0) { stroke = C.pos; } }
+    el("rect", { x: x1 + 1.5, y: y1 + 1.5, width: cs - 3, height: cs - 3, fill, stroke, "stroke-width": 1.2, rx: 2 }, g);
+    text(x1 + cs / 2, y1 + cs / 2 + 5, label, "cell mono", "middle", { style: `fill:${col};font-size:${label.length > 4 ? 12 : 15}px` }, g);
+  });
+  el("rect", { x: cx0, y: cy0, width: 4 * cs, height: 4 * cs, fill: "none", stroke: "#fff", "stroke-width": 2.5 }, g);
+  // target tile (the 16-px sample anchor)
+  el("rect", { x: (wd.cx - ctx0x) * ZS, y: (wd.cy - ctx0y) * ZS, width: T * ZS, height: T * ZS, fill: "none",
+    stroke: "#f2c14e", "stroke-width": 2, "stroke-dasharray": "4 3" }, g);
+  el("rect", { x, y, width: ZW, height: ZW, fill: "none", stroke: C.edge, "stroke-width": 1.5 });
+  text(x + ZW / 2, y + ZW + 20, "96 × 96 context · black lines = 16-px tile lattice", "t4");
+  lines(x + ZW + 22, y + 18, notes, "t3", 21, "start");
+}
+const SY = R2 + 30;
+sample(R.mixed, ZX, SY, "A", "edge of a stroke", [
+  "label 1 if any dilated-ink pixel in the cell;",
+  "cells sit 8 px off the tile lattice (64-px",
+  "centre around the 16-px anchor tile, dashed).",
+  "",
+  "A cell is used only if all 256 px lie in",
+  "supervision (ink or ring) tiles; orange-edged",
+  "'ign' cells hold ink but straddle the gap.",
+  "",
+  "Positives that only graze the stroke get a",
+  "softened target (numbers); deep cells stay 1.",
+  "",
+  "pos_only: a window with a used positive",
+  "drops all its negatives (none here).",
+]);
+sample(R.ringwin, ZX, SY + ZW + 64, "B", "ring window", [
+  "no ink anywhere in the 64-px centre:",
+  "every cell fully inside ring tiles is a",
+  "hard negative (target 0, blue).",
+  "",
+  "Cells reaching into the hatched gap are",
+  "ignored, so the model never sees a",
+  "negative within 32 px of a closed letter.",
+]);
+
+// ------------------------------------------------------------------ softening curve
+const GX = 1500, GY = SY + 20, GW = 360, GH = 250;
+text(GX - 10, SY - 12, "EDGE SOFTENING", "hdr mono", "start", { style: "font-size:15px" });
+el("rect", { x: GX - 10, y: GY - 6, width: GW + 30, height: GH + 72, rx: 8, fill: "#202124", stroke: "#45464b" });
+const gx = (v) => GX + 40 + v * (GW - 60), gy = (v) => GY + GH - 30 - v * (GH - 60);
+el("line", { x1: gx(0), y1: gy(0), x2: gx(1), y2: gy(0), stroke: "#777" });
+el("line", { x1: gx(0), y1: gy(0), x2: gx(0), y2: gy(1), stroke: "#777" });
+[0, 0.5, 1].forEach((v) => {
+  text(gx(v), gy(0) + 18, v.toFixed(1), "t4 mono");
+  text(gx(0) - 8, gy(v) + 4, v.toFixed(1), "t4 mono", "end");
+});
+el("line", { x1: gx(0), y1: gy(0.5), x2: gx(1), y2: gy(0.5), stroke: "#555", "stroke-dasharray": "3 4" });
+const curve = [];
+for (let i = 0; i <= 200; i++) {
+  const p = i / 200;
+  const t = p >= 0.98 ? 1 : Math.max(R.floor, p);
+  curve.push(`${i ? "L" : "M"}${gx(p)},${gy(t)}`);
+}
+el("path", { d: curve.join(""), fill: "none", stroke: C.pos, "stroke-width": 3 });
+R.mixed.cells.filter((c) => c.label > 0).forEach((c) => {
+  el("circle", { cx: gx(c.peak), cy: gy(c.target), r: 5, fill: c.used ? "#fff" : "none", stroke: "#fff", "stroke-width": 1.5 });
+});
+text(gx(0.5), gy(0) + 40, "peak = max over the cell of Gaussian-blurred ink (σ = 8 px)", "t4");
+text(gx(0.02), gy(1) - 10, "cell target", "t4", "start");
+text(gx(0.06), gy(R.floor) - 8, `floor ${R.floor}`, "t4", "start", { style: "fill:#ef6a43" });
+lines(GX + GW / 2 + 5, GY + GH + 100, [
+  "target = 1             if peak ≥ 0.98",
+  `target = max(${R.floor}, peak)   otherwise`,
+], "t3 mono", 22);
+lines(GX + GW / 2 + 5, GY + GH + 162, [
+  "applies to positive cells of training",
+  "samples only; floor > 0.5 keeps every",
+  "softened cell a positive. dots = sample A",
+  "(filled: used, open: ignored cells).",
+], "t3", 20);
+
+// ------------------------------------------------------------------ bottom summary
+const BY = 1196;
+el("rect", { x: 28, y: BY, width: 1844, height: 80, rx: 8, fill: "#202124", stroke: "#45464b", "stroke-dasharray": "7 5" });
+lines(48, BY + 28, [
+  `Rings are built once per scroll on the tile grid from dilated_inklabels (painted 119-negatives never seed a ring; painted 185-positives are positives). Whole scroll: ${R.counts.scroll_ink_tiles} ink tiles, ${R.counts.scroll_ring_tiles} ring tiles.`,
+  "Samples are drawn every 16 px where the 64-px centre touches supervision; ctx jitter ±10 px moves the 96-px context around a fixed target, depth jitter ±1 slice. Only cells inside the train split (train_masks = 255) count.",
+], "t3", 26, "start");
+</script>
+</body>
+</html>

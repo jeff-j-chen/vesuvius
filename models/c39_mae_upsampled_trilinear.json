@@ -1,0 +1,22 @@
+{
+ "upsampler": "trilinear",
+ "upsampler_config": {
+  "depth_factor": 4,
+  "scale": 2,
+  "width": 48,
+  "layers": 8,
+  "depth_pool": 2
+ },
+ "native_input": [
+  8,
+  96,
+  96
+ ],
+ "network_input": [
+  16,
+  192,
+  192
+ ],
+ "init_weights": "models/c39_mae_base.pth",
+ "data_norm_mode": "surface_anchor"
+}

@@ -1,0 +1,5 @@
+nohup: ignoring input
+[w039] ink bbox y[3933,4780] x[2463,5147] (3% of the frame) -> 19 tiles (bbox, margin 256px)
+[w039] prefetched 200/340 chunks (0s)
+[w039] prefetched 340/340 chunks (0s)
+[w039] kept 19 tiles (median midslice NCC 0.8791269501992892, median depth shift -0.50 slices), dropped 0 -> /vesuvius/crossres/pairs/degrade/20260302000000

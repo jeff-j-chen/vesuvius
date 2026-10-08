@@ -1,0 +1,25 @@
+[degrader] train [('w044', 16), ('w059', 52), ('w030', 14), ('w043', 27), ('w045', 50), ('w040', 93), ('w041', 57), ('w039', 17), ('w035', 27), ('seg46527', 5)] monitor ['p841'] (all); NCC >= 0.5; reference median/MAD 0.2903/0.1804; params=376,177
+Traceback (most recent call last):
+  File "/vesuvius/crossres/train_degrader.py", line 253, in <module>
+    main()
+  File "/vesuvius/crossres/train_degrader.py", line 190, in main
+    loss = mse(model(x.to(dev)), t.to(dev), w.to(dev))
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py", line 1518, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py", line 1527, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/vesuvius/utils/degrader.py", line 44, in forward
+    return x + self.net(x)
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py", line 1518, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py", line 1527, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/container.py", line 215, in forward
+    input = module(input)
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py", line 1518, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/module.py", line 1527, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/usr/local/lib/python3.10/dist-packages/torch/nn/modules/activation.py", line 682, in forward
+    return F.gelu(input, approximate=self.approximate)
+torch.cuda.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.31 GiB. GPU 0 has a total capacty of 23.55 GiB of which 1.12 GiB is free. Process 238487 has 424.00 MiB memory in use. Including non-PyTorch memory, this process has 22.00 GiB memory in use. Of the allocated memory 21.75 GiB is allocated by PyTorch, and 1.62 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF

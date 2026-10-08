@@ -1,0 +1,20 @@
+nohup: ignoring input
+[w040] ink bbox y[711,5948] x[1561,7741] (63% of the frame) -> 128 tiles (bbox, margin 256px)
+[w040] prefetched 200/2056 chunks (2s)
+[w040] prefetched 400/2056 chunks (2s)
+[w040] prefetched 600/2056 chunks (2s)
+[w040] prefetched 800/2056 chunks (2s)
+[w040] prefetched 1000/2056 chunks (2s)
+[w040] prefetched 1200/2056 chunks (2s)
+[w040] prefetched 1400/2056 chunks (2s)
+[w040] prefetched 1600/2056 chunks (2s)
+[w040] prefetched 1800/2056 chunks (2s)
+[w040] prefetched 2000/2056 chunks (2s)
+[w040] prefetched 2056/2056 chunks (6s)
+[w040] 20/128 tiles, kept 19
+[w040] 40/128 tiles, kept 39
+[w040] 60/128 tiles, kept 58
+[w040] 80/128 tiles, kept 77
+[w040] 100/128 tiles, kept 95
+[w040] 120/128 tiles, kept 112
+[w040] kept 120 tiles (median midslice NCC 0.7615936465975451, median depth shift -0.50 slices), dropped 8 -> /vesuvius/crossres/pairs/degrade/20250831000000

@@ -1,0 +1,233 @@
+            print(f"{zid:28s} skipped (tiles={n}, depth={D})"); continue
+        print(f"{zid:28s} depth={D} peak={e['peak']:2d} offset={e['offset']:+5.1f} asym={e['asymmetry']:+.2f} {verdic
+EOF     print(f"{zid:28s} error {ex}")
+PHerc0125_z10544_w020        depth=28 peak=15 offset= +1.5 asym=-0.07 ok
+PHerc0125_z10544_w040        depth=28 peak= 8 offset= -5.5 asym=-0.48 REVERSED?
+PHerc0125_z10544_w060        depth=28 peak=14 offset= +0.5 asym=+0.50 ok
+PHerc0125_z10544_w080        depth=28 peak= 8 offset= -5.5 asym=+0.64 off-centre
+PHerc0125_z10544_w100        depth=28 peak= 6 offset= -7.5 asym=+2.46 off-centre
+PHerc0125_z11744_w020        depth=28 peak= 6 offset= -7.5 asym=-8.38 REVERSED?
+PHerc0125_z11744_w040        depth=28 peak=14 offset= +0.5 asym=+0.04 ok
+PHerc0125_z11744_w060        depth=28 peak=13 offset= -0.5 asym=-0.01 ok
+PHerc0125_z11744_w080        depth=28 peak=15 offset= +1.5 asym=+0.06 ok
+PHerc0125_z11744_w100        depth=28 peak=19 offset= +5.5 asym=-0.57 REVERSED?
+PHerc0125_z14144_w020        depth=28 peak=21 offset= +7.5 asym=+0.03 off-centre
+PHerc0125_z14144_w040        depth=28 peak= 6 offset= -7.5 asym=+1.31 off-centre
+PHerc0125_z14144_w060        depth=28 peak=19 offset= +5.5 asym=-0.01 off-centre
+PHerc0125_z14144_w080        depth=28 peak=12 offset= -1.5 asym=+0.01 ok
+PHerc0125_z14144_w100        depth=28 peak=16 offset= +2.5 asym=-0.26 REVERSED?
+PHerc0125_z14736_w020        depth=28 peak=14 offset= +0.5 asym=-0.13 ok
+PHerc0125_z14736_w040        depth=28 peak=12 offset= -1.5 asym=+0.04 ok
+PHerc0125_z14736_w060        depth=28 peak=14 offset= +0.5 asym=-0.27 REVERSED?
+PHerc0125_z14736_w080        depth=28 peak=15 offset= +1.5 asym=-0.30 REVERSED?
+PHerc0125_z14736_w100        depth=28 peak=12 offset= -1.5 asym=+0.04 ok
+PHerc0125_z15344_w020        depth=28 peak= 8 offset= -5.5 asym=+0.30 off-centre
+PHerc0125_z15344_w040        depth=28 peak=15 offset= +1.5 asym=-0.12 ok
+PHerc0125_z16544_w020        depth=28 peak=21 offset= +7.5 asym=-0.17 off-centre
+PHerc0125_z16544_w040        depth=28 peak=14 offset= +0.5 asym=+0.34 ok
+PHerc0125_z16544_w060        depth=28 peak=15 offset= +1.5 asym=+0.44 ok
+PHerc0125_z16544_w080        depth=28 peak=13 offset= -0.5 asym=+0.11 ok
+PHerc0125_z16544_w100        depth=28 peak=21 offset= +7.5 asym=-0.39 REVERSED?
+PHerc0125_z17136_w020        depth=28 peak=21 offset= +7.5 asym=-0.97 REVERSED?
+PHerc0125_z17136_w040        depth=28 peak= 9 offset= -4.5 asym=-0.10 off-centre
+PHerc0125_z17136_w060        depth=28 peak=16 offset= +2.5 asym=+0.41 off-centre
+PHerc0125_z17136_w080        depth=28 peak=21 offset= +7.5 asym=-0.13 off-centre
+PHerc0125_z17136_w100        depth=28 peak=17 offset= +3.5 asym=+0.18 off-centre
+PHerc0125_z6336_w020         depth=28 peak= 6 offset= -7.5 asym=+4.05 off-centre
+PHerc0125_z6336_w040         depth=28 peak=17 offset= +3.5 asym=+0.49 off-centre
+PHerc0125_z6336_w060         depth=28 peak=19 offset= +5.5 asym=-0.05 off-centre
+PHerc0125_z6336_w080         depth=28 peak= 9 offset= -4.5 asym=+0.08 off-centre
+PHerc0125_z6336_w100         depth=28 peak=21 offset= +7.5 asym=-6.02 REVERSED?
+PHerc0125_z6944_w020         depth=28 peak= 6 offset= -7.5 asym=+1.65 off-centre
+PHerc0125_z6944_w040         depth=28 peak=21 offset= +7.5 asym=-0.70 REVERSED?
+PHerc0125_z6944_w060         depth=28 peak=11 offset= -2.5 asym=-0.43 REVERSED?
+PHerc0125_z6944_w080         depth=28 peak=10 offset= -3.5 asym=+0.43 off-centre
+PHerc0125_z6944_w100         depth=28 peak=17 offset= +3.5 asym=-0.23 REVERSED?
+PHerc0125_z8144_w020         depth=28 peak=13 offset= -0.5 asym=+0.37 ok
+PHerc0125_z8144_w040         depth=28 peak=14 offset= +0.5 asym=+0.20 ok
+PHerc0125_z8144_w060         depth=28 peak=12 offset= -1.5 asym=+0.06 ok
+PHerc0125_z8144_w080         depth=28 peak=18 offset= +4.5 asym=-0.00 off-centre
+PHerc0125_z8144_w100         depth=28 peak=14 offset= +0.5 asym=+0.25 ok
+PHerc0125_z8736_w020         depth=28 peak=21 offset= +7.5 asym=-1.93 REVERSED?
+PHerc0125_z8736_w040         depth=28 peak=15 offset= +1.5 asym=+0.66 ok
+PHerc0125_z8736_w060         depth=28 peak=13 offset= -0.5 asym=-0.09 ok
+PHerc0125_z8736_w080         depth=28 peak= 8 offset= -5.5 asym=+0.03 off-centre
+PHerc0125_z8736_w100         depth=28 peak=16 offset= +2.5 asym=+0.66 off-centre
+PHerc0125_z9344_w020         depth=28 peak=21 offset= +7.5 asym=-0.22 REVERSED?
+PHerc0125_z9344_w040         depth=28 peak=18 offset= +4.5 asym=+0.09 off-centre
+PHerc0125_z9344_w060         depth=28 peak= 8 offset= -5.5 asym=+0.10 off-centre
+PHerc0125_z9344_w080         depth=28 peak=17 offset= +3.5 asym=-0.26 REVERSED?
+PHerc0125_z9344_w100         depth=28 peak= 7 offset= -6.5 asym=-0.22 REVERSED?
+PHerc0125_z9936_w020         depth=28 peak=10 offset= -3.5 asym=+0.02 off-centre
+PHerc0125_z9936_w040         depth=28 peak=12 offset= -1.5 asym=-0.29 REVERSED?
+PHerc0125_z9936_w060         depth=28 peak=21 offset= +7.5 asym=-0.06 off-centre
+PHerc0125_z9936_w080         depth=28 peak=10 offset= -3.5 asym=-0.26 REVERSED?
+PHerc0125_z9936_w100         depth=28 peak=21 offset= +7.5 asym=+0.48 off-centre
+PHerc0211_z10320_w020        depth=28 peak=21 offset= +7.5 asym=-0.20 off-centre
+PHerc0211_z10320_w040        depth=28 peak=13 offset= -0.5 asym=+0.44 ok
+PHerc0211_z10320_w060        depth=28 peak= 8 offset= -5.5 asym=-0.16 off-centre
+PHerc0211_z10320_w080        depth=28 peak=13 offset= -0.5 asym=+0.05 ok
+PHerc0211_z10912_w020        depth=28 peak=11 offset= -2.5 asym=+0.41 off-centre
+PHerc0211_z10912_w060        depth=28 peak=11 offset= -2.5 asym=-0.33 REVERSED?
+PHerc0211_z10912_w080        depth=28 peak=14 offset= +0.5 asym=+0.48 ok
+PHerc0211_z11520_w040        depth=28 peak= 6 offset= -7.5 asym=+0.01 off-centre
+PHerc0211_z11520_w080        depth=28 peak=16 offset= +2.5 asym=+0.09 off-centre
+PHerc0211_z12112_w040        depth=28 peak=20 offset= +6.5 asym=-0.57 REVERSED?
+PHerc0211_z12112_w060        depth=28 peak= 9 offset= -4.5 asym=+0.21 off-centre
+PHerc0211_z12112_w080        depth=28 peak= 6 offset= -7.5 asym=+0.80 off-centre
+PHerc0211_z12112_w100        depth=28 peak=16 offset= +2.5 asym=+0.27 off-centre
+PHerc0211_z12720_w040        depth=28 peak=19 offset= +5.5 asym=-0.17 off-centre
+PHerc0211_z12720_w060        depth=28 peak=21 offset= +7.5 asym=-0.24 REVERSED?
+PHerc0211_z12720_w080        depth=28 peak=21 offset= +7.5 asym=-0.73 REVERSED?
+PHerc0211_z13312_w060        depth=28 peak= 7 offset= -6.5 asym=-0.33 REVERSED?
+PHerc0211_z3712_w040         depth=28 peak=18 offset= +4.5 asym=-0.18 off-centre
+PHerc0211_z3712_w060         depth=28 peak=12 offset= -1.5 asym=+0.20 ok
+PHerc0211_z3712_w080         depth=28 peak= 6 offset= -7.5 asym=-0.26 REVERSED?
+PHerc0211_z3712_w100         depth=28 peak=20 offset= +6.5 asym=-0.67 REVERSED?
+PHerc0211_z4320_w040         depth=28 peak= 8 offset= -5.5 asym=+0.50 off-centre
+PHerc0211_z4320_w060         depth=28 peak=21 offset= +7.5 asym=-0.80 REVERSED?
+PHerc0211_z4320_w080         depth=28 peak=20 offset= +6.5 asym=+0.07 off-centre
+PHerc0211_z4912_w020         depth=28 peak= 8 offset= -5.5 asym=+0.31 off-centre
+PHerc0211_z4912_w040         depth=28 peak= 6 offset= -7.5 asym=+0.98 off-centre
+PHerc0211_z4912_w060         depth=28 peak=14 offset= +0.5 asym=+0.12 ok
+PHerc0211_z4912_w080         depth=28 peak=11 offset= -2.5 asym=+0.52 off-centre
+PHerc0211_z5520_w040         depth=28 peak= 6 offset= -7.5 asym=+0.67 off-centre
+PHerc0211_z5520_w060         depth=28 peak=21 offset= +7.5 asym=-0.41 REVERSED?
+PHerc0211_z5520_w080         depth=28 peak=12 offset= -1.5 asym=+0.20 ok
+PHerc0211_z6112_w040         depth=28 peak= 6 offset= -7.5 asym=+1.51 off-centre
+PHerc0211_z6112_w060         depth=28 peak=21 offset= +7.5 asym=-0.59 REVERSED?
+PHerc0211_z6112_w080         depth=28 peak=11 offset= -2.5 asym=+0.34 off-centre
+PHerc0211_z6720_w040         depth=28 peak=10 offset= -3.5 asym=+0.64 off-centre
+PHerc0211_z6720_w060         depth=28 peak=12 offset= -1.5 asym=-0.40 REVERSED?
+PHerc0211_z6720_w080         depth=28 peak=21 offset= +7.5 asym=-0.82 REVERSED?
+PHerc0211_z7312_w040         depth=28 peak=15 offset= +1.5 asym=-0.08 ok
+PHerc0211_z7312_w060         depth=28 peak=10 offset= -3.5 asym=+0.33 off-centre
+PHerc0211_z7312_w080         depth=28 peak=12 offset= -1.5 asym=+0.03 ok
+PHerc0211_z7920_w040         depth=28 peak=12 offset= -1.5 asym=+0.55 ok
+PHerc0211_z7920_w060         depth=28 peak=10 offset= -3.5 asym=-0.12 off-centre
+PHerc0211_z7920_w080         depth=28 peak=13 offset= -0.5 asym=-0.67 REVERSED?
+PHerc0211_z9120_w020         depth=28 peak= 6 offset= -7.5 asym=+0.29 off-centre
+PHerc0211_z9120_w040         depth=28 peak=13 offset= -0.5 asym=-0.35 REVERSED?
+PHerc0211_z9120_w060         depth=28 peak=13 offset= -0.5 asym=-0.07 ok
+PHerc0211_z9120_w080         depth=28 peak=11 offset= -2.5 asym=+0.25 off-centre
+PHerc0211_z9712_w020         depth=28 peak=13 offset= -0.5 asym=+0.32 ok
+PHerc0211_z9712_w040         depth=28 peak=15 offset= +1.5 asym=-0.10 ok
+PHerc0211_z9712_w060         depth=28 peak=18 offset= +4.5 asym=-0.07 off-centre
+PHerc0211_z9712_w080         depth=28 peak= 7 offset= -6.5 asym=+0.09 off-centre
+PHerc0257_z4352_w060         depth=28 peak=19 offset= +5.5 asym=-0.41 REVERSED?
+PHerc0358_z11280_w040        depth=28 peak=11 offset= -2.5 asym=+0.45 off-centre
+PHerc0358_z11280_w060        depth=28 peak=21 offset= +7.5 asym=+0.17 off-centre
+PHerc0800_z10464_w040        depth=28 peak=12 offset= -1.5 asym=+0.02 ok
+PHerc0800_z10464_w080        depth=28 peak= 9 offset= -4.5 asym=+0.35 off-centre
+PHerc0800_z11072_w040        depth=28 peak=10 offset= -3.5 asym=+0.19 off-centre
+PHerc0800_z11072_w060        depth=28 peak=12 offset= -1.5 asym=+0.09 ok
+PHerc0800_z12272_w100        depth=28 peak= 9 offset= -4.5 asym=-0.20 off-centre
+PHerc0800_z12864_w040        depth=28 peak=21 offset= +7.5 asym=-0.64 REVERSED?
+PHerc0800_z12864_w100        depth=28 peak=12 offset= -1.5 asym=-0.21 REVERSED?
+PHerc0800_z13472_w040        depth=28 peak=21 offset= +7.5 asym=+0.24 off-centre
+PHerc0800_z13472_w060        depth=28 peak= 6 offset= -7.5 asym=+0.68 off-centre
+PHerc0800_z13472_w080        depth=28 peak=13 offset= -0.5 asym=-0.02 ok
+PHerc0800_z14064_w040        depth=28 peak=12 offset= -1.5 asym=+0.27 ok
+PHerc0800_z14064_w060        depth=28 peak= 6 offset= -7.5 asym=-0.22 REVERSED?
+PHerc0800_z14064_w080        depth=28 peak= 9 offset= -4.5 asym=-0.43 REVERSED?
+PHerc0800_z14672_w040        depth=28 peak= 7 offset= -6.5 asym=+0.24 off-centre
+PHerc0800_z14672_w060        depth=28 peak= 8 offset= -5.5 asym=+0.00 off-centre
+PHerc0800_z14672_w080        depth=28 peak= 6 offset= -7.5 asym=-0.02 off-centre
+PHerc0800_z15264_w040        depth=28 peak= 6 offset= -7.5 asym=-0.39 REVERSED?
+PHerc0800_z15264_w060        depth=28 peak= 8 offset= -5.5 asym=-0.16 off-centre
+PHerc0800_z15264_w080        depth=28 peak=13 offset= -0.5 asym=+0.47 ok
+PHerc0800_z15264_w100        depth=28 peak= 8 offset= -5.5 asym=-0.31 REVERSED?
+PHerc0800_z15872_w040        depth=28 peak= 9 offset= -4.5 asym=+0.35 off-centre
+PHerc0800_z15872_w060        depth=28 peak=12 offset= -1.5 asym=-0.01 ok
+PHerc0800_z15872_w080        depth=28 peak=21 offset= +7.5 asym=+0.08 off-centre
+PHerc0800_z15872_w100        depth=28 peak=11 offset= -2.5 asym=-0.47 REVERSED?
+PHerc0800_z16464_w040        depth=28 peak=13 offset= -0.5 asym=-0.40 REVERSED?
+PHerc0800_z16464_w060        depth=28 peak=11 offset= -2.5 asym=-0.32 REVERSED?
+PHerc0800_z16464_w080        depth=28 peak= 9 offset= -4.5 asym=-0.31 REVERSED?
+PHerc0800_z16464_w100        depth=28 peak=10 offset= -3.5 asym=+0.05 off-centre
+PHerc0800_z17072_w040        depth=28 peak=10 offset= -3.5 asym=+0.13 off-centre
+PHerc0800_z17072_w060        depth=28 peak=10 offset= -3.5 asym=-0.36 REVERSED?
+PHerc0800_z17072_w080        depth=28 peak=17 offset= +3.5 asym=+0.25 off-centre
+PHerc0800_z17072_w100        depth=28 peak=18 offset= +4.5 asym=-0.13 off-centre
+PHerc0800_z5664_w040         depth=28 peak= 7 offset= -6.5 asym=+0.29 off-centre
+PHerc0800_z7472_w040         depth=28 peak=12 offset= -1.5 asym=-0.37 REVERSED?
+PHerc0800_z8672_w020         depth=28 peak=12 offset= -1.5 asym=-0.23 REVERSED?
+PHerc0800_z8672_w040         depth=28 peak=10 offset= -3.5 asym=+0.03 off-centre
+PHerc0800_z8672_w060         depth=28 peak=15 offset= +1.5 asym=-0.25 REVERSED?
+PHerc0800_z8672_w080         depth=28 peak= 7 offset= -6.5 asym=-0.02 off-centre
+PHerc0800_z9264_w040         depth=28 peak=10 offset= -3.5 asym=-0.08 off-centre
+PHerc0800_z9264_w060         depth=28 peak=18 offset= +4.5 asym=-0.02 off-centre
+PHerc0800_z9264_w080         depth=28 peak=10 offset= -3.5 asym=-0.14 off-centre
+PHerc0800_z9264_w100         depth=28 peak= 9 offset= -4.5 asym=+0.23 off-centre
+PHerc0800_z9872_w040         depth=28 peak=10 offset= -3.5 asym=+0.78 off-centre
+PHerc0800_z9872_w060         depth=28 peak=10 offset= -3.5 asym=+0.07 off-centre
+PHerc0813_z11296_w040        depth=28 peak=12 offset= -1.5 asym=+0.03 ok
+PHerc0813_z11296_w060        depth=28 peak=10 offset= -3.5 asym=+0.43 off-centre
+PHerc0813_z11296_w080        depth=28 peak=13 offset= -0.5 asym=+0.16 ok
+PHerc0813_z11296_w100        depth=28 peak=21 offset= +7.5 asym=+0.03 off-centre
+PHerc0813_z11904_w040        depth=28 peak=13 offset= -0.5 asym=-0.17 ok
+PHerc0813_z11904_w060        depth=28 peak=14 offset= +0.5 asym=-0.19 ok
+PHerc0813_z11904_w080        depth=28 peak=16 offset= +2.5 asym=+0.22 off-centre
+PHerc0813_z11904_w100        depth=28 peak=18 offset= +4.5 asym=+0.11 off-centre
+PHerc0813_z12496_w040        depth=28 peak=12 offset= -1.5 asym=+0.17 ok
+PHerc0813_z12496_w060        depth=28 peak=16 offset= +2.5 asym=+0.14 off-centre
+PHerc0813_z12496_w080        depth=28 peak=10 offset= -3.5 asym=+0.50 off-centre
+PHerc0813_z12496_w100        depth=28 peak= 7 offset= -6.5 asym=-0.18 off-centre
+PHerc0813_z13088_w040        depth=28 peak= 9 offset= -4.5 asym=+0.25 off-centre
+PHerc0813_z13088_w060        depth=28 peak=12 offset= -1.5 asym=+0.02 ok
+PHerc0813_z13088_w080        depth=28 peak=11 offset= -2.5 asym=+0.16 off-centre
+PHerc0813_z13088_w100        depth=28 peak=10 offset= -3.5 asym=+0.26 off-centre
+PHerc0813_z13696_w040        depth=28 peak= 9 offset= -4.5 asym=+0.09 off-centre
+PHerc0813_z13696_w060        depth=28 peak=10 offset= -3.5 asym=+0.00 off-centre
+PHerc0813_z13696_w080        depth=28 peak= 9 offset= -4.5 asym=-0.16 off-centre
+PHerc0813_z14304_w040        depth=28 peak=19 offset= +5.5 asym=-0.04 off-centre
+PHerc0813_z14304_w060        depth=28 peak=12 offset= -1.5 asym=+0.43 ok
+PHerc0813_z14896_w040        depth=28 peak= 6 offset= -7.5 asym=+0.41 off-centre
+PHerc0813_z14896_w080        depth=28 peak=13 offset= -0.5 asym=+0.51 ok
+PHerc0813_z5888_w040         depth=28 peak=10 offset= -3.5 asym=+0.01 off-centre
+PHerc0813_z5888_w060         depth=28 peak= 6 offset= -7.5 asym=+0.38 off-centre
+PHerc0813_z5888_w080         depth=28 peak= 6 offset= -7.5 asym=+0.23 off-centre
+PHerc0813_z5888_w100         depth=28 peak=21 offset= +7.5 asym=+7.19 off-centre
+PHerc0813_z6496_w020         depth=28 peak=11 offset= -2.5 asym=+0.32 off-centre
+PHerc0813_z6496_w040         depth=28 peak=10 offset= -3.5 asym=-0.06 off-centre
+PHerc0813_z6496_w060         depth=28 peak= 9 offset= -4.5 asym=+0.43 off-centre
+PHerc0813_z6496_w080         depth=28 peak=14 offset= +0.5 asym=-0.17 ok
+PHerc0813_z6496_w100         depth=28 peak=19 offset= +5.5 asym=-0.26 REVERSED?
+PHerc0813_z7104_w020         depth=28 peak=16 offset= +2.5 asym=+0.04 off-centre
+PHerc0813_z7104_w040         depth=28 peak=13 offset= -0.5 asym=+0.44 ok
+PHerc0813_z7104_w060         depth=28 peak=21 offset= +7.5 asym=-0.41 REVERSED?
+PHerc0813_z7104_w080         depth=28 peak=16 offset= +2.5 asym=-0.03 off-centre
+PHerc0813_z7696_w040         depth=28 peak=17 offset= +3.5 asym=-0.41 REVERSED?
+PHerc0813_z7696_w060         depth=28 peak=13 offset= -0.5 asym=+0.61 ok
+PHerc0813_z7696_w080         depth=28 peak=12 offset= -1.5 asym=-0.46 REVERSED?
+PHerc0813_z7696_w100         depth=28 peak= 6 offset= -7.5 asym=-0.47 REVERSED?
+PHerc0813_z8288_w040         depth=28 peak=10 offset= -3.5 asym=+0.11 off-centre
+PHerc0813_z8288_w060         depth=28 peak= 8 offset= -5.5 asym=-0.36 REVERSED?
+PHerc0813_z8288_w080         depth=28 peak=11 offset= -2.5 asym=+0.49 off-centre
+PHerc0813_z9504_w040         depth=28 peak=12 offset= -1.5 asym=+0.37 ok
+PHerc0813_z9504_w060         depth=28 peak= 8 offset= -5.5 asym=+0.34 off-centre
+PHerc0813_z9504_w080         depth=28 peak=13 offset= -0.5 asym=-0.11 ok
+PHerc0826_z6528_w040         depth=28 peak=15 offset= +1.5 asym=-0.26 REVERSED?
+PHerc0826_z6528_w060         depth=28 peak=12 offset= -1.5 asym=+0.19 ok
+auto_grown_20260925170145991_abf depth=28 peak=12 offset= -1.5 asym=+0.09 ok
+auto_grown_20260925180043604_abf depth=28 peak=12 offset= -1.5 asym=+0.16 ok
+auto_grown_20260925213656950_abf depth=28 peak=21 offset= +7.5 asym=-0.03 off-centre
+auto_grown_20260925224049575_abf depth=28 peak=13 offset= -0.5 asym=+0.05 ok
+auto_grown_20260926074031926_abf depth=28 peak=11 offset= -2.5 asym=+0.22 off-centre
+auto_grown_20260926100047057_abf depth=28 peak=12 offset= -1.5 asym=-0.45 REVERSED?
+auto_grown_20260926111033780_abf depth=28 peak=15 offset= +1.5 asym=-0.46 REVERSED?
+auto_grown_20260926124358178_abf depth=28 peak= 9 offset= -4.5 asym=+0.56 off-centre
+auto_grown_20260926143326538_abf depth=28 peak=12 offset= -1.5 asym=+0.12 ok
+auto_grown_20260926155339746_abf depth=28 peak=21 offset= +7.5 asym=-1.23 REVERSED?
+auto_grown_20260927093812925_abf depth=28 peak=17 offset= +3.5 asym=-0.02 off-centre
+auto_grown_20260927104835405_abf depth=28 peak=13 offset= -0.5 asym=+0.32 ok
+auto_grown_20260927113833323_abf depth=28 peak=13 offset= -0.5 asym=+0.20 ok
+auto_grown_20260927125840158_abf depth=28 peak=12 offset= -1.5 asym=-0.14 ok
+auto_grown_20260927134928530_abf depth=28 peak=12 offset= -1.5 asym=+0.12 ok
+auto_grown_20260927143929299_abf depth=28 peak=15 offset= +1.5 asym=+0.31 ok
+auto_grown_20260927154033403_abf depth=28 peak=13 offset= -0.5 asym=+0.10 ok
+auto_grown_20260927163807488_abf depth=28 peak= 8 offset= -5.5 asym=-0.09 off-centre
+auto_grown_20260927175857678_abf depth=28 peak=21 offset= +7.5 asym=+0.05 off-centre
+auto_grown_20260927200859829_abf depth=28 peak= 8 offset= -5.5 asym=-0.10 off-centre
+auto_grown_20260927210402707_abf depth=28 peak=12 offset= -1.5 asym=-0.12 ok
+auto_grown_20260927214603141_abf depth=28 peak=16 offset= +2.5 asym=-0.56 REVERSED?
