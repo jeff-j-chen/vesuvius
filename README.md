@@ -270,7 +270,7 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 |---|---|
 | `train.py` | Training loop, losses, metrics, checkpoints, and logging |
 | `campaign_archs_*.py` | Complete experiment definitions and campaign runners |
-| `campaign_finetune.py` | Fine-tunes the archs40 learned-upsampled checkpoint with PHerc0211 + PHerc1447 |
+| `campaign_finetune.py` | Fine-tunes the archs40 native-96 nnPU checkpoint with PHerc1447; PHerc0211 and PHerc0813 are label-free, end-of-training visualizations only |
 | `campaign_finetune_96.py` | Fine-tunes the archs40 native-96 combined-surface checkpoint on PHerc1447 + selected scrolls |
 | `generate_scroll_visual_guide.py` | Contact sheet of the training corpus and test surfaces (`output/scroll_patch_guide.png`) |
 | `utils/config.py` | Shared configuration and registered train, holdout, and test IDs |

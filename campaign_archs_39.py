@@ -126,7 +126,7 @@ TESTS = [
     _test("holdout_n96_downsampled_upsampled_trilinear", DOWNSAMPLED,
           init_weights=UPSAMPLED_TRILINEAR_MAE, upsampler="trilinear"),
     _test("holdout_n96_downsampled_upsampled_learned", DOWNSAMPLED,
-          init_weights=UPSAMPLED_LEARNED_MAE, upsampler=LEARNED_UPSAMPLER),
+          init_weights=UPSAMPLED_LEAR~NED_MAE, upsampler=LEARNED_UPSAMPLER),
 ]
 
 

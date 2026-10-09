@@ -1,17 +1,29 @@
-"""campaign_finetune.py -- fine-tune the archs40 learned-upsampled model with PHerc0211 + PHerc1447.
+"""campaign_finetune.py -- fine-tune the archs40 native-96 nnPU model with PHerc1447.
 
-This starts from the campaign-40 learned-upsampled checkpoint and keeps the same training
-fragments as archs40, then adds two new physical domains:
+This starts from the campaign-40 holdout_n96_combined_surface_norm_nnpu checkpoint (native 8 x 96 x 96
+input) and trains on PHerc1447 (20260930144758 / 20260930144760), PHerc0500P2 (20250628074500),
+PHerc0841 (20260221022814), PHerc0009B (20250919125754), PHerc0139 w044 (20260115000000) and
+PHerc0814 seg46527 (20260226000000).
 
-- PHerc0211: 20260928000003 (train-only, no validation split)
-- PHerc1447: 20260930144758 / 20260930144760 / 20260930144762
+| tid          | change vs the archs40 nnPU recipe                                      |
+|--------------|------------------------------------------------------------------------|
+| baseline     | none                                                                   |
+| hard         | hard targets (no sigma-8 soft edges)                                   |
+| c0r0s4       | ring close 0 / gap 0 / shell 4, multitile_pos_only=False, soft targets |
+| c0r0s4_hard  | ring close 0 / gap 0 / shell 4, multitile_pos_only=False, hard targets |
 
-Unlike the archs40 campaigns, this runner uses axis splits (`simple_split=True`) so the new
-PHerc1447 windings do not require train_masks.
+PHerc0211 (20260928000003, 20260928000004) and PHerc0813 (20260814140748, 20260928000007) are
+label-free visualization scrolls: never sampled for training or validation, rendered only after
+the final epoch.
+
+Splits come from train_masks/ (`simple_split=False`): the nnPU far-negative sampler requires a
+manual split.
 
 Usage:
     python3 campaign_finetune.py --dry-run
+    python3 campaign_finetune.py --smoke
     python3 campaign_finetune.py
+    python3 campaign_finetune.py --only hard,c0r0s4
 """
 from __future__ import annotations
 
@@ -38,38 +50,69 @@ ROOT = Path(__file__).resolve().parent
 LOG_DIR = "./runs_finetune"
 MODEL_DIR = "models/finetune"
 INKLABEL_DIR = "./dilated_inklabels"
-DEFAULT_INIT_WEIGHTS = "/vesuvius/models/archs40/holdout_n96_upsampled_learned/final_best_character.pth"
-PHERC0211_ID = 20260928000003
+DEFAULT_INIT_WEIGHTS = "/vesuvius/models/archs40/holdout_n96_combined_surface_norm_nnpu/final.pth"
+PHERC0211_IDS = (20260928000003, 20260928000004)
+PHERC0813_IDS = (20260814140748, 20260928000007)
 PHERC1447_IDS = (20260930144758, 20260930144760)#, 20260930144762)
 PHERC1447_DOMAIN = "pherc1447"
-VIS_SCROLL_IDS = [PHERC0211_ID, PHERC1447_IDS[1], 20260115000000]
-    
+PHERC0500P2_ID = 20250628074500
+PHERC0841_ID = 20260221022814
+PHERC0009B_ID = 20250919125754
+W044_ID = 20260115000000
+SEG46527_ID = 20260226000000
+ADDED_IDS = (PHERC0500P2_ID, PHERC0841_ID, PHERC0009B_ID, W044_ID, SEG46527_ID)
+LABEL_FREE_VIS_IDS = [*PHERC0211_IDS, *PHERC0813_IDS]
+VIS_SCROLL_IDS = [*PHERC0211_IDS, *PHERC0813_IDS, *PHERC1447_IDS]
+SMOKE_LOG_DIR = "./runs_finetune_smoke"
+SMOKE_MODEL_DIR = "models/finetune_smoke"
+
 TRAIN_SCROLL_DICT = {
-    **campaign40.BASE_SCROLL_DICT,
-    campaign40.NEW_DOMAIN: [PHERC0211_ID],
     PHERC1447_DOMAIN: list(PHERC1447_IDS),
+    "pherc0500p2": [PHERC0500P2_ID],
+    "pherc0841": [PHERC0841_ID],
+    "pherc0009b": [PHERC0009B_ID],
+    "pherc0139": [W044_ID],
+    "pherc0814": [SEG46527_ID],
 }
 SCROLLS = [
-    *campaign40.SCROLLS_BASE,
-    ScrollConfig(PHERC0211_ID, split_axis="x", train_split_frac=1.0),
     ScrollConfig(PHERC1447_IDS[0], split_axis="x", train_split_frac=0.75),
     ScrollConfig(PHERC1447_IDS[1], split_axis="x", train_split_frac=0.75),
     # ScrollConfig(PHERC1447_IDS[2], split_axis="x", train_split_frac=0.75),
+    *(scroll for scroll in campaign40.SCROLLS_BASE if int(scroll.scroll_id) in ADDED_IDS),
 ]
 
 
-def _test(init_weights: str) -> dict:
+HARD = {"data.edge_soft_sigma": 0.0}
+RING_C0R0S4 = {
+    "data.ring_close_r": 0,
+    "data.ring_gap_r": 0,
+    "data.ring_shell_r": 4,
+    "data.multitile_pos_only": False,
+}
+
+
+def _test(tid: str, changes: dict, init_weights: str) -> dict:
     test = campaign40._test(
-        "holdout_n96_upsampled_learned",
+        tid,
         campaign40.SURFACE_FIBER_MAE_KEY,
         TRAIN_SCROLL_DICT,
         SCROLLS,
+        changes={**campaign40.NNPU, **changes},
         init_weights=init_weights,
-        upsampler=campaign40.LEARNED_UPSAMPLER,
-        **campaign40.CROSSRES_TRAINING,
+        batch_size=campaign40.SCRATCH_TRAINING["batch_size"],
+        lr=1e-4,
     )
-    test["tag"] = "finetune_holdout_n96_upsampled_learned"
+    test["tag"] = f"ft_{tid}"
     return test
+
+
+def _tests(init_weights: str) -> list[dict]:
+    return [
+        _test("baseline", {}, init_weights),
+        _test("hard", HARD, init_weights),
+        _test("c0r0s4", RING_C0R0S4, init_weights),
+        _test("c0r0s4_hard", {**RING_C0R0S4, **HARD}, init_weights),
+    ]
 
 
 def _selected_scrolls(selected: list[dict]) -> list[ScrollConfig]:
@@ -105,18 +148,46 @@ def build_config(test: dict):
         domain: list(ids) for domain, ids in test["train_scroll_dict"].items()
     }
     config.data.train_scroll_weights = campaign40._train_scroll_weights(config.data.train_scroll_dict)
-    config.data.simple_split = True
+    config.data.simple_split = False
+    config.data.train_mask_dir = "./train_masks"
     config.data.inklabel_dir = INKLABEL_DIR
     config.data.vis_scroll_ids = list(VIS_SCROLL_IDS)
     config.data.vis_preload_persistent = True
-    config.data.train_only_scroll_ids = [PHERC0211_ID]
-    config.tra.n_epochs = 5
-    config.tra.eval_int = 5
+    config.data.label_free_vis_scroll_ids = list(LABEL_FREE_VIS_IDS)
+    config.data.train_only_scroll_ids = []
+    config.tra.n_epochs = 10
+    # fully trainable at a high LR; one warmup epoch instead of five
+    config.tra.lr = 1e-3
+    config.tra.warmup_epochs = 1
+    config.tra.freeze_prefixes = ()
+    config.tra.encoder_freeze_epochs = 0
+    config.tra.encoder_lr_scale = 1.0
+    config.tra.encoder_lr = None
+    config.tra.task_lr = None
+    # figures only after the final epoch
+    config.tra.eval_int = config.tra.n_epochs
     config.tra.eval_int_scrolls = len(VIS_SCROLL_IDS)
     config.tra.test_int = 999
-    config.tra.fast_eval_figure = True
+    config.tra.probe_int = 999
+    config.tra.fast_eval_figure = False
     config.tra.dann_n_domains = len(config.data.train_scroll_dict)
+    trained = {int(sid) for ids in config.data.train_scroll_dict.values() for sid in ids}
+    trained |= {int(scroll.scroll_id) for scroll in config.data.scrolls}
+    leaked = trained & set(LABEL_FREE_VIS_IDS)
+    if leaked:
+        raise ValueError(f"vis-only scrolls {sorted(leaked)} must not be trained")
     return config
+
+
+def _smoke_config(config) -> None:
+    """one tiny epoch, then the end-of-training figure on the smallest vis-only scroll."""
+    config.tra.n_epochs = 1
+    config.tra.eval_int = 1
+    config.dl.num_workers = 2
+    config.data.max_samples_per_epoch = 2 * config.dl.num_workers * config.dl.batch_size
+    config.data.vis_scroll_ids = [PHERC0813_IDS[1]]
+    config.data.vis_preload_persistent = False
+    config.tra.eval_int_scrolls = 1
 
 
 def preflight_inputs(selected: list[dict], dry_run: bool) -> None:
@@ -128,12 +199,23 @@ def preflight_inputs(selected: list[dict], dry_run: bool) -> None:
             zarr_root / f"{scroll_id}.zarr",
             ROOT / "masks" / f"{scroll_id}.png",
             ROOT / INKLABEL_DIR.strip("./") / f"{scroll_id}.png",
+            ROOT / "train_masks" / f"{scroll_id}.png",
             ROOT / "surface_labels" / str(scroll_id) / "depth.npy",
             ROOT / "surface_labels" / str(scroll_id) / "confidence.npy",
         )
         missing = [str(path) for path in required if not path.exists()]
         if missing:
             failures.append(f"{scroll_id}: {', '.join(missing)}")
+    for scroll_id in LABEL_FREE_VIS_IDS:
+        required = (
+            zarr_root / f"{scroll_id}.zarr",
+            ROOT / "masks" / f"{scroll_id}.png",
+            ROOT / "surface_labels" / str(scroll_id) / "depth.npy",
+            ROOT / "surface_labels" / str(scroll_id) / "confidence.npy",
+        )
+        missing = [str(path) for path in required if not path.exists()]
+        if missing:
+            failures.append(f"{scroll_id} (vis-only): {', '.join(missing)}")
     external = []
     for test in selected:
         for path in campaign40._external_files(test):
@@ -152,14 +234,19 @@ def preflight_inputs(selected: list[dict], dry_run: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="fine-tune archs40 learned-upsampled model with PHerc0211 + PHerc1447")
+    parser = argparse.ArgumentParser(description="fine-tune archs40 native-96 nnPU model with PHerc1447")
     parser.add_argument("--only", type=str, default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--smoke", action="store_true",
+                        help="one tiny epoch + final vis on one vis-only scroll, separate log/model dirs")
     parser.add_argument("--init-weights", default=DEFAULT_INIT_WEIGHTS,
-                        help="starting checkpoint (default: the requested archs40 learned-upsampled final_best_character)")
+                        help="starting checkpoint (default: archs40 holdout_n96_combined_surface_norm_nnpu final.pth)")
     args = parser.parse_args()
+    if args.smoke:
+        global LOG_DIR, MODEL_DIR
+        LOG_DIR, MODEL_DIR = SMOKE_LOG_DIR, SMOKE_MODEL_DIR
 
-    selected = [_test(args.init_weights)]
+    selected = _tests(args.init_weights)
     if args.only:
         wanted = {value.strip() for value in args.only.split(",") if value.strip()}
         selected = [test for test in selected if test["tid"] in wanted]
@@ -176,18 +263,26 @@ def main() -> None:
     results = {}
     for test in selected:
         config = build_config(test)
+        if args.smoke:
+            _smoke_config(config)
         with startup_output():
             print(
                 f"[campaign_finetune] {test['tid']}: ctx={config.data.context_size} "
                 f"domains={list(config.data.train_scroll_dict)} "
                 f"weights={config.data.train_scroll_weights} simple_split={config.data.simple_split} "
                 f"fast_eval={config.tra.fast_eval_figure} vis={config.data.vis_scroll_ids} "
+                f"label_free={config.data.label_free_vis_scroll_ids} "
                 f"batch={config.dl.batch_size} lr={config.tra.lr} epochs={config.tra.n_epochs} "
+                f"ring={config.data.ring_close_r}/{config.data.ring_gap_r}/{config.data.ring_shell_r} "
+                f"pos_only={config.data.multitile_pos_only} edge_soft={config.data.edge_soft_sigma} "
+                f"upsampler={config.model.input_upsampler or 'none'} "
                 f"init={config.init_weights}",
                 flush=True,
             )
         if args.dry_run:
             success = campaign31.run_test(config, True)
+        elif args.smoke:
+            success = campaign31.run_test_isolated(config)
         else:
             campaign29.prewarm_data_cache(config)
             success = campaign31.run_test_isolated(config)
