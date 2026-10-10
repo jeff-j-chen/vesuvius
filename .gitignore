@@ -7,7 +7,7 @@ __pycache__/
 *.pyc
 *.tar
 ves_3zars.tar
-ves_zarrs2/
+ves_zarrs*
 # cross-resolution tile stores are rebuilt by crossres/build_pairs.py; their meta.json files stay tracked
 crossres/pairs/**/pairs.zarr/
 runs_old/

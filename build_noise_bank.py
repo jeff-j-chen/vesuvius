@@ -40,7 +40,7 @@ NATIVE_SCROLL_IDS = (
     20260226000000, 20250628074500,
 )
 DEFAULT_OUT = "_ves_tmp/native_noise_bank.npy"
-DEFAULT_DENOISER = "models/denoiser_n2v_native.pth"
+DEFAULT_DENOISER = "models/denoiser_n2v_block3_4k.pth"
 
 
 def ensure_denoiser(path: Path, scroll_ids, steps: int, depth: int) -> None:

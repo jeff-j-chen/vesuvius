@@ -1185,6 +1185,9 @@ class NnUnet3dLcndz(nn.Module):
             self.early2d_up1 = nn.ConvTranspose2d(e2, e1, kernel_size=2, stride=2)
             self.early2d_dec1 = block2d(e1 * 2, e1)
             self.early2d_head = nn.Conv2d(e1, 1, kernel_size=1)
+            extra_routes = max(0, int(getattr(config.model, "divdis_heads", 1)) - 1)
+            self.divdis_dec1 = nn.ModuleList([block2d(e1 * 2, e1) for _ in range(extra_routes)])
+            self.divdis_head = nn.ModuleList([nn.Conv2d(e1, 1, kernel_size=1) for _ in range(extra_routes)])
             extra_channels = self._two_d_extra_channels or (e4,) * self._two_d_extra_levels
             encoder_channels = (e4,) + extra_channels
             self.early2d_extra_encoders = nn.ModuleList([
@@ -1228,6 +1231,8 @@ class NnUnet3dLcndz(nn.Module):
             self.early2d_up1 = None
             self.early2d_dec1 = None
             self.early2d_head = None
+            self.divdis_dec1 = nn.ModuleList()
+            self.divdis_head = nn.ModuleList()
             self.early2d_extra_encoders = nn.ModuleList()
             self.early2d_extra_ups = nn.ModuleList()
             self.early2d_extra_decoders = nn.ModuleList()
@@ -1365,6 +1370,15 @@ class NnUnet3dLcndz(nn.Module):
         self.last_private_delta: torch.Tensor | None = None
         self.last_head_input: torch.Tensor | None = None
         self.last_head_output: torch.Tensor | None = None
+        self._divdis_heads = int(getattr(config.model, "divdis_heads", 1))
+        if self._divdis_heads > 1:
+            if not self._early_2d_unet or self._overlapping_depth_windows:
+                raise ValueError("divdis_heads > 1 requires the plain early-2D U-Net")
+            # head returned in eval mode; chosen by the trainer from per-head validation metrics
+            self.register_buffer("divdis_output_head", torch.zeros((), dtype=torch.long))
+        self._last_dec1_input: torch.Tensor | None = None
+        # (B, n*n) cell logits per head, head 0 first; set by every early-2D forward when divdis_heads > 1
+        self.last_divdis_scores: list[torch.Tensor] | None = None
 
         use_better_surface = bool(getattr(config.model, "better_surface", False))
         use_new_surface = bool(getattr(config.model, "new_learned_surface", False))
@@ -2103,7 +2117,9 @@ class NnUnet3dLcndz(nn.Module):
             decoded = decoder(self._merge_skip_2d(upsample(decoded), skip))
         dec3 = self.early2d_dec3(self._merge_skip_2d(self.early2d_up3(decoded), enc3))
         dec2 = self.early2d_dec2(self._merge_skip_2d(self.early2d_up2(dec3), enc2))
-        dec1 = self.early2d_dec1(self._merge_skip_2d(self.early2d_up1(dec2), enc1))
+        dec1_input = self._merge_skip_2d(self.early2d_up1(dec2), enc1)
+        self._last_dec1_input = dec1_input if self._divdis_heads > 1 else None
+        dec1 = self.early2d_dec1(dec1_input)
         if self._head_drop is not None:
             dec1 = F.dropout2d(dec1, p=self._head_drop.p, training=self.training)
         return deepest, dec1
@@ -2516,6 +2532,22 @@ class NnUnet3dLcndz(nn.Module):
         count = cells.new_tensor(float(cells.shape[-1]))
         return (torch.logsumexp(r * cells, dim=-1) - torch.log(count)) / r
 
+    def _divdis_scores(self, score: torch.Tensor, target_offsets: torch.Tensor | None) -> torch.Tensor:
+        """score every DivDis route; training returns head 0, eval the selected head."""
+        if self._last_dec1_input is None:
+            raise RuntimeError("DivDis routes need the early-2D dec1 input")
+        scores = [score]
+        for decoder, head in zip(self.divdis_dec1, self.divdis_head):
+            routed = decoder(self._last_dec1_input)
+            if self._head_drop is not None:
+                routed = F.dropout2d(routed, p=self._head_drop.p, training=self.training)
+            scores.append(self._multitile_aggregate_2d(head(routed), target_offsets))
+        self.last_divdis_scores = scores
+        self._last_dec1_input = None
+        if self.training:
+            return score
+        return scores[int(self.divdis_output_head)]
+
     def score_from_head_input(
         self,
         head_input: torch.Tensor,
@@ -2741,6 +2773,8 @@ class NnUnet3dLcndz(nn.Module):
             )
             score = self._multitile_aggregate_2d(voxel2d, target_offsets)
             score = self._apply_dual_scale_score(score, x, target_offsets)
+            if self._divdis_heads > 1:
+                score = self._divdis_scores(score, target_offsets)
             if self.last_private_score is not None and self.last_dual_scale_delta is not None:
                 self.last_private_score = self.last_private_score + self.last_dual_scale_delta
             self.last_attn_entropy_loss = voxel2d.new_zeros(())

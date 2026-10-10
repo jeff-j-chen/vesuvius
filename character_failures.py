@@ -14,9 +14,10 @@ split (train/valid/mixed by train_masks), bbox, and a sampling weight
     failure = 1 - (AP + recall) / 2      (1 - recall when the character has no ring cells)
     weight  = 1 + (max_weight - 1) * failure
 
-written to campaign_archs_41.FORGETTING_PATH with a fingerprint of each ./inklabels file. Campaign 41's
-`character_failures` arm refuses to start without an up-to-date entry for every training scroll. The file
-is rewritten after every scroll, so an interrupted run resumes where it stopped.
+written to campaign_archs_41.FORGETTING_PATH with a fingerprint of each ./inklabels file, plus each scroll's
+prediction map in --maps-dir (character_failures/maps/<id>.png full frame, black = ink; <id>.npy cell scores).
+Campaign 41's `character_failures` arm is skipped without an up-to-date entry for every training scroll. The
+file is rewritten after every scroll, so an interrupted run resumes where it stopped.
 
     python3 character_failures.py
     python3 character_failures.py --checkpoint models/archs40/holdout_n96_combined_surface_norm_nnpu/final.pth
@@ -41,6 +42,7 @@ sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
 import numpy as np  # noqa: E402
+import cv2  # noqa: E402
 import torch  # noqa: E402
 from scipy.ndimage import distance_transform_edt, find_objects  # noqa: E402
 from sklearn.metrics import average_precision_score  # noqa: E402
@@ -146,7 +148,23 @@ def predict_scroll(config: Config, model, manager: DataManager, mask01: np.ndarr
         )
 
 
-def evaluate_scroll(scroll_id: int, model_cfg: Config, model, data_cfg: Config, max_weight: float) -> dict:
+def save_prediction_map(scores: np.ndarray, unit: int, shape: tuple[int, int], out_dir: Path, scroll_id: int) -> Path:
+    """cell scores -> <out_dir>/<id>.npy and a full-frame PNG (black = ink, mid grey = not scored)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    np.save(out_dir / f"{scroll_id}.npy", scores.astype(np.float16))
+    image = np.where(np.isfinite(scores), 255.0 * (1.0 - np.clip(np.nan_to_num(scores), 0.0, 1.0)), 160.0)
+    image = np.repeat(np.repeat(image.astype(np.uint8), unit, axis=0), unit, axis=1)
+    frame = np.full(shape, 160, dtype=np.uint8)
+    h, w = min(shape[0], image.shape[0]), min(shape[1], image.shape[1])
+    frame[:h, :w] = image[:h, :w]
+    path = out_dir / f"{scroll_id}.png"
+    if not cv2.imwrite(str(path), frame):
+        raise OSError(f"could not write {path}")
+    return path
+
+
+def evaluate_scroll(scroll_id: int, model_cfg: Config, model, data_cfg: Config, max_weight: float,
+                    maps_dir: Path) -> dict:
     with startup_output():
         ensure_surface_anchors([scroll_id], data_cfg.data.zarr_path, surface_dir=data_cfg.data.surface_label_dir)
         manager = DataManager(data_cfg, scroll_id=scroll_id)
@@ -161,6 +179,8 @@ def evaluate_scroll(scroll_id: int, model_cfg: Config, model, data_cfg: Config, 
 
     started = time.time()
     scores = predict_scroll(model_cfg, model, manager, mask01, scroll_id)[:shape[0], :shape[1]]
+    map_path = save_prediction_map(scores, unit, (height, width), maps_dir, scroll_id)
+    print(f"[failures] {scroll_id}: prediction map -> {map_path}", flush=True)
     finite = np.isfinite(scores)
     papyrus = _cells(mask01 > 0, unit, shape, np.all)
     positive = _cells(labels, unit, shape, np.any) & papyrus & finite
@@ -242,6 +262,8 @@ def main() -> None:
     parser.add_argument("--stride", type=int, default=32, help="inference window step in px (16 = densest)")
     parser.add_argument("--max-weight", type=float, default=4.0)
     parser.add_argument("--force", action="store_true", help="recompute scrolls that already have a current entry")
+    parser.add_argument("--maps-dir", default="character_failures/maps",
+                        help="prediction PNG/.npy per scroll; scrolls without a map are recomputed")
     args = parser.parse_args()
 
     checkpoint = (ROOT / args.checkpoint).resolve()
@@ -272,15 +294,19 @@ def main() -> None:
     model_cfg = model_config(checkpoint, args.stride)
     model = load_model(model_cfg, checkpoint)
     data_cfg = data_config()
+    maps_dir = ROOT / args.maps_dir
     for index, scroll_id in enumerate(scroll_ids, 1):
         label_path = ROOT / "inklabels" / f"{scroll_id}.png"
         entry = payload["scrolls"].get(str(scroll_id))
         if (not args.force and entry is not None and label_path.is_file()
+                and (maps_dir / f"{scroll_id}.png").is_file()
                 and entry.get("inklabel_fingerprint") == inklabel_fingerprint(str(label_path))):
             print(f"[failures] {index}/{len(scroll_ids)} {scroll_id}: current entry kept", flush=True)
             continue
         print(f"[failures] {index}/{len(scroll_ids)} {scroll_id}: predicting", flush=True)
-        payload["scrolls"][str(scroll_id)] = evaluate_scroll(scroll_id, model_cfg, model, data_cfg, args.max_weight)
+        payload["scrolls"][str(scroll_id)] = evaluate_scroll(
+            scroll_id, model_cfg, model, data_cfg, args.max_weight, maps_dir,
+        )
         payload["created"] = time.strftime("%Y-%m-%d %H:%M:%S")
         _write(out, payload)
         print(f"[failures] {scroll_id}: {payload['scrolls'][str(scroll_id)]['summary']}", flush=True)

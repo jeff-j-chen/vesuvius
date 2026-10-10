@@ -1,4 +1,4 @@
-"""campaign 41: degraded fine scans + PHerc1447 on the archs40 nnPU recipe, then two label-targeting arms
+"""campaign 41: degraded fine scans + PHerc1447 on the archs40 nnPU recipe, then cross-scroll and label-targeting arms
 
 Every arm is campaign 40's `holdout_n96_combined_surface_norm_nnpu` (scratch campaign-40 MAE, native 96 px
 field, ring c2g2s4, sigma-8 soft edges, bag ranking, fiber branch, regime weights, RSC, dropout/augs,
@@ -15,23 +15,30 @@ surface-anchor norm, nnPU far background, patch GroupDRO, batch 95 / lr 1.5e-4, 
 | tid                 | change vs baseline                                                         |
 |---------------------|----------------------------------------------------------------------------|
 | baseline            | none                                                                       |
+| and_mask            | AND-mask: per step, 4 random groups of physical domains run separately and |
+|                     | only weights whose gradient sign >= 3 of 4 groups share are updated        |
+| divdis              | DivDis: a second dec1 + head route on the shared trunk; both fit the       |
+|                     | labels, while on unlabeled PHerc0211/PHerc0813 crops their predictions     |
+|                     | must carry no mutual information and keep a 0.15 ink rate. The eval head   |
+|                     | is the better one on PHerc1447 validation (character AP)                   |
 | character_failures  | static character forgetting: characters this repo's current model fails on |
 |                     | are drawn more often (character_failures.py, weight 1-4)                   |
 | new_letters         | assumed letters drawn at half brightness (value ~128) in dilated_inklabels |
 |                     | train as their own characters and fill 30% of all training draws           |
 
-`character_failures` refuses to launch until character_failures.py has written FORGETTING_PATH for every
-training scroll from the current ./inklabels. `new_letters` refuses to launch until at least one training
-split holds an assumed letter. Assumed letters get the same ring/close/gap/softening as every other letter,
-follow train_masks, are kept out of patch GroupDRO / CVaR (they re-enter as a plain cell-weighted mean) and
-are scored separately (Character/Extra/*, Character/Patch/<id>/F1/*_Extra, Per_Scroll/*_Extra/*). The other
-arms erase half-brightness strokes, so they read the label files exactly as campaign 40 did.
+`character_failures` needs character_failures.py to have written FORGETTING_PATH for every training
+scroll from the current ./inklabels; `new_letters` needs at least one assumed letter in a training split.
+Both are checked when the arm starts (they run last) and skipped if still not ready. Assumed letters get
+the same ring/close/gap/softening as every other letter, follow train_masks, are kept out of patch
+GroupDRO / CVaR (they re-enter as a plain cell-weighted mean) and are scored separately (Character/Extra/*,
+Character/Patch/<id>/F1/*_Extra, Per_Scroll/*_Extra/*). The other arms erase half-brightness strokes, so
+they read the label files exactly as campaign 40 did.
 
 Usage:
     python3 campaign_archs_41.py --dry-run
     python3 character_failures.py            # required before character_failures
     python3 campaign_archs_41.py
-    python3 campaign_archs_41.py --only new_letters
+    python3 campaign_archs_41.py --only baseline,new_letters,and_mask,divdis
 """
 from __future__ import annotations
 
@@ -70,6 +77,7 @@ VIS_ONLY_IDS = [P343_LETTERS_ID, PHERC0211_ID, PHERC0813_ID]
 TRAINED_VIS_IDS = [20250628074500, 20260226000000]  # pherc0500p2, pherc0814 seg46527
 VIS_SCROLL_IDS = [*VIS_ONLY_IDS, *TRAINED_VIS_IDS]
 FORGETTING_PATH = "character_failures/c41_character_failures.json"
+DENOISER = "models/denoiser_n2v_block3_4k.pth"
 EXTRA_LABEL_SHARE = 0.3
 # missing zarrs and the command that assembles each one
 ASSEMBLY = {
@@ -100,6 +108,23 @@ NEW_LETTERS = {
     "data.extra_inklabels": True,
     "data.extra_label_share": EXTRA_LABEL_SHARE,
 }
+# sign agreement across 4 random groups of physical domains: a coordinate moves only if >= 3 of 4 agree
+AND_MASK = {
+    "tra.and_mask": True,
+    "tra.and_mask_groups": 4,
+    "tra.and_mask_threshold": 0.5,
+}
+# unlabeled target crops: the label-free vis scrolls, never p343 (the held-out judge)
+DIVDIS_TARGET_IDS = [PHERC0211_ID, PHERC0813_ID]
+DIVDIS = {
+    "model.divdis_heads": 2,
+    "data.divdis_target_scroll_ids": DIVDIS_TARGET_IDS,
+    "tra.divdis_mi_lambda": 1.0,
+    "tra.divdis_reg_lambda": 1.0,
+    "tra.divdis_target_prior": 0.15,
+    "tra.divdis_batch_size": 32,
+    "tra.divdis_select_domains": [PHERC1447_DOMAIN],
+}
 
 
 def _test(tid: str, changes: dict | None = None) -> dict:
@@ -115,8 +140,11 @@ def _test(tid: str, changes: dict | None = None) -> dict:
     return test
 
 
+# arms that need hand-made inputs run last, so letters can still be drawn while the others train
 TESTS = [
     _test("baseline"),
+    _test("and_mask", AND_MASK),
+    _test("divdis", DIVDIS),
     _test("character_failures", CHARACTER_FAILURES),
     _test("new_letters", NEW_LETTERS),
 ]
@@ -181,9 +209,30 @@ def _missing_inputs() -> tuple[dict[int, list[str]], dict[int, list[str]]]:
         if scroll_id not in label_free:
             required += [ROOT / INKLABEL_DIR / f"{scroll_id}.png", ROOT / "train_masks" / f"{scroll_id}.png"]
         missing = [str(path) for path in required if not path.exists()]
+        if not missing and scroll_id not in zarrs:
+            missing = _frame_mismatches(zarr_root / f"{scroll_id}.zarr", scroll_id)
         if missing:
             others[scroll_id] = missing
     return zarrs, others
+
+
+def _frame_mismatches(volume_path: Path, scroll_id: int) -> list[str]:
+    """mask / surface maps whose frame differs from the zarr (they would crash the data loader)."""
+    import cv2
+    import numpy as np
+    import zarr
+
+    height, width = (int(value) for value in zarr.open(str(volume_path), mode="r").shape[-2:])
+    shapes = {
+        f"masks/{scroll_id}.png": cv2.imread(str(ROOT / "masks" / f"{scroll_id}.png"), cv2.IMREAD_GRAYSCALE).shape,
+        f"surface_labels/{scroll_id}/depth.npy": np.load(
+            ROOT / "surface_labels" / str(scroll_id) / "depth.npy", mmap_mode="r",
+        ).shape,
+    }
+    return [
+        f"{name} is {shape[0]}x{shape[1]} but the zarr is {height}x{width}"
+        for name, shape in shapes.items() if tuple(shape) != (height, width)
+    ]
 
 
 def preflight_inputs(dry_run: bool) -> None:
@@ -230,7 +279,12 @@ def ensure_noise_bank(test: dict, dry_run: bool) -> None:
     paths = [ROOT / str(bank), (ROOT / str(bank)).with_suffix(".json")]
     if all(path.is_file() for path in paths):
         return
-    command = [sys.executable, str(ROOT / "build_noise_bank.py"), "--out", str(bank)]
+    if not (ROOT / DENOISER).is_file():
+        message = f"campaign 41 noise bank needs the pretrained denoiser {DENOISER}"
+        if not dry_run:
+            raise FileNotFoundError(message)
+        print(f"[campaign41] WARNING {message}", flush=True)
+    command = [sys.executable, str(ROOT / "build_noise_bank.py"), "--out", str(bank), "--denoiser", DENOISER]
     if dry_run:
         print(f"[campaign41] would build the native noise bank with: {' '.join(command)}", flush=True)
         return
@@ -280,31 +334,26 @@ def extra_letter_counts() -> dict[int, int]:
     return counts
 
 
-def preflight_arms(selected: list[dict], dry_run: bool) -> None:
-    tids = {test["tid"] for test in selected}
-    problems = []
-    if "character_failures" in tids:
+def arm_problems(test: dict) -> list[str]:
+    """hand-made inputs this arm still lacks (empty when it can run)."""
+    if test["tid"] == "character_failures":
         failures = forgetting_problems()
-        if failures:
-            problems.append(
-                "character_failures needs `python3 character_failures.py` first:\n    "
-                + "\n    ".join(failures)
-            )
-        else:
+        return ["needs `python3 character_failures.py` first: " + "; ".join(failures)] if failures else []
+    if test["tid"] == "new_letters" and not extra_letter_counts():
+        return [f"needs assumed letters drawn at half brightness (~128) in {INKLABEL_DIR}/<id>.png"]
+    return []
+
+
+def preflight_arms(selected: list[dict]) -> None:
+    """warn at startup; each arm is checked again when it starts and skipped if still not ready."""
+    for test in selected:
+        problems = arm_problems(test)
+        if problems:
+            print(f"[campaign41] WARNING {test['tid']} not ready yet: {problems[0]}", flush=True)
+        elif test["tid"] == "character_failures":
             print(f"[campaign41] {FORGETTING_PATH} covers all {len(SCROLLS)} training scrolls", flush=True)
-    if "new_letters" in tids:
-        counts = extra_letter_counts()
-        if not counts:
-            problems.append(
-                f"new_letters needs assumed letters drawn at half brightness (~128) in {INKLABEL_DIR}/<id>.png"
-            )
-        else:
-            print(f"[campaign41] assumed-letter pixels by scroll: {counts}", flush=True)
-    if problems:
-        message = "campaign 41 arm inputs not ready:\n  " + "\n  ".join(problems)
-        if not dry_run:
-            raise FileNotFoundError(message)
-        print(f"[campaign41] WARNING {message}", flush=True)
+        elif test["tid"] == "new_letters":
+            print(f"[campaign41] assumed-letter pixels by scroll: {extra_letter_counts()}", flush=True)
 
 
 def main() -> None:
@@ -328,7 +377,7 @@ def main() -> None:
         selected = TESTS[ids.index(args.from_id):]
 
     with startup_output():
-        preflight_arms(selected, args.dry_run)
+        preflight_arms(selected)
         preflight_inputs(args.dry_run)
         campaign29.preflight_train_masks(SCROLLS, inklabel_dir=ROOT / INKLABEL_DIR, strict=not args.dry_run)
         campaign40.preflight_external(selected, args.dry_run)
@@ -344,6 +393,11 @@ def main() -> None:
 
     results = {}
     for test in selected:
+        problems = arm_problems(test)
+        if problems:
+            print(f"[campaign41] SKIP {test['tid']}: {problems[0]}", flush=True)
+            results[test["tid"]] = f"SKIPPED ({problems[0]})"
+            continue
         config = build_config(test)
         with startup_output():
             print(
@@ -353,7 +407,9 @@ def main() -> None:
                 f"vis={config.data.vis_scroll_ids} label_free={config.data.label_free_vis_scroll_ids} "
                 f"batch={config.dl.batch_size} lr={config.tra.lr} epochs={config.tra.n_epochs} "
                 f"init={config.init_weights} forgetting={config.tra.character_forgetting} "
-                f"extra_letters={config.data.extra_inklabels}/{config.data.extra_label_share}",
+                f"extra_letters={config.data.extra_inklabels}/{config.data.extra_label_share} "
+                f"and_mask={config.tra.and_mask} divdis_heads={config.model.divdis_heads} "
+                f"divdis_targets={config.data.divdis_target_scroll_ids}",
                 flush=True,
             )
         if args.dry_run:

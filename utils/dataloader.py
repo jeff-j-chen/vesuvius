@@ -3956,6 +3956,85 @@ class DataManager:
 
         return train_mask
 
+class UnlabeledTargetDataset(IterableDataset):
+    """endless label-free crops from target scrolls for DivDis, read exactly like training crops
+    (surface-relative window, norm, target-aware context and depth jitter, no augmentation).
+
+    yields (block (1,D,ctx,ctx), target_offset (2,), surface_depth (1,s,s), surface_confidence (1,s,s),
+    cell_valid (n*n,)) where cell_valid marks multitile cells that lie wholly on papyrus.
+    """
+
+    def __init__(self, config: Config, scroll_ids):
+        import copy
+
+        cfg = copy.deepcopy(config)
+        scroll_ids = [int(scroll_id) for scroll_id in scroll_ids]
+        if not scroll_ids:
+            raise ValueError("DivDis needs at least one target scroll")
+        cfg.data.label_free_vis_scroll_ids = list(scroll_ids)
+        cfg.data.character_balanced_sampling = False
+        cfg.tra.character_macro_metrics = False
+        cfg.data.far_negative_share = 0.0
+        cfg.data.explicit_negative_share = 0.0
+        cfg.data.extra_inklabels = False
+        cfg.data.native_noise = ""
+        cfg.data.preload_volumes = False
+        cfg.data.max_samples_per_epoch = None
+        cfg.data.multitile_train_step = 64
+        cfg.dl.context_replace_prob = 0.0
+        cfg.tra.context_consistency = False
+        cfg.tra.depth_view_consistency = False
+        self.datasets = []
+        for scroll_id in scroll_ids:
+            manager = DataManager(cfg, scroll_id=scroll_id)
+            papyrus = (np.asarray(manager.mask) > 0.5).astype(np.uint8)
+            height, width = papyrus.shape
+            dataset = InkVolumeDataset(
+                manager.vol, papyrus, np.zeros_like(papyrus), cfg,
+                getattr(manager, "full_x_range", (0, width)), getattr(manager, "full_y_range", (0, height)),
+                manager.norm_stats, shuffle=True, scroll_id=scroll_id, scroll_mask=papyrus,
+            )
+            if not dataset.block_coords:
+                raise ValueError(f"DivDis target scroll {scroll_id} has no papyrus windows")
+            print(f"[divdis] target scroll {scroll_id}: {len(dataset.block_coords):,} windows", flush=True)
+            self.datasets.append(dataset)
+            del manager
+
+    def __iter__(self) -> Iterator:
+        while True:
+            dataset = random.choice(self.datasets)
+            z_off, y_off, x_off = dataset.block_coords[random.randrange(len(dataset.block_coords))]
+            block, offset, depth_shift, _ = dataset._fetch_block(z_off, y_off, x_off)
+            size = int(block.shape[-1])
+            if dataset._use_surface_teacher:
+                depth, confidence = dataset._fetch_surface_teacher(z_off, y_off, x_off, offset, depth_shift)
+            else:
+                depth = np.full((size, size), -1.0, dtype=np.float32)
+                confidence = np.zeros((size, size), dtype=np.float32)
+            step = max(1, int(getattr(dataset.c.data, "context_downsample", 1)))
+            depth, confidence = depth[::step, ::step], confidence[::step, ::step]
+            yield (
+                torch.from_numpy(np.ascontiguousarray(block, dtype=np.float32)).unsqueeze(0),
+                torch.tensor(offset, dtype=torch.long),
+                torch.from_numpy(np.ascontiguousarray(depth, dtype=np.float32)).unsqueeze(0),
+                torch.from_numpy(np.ascontiguousarray(confidence, dtype=np.float32)).unsqueeze(0),
+                dataset._fetch_mask_mt(y_off, x_off),
+            )
+
+
+def get_divdis_loader(config: Config) -> DataLoader:
+    """endless DivDis target-crop loader over config.data.divdis_target_scroll_ids."""
+    workers = int(getattr(config.tra, "divdis_num_workers", 3))
+    kwargs = {
+        "batch_size": int(getattr(config.tra, "divdis_batch_size", 32)),
+        "num_workers": workers,
+        "pin_memory": True,
+    }
+    if workers > 0:
+        kwargs["prefetch_factor"] = 2
+        kwargs["worker_init_fn"] = partial(_worker_init, base_seed=int(getattr(config.tra, "seed", 41)) + 4242)
+    return DataLoader(UnlabeledTargetDataset(config, config.data.divdis_target_scroll_ids), **kwargs)
+
 def _worker_init(worker_id, base_seed):
     """deterministic per-worker seeding: each spawned worker reseeds numpy+random from a
     base seed + worker id, so the augmentations (which draw from the GLOBAL np.random /

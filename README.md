@@ -155,6 +155,29 @@ Notes:
 - test surfaces 11-13 are expanded versions of the atlas extras `PHerc0800_z9264_w040`, `PHerc0125_z15344_w040` and `PHerc0211_z7312_w080`, used as supplied; their numeric IDs are synthetic, and their areas are computed from the mesh because `meta.json` has no `area_cm2` or a stale one
 - `assemble_test_segments.py` reads the `_flatboi` meshes, but zarrs in `ves_zarrs2/` rendered before 2026-09-23 came from the unflattened meshes; re-render with `--force`
 
+### Extra segment sets
+
+Besides the numbered test surfaces, `assemble_test_segments.py --include-extras` renders two unlabeled extra sets for broader test-time review. They are keyed by their folder name and stored as uint8. Their masks go in `masks/extras/`, surface labels in `surface_labels/extras/` and composites in `output/composite_cache/extras/`. None of these are committed: each set's surface labels and composites are synced through R2 as `<set>_surface_labels.zip` and `<set>_composites.zip`. Extras are not in `DEFAULT_SCROLLS` or `DEFAULT_TEST_SCROLL_IDS`, so MAE pretraining never samples them.
+
+- `atlas`: auto-winder meshes, downloaded from R2 as `atlas.zip` into `tifxyz/atlas/`
+- `quick_patches_from_D`: meshes tracked in git under `tifxyz/quick_patches_from_D/<scroll>/<segment>/`. Any segment folder added there is assembled automatically, provided its scroll has a raw volume in `EXTRA_VOLUMES`.
+
+| Scroll | quick_patches_from_D segments | Scan |
+|---|---:|---|
+| PHerc0846A | 35 | 9.362µm / 113keV |
+| PHerc0175A | 11 | 8.640µm / 116keV |
+
+A few PHerc0846A meshes reach up to ~4% past the top of the scan; those points are clamped to the last slice.
+
+```bash
+# render missing extras, then pull or generate their surface labels + composites
+python3 assemble_test_segments.py --include-extras
+# re-zip and upload every set's surface labels + composites (needs R2_PUBLIC_URL + ACCESS_KEY/SECRET_KEY)
+python3 assemble_test_segments.py --include-extras --upload-extras
+```
+
+Do not combine `--only` with an R2-configured `--include-extras` run: the automatic re-upload would replace a set's R2 zips with only the selected segments.
+
 ## Data layout
 
 ### High-energy fragments

@@ -271,6 +271,7 @@ class DataConfig:
     # False erases them (the label file then reads exactly as it did before they were drawn)
     extra_inklabels: bool = False
     extra_label_share: float = 0.0  # fraction of all training draws taken from assumed-letter characters
+    divdis_target_scroll_ids: List[int] = field(default_factory=list)  # unlabeled DivDis crops come from these
     # training-only soft positives: a positive cell's target is the max of its gaussian-blurred
     # ink label, floored at edge_soft_floor (>0.5 so the cell still counts as positive). 0 = off
     edge_soft_sigma: float = 8.0
@@ -478,6 +479,15 @@ class TrainingConfig:
     mae_reconstruction_patch: int = 4
     entropy_min_lambda: float = 0.0  # weight for entropy reward on unlabeled (validation) tiles
     entropy_min_batch_size: int = 8  # unlabeled samples per step; kept small to avoid OOM
+    # DivDis (Lee et al. 2022): heads fit the labels, minimise pairwise mutual information on target crops,
+    # and keep each head's mean target ink rate near divdis_target_prior
+    divdis_mi_lambda: float = 1.0
+    divdis_reg_lambda: float = 1.0
+    divdis_target_prior: float = 0.15
+    divdis_batch_size: int = 32
+    divdis_num_workers: int = 3
+    # train_scroll_dict domains whose validation cells choose the eval head (empty = all validation cells)
+    divdis_select_domains: List[str] = field(default_factory=list)
     character_macro_metrics: bool = True
     character_score_threshold: float = 0.5
     character_calibrate_threshold: bool = True
@@ -629,6 +639,8 @@ class ModelConfig:
     private_domain_heads: bool = False
     # private loss sees the shared logits detached: the private head only shapes shared features, never takes over calibration
     private_head_detach_shared: bool = False
+    # DivDis: heads 2..K are extra early-2D dec1 + head routes on the shared trunk; eval returns the selected head
+    divdis_heads: int = 1
     early_2d_unet: bool = True
     early_2d_channels_mult: float = 1.0
     mid_2d_unet: bool = False

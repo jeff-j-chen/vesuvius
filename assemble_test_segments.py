@@ -75,6 +75,7 @@ COMPOSITE_D0, COMPOSITE_D1 = 10, 18
 # segment scroll -> (raw volume the mesh coords live in, vol shape z,y,x); bboxes verified to fit
 EXTRA_VOLUMES = {
     "PHerc0125": (f"{BUCKET}/PHerc0125/volumes/20250821151825-9.362um-1.2m-113keV-masked.zarr/0", "20840,8387,8387"),
+    "PHerc0175A": (f"{BUCKET}/PHerc0175A/volumes/20250521115057-8.640um-1.2m-116keV-masked.zarr/0", "12748,9363,9363"),
     "PHerc0211": (f"{BUCKET}/PHerc0211/volumes/20250821151803-9.362um-1.2m-113keV-masked.zarr/0", "19416,7948,7948"),
     "PHerc0257": (f"{BUCKET}/PHerc0257/volumes/20250821151750-9.362um-1.2m-113keV-masked.zarr/0", "18872,8388,8388"),
     "PHerc0358": (f"{BUCKET}/PHerc0358/volumes/20250821151737-9.362um-1.2m-113keV-masked.zarr/0", "14744,7783,7783"),

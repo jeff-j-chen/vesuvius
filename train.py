@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from utils.config import Config, startup_output
 from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray, get_tile_pos_weight, needs_domain_ids, needs_patch_ids
-from utils.dataloader import CHARACTER_NAMESPACE_STRIDE, EXTRA_CHARACTER_OFFSET, is_extra_character
+from utils.dataloader import CHARACTER_NAMESPACE_STRIDE, EXTRA_CHARACTER_OFFSET, get_divdis_loader, is_extra_character
 from utils.hard_mining import HardMiningInjector, HardMiningManager
 from utils.model import create_model, supcon_loss
 from utils.surface import make_surface_targets_from_depth, surface_supervision_loss
@@ -187,6 +187,31 @@ def _per_patch_character_f1(
         )
         values[int(patch_id)] = float(metrics["character_f1_macro"])
     return values
+
+
+def divdis_pairwise_mi(probabilities: list[torch.Tensor], eps: float = 1e-6) -> torch.Tensor:
+    """mean mutual information between every pair of binary heads, from batch-estimated joint distributions."""
+    total = probabilities[0].new_zeros(())
+    pairs = 0
+    for left in range(len(probabilities)):
+        for right in range(left + 1, len(probabilities)):
+            p, q = probabilities[left], probabilities[right]
+            joint = torch.stack(((1 - p) * (1 - q), (1 - p) * q, p * (1 - q), p * q), dim=1).mean(dim=0)
+            mp, mq = p.mean(), q.mean()
+            independent = torch.stack(((1 - mp) * (1 - mq), (1 - mp) * mq, mp * (1 - mq), mp * mq))
+            total = total + (joint * (joint.clamp(min=eps).log() - independent.clamp(min=eps).log())).sum()
+            pairs += 1
+    return total / max(pairs, 1)
+
+
+def divdis_prior_kl(probabilities: list[torch.Tensor], prior: float, eps: float = 1e-6) -> torch.Tensor:
+    """mean KL(Bernoulli(head's mean target ink rate) || Bernoulli(prior)); stops heads disagreeing by collapsing."""
+    total = probabilities[0].new_zeros(())
+    for p in probabilities:
+        rate = p.mean().clamp(eps, 1 - eps)
+        total = total + rate * math.log(1.0 / prior) + rate * rate.log() \
+            + (1 - rate) * ((1 - rate).log() - math.log(1.0 - prior))
+    return total / len(probabilities)
 
 
 def _blend_extra_cells(robust_loss, per_target_loss, loss_mask, extra_cells):
@@ -660,6 +685,12 @@ class Trainer:
 
             self.train_dataset, self.train_loader, self.valid_loader = self._setup_data()
             self.model, self.params, self.optimizer, self.scheduler, self.criterion = self._setup_model_optim()
+            self._divdis_loader = None
+            if int(getattr(self.c.model, "divdis_heads", 1)) > 1:
+                if any(bool(getattr(self.c.tra, name, False)) for name in ("and_mask", "fish", "mldg", "pcgrad", "pcgrad_lite")) \
+                        or float(getattr(self.c.tra, "sam_rho", 0.0)) > 0:
+                    raise ValueError("DivDis cannot be combined with AND-mask, Fish, MLDG, PCGrad or SAM")
+                self._divdis_loader = get_divdis_loader(self.c)
 
             print("Initializing Tensorboard...")
             self._init_visualizers()
@@ -740,6 +771,11 @@ class Trainer:
             "unsupported_neg_frac": 0.0,
             "and_mask_kept_frac": 0.0,
             "spectral_decoupling_penalty": 0.0,
+            "divdis_head_loss": 0.0,
+            "divdis_mi": 0.0,
+            "divdis_reg": 0.0,
+            "divdis_target_ink_rate": 0.0,
+            "divdis_target_agreement": 0.0,
         }
         self._closed = False
 
@@ -1002,6 +1038,12 @@ class Trainer:
                     f"[mae-anchor] lambda={anchor_lambda:g} "
                     f"parameters={anchored:,} tensors={len(self._mae_anchor_reference)}"
                 )
+
+        if len(getattr(model, "divdis_dec1", ())):
+            # extra routes start from the (pretrained) main decoder block; their 1x1 heads stay random
+            for decoder in model.divdis_dec1:
+                decoder.load_state_dict(model.early2d_dec1.state_dict())
+            print(f"[divdis] {len(model.divdis_dec1) + 1} heads; extra routes copied from early2d_dec1")
 
         optimizer, scheduler = create_optimizer_and_scheduler(model, self.c)
         # multitile supervises at the 8px sub-tile level, whose class balance (~5:1 neg:pos) is
@@ -1544,6 +1586,52 @@ class Trainer:
         )
         return weights
 
+    def _divdis_loss(self, extra_scores, targets, loss_mask, denom, divdis_batch) -> torch.Tensor:
+        """DivDis: supervised loss on the extra heads, then pairwise MI and a marginal prior on target crops."""
+        head_loss = sum(
+            (self.criterion(score, targets) * loss_mask).sum() / denom for score in extra_scores
+        ) / max(len(extra_scores), 1)
+        images, offsets, depth, confidence, cell_valid = divdis_batch
+        images = images.to(self.c.device, non_blocking=True)
+        surface_maps = any(
+            bool(getattr(self.c.model, name, False))
+            for name in ("new_learned_surface", "better_surface", "surface_teacher_input")
+        )
+        self.model(
+            images,
+            target_offsets=(
+                offsets.to(self.c.device, non_blocking=True)
+                if bool(getattr(self.c.data, "target_aware_ctx_jitter", False)) else None
+            ),
+            teacher_surface_depth=depth.to(self.c.device, non_blocking=True).float() if surface_maps else None,
+            teacher_surface_confidence=(
+                confidence.to(self.c.device, non_blocking=True).float() if surface_maps else None
+            ),
+        )
+        valid = cell_valid.to(self.c.device, non_blocking=True).view(images.shape[0], -1) > 0
+        probabilities = [
+            torch.sigmoid(score.float())[valid] for score in self.model.last_divdis_scores
+        ]
+        if probabilities[0].numel() == 0:
+            mi = reg = head_loss.new_zeros(())
+        else:
+            mi = divdis_pairwise_mi(probabilities)
+            reg = divdis_prior_kl(probabilities, float(getattr(self.c.tra, "divdis_target_prior", 0.15)))
+            with torch.no_grad():
+                decisions = torch.stack([value > 0.5 for value in probabilities])
+                self._last_dg_losses["divdis_target_ink_rate"] = float(probabilities[0].mean())
+                self._last_dg_losses["divdis_target_agreement"] = float(
+                    (decisions == decisions[0]).all(dim=0).float().mean()
+                )
+        self._last_dg_losses["divdis_head_loss"] = float(head_loss.detach())
+        self._last_dg_losses["divdis_mi"] = float(mi.detach())
+        self._last_dg_losses["divdis_reg"] = float(reg.detach())
+        return (
+            head_loss
+            + float(getattr(self.c.tra, "divdis_mi_lambda", 1.0)) * mi
+            + float(getattr(self.c.tra, "divdis_reg_lambda", 1.0)) * reg
+        )
+
     def _extra_letter_metrics(self, labels, scores, character_ids, domains, patch_ids) -> dict:
         tra = self.c.tra
         threshold = float(getattr(tra, "character_score_threshold", 0.5))
@@ -1976,6 +2064,7 @@ class Trainer:
     def _train_batch(self, images, labels, mask, domain_ids=None, patch_ids=None,
                      character_ids=None,
                      target_offsets=None, epoch: int = 0, unlabeled_images=None,
+                     divdis_batch=None,
                      surface_depth=None, surface_confidence=None,
                      depth_shift=None,
                      context_pair=None, context_pair_active=None,
@@ -2142,6 +2231,9 @@ class Trainer:
                 supcon_z = None
 
             attn_entropy_loss = getattr(self.model, "last_attn_entropy_loss", None)
+            labeled_divdis_scores = (
+                self.model.last_divdis_scores if self._divdis_loader is not None else None
+            )
             attn_entropy_per_target = getattr(self.model, "last_attn_entropy_per_target", None)
             new_surface_logits = getattr(self.model, "last_new_surface_logits", None)
             dual_scale_gate = getattr(self.model, "last_dual_scale_gate", None)
@@ -3015,6 +3107,11 @@ class Trainer:
                     getattr(self.c.tra, "mae_reconstruction_lambda", 0.1)
                 ) * mae_reconstruction_loss_value
 
+            if labeled_divdis_scores is not None and divdis_batch is not None:
+                loss = loss + self._divdis_loss(
+                    labeled_divdis_scores[1:], targets, loss_mask, denom, divdis_batch,
+                )
+
             # entropy maximization on unlabeled (validation) tiles: rewards uncertainty outside
             # the labeled region, attacking the "predict not-ink everywhere" fixed point
             entropy_lambda = float(getattr(self.c.tra, "entropy_min_lambda", 0.0))
@@ -3294,6 +3391,7 @@ class Trainer:
 
         entropy_lambda = float(getattr(self.c.tra, "entropy_min_lambda", 0.0))
         u_iter = iter(self.valid_loader) if entropy_lambda > 0 else None
+        divdis_iter = iter(self._divdis_loader) if self._divdis_loader is not None else None
 
         for batch_index, batch in enumerate(
             tqdm(self.train_loader, desc="Training", mininterval=5, miniters=1, file=sys.stderr)
@@ -3428,6 +3526,7 @@ class Trainer:
                 target_offsets=batch_target_offsets,
                 epoch=epoch,
                 unlabeled_images=u_imgs,
+                divdis_batch=next(divdis_iter) if divdis_iter is not None else None,
                 surface_depth=batch_surface_depth,
                 surface_confidence=batch_surface_confidence,
                 depth_shift=batch_depth_shift,
@@ -3566,6 +3665,11 @@ class Trainer:
         # before predict_tiles and eval figures start reading zarr (prevents IO saturation)
         if u_iter is not None:
             del u_iter
+        if divdis_iter is not None:
+            shutdown = getattr(divdis_iter, "_shutdown_workers", None)
+            if shutdown is not None:
+                shutdown()
+            del divdis_iter
 
         if hard_injector:
             stats = hard_injector.stats()
@@ -3585,6 +3689,9 @@ class Trainer:
         character_ids_all = []
         domain_ids_all = []
         patch_ids_all = []
+        divdis_head_scores: list[list] | None = (
+            [[] for _ in range(int(self.c.model.divdis_heads))] if self._divdis_loader is not None else None
+        )
 
         with torch.no_grad(), autocast(self.c.device, enabled=self.c.device == "cuda"):
             for batch in tqdm(
@@ -3673,6 +3780,10 @@ class Trainer:
                     batch_scores = batch_scores[keep]
                     batch_lab = batch_lab[keep]
                     batch_chars = batch_chars[keep]
+                if divdis_head_scores is not None:
+                    for head_scores, head_output in zip(divdis_head_scores, self.model.last_divdis_scores):
+                        values = torch.sigmoid(head_output.float()).cpu().numpy().flatten()
+                        head_scores.extend(values[keep] if batch_labels.shape[1] > 1 else values)
                 labels.extend(batch_lab)
                 preds.extend((batch_scores > 0.5).astype(int))
                 scores.extend(batch_scores)
@@ -3686,6 +3797,13 @@ class Trainer:
                         (batch_domains[keep] if batch_labels.shape[1] > 1 else batch_domains).tolist()
                     )
 
+        divdis_metrics = None
+        if divdis_head_scores is not None:
+            divdis_metrics, selected = self._select_divdis_head(
+                labels, divdis_head_scores, character_ids_all, domain_ids_all,
+            )
+            scores = list(divdis_head_scores[selected])
+            preds = [int(value > 0.5) for value in scores]
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
         if bool(getattr(self.c.tra, "character_macro_metrics", False)):
             metrics.update(calculate_character_metrics(
@@ -3732,8 +3850,55 @@ class Trainer:
             metrics.update(self._extra_letter_metrics(
                 labels, scores, character_ids_all, domain_ids_all, patch_ids_all,
             ))
+        if divdis_metrics is not None:
+            metrics["divdis_heads"] = divdis_metrics
         metrics["scores"] = scores
         return metrics
+
+    def _select_divdis_head(self, labels, head_scores, character_ids, domain_ids) -> tuple[list[dict], int]:
+        """per-head validation metrics on the selection domains; the best head becomes the eval head."""
+        key = str(getattr(self.c.tra, "character_checkpoint_metric", "character_ap_macro"))
+        names = list(getattr(self.c.data, "train_scroll_dict", {}) or {})
+        wanted = {names.index(name) for name in (getattr(self.c.tra, "divdis_select_domains", None) or [])}
+        labels_array = np.array(labels)
+        character_array = np.array(character_ids, dtype=np.int64)
+        selection = np.ones(labels_array.shape, dtype=bool)
+        if wanted:
+            if len(domain_ids) != labels_array.size:
+                raise RuntimeError("DivDis domain selection needs per-cell validation domain ids")
+            selection = np.isin(np.array(domain_ids), sorted(wanted))
+            if not selection.any():
+                raise RuntimeError(f"no validation cells in DivDis selection domains {sorted(wanted)}")
+        per_head = []
+        for scores in head_scores:
+            scores_array = np.array(scores)[selection]
+            values = calculate_metrics(
+                labels_array[selection], (scores_array > 0.5).astype(int), scores_array,
+            )
+            values.update(calculate_character_metrics(
+                labels_array[selection],
+                scores_array,
+                character_array[selection],
+                score_threshold=float(getattr(self.c.tra, "character_score_threshold", 0.5)),
+                recall_target=float(getattr(self.c.tra, "character_recall_target", 0.5)),
+                max_ring_fpr=float(getattr(self.c.tra, "character_max_ring_fpr", 0.1)),
+            ))
+            per_head.append({
+                name: float(values.get(name, float("nan")))
+                for name in (key, "character_f1_macro", "pr_auc", "roc_auc", "f1")
+            })
+        ranked = [entry.get(key, float("nan")) for entry in per_head]
+        selected = int(np.nanargmax(ranked)) if np.isfinite(ranked).any() else 0
+        self.model.divdis_output_head.fill_(selected)
+        print(
+            f"[divdis] valid {key} by head: "
+            + " ".join(f"{index}={value:.4f}" for index, value in enumerate(ranked))
+            + f" -> eval head {selected}",
+            flush=True,
+        )
+        for index, entry in enumerate(per_head):
+            entry["selected"] = float(index == selected)
+        return per_head, selected
 
     def _periodic_model_save(self, epoch: int, val_metrics: dict) -> None:
         character_metric = str(getattr(
@@ -3893,6 +4058,11 @@ class Trainer:
             ("cross_scroll_rank_loss", "CrossScroll/RankLoss"),
             ("private_head_loss", "CrossScroll/PrivateHeadLoss"),
             ("and_mask_kept_frac", "CrossScroll/ANDMaskKeptFraction"),
+            ("divdis_head_loss", "DivDis/ExtraHeadLoss"),
+            ("divdis_mi", "DivDis/TargetMutualInformation"),
+            ("divdis_reg", "DivDis/TargetPriorKL"),
+            ("divdis_target_ink_rate", "DivDis/TargetInkRateHead0"),
+            ("divdis_target_agreement", "DivDis/TargetAgreement"),
             ("spectral_decoupling_penalty", "CrossScroll/SpectralDecoupling"),
             ("pu_loss", "PU/Loss"),
             ("pu_risk", "PU/Risk"),
@@ -3900,6 +4070,11 @@ class Trainer:
         ):
             if key in train_metrics:
                 self.vis.writer.add_scalar(tag, train_metrics[key], epoch)
+        for index, entry in enumerate(val_metrics.get("divdis_heads", [])):
+            for name, value in entry.items():
+                self.vis.writer.add_scalar(f"DivDis/Head{index}/{name}_Select", value, epoch)
+            if entry.get("selected"):
+                self.vis.writer.add_scalar("DivDis/SelectedHead", index, epoch)
         if bool(getattr(self.c.tra, "dann", False)):
             self.vis.writer.add_scalar("DANN/DomainAccuracy", train_metrics["dann_accuracy"], epoch)
             self.vis.writer.add_scalar("DANN/GRLScale", train_metrics["dann_grl_scale"], epoch)

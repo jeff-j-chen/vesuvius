@@ -11,12 +11,14 @@ For each segment <name> with scroll id <id>, writes to output/test_visualization
                       zarr grid, instead of being cut out of the titled figure; it is resized only if the
                       inklabel differs from the zarr frame.
     <id>_4models.jpg  the 2x2 model grid figure as JPEG (no crop/resize)
-The original figures in training_c40/ are left untouched (copied, not moved).
+The original figures in training_c40/ are left untouched (copied, not moved). Everything in training_c40_by_id/ is
+then zipped to output/test_visualizations/villa_ensemble/training_c40_by_id.zip (skip with --no-zip).
 """
 import argparse
 import json
 import os
 import sys
+import zipfile
 
 import cv2
 import numpy as np
@@ -50,6 +52,7 @@ def main():
     parser.add_argument("names", nargs="*", help="segment names (default: all)")
     parser.add_argument("--force", action="store_true", help="overwrite existing exports")
     parser.add_argument("--jpeg-quality", type=int, default=90)
+    parser.add_argument("--no-zip", action="store_true", help="skip zipping the export folder")
     args = parser.parse_args()
 
     ns = notebook_setup()
@@ -86,6 +89,15 @@ def main():
                 figure.convert("RGB").save(grid_path, quality=args.jpeg_quality, optimize=True)
             print(f"[4models] {name} -> {grid_path}", flush=True)
     print(f"done -> {out_dir}" + (f"; not rendered yet: {pending}" if pending else ""))
+    if not args.no_zip:
+        zip_path = out_dir + ".zip"
+        files = sorted(f for f in os.listdir(out_dir) if f.endswith((".png", ".jpg")))
+        # png/jpg are already compressed: store them
+        with zipfile.ZipFile(zip_path + ".partial", "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+            for filename in files:
+                archive.write(os.path.join(out_dir, filename), f"{os.path.basename(out_dir)}/{filename}")
+        os.replace(zip_path + ".partial", zip_path)
+        print(f"zipped {len(files)} files -> {zip_path} ({os.path.getsize(zip_path) / 1e9:.2f} GB)")
 
 
 if __name__ == "__main__":
