@@ -75,13 +75,15 @@ SPLIT_COLOR = 'red'
 
 
 def _patch_character_f1_layout(scrolls):
-    """build one train/valid multiline chart for each individual patch."""
+    """build one train/valid multiline chart for each individual patch, with assumed-letter series."""
     return {
         f"patch_{patch_id}": [
             "Multiline",
             [
                 f"Character/Patch/{patch_id}/F1/Train",
                 f"Character/Patch/{patch_id}/F1/Valid",
+                f"Character/Patch/{patch_id}/F1/Train_Extra",
+                f"Character/Patch/{patch_id}/F1/Valid_Extra",
             ],
         ]
         for patch_id in dict.fromkeys(int(scroll.scroll_id) for scroll in scrolls)
@@ -1605,6 +1607,15 @@ class TensorboardVisualizer:
                     val_metrics[metric_name],
                     epoch,
                 )
+        # assumed (half-brightness) letters only, scored against their own ring cells
+        for display_name, metric_name in character_tags.items():
+            for split, metrics in (("Train", train_metrics), ("Valid", val_metrics)):
+                if f"extra_{metric_name}" in metrics:
+                    self.writer.add_scalar(
+                        f"Character/Extra/{display_name}/{split}",
+                        metrics[f"extra_{metric_name}"],
+                        epoch,
+                    )
 
         self.log_patch_character_f1(epoch, train_metrics, val_metrics)
 
@@ -1663,23 +1674,23 @@ class TensorboardVisualizer:
         self.writer.flush()
 
     def log_patch_character_f1(self, epoch, train_metrics, val_metrics):
-        """log paired character f1 series for each individual patch."""
-        train_values = train_metrics.get("per_patch_character_f1", {})
-        valid_values = val_metrics.get("per_patch_character_f1", {})
-        patch_ids = dict.fromkeys([*train_values, *valid_values])
-        for patch_id in patch_ids:
-            if patch_id in train_values:
-                self.writer.add_scalar(
-                    f"Character/Patch/{patch_id}/F1/Train",
-                    float(train_values[patch_id]),
-                    epoch,
-                )
-            if patch_id in valid_values:
-                self.writer.add_scalar(
-                    f"Character/Patch/{patch_id}/F1/Valid",
-                    float(valid_values[patch_id]),
-                    epoch,
-                )
+        """log paired character f1 series for each individual patch (plus assumed letters as *_Extra)."""
+        for key, suffix in (("per_patch_character_f1", ""), ("per_patch_character_f1_extra", "_Extra")):
+            train_values = train_metrics.get(key, {})
+            valid_values = val_metrics.get(key, {})
+            for patch_id in dict.fromkeys([*train_values, *valid_values]):
+                if patch_id in train_values:
+                    self.writer.add_scalar(
+                        f"Character/Patch/{patch_id}/F1/Train{suffix}",
+                        float(train_values[patch_id]),
+                        epoch,
+                    )
+                if patch_id in valid_values:
+                    self.writer.add_scalar(
+                        f"Character/Patch/{patch_id}/F1/Valid{suffix}",
+                        float(valid_values[patch_id]),
+                        epoch,
+                    )
 
     def log_confusion_matrix(self, train_metrics, val_metrics, epoch):
         """create and log confusion matrix visualization"""

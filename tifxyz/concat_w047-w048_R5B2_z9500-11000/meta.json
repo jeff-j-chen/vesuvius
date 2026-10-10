@@ -1,0 +1,123 @@
+{
+  "uuid": "concat_w047-w048_R5B2_z9500-11000",
+  "name": "concat_w047-w048_R5B2_z9500-11000",
+  "type": "seg",
+  "format": "tifxyz",
+  "scale": [
+    0.05,
+    0.05
+  ],
+  "bbox": [
+    [
+      3954.25927734375,
+      3331.63671875,
+      9503.154296875
+    ],
+    [
+      5984.900390625,
+      5263.2216796875,
+      11004.494140625
+    ]
+  ],
+  "area_vx2": 10835600.0,
+  "source": "PHerc. 343 (Vesuvius Challenge, First Letters). Concatenation of the nodes of the two official spiral-fit meshes w047_R5B2_z9500-11000 and w048_R5B2_z9500-11000 (the two meshes of the submitted image), joined at the spiral seam theta 360|0 with a smooth seam (version 3.2). w048 node rows 32-122 x columns 11-175 are copied bit for bit at row - 32, column + 160 (same place and tile phase as in its own render). w047 node rows 3-119 x columns 96-265 are placed at row -2, column -90 (w048 row = w047 row + 30, w048 column = w047 column - 250: the grid offsets measured across the seam in the text rows). Because the two meshes are rigid grids whose true offset drifts along the seam (row offset 26.8-30.7, column offset 246.9-251.5, measured by extending each grid across the gap), the remaining offset is spread over a transition strip on the w047 side (5-8 nodes wide next to the letters of text row 1, 15 next to text row 2, up to 100 in the rows without letters, so that the texture distortion stays below 3 percent there): there the w047 nodes are resampled on the w047 surface itself (bilinear between four original w047 nodes, i.e. on the surface as it is rendered; at the ragged sheet edge the bilinear cell may extrapolate by up to one node, and where no cell is available the original node is kept, so every valid node of both meshes is present) at grid positions shifted smoothly by at most [64, 63] px (row, column); all other w047 nodes and all w048 nodes are unchanged. Bridge: 38 nodes in 89 rows are linear 3D interpolations between the last w047 node and the first w048 node of a row; since the two grids now line up, the seam has a median 19.88 voxels per grid step. Columns = phi increasing (theta, then theta + 360), rows = z increasing; 20 voxels per node; 8.64 um voxels.",
+  "concat": {
+    "version": 3.2,
+    "parts": [
+      {
+        "mesh": "w047_R5B2_z9500-11000",
+        "source_rows": [
+          3,
+          119
+        ],
+        "source_cols": [
+          96,
+          265
+        ],
+        "dest_row_offset": -2,
+        "dest_col_offset": -90,
+        "sha256": {
+          "x.tif": "29117616a3174eaf58bf84c0e36df27089d743d5ede184fcba1d1d9c73034e66",
+          "y.tif": "505bea6a149b0a9f3b0a291b1544aade93d50883cfd86c9ec5153ed2b9666a8e",
+          "z.tif": "0a9ef23fc0c2a24717aa099ec20659f21444f5153096d04fb295789f64ffa141"
+        }
+      },
+      {
+        "mesh": "w048_R5B2_z9500-11000",
+        "source_rows": [
+          32,
+          122
+        ],
+        "source_cols": [
+          11,
+          175
+        ],
+        "dest_row_offset": -32,
+        "dest_col_offset": 160,
+        "sha256": {
+          "x.tif": "4beb95abe7014146aebb58aca9c1e0a7e41a3d5fcd5c30dfd1a1d11b2b1413ec",
+          "y.tif": "306f3374db29c41793d5d77bbd28a3e3bf78bf6c3f5f7c09b14d0efdb75722cb",
+          "z.tif": "173d5040e20ae8c0106a152d70b7aa005463df54a4ce2b7d2abfea93d1719cec"
+        }
+      }
+    ],
+    "row_offset_w048_minus_w047": 30,
+    "col_offset_w048_minus_w047": 250,
+    "nodes": {
+      "w047_original": 12931,
+      "w047_resampled_in_transition_strip": 2461,
+      "w048_original": 12168,
+      "bridge": 38
+    },
+    "transition_strip": {
+      "side": "w047",
+      "width_nodes": [
+        [
+          0,
+          100.0
+        ],
+        [
+          28,
+          100.0
+        ],
+        [
+          42,
+          8.0
+        ],
+        [
+          76,
+          8.0
+        ],
+        [
+          80,
+          15.0
+        ],
+        [
+          100,
+          15.0
+        ],
+        [
+          106,
+          100.0
+        ],
+        [
+          128,
+          100.0
+        ]
+      ],
+      "profile": "smoothstep",
+      "max_shift_px_row_col": [
+        64.0999984741211,
+        63.20000076293945
+      ],
+      "rule": "node (R, C) = w047 surface at w047 grid position (R - row_offset - t*d(R), C - col_offset + t*e(R)), t = smoothstep across the strip, d/e = measured residual row/column offset of the seam row, smoothed along the seam (sigma 3 rows)"
+    },
+    "bridge_rows": 89,
+    "seam_voxels_per_grid_step": {
+      "med": 19.88,
+      "p10": 19.26,
+      "p90": 27.75
+    },
+    "bridge_rule": "per row: linear 3D interpolation between the last w047 node and the first w048 node"
+  }
+}

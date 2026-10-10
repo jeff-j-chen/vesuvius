@@ -267,6 +267,10 @@ class DataConfig:
     far_negative_share: float = 0.0  # fraction of character negative draws taken from far-background papyrus windows
     far_negative_min_dist: int = 160  # px from any ink label before unlabeled papyrus counts as far background
     far_negative_forced_positive_dist: int = 200  # px far background must keep from any train-mask forced positive
+    # half-brightness strokes in inklabel_dir are assumed letters: True trains them as their own characters,
+    # False erases them (the label file then reads exactly as it did before they were drawn)
+    extra_inklabels: bool = False
+    extra_label_share: float = 0.0  # fraction of all training draws taken from assumed-letter characters
     # training-only soft positives: a positive cell's target is the max of its gaussian-blurred
     # ink label, floored at edge_soft_floor (>0.5 so the cell still counts as positive). 0 = off
     edge_soft_sigma: float = 8.0
@@ -558,6 +562,9 @@ class TrainingConfig:
     character_forgetting: bool = False
     character_forgetting_path: str = ""
     character_forgetting_max_weight: float = 4.0
+    # True: character_forgetting_path is a precomputed per-character failure file (character_failures.py),
+    # read once and never rewritten by the trainer
+    character_forgetting_static: bool = False
     model_ema: bool = False
     model_ema_decay: float = 0.995
     model_ema_start_epoch: int = 0

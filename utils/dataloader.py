@@ -113,6 +113,62 @@ def imread_gray(path):
     return np.array(Image.open(path).convert("L"))
 
 
+# namespaced character id = segment_namespace * STRIDE + local id; assumed letters take local ids >= OFFSET
+CHARACTER_NAMESPACE_STRIDE = 1_000_000
+EXTRA_CHARACTER_OFFSET = 500_000
+
+
+def is_extra_character(character_ids):
+    """true for namespaced character ids that belong to assumed (half-brightness) letters."""
+    ids = np.asarray(character_ids, dtype=np.int64)
+    return (ids > 0) & ((ids % CHARACTER_NAMESPACE_STRIDE) >= EXTRA_CHARACTER_OFFSET)
+
+
+def split_extra_labels(raw):
+    """split an 8-bit label image into regular ink (>=128) and assumed half-brightness letters.
+
+    assumed letters are solid strokes in 64..191; antialiased rims of regular strokes share that
+    band but are only 1-2 px wide, so they do not survive a 5 px opening and are left as before.
+    """
+    raw = np.asarray(raw)
+    mid = ((raw >= 64) & (raw < 192)).astype(np.uint8)
+    extra = np.zeros(raw.shape, dtype=bool)
+    if mid.any():
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        grown = cv2.morphologyEx(mid, cv2.MORPH_OPEN, kernel)
+        if grown.any():
+            step = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            for _ in range(3):
+                grown = cv2.dilate(grown, step) & mid
+            extra = grown > 0
+    regular = (raw >= 128) & ~extra
+    return regular, extra
+
+
+def reference_components(binary, min_pixels=8):
+    """8-connected components of a drawn label, small ones dropped, ids 1..N in OpenCV raster order."""
+    count, components, stats, _ = cv2.connectedComponentsWithStats(
+        (np.asarray(binary) > 0).astype(np.uint8), 8
+    )
+    keep = stats[:, cv2.CC_STAT_AREA] >= max(1, int(min_pixels))
+    keep[0] = False
+    remap = np.zeros(count, dtype=np.int32)
+    kept = np.flatnonzero(keep)
+    remap[kept] = np.arange(1, len(kept) + 1, dtype=np.int32)
+    return remap[components]
+
+
+def inklabel_fingerprint(path) -> str:
+    """content hash of a label png, so precomputed per-character files can detect edited labels."""
+    import hashlib
+
+    digest = hashlib.sha1()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 22), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 # ---- memmap scratch backing for mask/labels --------------------------------
 # at the 5-10 fragment scale the per-scroll uint8 mask/labels (hundreds of MB
 # each for the big scroll) get pickled to every spawned DataLoader worker on
@@ -1176,6 +1232,8 @@ class InkVolumeDataset(IterableDataset):
         ) and self.shuffle
         self._character_grid = character_grid
         self._character_nearest = None
+        self._character_subset = "all"  # "regular" / "extra" split assumed letters into their own stream
+        self._static_character_weights = None
         self._character_pos_coords = {}
         self._character_neg_coords = {}
         self._explicit_neg_coords = []
@@ -1384,11 +1442,40 @@ class InkVolumeDataset(IterableDataset):
                 else:
                     out[index] = int(self._character_nearest[gy, gx])
                 if out[index] > 0:
-                    out[index] += int(self.character_namespace) * 1_000_000
+                    out[index] += int(self.character_namespace) * CHARACTER_NAMESPACE_STRIDE
         return out
 
+    @property
+    def extra_character_ids(self) -> list:
+        """sampleable assumed-letter characters (positive and ring windows) in this split."""
+        ids = list(getattr(self, "_character_ids", ()) or ())
+        return [cid for cid in ids if bool(is_extra_character(cid))]
+
+    def extra_view(self):
+        """shallow copy that samples only assumed letters and their own ring windows."""
+        import copy
+
+        view = copy.copy(self)
+        view._character_subset = "extra"
+        view._far_negative_share = 0.0
+        view._explicit_negative_share = 0.0
+        return view
+
+    def _sampled_character_ids(self) -> list:
+        ids = list(self._character_ids)
+        if self._character_subset == "all":
+            return ids
+        want_extra = self._character_subset == "extra"
+        return [cid for cid in ids if bool(is_extra_character(cid)) == want_extra]
+
     def _character_sampling_weights(self, character_ids):
-        """per-character draw weights written by the trainer after each epoch."""
+        """per-character draw weights: precomputed (static) or written by the trainer after each epoch."""
+        if self._static_character_weights is not None:
+            weights = np.array(
+                [float(self._static_character_weights.get(int(cid), 1.0)) for cid in character_ids],
+                dtype=np.float64,
+            )
+            return weights / weights.sum()
         path = str(getattr(self.c.tra, "character_forgetting_path", "") or "")
         if not bool(getattr(self.c.tra, "character_forgetting", False)) or not path:
             return None
@@ -1407,7 +1494,9 @@ class InkVolumeDataset(IterableDataset):
         """pair one positive and one local-ring window per sampled character."""
         target = self.samples_per_epoch
         coords = []
-        character_ids = list(self._character_ids)
+        character_ids = self._sampled_character_ids()
+        if not character_ids:
+            return coords
         weights = self._character_sampling_weights(character_ids)
         explicit_share = self._explicit_negative_share if self._explicit_neg_coords else 0.0
         far_share = self._far_negative_share if self._far_neg_coords else 0.0
@@ -2413,10 +2502,19 @@ class MultiScrollIterableDataset(IterableDataset):
         balance_scrolls=False,
         sampling_groups=None,
         sampling_weights=None,
+        extra_datasets=None,
+        extra_share=0.0,
     ):
         super().__init__()
         self.datasets = list(datasets)
         self.balance_scrolls = bool(balance_scrolls)
+        # assumed-letter views drawn at a fixed share of every yield, outside the scroll schedule
+        self.extra_datasets = list(extra_datasets or [])
+        self.extra_share = float(extra_share) if self.extra_datasets else 0.0
+        if not 0.0 <= self.extra_share < 1.0:
+            raise ValueError("extra_share must be in [0, 1)")
+        if self.extra_share > 0 and not self.balance_scrolls:
+            raise ValueError("an assumed-letter stream requires balanced scroll sampling")
         self.sampling_groups = (
             [list(map(int, group)) for group in sampling_groups]
             if sampling_groups is not None else None
@@ -2455,7 +2553,7 @@ class MultiScrollIterableDataset(IterableDataset):
     def apply_transforms(self, value):
         # propagate to all children so augmentation toggles uniformly
         self._apply_transforms = value
-        for d in self.datasets:
+        for d in [*self.datasets, *self.extra_datasets]:
             d.apply_transforms = value
 
     def __len__(self):
@@ -2469,6 +2567,16 @@ class MultiScrollIterableDataset(IterableDataset):
                 total = int(np.ceil(total / float(worker_info.num_workers)))
             yielded = 0
             iterators = [iter(dataset) for dataset in self.datasets]
+            extra_iterators = [iter(dataset) for dataset in self.extra_datasets]
+
+            def next_extra():
+                index = random.randrange(len(extra_iterators))
+                try:
+                    return next(extra_iterators[index])
+                except StopIteration:
+                    extra_iterators[index] = iter(self.extra_datasets[index])
+                    return next(extra_iterators[index])
+
             if self.sampling_groups is not None:
                 group_orders = [list(np.random.permutation(group)) for group in self.sampling_groups]
                 group_positions = [0] * len(self.sampling_groups)
@@ -2481,6 +2589,10 @@ class MultiScrollIterableDataset(IterableDataset):
                     for group_index in np.random.permutation(schedule):
                         if yielded >= total:
                             break
+                        if self.extra_share > 0 and random.random() < self.extra_share:
+                            yielded += 1
+                            yield next_extra()
+                            continue
                         position = group_positions[group_index]
                         order = group_orders[group_index]
                         if position >= len(order):
@@ -2502,6 +2614,10 @@ class MultiScrollIterableDataset(IterableDataset):
                 for index in order:
                     if yielded >= total:
                         break
+                    if self.extra_share > 0 and random.random() < self.extra_share:
+                        yielded += 1
+                        yield next_extra()
+                        continue
                     try:
                         sample = next(iterators[index])
                     except StopIteration:
@@ -2695,7 +2811,7 @@ class DataManager:
             "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
             "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "vis_scroll_ids", "norm_mode",
             "train_only_scroll_ids", "label_free_vis_scroll_ids",
-            "zarr_suffix",
+            "zarr_suffix", "extra_inklabels",
         )
         dataloader_fields = (
             "context_replace_prob", "context_replace_min_mask_frac",
@@ -2736,7 +2852,7 @@ class DataManager:
         manager_names = (
             "vol", "mask", "labels", "train_x", "valid_x", "y_range", "norm_stats",
             "full_x_range", "full_y_range", "manual_train_mask", "explicit_negative_mask",
-            "explicit_positive_mask",
+            "explicit_positive_mask", "extra_label_mask",
             "train_range", "valid_range", "shared_range", "split_axis",
         )
         entry = {
@@ -2810,6 +2926,17 @@ class DataManager:
         if mask is None:
             raise FileNotFoundError(f"mask not found for scroll {self.scroll_id}")
 
+        regular_ink, extra_ink = split_extra_labels(labels)
+        if not bool(getattr(self.c.data, "extra_inklabels", False)):
+            extra_ink[:] = False
+        if extra_ink.any():
+            print(
+                f"[extra-labels] scroll {self.scroll_id}: {int(extra_ink.sum()):,} assumed-letter pixels",
+                flush=True,
+            )
+        labels = ((regular_ink | extra_ink) * 255).astype(np.uint8)
+        del regular_ink
+
         label_dilate_r = int(getattr(self.c.data, "label_dilate_r", 0))
         if label_dilate_r < 0:
             raise ValueError("label_dilate_r must be non-negative")
@@ -2819,6 +2946,8 @@ class DataManager:
                 (2 * label_dilate_r + 1, 2 * label_dilate_r + 1),
             )
             labels = cv2.dilate(labels, kernel)
+            if extra_ink.any():
+                extra_ink = cv2.dilate(extra_ink.astype(np.uint8), kernel) > 0
             print(
                 f"[labels] scroll {self.scroll_id}: dilated authoritative label "
                 f"by {label_dilate_r}px"
@@ -2884,6 +3013,11 @@ class DataManager:
             )
         mask = np.ascontiguousarray(mask[:common_h, :common_w])
         labels = np.ascontiguousarray(labels[:common_h, :common_w])
+        self.extra_label_mask = (
+            np.ascontiguousarray(extra_ink[:common_h, :common_w]).astype(np.uint8)
+            if extra_ink.any() else None
+        )
+        del extra_ink
         if manual_mask is not None:
             manual_mask = np.ascontiguousarray(manual_mask[:common_h, :common_w])
 
@@ -3019,7 +3153,7 @@ class DataManager:
         self.split_axis = axis
 
         labels = self._shift_labels(labels)
-        for name in ("explicit_negative_mask", "explicit_positive_mask"):
+        for name in ("explicit_negative_mask", "explicit_positive_mask", "extra_label_mask"):
             if getattr(self, name) is not None:
                 setattr(self, name, self._shift_labels(getattr(self, name)))
 
@@ -3141,6 +3275,7 @@ class DataManager:
                 explicit_positive_mask=prepared_valid["explicit_positive_mask"],
                 prepared_state=prepared_valid["state"],
             )
+            self._apply_static_character_weights(train_set)
             return train_set, valid_set
         supervision_mask = self._make_ring_mask() if getattr(self.c.data, 'ring_negatives', False) else self.mask
         manual_split = not bool(getattr(self.c.data, "simple_split", True))
@@ -3161,11 +3296,27 @@ class DataManager:
             if not bool(getattr(self.c.model, "multitile", False)):
                 raise ValueError("character-aware mode currently requires multitile=True")
             character_grid = self._build_character_grid(
-                self.labels,
+                self.labels if getattr(self, "extra_label_mask", None) is None
+                else np.where(self.extra_label_mask > 0, 0.0, self.labels).astype(np.float32),
                 split_unit,
                 int(getattr(self.c.data, "character_min_pixels", 8)),
                 reference=self._character_reference_labels(),
             )
+            if getattr(self, "extra_label_mask", None) is not None:
+                if int(character_grid.max()) >= EXTRA_CHARACTER_OFFSET:
+                    raise ValueError(f"scroll {self.scroll_id} has too many characters for the extra-id offset")
+                extra_grid = self._build_character_grid(
+                    self.extra_label_mask,
+                    split_unit,
+                    int(getattr(self.c.data, "character_min_pixels", 8)),
+                )
+                extra_cells = (extra_grid > 0) & (character_grid == 0)
+                character_grid[extra_cells] = extra_grid[extra_cells] + EXTRA_CHARACTER_OFFSET
+                print(
+                    f"[extra-labels] scroll {self.scroll_id}: "
+                    f"{len(np.unique(extra_grid[extra_cells]))} assumed letters on the target grid",
+                    flush=True,
+                )
         if manual_split:
             if self.manual_train_mask is None:
                 raise RuntimeError(f"manual split mask was not loaded for scroll {self.scroll_id}")
@@ -3331,7 +3482,58 @@ class DataManager:
         valid_set._labels_arr = self.labels
         if self._prepared_cache_entry is None:
             self._store_prepared_datasets(train_set, valid_set)
+        self._apply_static_character_weights(train_set)
         return train_set, valid_set
+
+    def _apply_static_character_weights(self, train_set) -> None:
+        """map precomputed per-character failure weights (character_failures.py) onto training characters.
+
+        the file keys connected components of ./inklabels; each training character takes the mean weight of
+        the reference components under its target cells (characters with none, e.g. assumed letters, keep 1).
+        """
+        if not (bool(getattr(self.c.tra, "character_forgetting", False))
+                and bool(getattr(self.c.tra, "character_forgetting_static", False))):
+            return
+        grid = train_set._character_grid
+        if grid is None:
+            raise ValueError("static character forgetting requires character-aware datasets")
+        path = str(self.c.tra.character_forgetting_path)
+        with open(path, "r", encoding="utf-8") as handle:
+            stored = json.load(handle)
+        entry = stored.get("scrolls", {}).get(str(self.scroll_id))
+        if entry is None:
+            raise KeyError(f"{path} has no entry for scroll {self.scroll_id}; rerun character_failures.py")
+        reference_path = f"./inklabels/{self.scroll_id}.png"
+        if entry.get("inklabel_fingerprint") != inklabel_fingerprint(reference_path):
+            raise ValueError(f"{reference_path} changed after {path} was written; rerun character_failures.py")
+        drawn = imread_gray(reference_path)
+        shape = np.asarray(self.labels).shape
+        reference = np.zeros(shape, dtype=np.uint8)
+        h, w = min(shape[0], drawn.shape[0]), min(shape[1], drawn.shape[1])
+        reference[:h, :w] = drawn[:h, :w] > 127
+        components = reference_components(reference, int(stored.get("min_pixels", 8)))
+        cap = float(getattr(self.c.tra, "character_forgetting_max_weight", 4.0))
+        by_component = np.ones(int(components.max()) + 1, dtype=np.float32)
+        for key, stats in entry.get("characters", {}).items():
+            if int(key) < by_component.size:
+                by_component[int(key)] = min(float(stats["weight"]), cap)
+        unit = int(getattr(self.c.model, "multitile_subtile", self.c.data.tile_size))
+        cell_weight = np.zeros(grid.shape, dtype=np.float32)
+        ys, xs = np.nonzero(components[:grid.shape[0] * unit, :grid.shape[1] * unit])
+        np.maximum.at(cell_weight, (ys // unit, xs // unit), by_component[components[ys, xs]])
+        weights = {}
+        for character in np.unique(grid[grid > 0]):
+            values = cell_weight[grid == character]
+            values = values[values > 0]
+            namespaced = int(character) + int(self.character_namespace) * CHARACTER_NAMESPACE_STRIDE
+            weights[namespaced] = float(values.mean()) if values.size else 1.0
+        train_set._static_character_weights = weights
+        upweighted = sum(value > 1.0 for value in weights.values())
+        print(
+            f"[forgetting-static] scroll {self.scroll_id}: {upweighted}/{len(weights)} characters upweighted "
+            f"(max {max(weights.values(), default=1.0):.2f})",
+            flush=True,
+        )
 
     def _character_reference_labels(self):
         """drawn ./inklabels (+ forced positives) defining characters for dilated_inklabels."""
@@ -3366,15 +3568,8 @@ class DataManager:
         reach keep their own ids.
         """
         binary = np.asarray(labels) > 0.5
-        ref_binary = (np.asarray(reference) > 0.5).astype(np.uint8)
-        ref_count, ref_components, ref_stats, _ = cv2.connectedComponentsWithStats(ref_binary, 8)
-        ref_keep = ref_stats[:, cv2.CC_STAT_AREA] >= max(1, int(min_pixels))
-        ref_keep[0] = False
-        ref_remap = np.zeros(ref_count, dtype=np.int32)
-        ref_kept = np.flatnonzero(ref_keep)
-        ref_remap[ref_kept] = np.arange(1, len(ref_kept) + 1, dtype=np.int32)
-        ref_ids = ref_remap[ref_components]
-        del ref_components
+        ref_ids = reference_components(reference, min_pixels)
+        ref_kept = np.arange(1, int(ref_ids.max()) + 1)
 
         label_count, label_components, label_stats, _ = cv2.connectedComponentsWithStats(
             binary.astype(np.uint8), 8

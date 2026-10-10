@@ -110,6 +110,8 @@ SEGMENTS = [
     ("p343", "PHerc0343P/segments/20250511003658-tifxyz", "20250511003658"),
     ("cr1fr3", "", "20231201215900"),
     ("p841", "PHerc0841/segments/20260221022814-auto_grown_20260220174252405", "20260221022814"),
+    # PHerc0343 First Letters segment (Nieuwlaar/pherc343-first-letters): tifxyz mesh rendered from the raw volume
+    ("p343_letters", "", "20261007000000"),
 ]
 
 # per-fragment behaviour overrides. skip_labels=True skips the dilated label check
@@ -220,6 +222,23 @@ FRAG_OPTS = {
         # re-cropped upstream 2026-09-22; equals old frame rows 3144:6904, cols 0:4900 (labels cropped to match)
         "surface_expected_shape": (28, 3760, 4900),
         "surface_crop": (0, 3760, 0, 4900),
+        "force_norm": True,
+    },
+    "p343_letters": {
+        "tifxyz_mesh": {
+            "base_url": "https://raw.githubusercontent.com/Nieuwlaar/pherc343-first-letters/"
+                        "e8370f1f88a211166056df62ea6fcfffe4a1063e/outputs/concat_w047-w048_R5B2_z9500-11000.tifxyz",
+            "sha256": {
+                "meta.json": "76dce1781a09108632d15711bc75f43ad963aeddf22b1426954b160638f87e7e",
+                "x.tif": "8f31c8d7bc79ef79a39677274f0f80cbcc4066b5c92b8aa47e8b938b1f9d1fc4",
+                "y.tif": "7d4161972cb7e90a0d6d8203040c2e515ce6fb29c172091b21facace315545fc",
+                "z.tif": "04feacf27806f6653d85bb10b53068f0c37cecea209dc739a3b8b3b5c4363c65",
+            },
+            "mesh_dir": "tifxyz/concat_w047-w048_R5B2_z9500-11000",
+            "volume_url": f"{BUCKET}/PHerc0343/volumes/20250521140437-8.640um-1.2m-116keV-masked.zarr/0",
+            "volume_shape": (17998, 8595, 8595),
+        },
+        "resample_um": 8.64,
         "force_norm": True,
     },
 }
@@ -1153,7 +1172,7 @@ def _verify_dlash_outputs(name, zid, opts):
 
 
 def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk_y, chunk_x,
-                               expected_shape=None, force=False):
+                               expected_shape=None, force=False, source_url=None):
     """resample a small isotropic surface zarr in XYZ to the 28-layer training frame."""
     import cv2
     import zarr
@@ -1170,7 +1189,7 @@ def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk
         print("  [1/3] resampled volume+mask exist -> skip")
         return
 
-    source_url = f"{BUCKET}/{seg}/surface-volumes/{vol_name}/0"
+    source_url = source_url or f"{BUCKET}/{seg}/surface-volumes/{vol_name}/0"
     source = zarr.open(source_url, mode="r")
     source_depth, source_height, source_width = map(int, source.shape)
     if expected_shape is not None and tuple(source.shape) != tuple(expected_shape):
@@ -1229,6 +1248,47 @@ def _assemble_resampled_volume(seg, zid, source_um, vol_name, chunk_depth, chunk
     output = zarr.open(out_zarr, mode="r")
     _write_mask_from_midslice(output, mask_path)
     print(f"  [resample] wrote {out_zarr} shape={output_shape}")
+
+
+def _assemble_mesh_surface(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
+    """download a sha256-pinned tifxyz mesh, render it natively from the raw volume, then resample to the training frame."""
+    import hashlib
+
+    import assemble_test_segments as test_assembler
+
+    out_zarr = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    if os.path.isdir(out_zarr) and os.path.exists(os.path.join("masks", f"{zid}.png")) and not force:
+        print("  [1/3] mesh-rendered volume+mask exist -> skip")
+        return
+    mesh = opts["tifxyz_mesh"]
+    os.makedirs(mesh["mesh_dir"], exist_ok=True)
+    for filename, expected in mesh["sha256"].items():
+        path = os.path.join(mesh["mesh_dir"], filename)
+        _download_once(f"{mesh['base_url']}/{filename}", path)
+        with open(path, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()
+        if digest != expected:
+            os.remove(path)
+            raise RuntimeError(f"{name}: {filename} sha256 {digest} != pinned {expected}")
+    source_um = float(opts["resample_um"])
+    # enough native layers to cover the 28 x 9.362 um output window
+    native_layers = int(np.ceil(TARGET_DEPTH * TARGET_VOXEL_UM / source_um)) + 1
+    native_layers += native_layers % 2
+    native_zarr = os.path.join(TMP, f"mesh_{zid}_native.zarr")
+    native_mask_dir = os.path.join(TMP, f"mesh_{zid}_mask")
+    cache_dir = os.path.join(TMP, f"render_{zid}")
+    if not os.path.isfile(os.path.join(native_mask_dir, f"{zid}.png")) or force:
+        print(f"  [1/3] rendering {mesh['mesh_dir']} -> {native_layers} native layers @{source_um} um", flush=True)
+        test_assembler.render_surface_volume(
+            mesh_dir=mesh["mesh_dir"], cache_dir=cache_dir, vol_base=mesh["volume_url"],
+            vol_shape=tuple(mesh["volume_shape"]), layers=native_layers, normal_step=1.0, upsample_factor=20.0,
+            workers=32, out_zarr=native_zarr, out_id=zid, chunk_depth=chunk_depth, chunk_y=chunk_y, chunk_x=chunk_x,
+            mask_dir=native_mask_dir, output_dtype="|u1", reverse_depth=_is_depth_reversed(zid))
+    _assemble_resampled_volume("", zid, source_um, "", chunk_depth, chunk_y, chunk_x, force=force,
+                               source_url=native_zarr)
+    shutil.rmtree(native_zarr, ignore_errors=True)
+    shutil.rmtree(native_mask_dir, ignore_errors=True)
+    shutil.rmtree(cache_dir, ignore_errors=True)
 
 
 def _assemble_cropped_surface(zid, opts, chunk_depth, chunk_y, chunk_x, force=False):
@@ -1481,6 +1541,9 @@ def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=F
     opts = FRAG_OPTS.get(name, {})
     if opts.get("hf_pherc1447"):
         _assemble_pherc1447_surface(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=force)
+        return
+    if opts.get("tifxyz_mesh"):
+        _assemble_mesh_surface(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=force)
         return
     if name in RESCAN_88KEV:
         if R2_BASE:

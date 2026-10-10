@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 from utils.config import Config, startup_output
 from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray, get_tile_pos_weight, needs_domain_ids, needs_patch_ids
+from utils.dataloader import CHARACTER_NAMESPACE_STRIDE, EXTRA_CHARACTER_OFFSET, is_extra_character
 from utils.hard_mining import HardMiningInjector, HardMiningManager
 from utils.model import create_model, supcon_loss
 from utils.surface import make_surface_targets_from_depth, surface_supervision_loss
@@ -186,6 +187,49 @@ def _per_patch_character_f1(
         )
         values[int(patch_id)] = float(metrics["character_f1_macro"])
     return values
+
+
+def _blend_extra_cells(robust_loss, per_target_loss, loss_mask, extra_cells):
+    """robust loss over regular cells plus the plain mean over assumed-letter cells, weighted by cell count."""
+    if extra_cells is None:
+        return robust_loss
+    extra_mask = loss_mask * extra_cells.to(loss_mask.dtype)
+    extra_count = extra_mask.sum()
+    if extra_count <= 0:
+        return robust_loss
+    fraction = extra_count / loss_mask.sum().clamp(min=1.0)
+    extra_mean = (per_target_loss * extra_mask).sum() / extra_count
+    return (1.0 - fraction) * robust_loss + fraction * extra_mean
+
+
+def _extra_letter_metrics(labels, scores, character_ids, domains, patch_ids, character_kwargs, threshold):
+    """the metric set restricted to assumed letters and the ring cells assigned to them."""
+    labels = np.asarray(labels).reshape(-1)
+    scores = np.asarray(scores).reshape(-1)
+    character_ids = np.asarray(character_ids, dtype=np.int64).reshape(-1)
+    selected = is_extra_character(character_ids)
+    out = {"extra_cell_count": int(selected.sum())}
+    if not selected.any():
+        return out
+    character = calculate_character_metrics(
+        labels[selected], scores[selected], character_ids[selected], **character_kwargs,
+    )
+    out.update({f"extra_{key}": value for key, value in character.items()})
+    domains = np.asarray(domains).reshape(-1)
+    if domains.size == labels.size:
+        out["per_scroll_pr_auc_extra"] = _per_domain_pr_auc(
+            labels[selected], scores[selected], domains[selected],
+        )
+        out["per_domain_character_ap_extra"] = _per_domain_character_ap(
+            labels[selected], scores[selected], character_ids[selected], domains[selected],
+        )
+    patch_ids = np.asarray(patch_ids).reshape(-1)
+    if patch_ids.size == labels.size:
+        out["per_patch_character_f1_extra"] = _per_patch_character_f1(
+            labels[selected], scores[selected], character_ids[selected], patch_ids[selected],
+            score_threshold=threshold,
+        )
+    return out
 
 
 def _character_group_losses(
@@ -645,7 +689,13 @@ class Trainer:
         self._character_learned: dict[int, bool] = {}
         self._character_forgets: dict[int, int] = {}
         forgetting_path = str(getattr(config.tra, "character_forgetting_path", "") or "")
-        if bool(getattr(config.tra, "character_forgetting", False)) and os.path.exists(
+        self._static_forgetting = bool(getattr(config.tra, "character_forgetting_static", False))
+        if bool(getattr(config.tra, "character_forgetting", False)) and self._static_forgetting:
+            if not os.path.isfile(forgetting_path):
+                raise FileNotFoundError(
+                    f"static character forgetting needs {forgetting_path}; run character_failures.py first"
+                )
+        elif bool(getattr(config.tra, "character_forgetting", False)) and os.path.exists(
             forgetting_path
         ):
             os.remove(forgetting_path)
@@ -817,11 +867,33 @@ class Trainer:
                     if len(dot_ds) > 0:
                         train_sets.append(dot_ds)
 
+            extra_share = float(getattr(self.c.data, "extra_label_share", 0.0))
+            extra_sets = []
+            if extra_share > 0:
+                if not bool(getattr(self.c.data, "extra_inklabels", False)):
+                    raise ValueError("data.extra_label_share needs data.extra_inklabels")
+                for train_set in train_sets:
+                    if isinstance(train_set, DotPositiveDataset) or not train_set.extra_character_ids:
+                        continue
+                    extra_sets.append(train_set.extra_view())
+                    train_set._character_subset = "regular"
+                    print(
+                        f"[extra-labels] scroll {train_set.scroll_id}: "
+                        f"{len(train_set.extra_character_ids)} assumed letters in the train stream",
+                        flush=True,
+                    )
+                if not extra_sets:
+                    raise ValueError(
+                        "data.extra_label_share > 0 but no training split holds a sampleable assumed letter "
+                        "(half-brightness strokes in inklabel_dir with ring windows)"
+                    )
             merged_train = MultiScrollIterableDataset(
                 train_sets,
                 balance_scrolls=balance_scrolls,
                 sampling_groups=sampling_groups,
                 sampling_weights=sampling_weights,
+                extra_datasets=extra_sets,
+                extra_share=extra_share,
             )
             merged_valid = MultiScrollIterableDataset(valid_sets)
             train_loader, valid_loader = get_dataloaders(merged_train, merged_valid, self.c)
@@ -1472,6 +1544,19 @@ class Trainer:
         )
         return weights
 
+    def _extra_letter_metrics(self, labels, scores, character_ids, domains, patch_ids) -> dict:
+        tra = self.c.tra
+        threshold = float(getattr(tra, "character_score_threshold", 0.5))
+        return _extra_letter_metrics(
+            labels, scores, character_ids, domains, patch_ids,
+            {
+                "score_threshold": threshold,
+                "recall_target": float(getattr(tra, "character_recall_target", 0.5)),
+                "max_ring_fpr": float(getattr(tra, "character_max_ring_fpr", 0.1)),
+            },
+            threshold,
+        )
+
     def _update_character_forgetting(self, labels, scores, character_ids) -> None:
         """upweight characters learned in one epoch and forgotten in the next.
 
@@ -1947,6 +2032,18 @@ class Trainer:
             character_ids.to(self.c.device, non_blocking=True).view(B, -1)
             if character_ids is not None else None
         )
+        extra_cells = None
+        if (
+            character_ids_device is not None
+            and bool(getattr(self.c.data, "extra_inklabels", False))
+            and character_ids_device.shape == mask.shape
+        ):
+            ids = character_ids_device.long()
+            extra_cells = (ids > 0) & (
+                torch.remainder(ids, CHARACTER_NAMESPACE_STRIDE) >= EXTRA_CHARACTER_OFFSET
+            )
+            if not extra_cells.any():
+                extra_cells = None
         context_active_mask = (
             context_pair_active.view(-1) > 0
             if context_pair_active is not None else None
@@ -2123,6 +2220,12 @@ class Trainer:
             denom = loss_mask.sum().clamp(min=1.0)
             raw_loss_value = raw_loss.sum() / denom
             primary_loss = raw_loss.sum() / denom
+            # robust objectives never see assumed letters; they re-enter as a plain cell-weighted mean
+            dro_mask = loss_mask if extra_cells is None else loss_mask * (~extra_cells).to(loss_mask.dtype)
+            character_dro_mask = (
+                labelled_mask if extra_cells is None
+                else labelled_mask * (~extra_cells).to(labelled_mask.dtype)
+            )
             needs_domain_losses = any([
                 bool(getattr(self.c.tra, "domain_gradient_mode", "")),
                 bool(getattr(self.c.tra, "physical_domain_groupdro", False)),
@@ -2137,7 +2240,7 @@ class Trainer:
                     raise RuntimeError("physical-domain objectives require domain IDs")
                 domain_group_ids, domain_group_losses = _physical_domain_group_losses(
                     per_target_loss,
-                    loss_mask,
+                    dro_mask,
                     domain_ids,
                 )
             else:
@@ -2260,7 +2363,7 @@ class Trainer:
                     ),
                 )
                 if robust_loss is not None:
-                    primary_loss = robust_loss
+                    primary_loss = _blend_extra_cells(robust_loss, per_target_loss, loss_mask, extra_cells)
                     self._last_physical_domain_groupdro_loss = float(
                         robust_loss.detach()
                     )
@@ -2269,7 +2372,7 @@ class Trainer:
                     raise RuntimeError("physical-patch GroupDRO requires patch IDs")
                 patch_group_ids, patch_group_losses = _physical_patch_group_losses(
                     per_target_loss,
-                    loss_mask,
+                    dro_mask,
                     patch_ids,
                 )
                 robust_loss, _ = character_groupdro_loss(
@@ -2282,7 +2385,7 @@ class Trainer:
                     ),
                 )
                 if robust_loss is not None:
-                    primary_loss = robust_loss
+                    primary_loss = _blend_extra_cells(robust_loss, per_target_loss, loss_mask, extra_cells)
                     self._last_physical_patch_groupdro_loss = float(
                         robust_loss.detach()
                     )
@@ -2303,6 +2406,7 @@ class Trainer:
                     float(getattr(self.c.tra, "domain_cvar_alpha", 0.25)),
                 )
                 self._last_dg_losses["domain_cvar_loss"] = float(primary_loss.detach())
+                primary_loss = _blend_extra_cells(primary_loss, per_target_loss, loss_mask, extra_cells)
             if bool(getattr(self.c.tra, "pcgrad", False)) or bool(
                 getattr(self.c.tra, "pcgrad_lite", False)
             ):
@@ -2334,7 +2438,7 @@ class Trainer:
             ]):
                 group_ids, group_losses = _character_group_losses(
                     per_target_loss,
-                    labelled_mask,
+                    character_dro_mask,
                     character_ids_device,
                 )
             if bool(getattr(self.c.tra, "character_groupdro", False)):
@@ -2346,7 +2450,7 @@ class Trainer:
                     max_ratio=float(getattr(self.c.tra, "character_groupdro_max_ratio", 3.0)),
                 )
                 if robust_loss is not None:
-                    primary_loss = robust_loss
+                    primary_loss = _blend_extra_cells(robust_loss, per_target_loss, loss_mask, extra_cells)
                     groupdro_loss_value = robust_loss
             elif bool(getattr(self.c.tra, "character_cvar", False)):
                 robust_loss, _ = character_cvar_loss(
@@ -2354,7 +2458,7 @@ class Trainer:
                     alpha=float(getattr(self.c.tra, "character_cvar_alpha", 0.25)),
                 )
                 if robust_loss is not None:
-                    primary_loss = robust_loss
+                    primary_loss = _blend_extra_cells(robust_loss, per_target_loss, loss_mask, extra_cells)
                     cvar_loss_value = robust_loss
             loss = primary_loss
             private_score = getattr(self.model, "last_private_score", None)
@@ -3384,7 +3488,7 @@ class Trainer:
                 domain_gradient_cluster_total += len(self._last_domain_gradient_clusters)
                 domain_gradient_cluster_batches += 1
 
-        if bool(getattr(self.c.tra, "character_forgetting", False)):
+        if bool(getattr(self.c.tra, "character_forgetting", False)) and not self._static_forgetting:
             self._update_character_forgetting(labels, scores, character_ids_all)
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
         if bool(getattr(self.c.tra, "character_macro_metrics", False)):
@@ -3451,6 +3555,10 @@ class Trainer:
                     patch_ids_all,
                     score_threshold=float(getattr(self.c.tra, "character_score_threshold", 0.5)),
                 )
+        if bool(getattr(self.c.data, "extra_inklabels", False)):
+            metrics.update(self._extra_letter_metrics(
+                labels, scores, character_ids_all, domain_ids_all, patch_ids_all,
+            ))
         metrics["scores"] = scores
         metrics["hard_injected"] = total_injected
 
@@ -3620,6 +3728,10 @@ class Trainer:
                     patch_ids_all,
                     score_threshold=float(getattr(self.c.tra, "character_score_threshold", 0.5)),
                 )
+        if bool(getattr(self.c.data, "extra_inklabels", False)):
+            metrics.update(self._extra_letter_metrics(
+                labels, scores, character_ids_all, domain_ids_all, patch_ids_all,
+            ))
         metrics["scores"] = scores
         return metrics
 
@@ -3804,6 +3916,15 @@ class Trainer:
             for domain, value in val_metrics.get("per_domain_character_ap", {}).items():
                 name = domain_names[domain] if domain < len(domain_names) else f"domain_{domain}"
                 self.vis.writer.add_scalar(f"Per_Scroll/CharacterAP_Valid/{name}", value, epoch)
+            # assumed (half-brightness) letters and their own ring cells only
+            for split, metrics in (("Train", train_metrics), ("Valid", val_metrics)):
+                for key, tag in (
+                    ("per_scroll_pr_auc_extra", "PR_AUC"),
+                    ("per_domain_character_ap_extra", "CharacterAP"),
+                ):
+                    for domain, value in metrics.get(key, {}).items():
+                        name = domain_names[domain] if domain < len(domain_names) else f"domain_{domain}"
+                        self.vis.writer.add_scalar(f"Per_Scroll/{tag}_{split}_Extra/{name}", value, epoch)
         for (left, right), value in train_metrics.get(
             "domain_gradient_cosines", {}
         ).items():
