@@ -15,6 +15,7 @@ import threading
 from functools import partial
 from typing import Iterator
 from .config import Config
+from .norm import scale_to_unit
 import json
 from tqdm import tqdm
 
@@ -167,6 +168,25 @@ def inklabel_fingerprint(path) -> str:
         for block in iter(lambda: handle.read(1 << 22), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def character_label_fingerprint(path) -> str:
+    """hash of a dilated label's regular ink only, so drawing assumed letters does not invalidate it."""
+    import hashlib
+
+    regular, _ = split_extra_labels(imread_gray(str(path)))
+    digest = hashlib.sha1(np.asarray(regular.shape, dtype=np.int64).tobytes())
+    digest.update(np.packbits(regular).tobytes())
+    return digest.hexdigest()
+
+
+def drawn_characters(path, shape, min_pixels=8):
+    """character components of a dilated label's regular ink, cropped/padded to shape."""
+    regular, _ = split_extra_labels(imread_gray(str(path)))
+    framed = np.zeros(tuple(shape), dtype=np.uint8)
+    h, w = min(shape[0], regular.shape[0]), min(shape[1], regular.shape[1])
+    framed[:h, :w] = regular[:h, :w]
+    return reference_components(framed, min_pixels)
 
 
 # ---- memmap scratch backing for mask/labels --------------------------------
@@ -1878,9 +1898,9 @@ class InkVolumeDataset(IterableDataset):
         
         # z score normalization followed by scaling to [0, 1]
         norm_block = (block.astype(np.float32, copy=False) - mean) / std
-        norm_block = (norm_block - g_min) / (g_max - g_min)
+        norm_block = scale_to_unit(norm_block, g_min, g_max, str(getattr(self.c.data, "norm_mode", "global")))
         # ensure dtype and contiguity
-        return np.ascontiguousarray(np.clip(norm_block, 0, 1).astype(np.float32, copy=False))
+        return np.ascontiguousarray(norm_block.astype(np.float32, copy=False))
 
     def _fetch_block(
         self,
@@ -2811,7 +2831,7 @@ class DataManager:
             "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
             "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "vis_scroll_ids", "norm_mode",
             "train_only_scroll_ids", "label_free_vis_scroll_ids",
-            "zarr_suffix", "extra_inklabels",
+            "zarr_suffix", "extra_inklabels", "flipped_train_mask_ids",
         )
         dataloader_fields = (
             "context_replace_prob", "context_replace_min_mask_frac",
@@ -3060,7 +3080,11 @@ class DataManager:
                     f"manual train mask shape {manual_mask.shape} does not match scroll mask "
                     f"{mask.shape} and labels {labels.shape} for scroll {self.scroll_id}"
                 )
-            normal_train = (manual_mask >= 240) | train_only
+            flipped = int(self.scroll_id) in {
+                int(scroll_id) for scroll_id in (getattr(self.c.data, "flipped_train_mask_ids", ()) or ())
+            }
+            train_paint = (manual_mask < 64) if flipped else (manual_mask >= 240)
+            normal_train = train_paint | train_only
             # paint-tool palette targets (119 negative, 185 positive, 255 train); brushes drift a few levels
             explicit_negative = (manual_mask >= 100) & (manual_mask <= 143)
             explicit_positive = np.abs(manual_mask.astype(np.int16) - 185) <= 6
@@ -3188,7 +3212,10 @@ class DataManager:
 
         cached_volume = (
             self.vol if isinstance(self.vol, SelectiveChunkVolume)
-            else get_selective_chunk_volume(self.vol, norm_stats=self.norm_stats)
+            else get_selective_chunk_volume(
+                self.vol, norm_stats=self.norm_stats,
+                norm_mode=str(getattr(self.c.data, "norm_mode", "global")),
+            )
         )
         if all(dataset._vol_obj is cached_volume and dataset._volume_is_normalized for dataset in datasets):
             self.vol = cached_volume
@@ -3300,7 +3327,6 @@ class DataManager:
                 else np.where(self.extra_label_mask > 0, 0.0, self.labels).astype(np.float32),
                 split_unit,
                 int(getattr(self.c.data, "character_min_pixels", 8)),
-                reference=self._character_reference_labels(),
             )
             if getattr(self, "extra_label_mask", None) is not None:
                 if int(character_grid.max()) >= EXTRA_CHARACTER_OFFSET:
@@ -3503,15 +3529,12 @@ class DataManager:
         entry = stored.get("scrolls", {}).get(str(self.scroll_id))
         if entry is None:
             raise KeyError(f"{path} has no entry for scroll {self.scroll_id}; rerun character_failures.py")
-        reference_path = f"./inklabels/{self.scroll_id}.png"
-        if entry.get("inklabel_fingerprint") != inklabel_fingerprint(reference_path):
-            raise ValueError(f"{reference_path} changed after {path} was written; rerun character_failures.py")
-        drawn = imread_gray(reference_path)
-        shape = np.asarray(self.labels).shape
-        reference = np.zeros(shape, dtype=np.uint8)
-        h, w = min(shape[0], drawn.shape[0]), min(shape[1], drawn.shape[1])
-        reference[:h, :w] = drawn[:h, :w] > 127
-        components = reference_components(reference, int(stored.get("min_pixels", 8)))
+        reference_path = os.path.join(str(self.c.data.inklabel_dir), f"{self.scroll_id}.png")
+        if entry.get("label_fingerprint") != character_label_fingerprint(reference_path):
+            raise ValueError(f"{reference_path} ink changed after {path} was written; rerun character_failures.py")
+        components = drawn_characters(
+            reference_path, np.asarray(self.labels).shape, int(stored.get("min_pixels", 8)),
+        )
         cap = float(getattr(self.c.tra, "character_forgetting_max_weight", 4.0))
         by_component = np.ones(int(components.max()) + 1, dtype=np.float32)
         for key, stats in entry.get("characters", {}).items():
@@ -3534,29 +3557,6 @@ class DataManager:
             f"(max {max(weights.values(), default=1.0):.2f})",
             flush=True,
         )
-
-    def _character_reference_labels(self):
-        """drawn ./inklabels (+ forced positives) defining characters for dilated_inklabels."""
-        label_dir = os.path.basename(str(getattr(self.c.data, "inklabel_dir", "")).rstrip("/"))
-        if label_dir != "dilated_inklabels":
-            return None
-        path = f"./inklabels/{self.scroll_id}.png"
-        drawn = imread_gray(path)
-        if drawn is None:
-            print(
-                f"[character-components] scroll {self.scroll_id}: missing {path}; "
-                "falling back to connected components on the training labels",
-                flush=True,
-            )
-            return None
-        shape = np.asarray(self.labels).shape
-        reference = np.zeros(shape, dtype=np.uint8)
-        h, w = min(shape[0], drawn.shape[0]), min(shape[1], drawn.shape[1])
-        reference[:h, :w] = drawn[:h, :w] > 127
-        reference = self._shift_labels(reference)
-        if self.explicit_positive_mask is not None:
-            reference |= (np.asarray(self.explicit_positive_mask)[:shape[0], :shape[1]] > 0).astype(np.uint8)
-        return reference
 
     @staticmethod
     def _reference_matched_components(labels, reference, min_pixels=8, reach_px=16):
@@ -4035,11 +4035,49 @@ def get_divdis_loader(config: Config) -> DataLoader:
         kwargs["worker_init_fn"] = partial(_worker_init, base_seed=int(getattr(config.tra, "seed", 41)) + 4242)
     return DataLoader(UnlabeledTargetDataset(config, config.data.divdis_target_scroll_ids), **kwargs)
 
+def cpu_budget() -> int:
+    """usable cores: the cgroup CPU quota and affinity mask, not os.cpu_count() (the host's 120)."""
+    cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    for path, parse in (
+        ("/sys/fs/cgroup/cpu.max", lambda text: text.split()),
+        ("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", lambda text: [text.strip(), open(
+            "/sys/fs/cgroup/cpu/cpu.cfs_period_us").read().strip()]),
+    ):
+        try:
+            quota, period = parse(open(path).read())
+        except (OSError, ValueError):
+            continue
+        if quota not in ("max", "-1") and int(period) > 0:
+            cores = min(cores, int(quota) // int(period))
+        break
+    return max(1, cores)
+
+
+def limit_cpu_threads(threads: int) -> None:
+    """cap torch, BLAS/OpenMP and blosc thread pools in this process.
+
+    OpenCV is left alone: cv2.setNumThreads in a forked process (every arm and loader worker is one)
+    deadlocks the next OpenCV call, and OpenCV already sizes its pool from the cgroup CPU quota."""
+    threads = max(1, int(threads))
+    torch.set_num_threads(threads)
+    try:
+        from threadpoolctl import threadpool_limits
+        threadpool_limits(threads)
+    except ImportError:
+        pass
+    try:
+        from numcodecs import blosc
+        blosc.set_nthreads(threads)
+    except (ImportError, AttributeError):
+        pass
+
+
 def _worker_init(worker_id, base_seed):
     """deterministic per-worker seeding: each spawned worker reseeds numpy+random from a
     base seed + worker id, so the augmentations (which draw from the GLOBAL np.random /
     random state) are reproducible across runs even with num_workers>0. MUST be module
     level (not a closure) so it can be pickled for the Windows 'spawn' start method."""
+    limit_cpu_threads(1)
     s = base_seed + worker_id
     np.random.seed(s)
     random.seed(s)

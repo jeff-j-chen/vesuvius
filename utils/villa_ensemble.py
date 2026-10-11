@@ -340,61 +340,13 @@ def save_ensemble_figure(scroll_id, ensemble, title, out_path):
     save_grid(panels, 1, out_path)
 
 
-def _draw_scale_bar(ax, image_hw, um_per_px, font_pt):
-    """red 1 cm bar in the bottom-right corner (test_inference.ipynb style), in image pixel coordinates"""
-    from matplotlib.patches import Rectangle
-
-    height, width = image_hw
-    length = 10000.0 / um_per_px
-    thickness = max(2.0, min(height, width) / 250)
-    pad = 0.05 * min(height, width) + thickness
-    if width >= height:
-        x1, y = width - pad, height - pad
-        x0 = max(0.0, x1 - length)
-        ax.add_patch(Rectangle((x0, y - thickness), x1 - x0, thickness, color="red"))
-        ax.text(x0, y - 3 * thickness, "1 cm", color="red", fontsize=font_pt, ha="left", va="bottom")
-    else:
-        y1, x = height - pad, width - pad
-        y0 = max(0.0, y1 - length)
-        ax.add_patch(Rectangle((x - thickness, y0), thickness, y1 - y0, color="red"))
-        ax.text(x, y0 - 2 * thickness, "1 cm", color="red", fontsize=font_pt, ha="right", va="bottom")
-
-
-MAX_FIGURE_PX = 65000
-FIGURE_DPI = 100
-
-
 def save_grid(panels, n_cols, out_path, gap_px=24):
-    """pixel-exact matplotlib grid of (title, image 0..1 with NaN invalid[, um_per_px for a 1 cm bar]) panels at
+    """pixel-exact grid of (title, image 0..1 with NaN invalid[, um_per_px for a 1 cm bar]) panels at
     full render resolution; not shown."""
-    import matplotlib
+    from utils.fast_figure import colorize, save_panel_grid
 
-    matplotlib.use("Agg", force=False)
-    import matplotlib.pyplot as plt
-
-    cmap = plt.get_cmap("gray").copy()
-    cmap.set_bad("black")
     height, width = panels[0][1].shape
-    n_rows = math.ceil(len(panels) / n_cols)
-    gap = max(gap_px, width // 40)
-    title_h = max(60, height // 14)
-    fig_w = n_cols * width + (n_cols + 1) * gap
-    fig_h = n_rows * (title_h + height) + (n_rows + 1) * gap
-    scale = min(1.0, MAX_FIGURE_PX / fig_w, MAX_FIGURE_PX / fig_h)
-    title_pt = title_h * scale * 0.45 * 72 / FIGURE_DPI
-    fig = plt.figure(figsize=(fig_w * scale / FIGURE_DPI, fig_h * scale / FIGURE_DPI), dpi=FIGURE_DPI,
-                     facecolor="white")
-    for index, (title, image, *bar) in enumerate(panels):
-        r, c = divmod(index, n_cols)
-        top = gap + r * (title_h + height + gap) + title_h
-        ax = fig.add_axes([(gap + c * (width + gap)) / fig_w, 1 - (top + height) / fig_h, width / fig_w, height / fig_h])
-        ax.imshow(np.ma.masked_invalid(image), cmap=cmap, vmin=0, vmax=1, interpolation="nearest", aspect="auto")
-        if bar:
-            _draw_scale_bar(ax, image.shape, bar[0], title_pt)
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.set_title(title, fontsize=title_pt, pad=title_pt * 0.4)
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    is_jpeg = out_path.lower().endswith((".jpg", ".jpeg"))
-    fig.savefig(out_path, dpi=FIGURE_DPI, facecolor="white", pil_kwargs={"quality": 92} if is_jpeg else None)
-    plt.close(fig)
+    cells = [(title, colorize(image, "gray", (0.0, 0.0, 0.0)), cv2.INTER_NEAREST, bar[0] if bar else None)
+             for title, image, *bar in panels]
+    rows = [cells[i:i + n_cols] for i in range(0, len(cells), n_cols)]
+    save_panel_grid(rows, (height, width), out_path, gap_px=gap_px)

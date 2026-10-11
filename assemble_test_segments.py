@@ -35,7 +35,7 @@ output:
     masks/<scroll_id>.png
 """
 from __future__ import annotations
-import argparse, json, multiprocessing, os, shutil, subprocess, sys, threading, zipfile
+import argparse, glob, json, multiprocessing, os, re, shutil, subprocess, sys, threading, zipfile
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import cv2
@@ -44,6 +44,16 @@ Image.MAX_IMAGE_PIXELS = None
 
 BUCKET = "https://vesuvius-challenge-open-data.s3.amazonaws.com"
 RAW_CHUNK = 128    # raw volume chunks are 128^3 uint8
+# every render lands on the training grid (assemble_training_segments.TARGET_VOXEL_UM)
+TARGET_VOXEL_UM = 9.362
+
+
+def volume_voxel_um(vol_base):
+    """voxel size encoded in a raw volume url, e.g. .../20250521151220-8.640um-1.2m-116keV-masked.zarr/0."""
+    match = re.search(r"-(\d+(?:\.\d+)?)um-", vol_base)
+    if match is None:
+        raise ValueError(f"no voxel size in volume url {vol_base}")
+    return float(match.group(1))
 
 # OUTPUT zarr chunks optimized for arbitrary 192px contexts and 8-slice windows
 DEFAULT_CHUNK_DEPTH = 8   # matches 8-slice depth windows in triple mode
@@ -186,15 +196,17 @@ def compute_normals(Xu, Yu, Zu):
 def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, normal_step,
                           upsample_factor, workers, out_zarr, out_id, chunk_depth, chunk_y, chunk_x,
                           crop_valid=True, crop_margin=8, mask_dir=MASK_DIR, output_dtype="<u2",
-                          reverse_depth=False):
+                          reverse_depth=False, source_um=TARGET_VOXEL_UM, trilinear=None):
     """render a flattened surface volume from tifxyz mesh + raw volume on S3.
     
     the mesh gives, for each point on the FLATTENED sheet, its (x,y,z) voxel in the raw scan.
     we:
       1. load the tifxyz mesh (x/y/z float32 grids, -1 = invalid)
-      2. upsample the coordinate grid to full flattened resolution (1 px per voxel-step)
-      3. NEAREST-sample the raw volume at those voxels (NO trilinear interpolation)
-    for a multi-layer surface volume we offset along the local surface NORMAL by +/- steps.
+      2. upsample the coordinate grid to the flattened output grid: one pixel per TARGET_VOXEL_UM
+      3. sample the raw volume there: NEAREST when the volume is already on the target grid,
+         TRILINEAR when it is not (8.64um volumes), like the resampled 8.64um training fragments
+    for a multi-layer surface volume we offset along the local surface NORMAL by +/- steps
+    of normal_step target voxels.
     
     the raw volume is uint8, chunks 128^3, NO compressor, dimension_separator '/'. we curl
     the chunks the surface passes through (threaded), cache them on disk (reusable across
@@ -219,10 +231,16 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
         Z = Z[y0:y1, x0:x1]
         valid = valid[y0:y1, x0:x1]
     
+    # source voxels per output pixel / layer step
+    step = TARGET_VOXEL_UM / float(source_um)
+    interpolate = abs(step - 1.0) > 1e-3 if trilinear is None else bool(trilinear)
     gh, gw = X.shape
-    H = int(round((gh - 1) * upsample_factor)) + 1
-    W = int(round((gw - 1) * upsample_factor)) + 1
-    print(f"[mesh] grid {gh}x{gw} -> flattened {H}x{W}  valid={valid.mean():.3f}", flush=True)
+    # published surface volumes use a (grid * upsample) canvas with cv2's pixel-centre resize convention
+    H = int(round(gh * upsample_factor / step))
+    W = int(round(gw * upsample_factor / step))
+    print(f"[mesh] grid {gh}x{gw} -> flattened {H}x{W}  valid={valid.mean():.3f}  "
+          f"source {source_um:g}um -> {TARGET_VOXEL_UM:g}um ({'trilinear' if interpolate else 'nearest'})",
+          flush=True)
 
     Xu = upsample(X, W, H)
     Yu = upsample(Y, W, H)
@@ -232,7 +250,7 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
     # depth layer offsets (centered): e.g. layers=64 -> offsets -31.5..+31.5 * normal_step
     if layers > 1:
         normals = compute_normals(Xu, Yu, Zu)
-        offsets = (np.arange(layers) - (layers - 1) / 2.0) * normal_step
+        offsets = (np.arange(layers) - (layers - 1) / 2.0) * normal_step * step
         if reverse_depth:
             # mesh normal opposes the training orientation (depth_reversed.json): same as negating it
             offsets = offsets[::-1]
@@ -247,6 +265,8 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
     GXC = vol_shape[2] // RAW_CHUNK + 2   # x-chunk stride
     vm = validu
     codes_all = []
+    # trilinear reads the floor and floor+1 voxel on every axis
+    corners = [(dz, dy, dx) for dz in (0, 1) for dy in (0, 1) for dx in (0, 1)] if interpolate else [None]
     for off in offsets:
         if normals is not None:
             xs = Xu[vm] + normals[..., 0][vm] * off
@@ -254,10 +274,15 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
             zs = Zu[vm] + normals[..., 2][vm] * off
         else:
             xs, ys, zs = Xu[vm], Yu[vm], Zu[vm]
-        zc = (np.clip(np.rint(zs), 0, vol_shape[0] - 1).astype(np.int64)) // RAW_CHUNK
-        yc = (np.clip(np.rint(ys), 0, vol_shape[1] - 1).astype(np.int64)) // RAW_CHUNK
-        xc = (np.clip(np.rint(xs), 0, vol_shape[2] - 1).astype(np.int64)) // RAW_CHUNK
-        codes_all.append((zc * GYC + yc) * GXC + xc)
+        for corner in corners:
+            if corner is None:
+                zr, yr, xr = np.rint(zs), np.rint(ys), np.rint(xs)
+            else:
+                zr, yr, xr = np.floor(zs) + corner[0], np.floor(ys) + corner[1], np.floor(xs) + corner[2]
+            zc = (np.clip(zr, 0, vol_shape[0] - 1).astype(np.int64)) // RAW_CHUNK
+            yc = (np.clip(yr, 0, vol_shape[1] - 1).astype(np.int64)) // RAW_CHUNK
+            xc = (np.clip(xr, 0, vol_shape[2] - 1).astype(np.int64)) // RAW_CHUNK
+            codes_all.append(np.unique((zc * GYC + yc) * GXC + xc))
     codes = np.unique(np.concatenate(codes_all))
     zc = codes // (GYC * GXC)
     rem = codes % (GYC * GXC)
@@ -276,17 +301,12 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
     _require_disk(cache_dir)
     print(f"[chunks] all {len(jobs)} present", flush=True)
 
-    # ---- phase B: sample each layer (nearest neighbor) ----
-    def sample_layer(off):
-        if normals is not None:
-            xs = Xu + normals[..., 0] * off
-            ys = Yu + normals[..., 1] * off
-            zs = Zu + normals[..., 2] * off
-        else:
-            xs, ys, zs = Xu, Yu, Zu
-        zi = np.clip(np.rint(zs), 0, vol_shape[0] - 1).astype(np.int32)
-        yi = np.clip(np.rint(ys), 0, vol_shape[1] - 1).astype(np.int32)
-        xi = np.clip(np.rint(xs), 0, vol_shape[2] - 1).astype(np.int32)
+    # ---- phase B: sample each layer ----
+    def gather(zs, ys, xs):
+        """raw voxel values at integer-valued coordinate maps (clipped to the volume)."""
+        zi = np.clip(zs, 0, vol_shape[0] - 1).astype(np.int32)
+        yi = np.clip(ys, 0, vol_shape[1] - 1).astype(np.int32)
+        xi = np.clip(xs, 0, vol_shape[2] - 1).astype(np.int32)
         out = np.zeros((H, W), dtype=np.uint8)
         zc = zi // RAW_CHUNK
         yc = yi // RAW_CHUNK
@@ -316,6 +336,23 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
                                  xi[rr, cc2] % RAW_CHUNK]
         return out
 
+    def sample_layer(off):
+        if normals is not None:
+            xs = Xu + normals[..., 0] * off
+            ys = Yu + normals[..., 1] * off
+            zs = Zu + normals[..., 2] * off
+        else:
+            xs, ys, zs = Xu, Yu, Zu
+        if not interpolate:
+            return gather(np.rint(zs), np.rint(ys), np.rint(xs))
+        z0, y0, x0 = np.floor(zs), np.floor(ys), np.floor(xs)
+        fz, fy, fx = zs - z0, ys - y0, xs - x0
+        acc = np.zeros((H, W), dtype=np.float32)
+        for dz, dy, dx in corners:
+            weight = (fz if dz else 1 - fz) * (fy if dy else 1 - fy) * (fx if dx else 1 - fx)
+            acc += weight * gather(z0 + dz, y0 + dy, x0 + dx)
+        return np.clip(np.rint(acc), 0, 255).astype(np.uint8)
+
     # write zarr
     import zarr
     D = len(offsets)
@@ -328,6 +365,8 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
         print(f"[zarr] layer {li+1}/{D}", flush=True)
     if reverse_depth and normals is not None:
         store.attrs["depth_flipped"] = True
+    store.attrs["voxel_um"] = TARGET_VOXEL_UM
+    store.attrs["source_voxel_um"] = float(source_um)
 
     # the rendered zarr is the source of truth for its usable footprint
     # derive the mask from the center layer rather than mesh validity alone
@@ -425,8 +464,13 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
     
     # idempotent: skip if this zarr + mask already exist
     if os.path.isdir(out_zarr) and os.path.exists(mask_path):
-        print(f"  zarr + mask exist -> skip")
-        return (zid, "OK (cached)")
+        import zarr
+        attrs = zarr.open(out_zarr, mode="r").attrs
+        if volume_voxel_um(vol_base) == TARGET_VOXEL_UM or attrs.get("voxel_um") == TARGET_VOXEL_UM:
+            print(f"  zarr + mask exist -> skip")
+            return (zid, "OK (cached)")
+        print(f"  zarr was rendered at the source voxel size -> re-rendering at {TARGET_VOXEL_UM}um")
+        shutil.rmtree(out_zarr, ignore_errors=True)
     
     if not os.path.isdir(mesh_dir):
         print(f"  [WARN] mesh dir missing: {mesh_dir} -- skipping")
@@ -434,6 +478,8 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
     
     # parse vol_shape string "z,y,x" -> tuple
     vol_shape_tuple = tuple(int(v) for v in vol_shape.split(","))
+    source_um = volume_voxel_um(vol_base)
+    old_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) if os.path.exists(mask_path) else None
     
     print(f"  raw vol: {vol_base}  shape={vol_shape}")
     print(f"  (renders on-demand from S3 -- can take 10-30 min per fragment depending on size/speed)")
@@ -458,7 +504,9 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
             crop_margin=8,
             mask_dir=mask_dir,
             output_dtype=output_dtype,
-            reverse_depth=zid in DEPTH_REVERSED)
+            reverse_depth=zid in DEPTH_REVERSED,
+            source_um=source_um)
+        drop_stale_derived(zid, old_mask, mask_path)
         if drop_cache:
             shutil.rmtree(cache_dir, ignore_errors=True)
         return (zid, "OK")
@@ -472,6 +520,38 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
         print(f"  [WARN] render failed for {zid}: {e}")
         traceback.print_exc()
         return (zid, f"FAIL: {e}")
+
+
+def _drop_json_key(path, key):
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict) or data.pop(key, None) is None:
+        return
+    temporary = f"{path}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=4)
+    os.replace(temporary, path)
+
+
+def drop_stale_derived(zid, old_mask, mask_path):
+    """remove surface labels, norms and composites built from an earlier render of a different size."""
+    new_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+    if new_mask is None:
+        return
+    surface = os.path.join(SURFACE_LABEL_ROOT, zid)
+    depth_path = os.path.join(surface, "depth.npy")
+    surface_stale = os.path.isfile(depth_path) and np.load(depth_path, mmap_mode="r").shape != new_mask.shape
+    if not surface_stale and (old_mask is None or old_mask.shape == new_mask.shape):
+        return
+    print(f"  [stale] {zid}: render size changed -> dropping old surface labels, norms and composites",
+          flush=True)
+    shutil.rmtree(surface, ignore_errors=True)
+    for name in ("norm_cache.json", "surface_anchor_cache.json"):
+        _drop_json_key(os.path.join(SCRIPT_DIR, name), zid)
+    for path in glob.glob(os.path.join(COMPOSITE_ROOT, f"{zid}_*.png")):
+        os.remove(path)
 
 
 def reconcile_depth_orientation(zids, out_dir, extra_ids):
@@ -555,11 +635,21 @@ def extra_fragments():
     return fragments
 
 
+def _extra_mask_shape(zid):
+    path = os.path.join(EXTRAS_MASK_DIR, f"{zid}.png")
+    mask = cv2.imread(path, cv2.IMREAD_GRAYSCALE) if os.path.isfile(path) else None
+    return None if mask is None else mask.shape
+
+
 def _has_extra_surface(zid):
     # metadata.json is written after depth/confidence are complete
     folder = os.path.join(EXTRAS_SURFACE_DIR, zid)
-    return all(os.path.isfile(os.path.join(folder, name))
-               for name in ("depth.npy", "confidence.npy", "metadata.json"))
+    if not all(os.path.isfile(os.path.join(folder, name))
+               for name in ("depth.npy", "confidence.npy", "metadata.json")):
+        return False
+    # labels from an older render (e.g. 8.64um before rescaling) no longer match the mask
+    shape = _extra_mask_shape(zid)
+    return shape is None or np.load(os.path.join(folder, "depth.npy"), mmap_mode="r").shape == shape
 
 
 def extra_composite_path(zid):
@@ -567,7 +657,14 @@ def extra_composite_path(zid):
 
 
 def _has_extra_composite(zid):
-    return os.path.isfile(extra_composite_path(zid))
+    path = extra_composite_path(zid)
+    if not os.path.isfile(path):
+        return False
+    shape = _extra_mask_shape(zid)
+    if shape is None:
+        return True
+    image = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    return image is not None and image.shape == shape
 
 
 # (zip suffix, archive root under which the zip's "extras/" folder is extracted, completeness check, files)
@@ -645,8 +742,10 @@ def _generate_extra_surface(zid, zarr_dir):
         raise RuntimeError(f"generate_surface_supervision exit {result.returncode}")
 
 
-def sync_extras_artifacts(ats, r2_root, fragments, zarr_dir):
-    """generate surface labels + composites for assembled extras lacking them; re-upload each set that changed."""
+def sync_extras_artifacts(ats, r2_root, fragments, zarr_dir, already_generated=None):
+    """generate surface labels + composites for assembled extras lacking them; re-upload each set that changed.
+    already_generated: {(set, artifact): count} made earlier in this run, so those sets are uploaded too."""
+    already_generated = already_generated or {}
     builders = {"surface_labels": _generate_extra_surface, "composites": build_extra_composite}
     for set_name in EXTRA_SETS:
         zids = [fragment[0] for fragment in fragments if fragment[4] == set_name]
@@ -657,7 +756,7 @@ def sync_extras_artifacts(ats, r2_root, fragments, zarr_dir):
             missing = [zid for zid in ready if not is_complete(zid)]
             print(f"[extras] {set_name} {artifact}: {len(ready) - len(missing)}/{len(ready)} present, "
                   f"generating {len(missing)}", flush=True)
-            generated = 0
+            generated = already_generated.get((set_name, artifact), 0)
             for index, zid in enumerate(missing, 1):
                 print(f"[extras] {set_name} {artifact} {index}/{len(missing)} {zid}", flush=True)
                 try:
@@ -669,6 +768,32 @@ def sync_extras_artifacts(ats, r2_root, fragments, zarr_dir):
                 upload_extras_artifact(ats, r2_root, set_name, artifact, zids)
             elif generated:
                 print(f"[extras] WARN R2 not configured -- {generated} new {set_name} {artifact} not uploaded")
+
+
+def prepare_extra(zid, zarr_dir):
+    """build one assembled extra's surface labels + composite; returns {artifact: 1} for each one made."""
+    builders = {"surface_labels": _generate_extra_surface, "composites": build_extra_composite}
+    made = {}
+    for artifact, (_root, is_complete, _files, _folder) in _EXTRA_ARTIFACTS.items():
+        if is_complete(zid):
+            continue
+        try:
+            builders[artifact](zid, zarr_dir)
+            made[artifact] = int(is_complete(zid))
+        except Exception as exc:
+            print(f"[extras] WARN {artifact} failed for {zid}: {exc}", flush=True)
+    return made
+
+
+def run_on_complete(command, zid):
+    """fire the per-fragment hook; a failing hook is reported but never stops assembly."""
+    import shlex
+
+    if not command:
+        return
+    result = subprocess.run(command.replace("{zid}", shlex.quote(zid)), shell=True, cwd=SCRIPT_DIR)
+    if result.returncode != 0:
+        print(f"[hook] WARN on-complete exited {result.returncode} for {zid}", flush=True)
 
 
 def upload_extras_artifact(ats, r2_root, set_name, artifact, zids):
@@ -718,6 +843,11 @@ def main():
                     help="stop downloading/rendering once free disk drops below this (default 10)")
     ap.add_argument("--upload-extras", action="store_true",
                     help="with --include-extras: re-zip and upload every set's surface labels + composites to R2")
+    ap.add_argument("--on-complete", type=str, default=None,
+                    help="shell command run after each fragment is assembled (and, for extras, prepared); "
+                         "{zid} is replaced by the fragment id")
+    ap.add_argument("--extras-order", type=str, default=",".join(EXTRA_SETS),
+                    help="comma-separated EXTRA_SETS names in render order (default: %(default)s)")
     args = ap.parse_args()
     if args.upload_extras and (args.only or not args.include_extras):
         ap.error("--upload-extras needs --include-extras and no --only (it would overwrite the R2 zips with a subset)")
@@ -743,6 +873,11 @@ def main():
         if not selected_ids or fragment[0] in selected_ids
     ]
     extras = [fragment for fragment in extras if not selected_ids or fragment[0] in selected_ids]
+    order = [name.strip() for name in args.extras_order.split(",") if name.strip()]
+    unknown_sets = set(order) - set(EXTRA_SETS)
+    if unknown_sets:
+        ap.error(f"unknown --extras-order sets: {sorted(unknown_sets)}")
+    extras.sort(key=lambda fragment: order.index(fragment[4]) if fragment[4] in order else len(order))
     missing_ids = selected_ids - {fragment[0] for fragment in fragments + extras}
     if missing_ids:
         ap.error(f"unknown --only IDs: {sorted(missing_ids)}")
@@ -771,20 +906,29 @@ def main():
                                 args.chunk_depth, args.chunk_y, args.chunk_x,
                                 force=args.force)
         results.append(result)
+        if result[1].startswith("OK"):
+            run_on_complete(args.on_complete, zid)
 
+    generated_in_loop = {}
     for i, (zid, mesh_sub, vol_base, vol_shape, set_name) in enumerate(extras, 1):
         if _LOW_DISK.is_set():
             break
         print(f"\n{'='*70}\n=== extra {i}/{len(extras)}  {set_name}/{zid} ===\n{'='*70}", flush=True)
-        results.append(render_fragment(
+        result = render_fragment(
             zid, mesh_sub, vol_base, vol_shape, args.workers, args.out_dir, script_dir,
             args.chunk_depth, args.chunk_y, args.chunk_x, force=args.force,
             mask_dir=EXTRAS_MASK_DIR, output_dtype=EXTRAS_DTYPE, drop_cache=True,
-        ))
+        )
+        results.append(result)
+        if result[1].startswith("OK"):
+            for artifact, count in prepare_extra(zid, args.out_dir).items():
+                key = (set_name, artifact)
+                generated_in_loop[key] = generated_in_loop.get(key, 0) + count
+            run_on_complete(args.on_complete, zid)
     if _LOW_DISK.is_set():
         print(f"\n[assemble] free disk fell below {args.min_free_gb:g} GB -- remaining renders skipped")
     if extras:
-        sync_extras_artifacts(ats, r2_root, extras, args.out_dir)
+        sync_extras_artifacts(ats, r2_root, extras, args.out_dir, already_generated=generated_in_loop)
     if args.upload_extras and extras:
         if r2_root is None:
             print("[extras] --upload-extras needs R2_PUBLIC_URL + ACCESS_KEY/SECRET_KEY -- nothing uploaded")

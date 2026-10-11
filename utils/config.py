@@ -234,6 +234,8 @@ class DataConfig:
     # scrolls whose labels give positives only: no ring negatives are built around their ink
     ring_free_scroll_ids: List[int] = field(default_factory=list)
     simple_split: bool = False  # true: axis/fraction split; false: train_masks/<scroll_id>.png
+    # train masks painted the other way round: black = train, white = validation (palette marks unchanged)
+    flipped_train_mask_ids: List[int] = field(default_factory=lambda: [20231210121321, 20240304144031])
     coordinate_hash_split: bool = False
     coordinate_hash_block_size: int = 512
     coordinate_hash_valid_fraction: float = 0.25
@@ -304,7 +306,7 @@ class DataConfig:
 @dataclass
 class DataloaderConfig:
     batch_size: int = 96
-    num_workers: int = 8
+    num_workers: int = 4
     prefetch_factor: int = 2
     data_aug: bool = True
     rotation_prob: float = 0.6

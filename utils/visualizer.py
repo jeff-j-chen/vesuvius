@@ -30,6 +30,8 @@ from scipy import stats as scipy_stats
 
 from .config import Config
 from .dataloader import DataManager, imread_gray
+from .fast_figure import FAST_PNG
+from .norm import scale_to_unit
 from .training_utils import calculate_metrics
 
 # Pillow>=10 removed Image.ANTIALIAS, but some torch/tensorboard paths still
@@ -229,6 +231,7 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     from collections import defaultdict
 
     tile  = config.data.tile_size
+    norm_mode = str(getattr(config.data, "norm_mode", "global"))
     depth = config.data.depth
     H = y_range[1] - y_range[0]
     W = x_range[1] - x_range[0]
@@ -280,7 +283,7 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
         if mask.ndim == 2:
             m = (mask[y_abs:y_abs + tile, x_abs_min:x_abs_min + width] > 0)
             s[:, ~m] = 0.0
-        return np.clip((s - g_min) / (g_max - g_min + 1e-12), 0.0, 1.0)
+        return scale_to_unit(s, g_min, g_max, norm_mode)
 
     def _read_ctx_strip(z_start, n_depth, y0, x0, hgt, wid):
         """read a zero-padded (OOB-safe) strip of height hgt for the context-window model.
@@ -295,7 +298,7 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
             out[:, ys - y0:ye - y0, xs - x0:xe - x0] = np.array(
                 vol[z_start:z_start + n_depth, ys:ye, xs:xe], dtype=np.float32)
         out = (out - g_mean) / g_std
-        return np.clip((out - g_min) / (g_max - g_min + 1e-12), 0.0, 1.0)
+        return scale_to_unit(out, g_min, g_max, norm_mode)
 
     valid = []
     n_rows = len(by_y)
@@ -855,6 +858,8 @@ class TensorboardVisualizer:
         self.explicit_negative_mask = getattr(dm, "explicit_negative_mask", None)
         if self.explicit_negative_mask is not None:
             self.labels[self.explicit_negative_mask > 0] = 0
+        # assumed letters (runs with data.extra_inklabels); None otherwise
+        self.extra_label_mask = getattr(dm, "extra_label_mask", None)
         self.surface_depth_map = None
         self.surface_confidence_map = None
         if bool(getattr(self.c.model, "surface_teacher_input", False)):
@@ -1616,6 +1621,18 @@ class TensorboardVisualizer:
                         metrics[f"extra_{metric_name}"],
                         epoch,
                     )
+        # the main tags above exclude assumed letters; their own cell-level set is logged as *_Extra
+        extra_tags = {
+            "loss": "G_M/Loss", "accuracy": "G_M/Acc", "balanced_accuracy": "G_M/BalAcc",
+            "precision": "P_M/Precision", "recall": "P_M/Recall", "f1": "P_M/F1_Score",
+            "specificity": "P_M/Specificity", "roc_auc": "AUC/ROC_AUC", "pr_auc": "AUC/PR_AUC",
+            "cell_count": "Extra/CellCount", "positive_samples": "Extra/PositiveCells",
+            "negative_samples": "Extra/RingCells",
+        }
+        for split, metrics in (("Train", train_metrics), ("Valid", val_metrics)):
+            for metric_name, tag in extra_tags.items():
+                if f"extra_{metric_name}" in metrics:
+                    self.writer.add_scalar(f"{tag}/{split}_Extra", float(metrics[f"extra_{metric_name}"]), epoch)
 
         self.log_patch_character_f1(epoch, train_metrics, val_metrics)
 
@@ -2124,22 +2141,35 @@ class TensorboardVisualizer:
                     return resized
                 raw_1_1 = _raw_ink("1_1um"); raw_2_4 = _raw_ink("2_4um")
 
+                overlay_labels, extra_binary = label_binary, None
+                extra_mask = getattr(self, "extra_label_mask", None)
+                if extra_mask is not None:
+                    # self.labels merges assumed letters into ink; split them back out for the overlay
+                    regular = np.where(extra_mask > 0, 0, self.labels)
+                    overlay_labels, _, _ = self._compute_tile_maps(
+                        regular, self.mask, full_y_range, full_x_range, tile=_out_tile,
+                    )
+                    extra_binary, _, _ = self._compute_tile_maps(
+                        extra_mask, self.mask, full_y_range, full_x_range, tile=_out_tile,
+                    )
+
                 fig = self._create_eval_figure_2x2(
                     reg_pred,
                     tta_pred,
-                    label_binary,
+                    overlay_labels,
                     raw_1_1,
                     raw_2_4,
                     train_split_n,
                     split_axis,
                     manual_train_grid,
+                    extra_binary=extra_binary,
                 )
                 if fig is not None:
                     # ALWAYS save the full-size eval figure to <log>/eval_figs/ (highest res)
                     try:
                         _ed = os.path.join(self.log_path, "eval_figs"); os.makedirs(_ed, exist_ok=True)
                         _lp = os.path.join(_ed, f"eval_s{self.scroll1_id}_ep{epoch+1:02d}.png")
-                        fig.savefig(_lp, dpi=200, bbox_inches="tight")
+                        fig.savefig(_lp, dpi=200, bbox_inches="tight", pil_kwargs=FAST_PNG)
                         print(f"[eval-fig] full-size -> {_lp}")
                     except Exception as _e:
                         print(f"[eval-fig] save failed: {_e}")
@@ -2147,7 +2177,7 @@ class TensorboardVisualizer:
                     if getattr(self.c.tra, "save_vis", False):
                         try:
                             _p = os.path.join(self._save_vis_dir(), f"eval_s{self.scroll1_id}_ep{epoch+1:02d}.png")
-                            fig.savefig(_p, dpi=200, bbox_inches="tight")
+                            fig.savefig(_p, dpi=200, bbox_inches="tight", pil_kwargs=FAST_PNG)
                             print(f"[save-vis] eval figure -> {_p}")
                         except Exception as _e:
                             print(f"[save-vis] eval save failed: {_e}")
@@ -2648,13 +2678,14 @@ class TensorboardVisualizer:
 
     def _create_eval_figure_2x2(self, reg_pred, tta_pred, label_binary,
                                 raw_1_1, raw_2_4, train_split_n, split_axis="x",
-                                manual_train_grid=None):
+                                manual_train_grid=None, extra_binary=None):
         """2-column x 2-row eval figure:
             row 0: inference                | inference + inklabel overlay
             row 1: 1.1um inklabel_raw       | 2.4um inklabel_raw
         every panel occupies the same cell footprint; predictions use SCROLL_CMAP (0-1),
         the raw inklabel references are grayscale. the split boundary is drawn only on
-        the prediction-plus-inklabel overlay.
+        the prediction-plus-inklabel overlay. extra_binary (assumed letters) is tinted at half
+        the opacity of label_binary.
         """
         h_tiles, w_tiles = reg_pred.shape
         aspect = w_tiles / max(h_tiles, 1)
@@ -2695,8 +2726,13 @@ class TensorboardVisualizer:
                 h = min(label_binary.shape[0], rgb.shape[0])
                 w = min(label_binary.shape[1], rgb.shape[1])
                 g = label_binary[:h, :w] > 0.5
-                rgb[:h, :w][~g] = rgb[:h, :w][~g] * (1.0 - 0.15)
+                e = np.zeros_like(g)
+                if extra_binary is not None:
+                    eh, ew = min(h, extra_binary.shape[0]), min(w, extra_binary.shape[1])
+                    e[:eh, :ew] = (extra_binary[:eh, :ew] > 0.5) & ~g[:eh, :ew]
+                rgb[:h, :w][~g & ~e] = rgb[:h, :w][~g & ~e] * (1.0 - 0.15)
                 rgb[:h, :w][g] = 0.5 * rgb[:h, :w][g] + 0.5 * LABEL_TINT
+                rgb[:h, :w][e] = 0.75 * rgb[:h, :w][e] + 0.25 * LABEL_TINT
                 ax.imshow(rgb, aspect='equal', interpolation='nearest')
             else:
                 ax.imshow(pred, cmap=SCROLL_CMAP, vmin=0, vmax=1, aspect='equal')

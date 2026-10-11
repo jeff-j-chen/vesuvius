@@ -463,7 +463,7 @@ def preflight_train_masks(scrolls, inklabel_dir: Path, strict: bool = True) -> N
             raise RuntimeError(message)
         print(f"[campaign29] WARNING {message}", flush=True)
         return
-    print(f"[preflight] {len(scrolls)} Campaign 29 fragments passed", flush=True)
+    print(f"[preflight] train masks/labels present for all {len(scrolls)} training fragments", flush=True)
 
 
 def preflight_pretraining(selected: list[dict], dry_run: bool) -> None:

@@ -4,7 +4,8 @@ Runs the given checkpoint over every campaign-41 training scroll (full frame, th
 predict_tiles path as eval_scrolls.ipynb), scores every 16 px target cell, and evaluates each character
 against its own closed ring exactly as training defines them:
 
-- characters: 8-connected components of ./inklabels/<id>.png (>= 8 px), keyed by component id
+- characters: 8-connected components of the regular (full-brightness) ink in dilated_inklabels/<id>.png
+  (>= 8 px), keyed by component id -- the same components training uses
 - positive cells: cells holding any training ink (dilated_inklabels), assigned to the nearest character
 - negative cells: closed-ring cells (ring c2g2s4 from the campaign-41 data config), nearest character
 
@@ -14,7 +15,8 @@ split (train/valid/mixed by train_masks), bbox, and a sampling weight
     failure = 1 - (AP + recall) / 2      (1 - recall when the character has no ring cells)
     weight  = 1 + (max_weight - 1) * failure
 
-written to campaign_archs_41.FORGETTING_PATH with a fingerprint of each ./inklabels file, plus each scroll's
+written to campaign_archs_41.FORGETTING_PATH with a fingerprint of each label file's regular ink (assumed
+half-brightness letters do not invalidate it), plus each scroll's
 prediction map in --maps-dir (character_failures/maps/<id>.png full frame, black = ink; <id>.npy cell scores).
 Campaign 41's `character_failures` arm is skipped without an up-to-date entry for every training scroll. The
 file is rewritten after every scroll, so an interrupted run resumes where it stopped.
@@ -49,7 +51,7 @@ from sklearn.metrics import average_precision_score  # noqa: E402
 
 import campaign_archs_41 as campaign41  # noqa: E402
 from utils.config import Config, ScrollConfig, resolve_run_config, startup_output  # noqa: E402
-from utils.dataloader import DataManager, imread_gray, inklabel_fingerprint, reference_components  # noqa: E402
+from utils.dataloader import DataManager, character_label_fingerprint, drawn_characters  # noqa: E402
 from utils.model import create_model  # noqa: E402
 from utils.norm import ensure_surface_anchors  # noqa: E402
 from utils.visualizer import TensorboardVisualizer, group_by_depth, predict_tiles  # noqa: E402
@@ -57,6 +59,7 @@ from utils.visualizer import TensorboardVisualizer, group_by_depth, predict_tile
 DEFAULT_CHECKPOINT = "models/archs40/holdout_n96_combined_surface_norm_nnpu/final_best_character.pth"
 _AUXILIARY_PREFIXES = ("supcon_head.", "domain_head.")
 MIN_PIXELS = 8
+CHARACTERS_FROM = "dilated_inklabels regular ink"
 WEIGHT_RULE = "1 + (max_weight - 1) * (1 - (ap + recall) / 2); 1 - recall without ring cells"
 
 
@@ -190,12 +193,8 @@ def evaluate_scroll(scroll_id: int, model_cfg: Config, model, data_cfg: Config, 
         if manager.manual_train_mask is not None else np.ones(shape, dtype=bool)
     )
 
-    label_path = ROOT / "inklabels" / f"{scroll_id}.png"
-    drawn = imread_gray(str(label_path))
-    reference = np.zeros((height, width), dtype=np.uint8)
-    h, w = min(height, drawn.shape[0]), min(width, drawn.shape[1])
-    reference[:h, :w] = drawn[:h, :w] > 127
-    components = reference_components(reference, MIN_PIXELS)
+    label_path = ROOT / campaign41.INKLABEL_DIR / f"{scroll_id}.png"
+    components = drawn_characters(label_path, (height, width), MIN_PIXELS)
     boxes = find_objects(components)
     owner = _majority_grid(components, unit, shape)
     if owner.any():
@@ -241,7 +240,7 @@ def evaluate_scroll(scroll_id: int, model_cfg: Config, model, data_cfg: Config, 
     }
     del manager, labels, mask01, ring, scores, components
     return {
-        "inklabel_fingerprint": inklabel_fingerprint(str(label_path)),
+        "label_fingerprint": character_label_fingerprint(label_path),
         "summary": summary,
         "characters": characters,
     }
@@ -279,7 +278,12 @@ def main() -> None:
 
     out = ROOT / args.out
     payload = json.loads(out.read_text(encoding="utf-8")) if out.is_file() else {}
-    if payload.get("checkpoint") != str(checkpoint.relative_to(ROOT)) or payload.get("max_weight") != args.max_weight:
+    if (payload.get("checkpoint") != str(checkpoint.relative_to(ROOT)) or payload.get("max_weight") != args.max_weight
+            or payload.get("characters_from") != CHARACTERS_FROM):
+        if payload:
+            backup = out.with_suffix(".previous.json")
+            os.replace(out, backup)
+            print(f"[failures] incompatible {out.name} moved to {backup.name}", flush=True)
         payload = {}
     payload.update({
         "checkpoint": str(checkpoint.relative_to(ROOT)),
@@ -287,7 +291,7 @@ def main() -> None:
         "min_pixels": MIN_PIXELS,
         "weight_rule": WEIGHT_RULE,
         "stride": args.stride,
-        "characters_from": "./inklabels",
+        "characters_from": CHARACTERS_FROM,
     })
     payload.setdefault("scrolls", {})
 
@@ -296,11 +300,11 @@ def main() -> None:
     data_cfg = data_config()
     maps_dir = ROOT / args.maps_dir
     for index, scroll_id in enumerate(scroll_ids, 1):
-        label_path = ROOT / "inklabels" / f"{scroll_id}.png"
+        label_path = ROOT / campaign41.INKLABEL_DIR / f"{scroll_id}.png"
         entry = payload["scrolls"].get(str(scroll_id))
         if (not args.force and entry is not None and label_path.is_file()
                 and (maps_dir / f"{scroll_id}.png").is_file()
-                and entry.get("inklabel_fingerprint") == inklabel_fingerprint(str(label_path))):
+                and entry.get("label_fingerprint") == character_label_fingerprint(label_path)):
             print(f"[failures] {index}/{len(scroll_ids)} {scroll_id}: current entry kept", flush=True)
             continue
         print(f"[failures] {index}/{len(scroll_ids)} {scroll_id}: predicting", flush=True)

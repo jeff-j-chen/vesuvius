@@ -236,6 +236,8 @@ def _extra_letter_metrics(labels, scores, character_ids, domains, patch_ids, cha
     out = {"extra_cell_count": int(selected.sum())}
     if not selected.any():
         return out
+    standard = calculate_metrics(labels[selected], (scores[selected] > threshold).astype(int), scores[selected])
+    out.update({f"extra_{key}": value for key, value in standard.items()})
     character = calculate_character_metrics(
         labels[selected], scores[selected], character_ids[selected], **character_kwargs,
     )
@@ -680,6 +682,16 @@ class Trainer:
         if bool(getattr(config.tra, "context_consistency", False)):
             torch.backends.cudnn.benchmark = False
             print("[seed] context consistency uses variable batch sizes -- cudnn benchmark off")
+        from utils.dataloader import cpu_budget, limit_cpu_threads
+
+        main_threads = max(1, cpu_budget() - int(config.dl.num_workers))
+        limit_cpu_threads(main_threads)
+        print(f"[threads] cpu budget {cpu_budget()}: main process {main_threads} thread(s), "
+              f"{config.dl.num_workers} loader worker(s) x 1")
+        if any(bool(getattr(config.tra, name, False)) for name in ("and_mask", "fish")):
+            # each random domain group is a new sub-batch size; cuDNN would re-autotune (~15 s) for every one
+            torch.backends.cudnn.benchmark = False
+            print("[seed] AND-mask/Fish domain groups use variable batch sizes -- cudnn benchmark off")
         with startup_output():
             self._print_config()
 
@@ -1252,7 +1264,7 @@ class Trainer:
         from utils.norm import SUPPORT_THRESHOLD
         if surface_depth is None:
             raise RuntimeError("support_drop needs the surface depth maps")
-        if str(getattr(self.c.data, "norm_mode", "global")) != "surface_anchor":
+        if str(getattr(self.c.data, "norm_mode", "global")) not in ("surface_anchor", "surface_anchor_knee"):
             raise RuntimeError("support_drop thresholds papyrus in surface-anchored units")
         volume = images.detach().float()
         volume = volume.reshape(volume.shape[0], -1, *volume.shape[-2:])
@@ -1631,6 +1643,17 @@ class Trainer:
             + float(getattr(self.c.tra, "divdis_mi_lambda", 1.0)) * mi
             + float(getattr(self.c.tra, "divdis_reg_lambda", 1.0)) * reg
         )
+
+    def _separate_extra_letters(self, labels, preds, scores, character_ids, domains, patch_ids):
+        """assumed-letter metrics, plus every metric list with assumed letters (and their rings) removed."""
+        extra = self._extra_letter_metrics(labels, scores, character_ids, domains, patch_ids)
+        keep = ~is_extra_character(np.asarray(character_ids, dtype=np.int64))
+        size = len(labels)
+
+        def regular(values):
+            return list(np.asarray(values)[keep]) if len(values) == size else values
+
+        return extra, tuple(regular(values) for values in (labels, preds, scores, character_ids, domains, patch_ids))
 
     def _extra_letter_metrics(self, labels, scores, character_ids, domains, patch_ids) -> dict:
         tra = self.c.tra
@@ -3589,6 +3612,11 @@ class Trainer:
 
         if bool(getattr(self.c.tra, "character_forgetting", False)) and not self._static_forgetting:
             self._update_character_forgetting(labels, scores, character_ids_all)
+        extra_metrics = {}
+        if bool(getattr(self.c.data, "extra_inklabels", False)):
+            extra_metrics, (labels, preds, scores, character_ids_all, domain_ids_all, patch_ids_all) = (
+                self._separate_extra_letters(labels, preds, scores, character_ids_all, domain_ids_all, patch_ids_all)
+            )
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
         if bool(getattr(self.c.tra, "character_macro_metrics", False)):
             metrics.update(calculate_character_metrics(
@@ -3654,10 +3682,7 @@ class Trainer:
                     patch_ids_all,
                     score_threshold=float(getattr(self.c.tra, "character_score_threshold", 0.5)),
                 )
-        if bool(getattr(self.c.data, "extra_inklabels", False)):
-            metrics.update(self._extra_letter_metrics(
-                labels, scores, character_ids_all, domain_ids_all, patch_ids_all,
-            ))
+        metrics.update(extra_metrics)
         metrics["scores"] = scores
         metrics["hard_injected"] = total_injected
 
@@ -3692,6 +3717,8 @@ class Trainer:
         divdis_head_scores: list[list] | None = (
             [[] for _ in range(int(self.c.model.divdis_heads))] if self._divdis_loader is not None else None
         )
+        track_extra = bool(getattr(self.c.data, "extra_inklabels", False))
+        cell_losses: list[float] = []
 
         with torch.no_grad(), autocast(self.c.device, enabled=self.c.device == "cuda"):
             for batch in tqdm(
@@ -3768,6 +3795,8 @@ class Trainer:
                 raw_loss = self.criterion(outputs, batch_labels)
                 loss_total += ((raw_loss * mask).sum() / mask.sum()).item()
                 processed_batches += 1
+                if track_extra and batch_labels.shape[1] > 1:
+                    cell_losses.extend(raw_loss.float()[mask > 0].cpu().numpy().tolist())
 
                 batch_scores = torch.sigmoid(outputs).cpu().numpy().flatten()
                 batch_lab = batch_labels.cpu().numpy().flatten().astype(int)
@@ -3804,6 +3833,20 @@ class Trainer:
             )
             scores = list(divdis_head_scores[selected])
             preds = [int(value > 0.5) for value in scores]
+        extra_metrics = {}
+        regular_loss = None
+        if track_extra:
+            if len(cell_losses) == len(character_ids_all):
+                extra_cells = is_extra_character(np.asarray(character_ids_all, dtype=np.int64))
+                losses = np.asarray(cell_losses, dtype=np.float64)
+                if extra_cells.any():
+                    extra_metrics["extra_loss"] = float(losses[extra_cells].mean())
+                if (~extra_cells).any():
+                    regular_loss = float(losses[~extra_cells].mean())
+            extra_split, (labels, preds, scores, character_ids_all, domain_ids_all, patch_ids_all) = (
+                self._separate_extra_letters(labels, preds, scores, character_ids_all, domain_ids_all, patch_ids_all)
+            )
+            extra_metrics.update(extra_split)
         metrics = calculate_metrics(np.array(labels), np.array(preds), np.array(scores))
         if bool(getattr(self.c.tra, "character_macro_metrics", False)):
             metrics.update(calculate_character_metrics(
@@ -3825,7 +3868,8 @@ class Trainer:
                     recall_target=float(getattr(self.c.tra, "character_recall_target", 0.5)),
                     max_ring_fpr=float(getattr(self.c.tra, "character_max_ring_fpr", 0.1)),
                 ))
-        metrics["loss"] = loss_total / max(1, processed_batches)
+        # with assumed letters present the scheduler and checkpoints follow the regular cells only
+        metrics["loss"] = regular_loss if regular_loss is not None else loss_total / max(1, processed_batches)
         if bool(getattr(self.c.tra, "per_scroll_metrics", False)):
             metrics["per_scroll_pr_auc"] = _per_domain_pr_auc(
                 labels,
@@ -3846,10 +3890,7 @@ class Trainer:
                     patch_ids_all,
                     score_threshold=float(getattr(self.c.tra, "character_score_threshold", 0.5)),
                 )
-        if bool(getattr(self.c.data, "extra_inklabels", False)):
-            metrics.update(self._extra_letter_metrics(
-                labels, scores, character_ids_all, domain_ids_all, patch_ids_all,
-            ))
+        metrics.update(extra_metrics)
         if divdis_metrics is not None:
             metrics["divdis_heads"] = divdis_metrics
         metrics["scores"] = scores
@@ -4374,7 +4415,7 @@ def main() -> None:
         )
         return
 
-    if config.data.norm_mode == "surface_anchor":
+    if config.data.norm_mode in ("surface_anchor", "surface_anchor_knee"):
         from utils.norm import ensure_surface_anchors
 
         ensure_surface_anchors(

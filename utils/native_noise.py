@@ -18,7 +18,8 @@ class NativeNoise:
         self.path, self.scale = str(path), float(scale)
         self.bank = np.load(self.path, mmap_mode="r")
         meta = json.loads(Path(self.path).with_suffix(".json").read_text(encoding="utf-8"))
-        if meta.get("norm_mode", "global") != norm_mode:
+        # the knee only bends highlights after the bank's surface_anchor scaling
+        if meta.get("norm_mode", "global") != norm_mode.replace("surface_anchor_knee", "surface_anchor"):
             raise ValueError(f"{self.path} was built with norm_mode {meta.get('norm_mode', 'global')!r}, "
                              f"training uses {norm_mode!r}; rebuild it with --norm-mode {norm_mode}")
         self.coeffs = np.asarray(meta["sigma_coeffs"], np.float32) if meta.get("intensity_scaled") else None

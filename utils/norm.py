@@ -116,10 +116,13 @@ def compute_norm(
 def load_cached_norm(scroll_id: str | int, cache_path: str = UNIFIED_CACHE_PATH, mode: str = "global"):
     """load norm stats from cache if present; return None if missing.
 
-    mode "surface_anchor" maps the scroll's gap level to 0.1 and its surface papyrus level to 0.5.
+    mode "surface_anchor" maps the scroll's gap level to 0.1 and its surface papyrus level to 0.5;
+    "surface_anchor_knee" uses the same stats (see scale_to_unit).
     """
     if mode == "raw255":
         return 0.0, 1.0, 0.0, 255.0
+    if mode == "surface_anchor_knee":
+        mode = "surface_anchor"
     sid = str(scroll_id)
     if not os.path.exists(cache_path):
         return None
@@ -153,6 +156,17 @@ SURFACE_ANCHOR_CACHE_PATH = "./surface_anchor_cache.json"
 ANCHOR_GAP_LEVEL = 0.1
 ANCHOR_PAPYRUS_LEVEL = 0.5
 SUPPORT_THRESHOLD = 0.5 * (ANCHOR_GAP_LEVEL + ANCHOR_PAPYRUS_LEVEL)
+# surface_anchor_knee: linear (identical to surface_anchor) below this level, tanh-compressed toward 1 above it
+HIGHLIGHT_KNEE = 0.85
+
+
+def scale_to_unit(zscored, g_min: float, g_max: float, mode: str = "global"):
+    """z-scored values -> [0, 1]; the knee mode bends highlights instead of clipping them flat at 1."""
+    unit = (zscored - g_min) / (g_max - g_min + 1e-12)
+    if mode == "surface_anchor_knee":
+        span = 1.0 - HIGHLIGHT_KNEE
+        unit = np.where(unit > HIGHLIGHT_KNEE, HIGHLIGHT_KNEE + span * np.tanh((unit - HIGHLIGHT_KNEE) / span), unit)
+    return np.clip(unit, 0.0, 1.0)
 
 
 def _read_json(path: str) -> dict:

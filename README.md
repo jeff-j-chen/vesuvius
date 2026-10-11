@@ -133,7 +133,7 @@ Shape `(H,W)` and mask coverage are measured from the current files in `masks/`;
 | 12 | `20260928000002` | PHerc0125 | `(1161, 3141)` | 77.3% | 2.50 cm² | 9.362µm / 113keV | `PHerc0125_z15344_w040_abf` (expanded auto-winder segment) |
 | 13 | `20260928000003` | PHerc0211 | `(1941, 3641)` | 53.5% | 26.229 cm² | 9.362µm / 113keV | `PHerc0211_z7312_w080_abf` (expanded auto-winder segment) |
 
-`assemble_test_segments.py` renders each surface from its tifxyz coordinates and the listed raw CT volume. 8.640µm meshes are rendered in their native volume space; the scan column is the volume the mesh was built on.
+`assemble_test_segments.py` renders each surface from its tifxyz coordinates and the listed raw CT volume; the scan column is the volume the mesh was built on. Every render lands on the 9.362µm training grid (in-plane pixels and depth steps): 9.362µm volumes are nearest-sampled, 8.640µm volumes are trilinearly resampled, like the 8.64µm training fragments. Zarrs record `voxel_um`/`source_voxel_um`; shapes in the table above for 8.640µm surfaces predate this (~8% larger), and stale surface labels, norms and composites are dropped on re-render.
 
 ### Flattened meshes
 

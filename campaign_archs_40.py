@@ -602,7 +602,7 @@ def _surface_anchor_ids(selected: list[dict]) -> tuple[int, ...]:
 def _smoke_config(config) -> list[int]:
     config.tra.n_epochs = 1
     config.tra.eval_int = 10**9
-    config.dl.num_workers = 2
+    config.dl.num_workers = 4
     config.data.max_samples_per_epoch = 2 * config.dl.num_workers * config.dl.batch_size
     config.init_weights = None
     config.model.require_architecture_init = False

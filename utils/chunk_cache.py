@@ -11,11 +11,12 @@ import numpy as np
 class SelectiveChunkVolume:
     """Read-only zarr-like volume backed by selected full-depth spatial chunks."""
 
-    def __init__(self, path: str, shape, dtype, chunks, norm_stats=None):
+    def __init__(self, path: str, shape, dtype, chunks, norm_stats=None, norm_mode: str = "global"):
         self.path = os.path.abspath(path)
         self.shape = tuple(int(value) for value in shape)
         self.source_dtype = np.dtype(dtype)
         self.norm_stats = None if norm_stats is None else tuple(float(value) for value in norm_stats)
+        self.norm_mode = str(norm_mode)
         self.normalized = self.norm_stats is not None
         self.dtype = np.dtype(np.float32) if self.normalized else self.source_dtype
         self.chunks = tuple(int(value) for value in chunks)
@@ -44,12 +45,12 @@ class SelectiveChunkVolume:
     def _prepare_array(self, array) -> np.ndarray:
         array = np.asarray(array)
         if self.normalized:
+            from .norm import scale_to_unit
+
             mean, std, lower, upper = self.norm_stats
             array = array.astype(np.float32)
             if std != 0:
-                array = (array - mean) / std
-                array = (array - lower) / (upper - lower)
-                array = np.clip(array, 0.0, 1.0)
+                array = scale_to_unit((array - mean) / std, lower, upper, self.norm_mode).astype(np.float32)
         return np.ascontiguousarray(array, dtype=self.dtype)
 
     def _prepare_cached_array(self, array) -> np.ndarray:
@@ -162,7 +163,7 @@ class SelectiveChunkVolume:
 _CACHE_REGISTRY: dict[str, SelectiveChunkVolume] = {}
 
 
-def get_selective_chunk_volume(source, norm_stats=None) -> SelectiveChunkVolume:
+def get_selective_chunk_volume(source, norm_stats=None, norm_mode: str = "global") -> SelectiveChunkVolume:
     path = os.path.abspath(str(source.store.path))
     cached = _CACHE_REGISTRY.get(path)
     if cached is None:
@@ -172,6 +173,7 @@ def get_selective_chunk_volume(source, norm_stats=None) -> SelectiveChunkVolume:
             source.dtype,
             source.chunks,
             norm_stats=norm_stats,
+            norm_mode=norm_mode,
         )
         _CACHE_REGISTRY[path] = cached
     elif (
@@ -182,7 +184,7 @@ def get_selective_chunk_volume(source, norm_stats=None) -> SelectiveChunkVolume:
         raise RuntimeError(f"selective cache metadata changed for {path}")
     elif cached.norm_stats != (
         None if norm_stats is None else tuple(float(value) for value in norm_stats)
-    ):
+    ) or (norm_stats is not None and cached.norm_mode != str(norm_mode)):
         # a later arm normalizes the same volume differently (e.g. surface-anchored norm)
         cached = SelectiveChunkVolume(
             path,
@@ -190,6 +192,7 @@ def get_selective_chunk_volume(source, norm_stats=None) -> SelectiveChunkVolume:
             source.dtype,
             source.chunks,
             norm_stats=norm_stats,
+            norm_mode=norm_mode,
         )
         _CACHE_REGISTRY[path] = cached
     return cached

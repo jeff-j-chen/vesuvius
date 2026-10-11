@@ -8,9 +8,11 @@ surface-anchor norm, nnPU far background, patch GroupDRO, batch 95 / lr 1.5e-4, 
   read from their degrader-translated `.translated` siblings (models/c39_degrader.pth, synthetic 9.36 um)
   plus real 113 keV / 1.2 m scan noise on every training crop (build_noise_bank.py)
 - PHerc1447 (20260930144758 / 20260930144760) added as its own physical domain (train_masks split)
-- figures only after the final epoch, for five scrolls: the vis-only p343_letters (20261007000000),
-  PHerc0211 (20260928000003) and PHerc0813 (20260928000007), which are preloaded but never trained on,
-  plus the trained pherc0500p2 (20250628074500) and pherc0814 seg46527 (20260226000000)
+- p343_letters (20261007000000) trained as a second pherc0343p patch (train_masks split); pherc0009b
+  (20250919125754) held out of training
+- figures only after the final epoch, for six scrolls: the vis-only pherc0009b, PHerc0211 (20260928000003)
+  and PHerc0813 (20260928000007), which are preloaded but never trained on, plus the trained
+  p343_letters, pherc0500p2 (20250628074500) and pherc0814 seg46527 (20260226000000)
 
 | tid                 | change vs baseline                                                         |
 |---------------------|----------------------------------------------------------------------------|
@@ -24,7 +26,12 @@ surface-anchor norm, nnPU far background, patch GroupDRO, batch 95 / lr 1.5e-4, 
 | character_failures  | static character forgetting: characters this repo's current model fails on |
 |                     | are drawn more often (character_failures.py, weight 1-4)                   |
 | new_letters         | assumed letters drawn at half brightness (value ~128) in dilated_inklabels |
-|                     | train as their own characters and fill 30% of all training draws           |
+|                     | train as their own characters and fill 30% of all training draws,          |
+|                     | with AND-mask on (as in and_mask)                                          |
+| new_letters_10      | new_letters with the assumed letters at 10% of all draws instead of 30%    |
+| new_letters_knee    | new_letters with surface_anchor_knee normalisation: surface anchors as     |
+|                     | before, but values above 0.85 are tanh-compressed toward 1 instead of      |
+|                     | being clipped flat at 1                                                    |
 
 `character_failures` needs character_failures.py to have written FORGETTING_PATH for every training
 scroll from the current ./inklabels; `new_letters` needs at least one assumed letter in a training split.
@@ -67,14 +74,16 @@ ROOT = Path(__file__).resolve().parent
 LOG_DIR = "./runs_archs41"
 MODEL_DIR = "models/archs41"
 INKLABEL_DIR = "./dilated_inklabels"
-N_EPOCHS = 10
+N_EPOCHS = 12
 PHERC1447_DOMAIN = "pherc1447"
 PHERC1447_IDS = (20260930144758, 20260930144760)
 P343_LETTERS_ID = 20261007000000
+HOLDOUT_DOMAIN = "pherc0009b"
+PHERC0009B_ID = 20250919125754
 PHERC0211_ID = 20260928000003
 PHERC0813_ID = 20260928000007
-VIS_ONLY_IDS = [P343_LETTERS_ID, PHERC0211_ID, PHERC0813_ID]
-TRAINED_VIS_IDS = [20250628074500, 20260226000000]  # pherc0500p2, pherc0814 seg46527
+VIS_ONLY_IDS = [PHERC0009B_ID, PHERC0211_ID, PHERC0813_ID]
+TRAINED_VIS_IDS = [P343_LETTERS_ID, 20250628074500, 20260226000000]  # p343_letters, pherc0500p2, pherc0814 seg46527
 VIS_SCROLL_IDS = [*VIS_ONLY_IDS, *TRAINED_VIS_IDS]
 FORGETTING_PATH = "character_failures/c41_character_failures.json"
 DENOISER = "models/denoiser_n2v_block3_4k.pth"
@@ -89,13 +98,15 @@ ASSEMBLY = {
 }
 
 TRAIN_SCROLL_DICT = {
-    **campaign40.BASE_SCROLL_DICT,
+    **{domain: list(ids) for domain, ids in campaign40.BASE_SCROLL_DICT.items() if domain != HOLDOUT_DOMAIN},
     PHERC1447_DOMAIN: list(PHERC1447_IDS),
 }
+TRAIN_SCROLL_DICT["pherc0343p"].append(P343_LETTERS_ID)
 SCROLLS = [
-    *campaign40.SCROLLS_BASE,
+    *(scroll for scroll in campaign40.SCROLLS_BASE if int(scroll.scroll_id) != PHERC0009B_ID),
     ScrollConfig(PHERC1447_IDS[0], split_axis="x", train_split_frac=0.75),
     ScrollConfig(PHERC1447_IDS[1], split_axis="x", train_split_frac=0.75),
+    ScrollConfig(P343_LETTERS_ID, split_axis="x", train_split_frac=0.75),
 ]
 DEGRADED = {**campaign40.DOWNSAMPLED, **campaign40.NATIVE_NOISE}
 CHARACTER_FAILURES = {
@@ -114,7 +125,7 @@ AND_MASK = {
     "tra.and_mask_groups": 4,
     "tra.and_mask_threshold": 0.5,
 }
-# unlabeled target crops: the label-free vis scrolls, never p343 (the held-out judge)
+# unlabeled target crops: the label-free vis scrolls, never pherc0009b (the held-out judge)
 DIVDIS_TARGET_IDS = [PHERC0211_ID, PHERC0813_ID]
 DIVDIS = {
     "model.divdis_heads": 2,
@@ -143,10 +154,12 @@ def _test(tid: str, changes: dict | None = None) -> dict:
 # arms that need hand-made inputs run last, so letters can still be drawn while the others train
 TESTS = [
     _test("baseline"),
-    _test("and_mask", AND_MASK),
     _test("divdis", DIVDIS),
     _test("character_failures", CHARACTER_FAILURES),
-    _test("new_letters", NEW_LETTERS),
+    _test("and_mask", AND_MASK),
+    _test("new_letters", {**NEW_LETTERS, **AND_MASK}),
+    _test("new_letters_10", {**NEW_LETTERS, **AND_MASK, "data.extra_label_share": 0.1}),
+    _test("new_letters_knee", {**NEW_LETTERS, **AND_MASK, "data.norm_mode": "surface_anchor_knee"}),
 ]
 
 
@@ -297,7 +310,7 @@ def ensure_noise_bank(test: dict, dry_run: bool) -> None:
 
 def forgetting_problems() -> list[str]:
     """why FORGETTING_PATH cannot drive the character_failures arm (empty when it can)."""
-    from utils.dataloader import inklabel_fingerprint
+    from utils.dataloader import character_label_fingerprint
 
     path = ROOT / FORGETTING_PATH
     if not path.is_file():
@@ -309,13 +322,13 @@ def forgetting_problems() -> list[str]:
     problems = []
     for scroll_id in training_scroll_ids():
         entry = stored.get("scrolls", {}).get(str(scroll_id))
-        label = ROOT / "inklabels" / f"{scroll_id}.png"
+        label = ROOT / INKLABEL_DIR / f"{scroll_id}.png"
         if entry is None:
             problems.append(f"{scroll_id}: no entry")
         elif not label.is_file():
             problems.append(f"{scroll_id}: {label} missing")
-        elif entry.get("inklabel_fingerprint") != inklabel_fingerprint(str(label)):
-            problems.append(f"{scroll_id}: ./inklabels changed since the file was written")
+        elif entry.get("label_fingerprint") != character_label_fingerprint(label):
+            problems.append(f"{scroll_id}: {INKLABEL_DIR} regular ink changed (or file predates dilated characters)")
     return problems
 
 
@@ -339,7 +352,7 @@ def arm_problems(test: dict) -> list[str]:
     if test["tid"] == "character_failures":
         failures = forgetting_problems()
         return ["needs `python3 character_failures.py` first: " + "; ".join(failures)] if failures else []
-    if test["tid"] == "new_letters" and not extra_letter_counts():
+    if test["config"].get("data.extra_inklabels") and not extra_letter_counts():
         return [f"needs assumed letters drawn at half brightness (~128) in {INKLABEL_DIR}/<id>.png"]
     return []
 
@@ -352,7 +365,7 @@ def preflight_arms(selected: list[dict]) -> None:
             print(f"[campaign41] WARNING {test['tid']} not ready yet: {problems[0]}", flush=True)
         elif test["tid"] == "character_failures":
             print(f"[campaign41] {FORGETTING_PATH} covers all {len(SCROLLS)} training scrolls", flush=True)
-        elif test["tid"] == "new_letters":
+        elif test["config"].get("data.extra_inklabels"):
             print(f"[campaign41] assumed-letter pixels by scroll: {extra_letter_counts()}", flush=True)
 
 
