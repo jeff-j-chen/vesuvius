@@ -68,6 +68,7 @@ import campaign_archs_31 as campaign31
 import campaign_archs_40 as campaign40
 from utils.config import ScrollConfig, startup_output
 from utils.norm import ensure_surface_anchors
+from utils.spectral_match import MATCHED_SUFFIX
 
 
 ROOT = Path(__file__).resolve().parent
@@ -109,6 +110,9 @@ SCROLLS = [
     ScrollConfig(P343_LETTERS_ID, split_axis="x", train_split_frac=0.75),
 ]
 DEGRADED = {**campaign40.DOWNSAMPLED, **campaign40.NATIVE_NOISE}
+# fine scans read from gaussian-PSF spectral-match copies (utils/spectral_match.py) instead of the learned
+# degrader's .translated copies, which carry 7-15x the native high-frequency power
+DEGRADED["data.zarr_suffix"] = {sid: MATCHED_SUFFIX for sid in DEGRADED["data.zarr_suffix"]}
 CHARACTER_FAILURES = {
     "tra.character_forgetting": True,
     "tra.character_forgetting_static": True,

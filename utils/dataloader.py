@@ -980,6 +980,10 @@ class Transform:
         # np.flip returns a view with negative strides so force a copy
         return np.flip(block, axis=axis).copy()
 
+def _train_only_ids(config) -> set:
+    return {int(scroll_id) for scroll_id in (getattr(config.data, "train_only_scroll_ids", ()) or ())}
+
+
 class InkVolumeDataset(IterableDataset):
     """iterable dataset for ink volume data"""
     def __init__(self, volume, mask, labels, config, x_range, y_range, norm_stats, shuffle=True, soft_labels=None, scroll_id=None, domain_id=None, character_namespace=None, scroll_mask=None, split_mask=None, character_grid=None, explicit_negative_mask=None, explicit_positive_mask=None, prepared_state=None, far_negative_coords=None, far_negative_units=None):
@@ -1388,7 +1392,7 @@ class InkVolumeDataset(IterableDataset):
             ).all(axis=(1, 3))
             chars[~split_cells] = 0
         if not np.any(chars > 0):
-            if not self.shuffle:
+            if not self.shuffle or (int(self.scroll_id) in _train_only_ids(self.c) and self._far_neg_coords):
                 self._character_nearest = None
                 self._character_ids = []
                 return
@@ -1516,6 +1520,9 @@ class InkVolumeDataset(IterableDataset):
         coords = []
         character_ids = self._sampled_character_ids()
         if not character_ids:
+            if self._far_neg_coords and int(self.scroll_id) in _train_only_ids(self.c):
+                far = self._far_neg_coords
+                return [far[index] for index in np.random.randint(len(far), size=target)]
             return coords
         weights = self._character_sampling_weights(character_ids)
         explicit_share = self._explicit_negative_share if self._explicit_neg_coords else 0.0
@@ -3255,6 +3262,12 @@ class DataManager:
         train and validation masks.
         InkVolumeDataset takes (x_range, y_range); we feed the split range on the split axis and
         the shared range on the other axis."""
+        heldout_ids = {
+            int(scroll_id)
+            for domain in (getattr(self.c.data, "holdout_domains", None) or ())
+            for scroll_id in (getattr(self.c.data, "train_scroll_dict", None) or {}).get(domain, ())
+        }
+        train_shuffle = self.scroll_id not in heldout_ids
         prepared_train = (
             self._prepared_cache_entry["train"]
             if self._prepared_cache_entry is not None else None
@@ -3272,7 +3285,7 @@ class DataManager:
                 prepared_train["x_range"],
                 prepared_train["y_range"],
                 self.norm_stats,
-                shuffle=True,
+                shuffle=train_shuffle,
                 scroll_id=self.scroll_id,
                 domain_id=self.domain_id,
                 character_namespace=self.character_namespace,
@@ -3467,7 +3480,7 @@ class DataManager:
             train_x,
             train_y,
             self.norm_stats,
-            shuffle=True,
+            shuffle=train_shuffle,
             scroll_id=self.scroll_id,
             domain_id=self.domain_id,
             character_namespace=self.character_namespace,
@@ -3906,6 +3919,9 @@ class DataManager:
 
         ink_count = int(ink_tile_eroded.sum())
         if ink_count == 0:
+            if int(self.scroll_id) in _train_only_ids(self.c):
+                # blank train-only scroll: no ring; all its papyrus becomes far background
+                return np.zeros_like(self.mask)
             return self.mask
 
         shell_r = int(getattr(self.c.data, 'ring_shell_r', 0))

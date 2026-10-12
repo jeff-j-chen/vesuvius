@@ -943,6 +943,13 @@ class Trainer:
                 extra_datasets=extra_sets,
                 extra_share=extra_share,
             )
+            validation_ids = getattr(self.c.data, "validation_scroll_ids", None)
+            if validation_ids is not None:
+                validation_ids = {int(scroll_id) for scroll_id in validation_ids}
+                unknown = validation_ids - set(scroll_ids)
+                if unknown:
+                    raise ValueError(f"validation_scroll_ids are not configured: {sorted(unknown)}")
+                valid_sets = [dataset for dataset in valid_sets if dataset.scroll_id in validation_ids]
             merged_valid = MultiScrollIterableDataset(valid_sets)
             train_loader, valid_loader = get_dataloaders(merged_train, merged_valid, self.c)
             # per-scroll InkVolumeDatasets (excludes DotPositiveDataset) for pos_weight sampling
@@ -1728,7 +1735,8 @@ class Trainer:
                 f"test_on_final={getattr(tra, 'test_on_final', False)} -> skipping test-frag load"
             )
 
-        if len(scroll_ids) > 1:
+        # single-scroll runs still need per-scroll visualizers when vis-only scrolls are configured
+        if len(scroll_ids) > 1 or len(visualizer_ids) > 1:
             self.vis = TensorboardVisualizer(self.c, mode="metrics")
             self.vis.writer.add_scalar("Run/Initializing", 1.0, 0)
             self.vis.writer.flush()

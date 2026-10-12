@@ -1721,6 +1721,34 @@ def step4_translate(name, zid, checkpoint, force=False):
     ensure_surface_anchors([volume_id], ZARR_DIR)
 
 
+def step4_spectral_match(name, zid, reference, force=False):
+    """write ves_zarrs2/<id>.matched.zarr: the local zarr blurred to the native spectrum, plus its norm and anchors."""
+    from utils.norm import UNIFIED_CACHE_PATH, compute_norm, ensure_surface_anchors, load_cached_norm
+    from utils.spectral_match import MATCHED_SUFFIX, fit_sigmas, is_matched, load_crops, match_zarr
+
+    src = os.path.join(ZARR_DIR, f"{zid}.zarr")
+    volume_id = f"{zid}{MATCHED_SUFFIX}"
+    dst = os.path.join(ZARR_DIR, f"{volume_id}.zarr")
+    if not os.path.isdir(src):
+        raise FileNotFoundError(f"{name}: {src} missing; assemble it first")
+    if is_matched(dst) and not force:
+        print(f"  [match] {dst} exists -> skip")
+    else:
+        sigma_xy, sigma_z, fitted = fit_sigmas(load_crops(src), reference)
+        print(f"  [match] {name}: sigma_xy={sigma_xy} sigma_z={sigma_z} fitted {np.round(fitted, 3).tolist()} "
+              f"reference {np.round(reference, 3).tolist()}", flush=True)
+        match_zarr(src, dst, sigma_xy, sigma_z)
+        force = True
+    if force or load_cached_norm(volume_id, UNIFIED_CACHE_PATH) is None:
+        compute_norm(volume_id, ZARR_DIR, cache_path=UNIFIED_CACHE_PATH, mask_id=zid)
+    if force and os.path.exists("surface_anchor_cache.json"):
+        anchors = json.load(open("surface_anchor_cache.json"))
+        if anchors.pop(volume_id, None) is not None:
+            with open("surface_anchor_cache.json", "w") as handle:
+                json.dump(anchors, handle, indent=2)
+    ensure_surface_anchors([volume_id], ZARR_DIR)
+
+
 def process_fragment(name, seg, zid, workers, skip_norm, skip_surface, chunk_depth, chunk_y, chunk_x,
                      prefix="", force=False):
     """run the full assembly pipeline for one fragment. isolated in try/except so a
@@ -1784,7 +1812,32 @@ def main():
     ap.add_argument("--degrader", default=None,
                     help="plan R only: translate the existing local zarrs of TRANSLATE_NAMES (or --only) with this "
                          "utils/degrader.py checkpoint into <id>.translated.zarr siblings; nothing is downloaded")
+    ap.add_argument("--spectral-match", action="store_true",
+                    help="write <id>.matched.zarr siblings of TRANSLATE_NAMES (or --only): each local zarr blurred "
+                         "with a fitted gaussian PSF to the native 113 keV spectrum (utils/spectral_match.py)")
     args = ap.parse_args()
+
+    if args.spectral_match:
+        from utils.spectral_match import reference_stats
+
+        want = {o.strip() for o in (args.only or "").split(",") if o.strip()} or set(TRANSLATE_NAMES)
+        reference = reference_stats(ZARR_DIR)
+        results = []
+        for name, _seg, zid in SEGMENTS:
+            if name not in want:
+                continue
+            try:
+                print(f"\n{'='*70}\n[match] {name} ({zid})\n{'='*70}", flush=True)
+                step4_spectral_match(name, zid, reference, force=args.force)
+                results.append((name, "OK"))
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                results.append((name, f"FAIL: {exc}"))
+        print("\n[match] SUMMARY")
+        for name, status in results:
+            print(f"  {name}: {status}")
+        return
 
     if args.degrader:
         want = {o.strip() for o in (args.only or "").split(",") if o.strip()} or set(TRANSLATE_NAMES)

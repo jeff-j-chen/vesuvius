@@ -476,7 +476,7 @@ def _external_files(test: dict) -> list[str]:
         upsampler = _upsampler_setting(test)
         if upsampler != "trilinear":
             files.append(upsampler)
-    if test["config"].get("data.zarr_suffix"):
+    if TRANSLATED_SUFFIX in (test["config"].get("data.zarr_suffix") or {}).values():
         files.append(DEGRADER)
     return files
 
@@ -484,10 +484,11 @@ def _external_files(test: dict) -> list[str]:
 def _translation_problems(test: dict) -> list[str]:
     """translated siblings that are missing, stale for this degrader, or lack norm/anchor entries."""
     suffixes = test["config"].get("data.zarr_suffix") or {}
-    if not suffixes or not (ROOT / DEGRADER).is_file():
+    if not suffixes:
         return []
     from utils.degrader import is_current
     from utils.norm import SURFACE_ANCHOR_CACHE_PATH, UNIFIED_CACHE_PATH, _read_json, load_cached_norm
+    from utils.spectral_match import is_matched
 
     zarr_root = Path(os.getenv("VESUVIUS_ZARR_PATH", "/vesuvius/ves_zarrs2"))
     anchors = _read_json(str(ROOT / SURFACE_ANCHOR_CACHE_PATH))
@@ -496,8 +497,11 @@ def _translation_problems(test: dict) -> list[str]:
         volume = zarr_root / f"{scroll_id}{suffix}.zarr"
         if not volume.is_dir():
             problems.append(f"{volume} missing")
-        elif not is_current(str(volume), str(ROOT / DEGRADER)):
+        elif suffix == TRANSLATED_SUFFIX and not (
+                (ROOT / DEGRADER).is_file() and is_current(str(volume), str(ROOT / DEGRADER))):
             problems.append(f"{volume} was not made by {DEGRADER}")
+        elif suffix != TRANSLATED_SUFFIX and not is_matched(str(volume)):
+            problems.append(f"{volume} is not a spectral-match copy")
         elif load_cached_norm(f"{scroll_id}{suffix}", str(ROOT / UNIFIED_CACHE_PATH)) is None:
             problems.append(f"{scroll_id}{suffix} has no norm_cache.json entry")
         elif f"{scroll_id}{suffix}" not in anchors:
@@ -523,7 +527,11 @@ def _ensure_downsampled_inputs(test: dict, dry_run: bool) -> None:
     problems = sorted(_translation_problems(test))
     if not problems:
         return
-    command = [sys.executable, str(ROOT / "assemble_training_segments.py"), "--degrader", DEGRADER]
+    suffixes = set((test["config"].get("data.zarr_suffix") or {}).values())
+    if suffixes == {TRANSLATED_SUFFIX}:
+        command = [sys.executable, str(ROOT / "assemble_training_segments.py"), "--degrader", DEGRADER]
+    else:
+        command = [sys.executable, str(ROOT / "assemble_training_segments.py"), "--spectral-match"]
     if dry_run:
         print(
             f"[campaign40] would translate fine-scan siblings for {test['tid']} with: {' '.join(command)}",

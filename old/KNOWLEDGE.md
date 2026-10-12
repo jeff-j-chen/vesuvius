@@ -1914,3 +1914,53 @@ made non-increasing, cached in `quality_transfer.json`. The dataloader multiplie
 crop of those scrolls by that fixed radial filter in Fourier space after intensity normalisation. The
 cache is re-measured automatically when a source zarr is newer than it (the 88 keV fragment
 re-renders made the first cache stale).
+
+## 25) Test-surface render fix: trilinear sampling on the 9.362um grid (2026-10-11)
+
+### Finding
+`assemble_test_segments.py` used to NEAREST-sample the raw 9.362um volume along each tifxyz mesh. Every
+training/holdout volume is instead a published (or externally rendered) surface volume, which is
+trilinearly sampled. Nearest sampling adds +/-0.5 voxel position jitter that changes pixel by pixel; it
+showed up as 3-6x more high-frequency power (hi/mid band ratio 0.010-0.017 vs 0.0024-0.0042 for every
+published 113 keV volume). The holdout (pherc0009b) is a published render, so method selection never
+saw this gap. 8.64um test meshes were also rendered at 8.64um (8% off the training grid).
+
+Decisive test on PHerc0841 (same mesh + raw volume, and_mask checkpoint, full-extent 16px cells):
+
+| render | recall@1%FPR | PR-AUC | mean score |
+|---|---:|---:|---:|
+| published surface volume | 0.114-0.116 | 0.176-0.178 | 0.41 |
+| our render, nearest | 0.058 | 0.136 | 0.52 |
+| our render, trilinear | 0.114 | 0.181 | 0.41 |
+
+The trilinear render reproduces the published one (layer-14 correlation 1.000). Swapping the surface
+maps or the normalization between renders changed nothing (recall 0.057-0.058 for all four
+combinations): the elastic surface (88% columns identical, 99.9% within one slice) and the norms are
+robust; only the volume render matters.
+
+### Current behaviour (assemble_test_segments.py)
+- every render is trilinear (tile-based dense block + `map_coordinates(order=1)`, ~1.4x nearest cost)
+  and lands on the 9.362um grid (8.64um volumes are resampled in-plane and in depth step)
+- zarrs carry `sampling=trilinear`, `voxel_um`, `source_voxel_um`; untagged zarrs re-render on the next
+  run (no `--force` needed, resumable)
+- output size keeps the old `(grid-1)*20+1` convention so existing surface labels/norms stay valid;
+  when a render's size changes, its surface labels, norm/anchor cache entries and composites are dropped
+  and rebuilt; composites are always rebuilt
+- `--parallel N` renders N fragments in spawned worker processes in priority order (main fragments,
+  then `--extras-order` sets); `--on-complete` fires per fragment
+- training: only p343_letters (`20261007000000`) is rendered by this renderer (re-rendered trilinear);
+  PHerc1447 windings come from Hugging Face renders, the 88 keV rescans from utils/fragment_rescan.py
+  (trilinear + box pre-filter); both were already smooth
+
+### Tools in old/ (scratch state/logs still go to _ves_tmp/)
+- `old/trilinear_test_pipeline.sh`: re-renders every test fragment + extras in tmux `dl`
+  (`--include-extras --parallel 3`); the hook frees caches (`tidy`) and queues each finished fragment;
+  one ensemble evaluator serves the queue
+- `old/test_eval.py`: queue-driven evaluation. `enqueue <zid>` / `end` / `tidy` (frees finished render
+  caches below 60 GB free) / `serve <ckpt>` (test_inference.ipynb cells, one model) /
+  `serve-ensemble` (test_inference_and_letters.ipynb: both checkpoints in its cell 2, shared z-scores,
+  2x2 figure to output/test_visualizations/and_letters_ensemble/)
+- `old/p841_render_check.py`: render the 0841 mesh through the test renderer (`render`), register it
+  to the published volume (`align`), score both against the 0841 labels (`score <ckpt>`)
+- `old/p841_factor_check.py <ckpt>`: scores the self-render with each combination of own/published
+  surface maps and norms (attributes a drop to volume vs surface vs normalization)

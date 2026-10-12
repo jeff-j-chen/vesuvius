@@ -63,7 +63,9 @@ def create_optimizer_and_scheduler(model, config: Config):
         or encoder_freeze_epochs > 0 or bool(freeze_prefixes)
     )
     if needs_groups:
-        encoder_prefixes = ("enc1.", "enc2.", "enc3.", "bottleneck.")
+        encoder_prefixes = tuple(getattr(config.tra, "encoder_prefixes", None) or (
+            "enc1.", "enc2.", "enc3.", "bottleneck.",
+        ))
         encoder_parameters = []
         task_parameters = []
         frozen_count = 0

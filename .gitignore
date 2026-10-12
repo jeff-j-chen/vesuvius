@@ -31,4 +31,4 @@ runs_*.log
 !runs_finetune2/
 output/surface_review/
 output/test_visualizations/
-output/
+output/models/

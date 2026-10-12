@@ -203,8 +203,8 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
     we:
       1. load the tifxyz mesh (x/y/z float32 grids, -1 = invalid)
       2. upsample the coordinate grid to the flattened output grid: one pixel per TARGET_VOXEL_UM
-      3. sample the raw volume there: NEAREST when the volume is already on the target grid,
-         TRILINEAR when it is not (8.64um volumes), like the resampled 8.64um training fragments
+      3. TRILINEAR-sample the raw volume there (like the published surface volumes; nearest sampling
+         halved held-out recall on PHerc0841), also resampling 8.64um volumes onto the 9.362um grid
     for a multi-layer surface volume we offset along the local surface NORMAL by +/- steps
     of normal_step target voxels.
     
@@ -233,11 +233,11 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
     
     # source voxels per output pixel / layer step
     step = TARGET_VOXEL_UM / float(source_um)
-    interpolate = abs(step - 1.0) > 1e-3 if trilinear is None else bool(trilinear)
+    interpolate = True if trilinear is None else bool(trilinear)
     gh, gw = X.shape
-    # published surface volumes use a (grid * upsample) canvas with cv2's pixel-centre resize convention
-    H = int(round(gh * upsample_factor / step))
-    W = int(round(gw * upsample_factor / step))
+    # same size convention as the earlier renders, so their surface labels and norms stay valid
+    H = int(round((gh - 1) * upsample_factor / step)) + 1
+    W = int(round((gw - 1) * upsample_factor / step)) + 1
     print(f"[mesh] grid {gh}x{gw} -> flattened {H}x{W}  valid={valid.mean():.3f}  "
           f"source {source_um:g}um -> {TARGET_VOXEL_UM:g}um ({'trilinear' if interpolate else 'nearest'})",
           flush=True)
@@ -343,15 +343,57 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
             zs = Zu + normals[..., 2] * off
         else:
             xs, ys, zs = Xu, Yu, Zu
-        if not interpolate:
-            return gather(np.rint(zs), np.rint(ys), np.rint(xs))
-        z0, y0, x0 = np.floor(zs), np.floor(ys), np.floor(xs)
-        fz, fy, fx = zs - z0, ys - y0, xs - x0
-        acc = np.zeros((H, W), dtype=np.float32)
-        for dz, dy, dx in corners:
-            weight = (fz if dz else 1 - fz) * (fy if dy else 1 - fy) * (fx if dx else 1 - fx)
-            acc += weight * gather(z0 + dz, y0 + dy, x0 + dx)
-        return np.clip(np.rint(acc), 0, 255).astype(np.uint8)
+        return gather(np.rint(zs), np.rint(ys), np.rint(xs))
+
+    def sample_trilinear(tile=256):
+        """all layers at once, per output tile: one dense block from cached chunks + map_coordinates(order=1)."""
+        from scipy.ndimage import map_coordinates
+
+        result = np.zeros((len(offsets), H, W), dtype=np.uint8)
+        upper = np.array(vol_shape)[:, None, None] - 1
+        chunks = {}
+
+        def chunk(key):
+            if key not in chunks:
+                if len(chunks) > 1024:
+                    chunks.clear()
+                chunks[key] = _load_raw_chunk(cache_dir, *key)
+            return chunks[key]
+
+        for ty in range(0, H, tile):
+            for tx in range(0, W, tile):
+                window = (slice(ty, ty + tile), slice(tx, tx + tile))
+                keep = validu[window]
+                if not keep.any():
+                    continue
+                base = np.stack([Zu[window][keep], Yu[window][keep], Xu[window][keep]])
+                if normals is None:
+                    pts = base[:, None, :]
+                else:
+                    direction = np.stack([normals[..., axis][window][keep] for axis in (2, 1, 0)])
+                    pts = base[:, None, :] + direction[:, None, :] * offsets[None, :, None].astype(np.float32)
+                pts = np.clip(pts, 0, upper)
+                flat = pts.reshape(3, -1)
+                lo = np.floor(flat.min(1)).astype(int)
+                hi = np.minimum(np.floor(flat.max(1)).astype(int) + 2, vol_shape)
+                block = np.zeros(tuple(hi - lo), dtype=np.uint8)
+                for zc in range(lo[0] // RAW_CHUNK, (hi[0] - 1) // RAW_CHUNK + 1):
+                    for yc in range(lo[1] // RAW_CHUNK, (hi[1] - 1) // RAW_CHUNK + 1):
+                        for xc in range(lo[2] // RAW_CHUNK, (hi[2] - 1) // RAW_CHUNK + 1):
+                            data = chunk((zc, yc, xc))
+                            if data is None:
+                                continue
+                            src, dst = [], []
+                            for axis, c in enumerate((zc, yc, xc)):
+                                a = max(lo[axis], c * RAW_CHUNK)
+                                b = min(hi[axis], (c + 1) * RAW_CHUNK)
+                                src.append(slice(a - c * RAW_CHUNK, b - c * RAW_CHUNK))
+                                dst.append(slice(a - lo[axis], b - lo[axis]))
+                            block[tuple(dst)] = data[tuple(src)]
+                values = map_coordinates(block, flat - lo[:, None], order=1, mode="nearest", output=np.float32)
+                values = np.clip(np.rint(values), 0, 255).astype(np.uint8).reshape(len(offsets), -1)
+                result[:, window[0], window[1]][:, keep] = values
+        return result
 
     # write zarr
     import zarr
@@ -359,14 +401,19 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
     store = zarr.open(out_zarr, mode="w", shape=(D, H, W), 
                       chunks=(min(chunk_depth, D), chunk_y, chunk_x),
                       dtype=output_dtype, compressor=None, zarr_format=2)
+    _require_disk(os.path.dirname(os.path.abspath(out_zarr)))
+    trilinear_volume = sample_trilinear() if interpolate else None
     for li, off in enumerate(offsets):
         _require_disk(os.path.dirname(os.path.abspath(out_zarr)))
-        store[li] = sample_layer(off).astype(store.dtype)
+        layer = trilinear_volume[li] if interpolate else sample_layer(off)
+        store[li] = layer.astype(store.dtype)
         print(f"[zarr] layer {li+1}/{D}", flush=True)
+    del trilinear_volume
     if reverse_depth and normals is not None:
         store.attrs["depth_flipped"] = True
     store.attrs["voxel_um"] = TARGET_VOXEL_UM
     store.attrs["source_voxel_um"] = float(source_um)
+    store.attrs["sampling"] = "trilinear" if interpolate else "nearest"
 
     # the rendered zarr is the source of truth for its usable footprint
     # derive the mask from the center layer rather than mesh validity alone
@@ -444,6 +491,24 @@ FRAGMENTS = [
     ("20260928000007", "PHerc0813_z7104_w020_abf",
      f"{BUCKET}/PHerc0813/volumes/20250821151723-9.362um-1.2m-113keV-masked.zarr/0",
      "16993,7947,7947"),
+    # PHerc0846A quick patch auto_grown_20260927134928530_abf under a numeric id (training needs int ids)
+    ("20260927134928", "quick_patches_from_D/PHerc0846A/auto_grown_20260927134928530_abf",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    # PHerc0846A patches (2026-10-12); bboxes overlap 20260927134928, z reaches ~3% past the scan top
+    ("20261012065803", "3_new/auto_grown_20261012065803387_abf",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    ("20261012073244", "3_new/auto_grown_20261012073244544_abf",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    ("20261012081237", "3_new/auto_grown_20261012081237255_abf",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    # 20261012073244's mesh moved +29 voxels along its render normal (_ves_tmp/offset_mesh.py): the next sheet
+    ("20261012073249", "3_new_offset/auto_grown_20261012073244544_abf_p29",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
 ]
 
 
@@ -462,14 +527,14 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
             os.remove(mask_path)
         print("  --force: cleared zarr + mask; keeping the raw chunk cache")
     
-    # idempotent: skip if this zarr + mask already exist
+    # idempotent: skip only zarrs already rendered on the 9.362um grid with trilinear sampling
     if os.path.isdir(out_zarr) and os.path.exists(mask_path):
         import zarr
         attrs = zarr.open(out_zarr, mode="r").attrs
-        if volume_voxel_um(vol_base) == TARGET_VOXEL_UM or attrs.get("voxel_um") == TARGET_VOXEL_UM:
+        if attrs.get("sampling") == "trilinear" and attrs.get("voxel_um") == TARGET_VOXEL_UM:
             print(f"  zarr + mask exist -> skip")
             return (zid, "OK (cached)")
-        print(f"  zarr was rendered at the source voxel size -> re-rendering at {TARGET_VOXEL_UM}um")
+        print(f"  zarr predates trilinear 9.362um rendering -> re-rendering")
         shutil.rmtree(out_zarr, ignore_errors=True)
     
     if not os.path.isdir(mesh_dir):
@@ -480,6 +545,9 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
     vol_shape_tuple = tuple(int(v) for v in vol_shape.split(","))
     source_um = volume_voxel_um(vol_base)
     old_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) if os.path.exists(mask_path) else None
+    # a mask marks a finished render (test_eval tidy frees its chunk cache), so drop it while rendering
+    if os.path.exists(mask_path):
+        os.remove(mask_path)
     
     print(f"  raw vol: {vol_base}  shape={vol_shape}")
     print(f"  (renders on-demand from S3 -- can take 10-30 min per fragment depending on size/speed)")
@@ -507,6 +575,10 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
             reverse_depth=zid in DEPTH_REVERSED,
             source_um=source_um)
         drop_stale_derived(zid, old_mask, mask_path)
+        # composites show the raw render, so they are rebuilt from the new one
+        for path in glob.glob(os.path.join(COMPOSITE_ROOT, f"{zid}_*.png")) + [extra_composite_path(zid)]:
+            if os.path.isfile(path):
+                os.remove(path)
         if drop_cache:
             shutil.rmtree(cache_dir, ignore_errors=True)
         return (zid, "OK")
@@ -817,6 +889,28 @@ def upload_extras_artifact(ats, r2_root, set_name, artifact, zids):
         os.remove(local)
 
 
+def _set_min_free(min_free_bytes):
+    global _MIN_FREE_BYTES
+    _MIN_FREE_BYTES = min_free_bytes
+
+
+def _render_job(job, workers, out_dir, script_dir, chunk_depth, chunk_y, chunk_x, force, index=0, total=1):
+    """render one main fragment (set_name None) or extra; returns (result, artifacts made)."""
+    zid, mesh_sub, vol_base, vol_shape, set_name = job
+    if _LOW_DISK.is_set():
+        return (zid, "STOPPED: low disk"), {}
+    label = f"extra {set_name}/{zid}" if set_name else f"{zid}  (mesh {mesh_sub})"
+    print(f"\n{'='*70}\n=== {index + 1}/{total}  {label} ===\n{'='*70}", flush=True)
+    if set_name is None:
+        return render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script_dir,
+                               chunk_depth, chunk_y, chunk_x, force=force), {}
+    result = render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script_dir,
+                             chunk_depth, chunk_y, chunk_x, force=force, mask_dir=EXTRAS_MASK_DIR,
+                             output_dtype=EXTRAS_DTYPE, drop_cache=True)
+    made = prepare_extra(zid, out_dir) if result[1].startswith("OK") else {}
+    return result, made
+
+
 def main():
     ap = argparse.ArgumentParser(description="assemble test segment zarrs from tifxyz meshes")
     ap.add_argument(
@@ -848,6 +942,8 @@ def main():
                          "{zid} is replaced by the fragment id")
     ap.add_argument("--extras-order", type=str, default=",".join(EXTRA_SETS),
                     help="comma-separated EXTRA_SETS names in render order (default: %(default)s)")
+    ap.add_argument("--parallel", type=int, default=1,
+                    help="fragments rendered concurrently in worker processes, started in priority order")
     args = ap.parse_args()
     if args.upload_extras and (args.only or not args.include_extras):
         ap.error("--upload-extras needs --include-extras and no --only (it would overwrite the R2 zips with a subset)")
@@ -897,34 +993,39 @@ def main():
           f"chunks=({args.chunk_depth},{args.chunk_y},{args.chunk_x})  min_free={args.min_free_gb:g} GB")
     
     results = []
-    for i, (zid, mesh_sub, vol_base, vol_shape) in enumerate(fragments, 1):
-        if _LOW_DISK.is_set():
-            break
-        print(f"\n{'='*70}\n=== {i}/{len(fragments)}  {zid}  (mesh {mesh_sub}) ===\n{'='*70}", flush=True)
-        result = render_fragment(zid, mesh_sub, vol_base, vol_shape, 
-                                args.workers, args.out_dir, script_dir,
-                                args.chunk_depth, args.chunk_y, args.chunk_x,
-                                force=args.force)
-        results.append(result)
-        if result[1].startswith("OK"):
-            run_on_complete(args.on_complete, zid)
-
     generated_in_loop = {}
-    for i, (zid, mesh_sub, vol_base, vol_shape, set_name) in enumerate(extras, 1):
-        if _LOW_DISK.is_set():
-            break
-        print(f"\n{'='*70}\n=== extra {i}/{len(extras)}  {set_name}/{zid} ===\n{'='*70}", flush=True)
-        result = render_fragment(
-            zid, mesh_sub, vol_base, vol_shape, args.workers, args.out_dir, script_dir,
-            args.chunk_depth, args.chunk_y, args.chunk_x, force=args.force,
-            mask_dir=EXTRAS_MASK_DIR, output_dtype=EXTRAS_DTYPE, drop_cache=True,
-        )
+    jobs = [(zid, mesh_sub, vol_base, vol_shape, None) for zid, mesh_sub, vol_base, vol_shape in fragments]
+    jobs += [tuple(fragment) for fragment in extras]
+    job_args = (args.workers, args.out_dir, script_dir, args.chunk_depth, args.chunk_y, args.chunk_x, args.force)
+
+    def finish(index, result, made):
+        zid, set_name = jobs[index][0], jobs[index][4]
         results.append(result)
-        if result[1].startswith("OK"):
-            for artifact, count in prepare_extra(zid, args.out_dir).items():
-                key = (set_name, artifact)
-                generated_in_loop[key] = generated_in_loop.get(key, 0) + count
-            run_on_complete(args.on_complete, zid)
+        if not result[1].startswith("OK"):
+            return
+        for artifact, count in made.items():
+            key = (set_name, artifact)
+            generated_in_loop[key] = generated_in_loop.get(key, 0) + count
+        run_on_complete(args.on_complete, zid)
+
+    if args.parallel <= 1:
+        for index, job in enumerate(jobs):
+            if _LOW_DISK.is_set():
+                break
+            finish(index, *_render_job(job, *job_args, index=index, total=len(jobs)))
+    else:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        with ProcessPoolExecutor(max_workers=args.parallel, mp_context=multiprocessing.get_context("spawn"),
+                                 initializer=_set_min_free, initargs=(_MIN_FREE_BYTES,)) as pool:
+            futures = {pool.submit(_render_job, job, *job_args, index=index, total=len(jobs)): index
+                       for index, job in enumerate(jobs)}
+            for future in as_completed(futures):
+                result = future.result()
+                finish(futures[future], *result)
+                if result[0][1].startswith("STOPPED"):
+                    _LOW_DISK.set()
+                    for pending in futures:
+                        pending.cancel()
     if _LOW_DISK.is_set():
         print(f"\n[assemble] free disk fell below {args.min_free_gb:g} GB -- remaining renders skipped")
     if extras:

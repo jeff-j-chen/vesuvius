@@ -218,6 +218,12 @@ def _process_chunk(valid, pm_sum, pm_cnt, pm_sum_t, pm_cnt_t, model, device,
             del bt
 
 
+def _configured_surface_window_offset(config, scroll_id):
+    offsets = getattr(config.data, "surface_window_offset_by_scroll", None) or {}
+    fallback = getattr(config.data, "surface_window_offset", 0)
+    return int(offsets.get(int(scroll_id), offsets.get(str(scroll_id), fallback)))
+
+
 def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False, also_tta=False, surface_depth_map=None, surface_confidence_map=None, surface_depth_offset=0):
     """run batched prediction over given coords returning downsampled map.
 
@@ -1639,9 +1645,10 @@ class TensorboardVisualizer:
         self.writer.add_scalar('Learning_Rate', learning_rate, epoch)
         self.writer.add_scalar('Time_Elapsed', time_elapsed, epoch)
 
-        self.log_confusion_matrix(train_metrics, val_metrics, epoch)
-        self.log_output_histogram(train_metrics, val_metrics, epoch)
-        self.log_metrics_comparison(train_metrics, val_metrics, epoch)
+        if not bool(getattr(self.c.tra, "disable_figures", False)):
+            self.log_confusion_matrix(train_metrics, val_metrics, epoch)
+            self.log_output_histogram(train_metrics, val_metrics, epoch)
+            self.log_metrics_comparison(train_metrics, val_metrics, epoch)
 
         # weight/gradient histogram logging disabled — too expensive on large models
         # self.log_weight_histograms(model, epoch)
@@ -1950,6 +1957,7 @@ class TensorboardVisualizer:
                 depth_start, "eval", self.global_mean, self.global_std, self.global_min, self.global_max,
                 surface_depth_map=self.surface_depth_map,
                 surface_confidence_map=self.surface_confidence_map,
+                surface_depth_offset=_configured_surface_window_offset(self.c, self.scroll1_id),
             )
             full_tta = full_pred
 
@@ -2546,6 +2554,7 @@ class TensorboardVisualizer:
             d_start, f"Frag_{sid}", gm, gs, gmin, gmax,
             surface_depth_map=frag.get("surface_depth"),
             surface_confidence_map=frag.get("surface_confidence"),
+            surface_depth_offset=_configured_surface_window_offset(self.c, sid),
         )
 
         cm    = getattr(self.c.data, "composite_method", "maxproj")
