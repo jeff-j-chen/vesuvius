@@ -4653,7 +4653,7 @@ def _free_run_name(config, repo_root: str) -> str:
     return name
 
 
-def main() -> None:
+def main(configure=None) -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -4662,6 +4662,9 @@ def main() -> None:
     args = parser.parse_args()
 
     config = Config()
+    # experiment runners (k_folds.py) edit the default config here, before any path resolution
+    if configure is not None:
+        configure(config)
     repo_root = os.path.dirname(os.path.abspath(__file__))
     # data, label, and cache paths in the config are repo-relative
     os.chdir(repo_root)

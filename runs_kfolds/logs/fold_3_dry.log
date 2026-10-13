@@ -1,0 +1,12 @@
+2026-10-13 23:47:02.473052: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1791935222.491668 1456741 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1791935222.497447 1456741 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1791935222.514050 1456741 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1791935222.514071 1456741 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1791935222.514073 1456741 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1791935222.514075 1456741 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2026-10-13 23:47:02.518072: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[preflight] 32 scroll(s) and init weights present
+[dry-run] run=fold_3 ctx=96 norm=surface_anchor domains={'pherc0139': 2, 'pherc0172': 1, 'pherc1667': 1, 'phercparis4': 1, 'pherc0500p2': 3, 'pherc0814': 5, 'phercparis2_fr143': 1, 'pherc51cr4_fr8': 1, 'phercparis1_fr34': 1, 'pherc0343p': 4, 'pherc0841': 1, 'pherc1447': 1, 'pherc0009b': 1, 'pherc0846a': 5} scrolls=30 vis=[20260927134931, 20261012073246, 20261012073250, 20261012065811, 20261012065813] epochs=8 batch=95 lr=0.00015 init=models/mae_0846a_six_flat13_m1_2k.pth -> /vesuvius/models/runs_kfolds/fold_3/final.pth (TensorBoard /vesuvius/runs_kfolds/fold_3)
