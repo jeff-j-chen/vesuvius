@@ -167,6 +167,33 @@ TRAIN_SCROLL_DICT = {
 }
 TRAIN_SCROLL_WEIGHT_BY_DOMAIN = {"pherc0139": 2, "pherc0343p": 4, "pherc0500p2": 3, "pherc0814": 5}
 
+# ---- default run: combo_patch_bag_strict (python3 train.py) ----
+# the campaign-40 set (TRAIN_SCROLLS without PHerc0009B), PHerc1447 x2 and the p343 letters patch, the three
+# labeled PHerc0846A patches (flat depth-13 aliases, train-only), then PHerc0009B. order sets the domain ids.
+RUN_0846A_IDS = (20260927134931, 20261012073246, 20261012073250)
+# vis-only, never trained and label-free: the straightened 0846A re-trace (flat alias 20261012065811 of
+# auto_grown_20261012065803387_straight_abf) and that mesh moved -28 voxels along its normal (alias 20261012065813)
+RUN_LABEL_FREE_VIS_IDS = (20261012065811, 20261012065813)
+# fine scans resampled to 9.362 um; trained on their spectrally matched <id>.matched zarrs plus native scan noise
+RUN_FINE_SCAN_IDS = (20240304141531, 20240304144031, 20231210121321, 20230301213755, 20231205222200,
+                     20230301213423, 20231201215900, 20230205142449)
+RUN_SCROLLS: List[ScrollConfig] = [
+    *(scroll for scroll in TRAIN_SCROLLS if scroll.scroll_id != 20250919125754),
+    ScrollConfig(20260930144758, split_axis="x", train_split_frac=0.75),  # PHerc1447 w058
+    ScrollConfig(20260930144760, split_axis="x", train_split_frac=0.75),  # PHerc1447 w060
+    ScrollConfig(20261007000000, split_axis="x", train_split_frac=0.75),  # PHerc0343P letters
+    *(ScrollConfig(scroll_id, split_axis="x", train_split_frac=1.0) for scroll_id in RUN_0846A_IDS),
+    ScrollConfig(20250919125754, split_axis="x", train_split_frac=0.75),  # PHerc0009B 487
+]
+RUN_TRAIN_SCROLL_DICT = {
+    **{name: list(ids) for name, ids in TRAIN_SCROLL_DICT.items() if name != "pherc0009b"},
+    "pherc0343p": [20250511003658, 20261007000000],
+    "pherc1447": [20260930144758, 20260930144760],
+    "pherc0009b": [20250919125754],
+    "pherc0846a": list(RUN_0846A_IDS),
+}
+RUN_DOMAIN_WEIGHTS = {**TRAIN_SCROLL_WEIGHT_BY_DOMAIN, "pherc0846a": 5}
+
 DEFAULT_TEST_SCROLL_IDS = (
     20260814140748,
     20260717193517,
@@ -193,14 +220,14 @@ class DataConfig:
             "/vesuvius/ves_zarrs2" if os.name == "posix" else r"C:\Users\ChenJeff\Documents\ves_zarrs2",
         )
     )
-    scrolls: List[ScrollConfig] = field(default_factory=lambda: list(TRAIN_SCROLLS))
+    scrolls: List[ScrollConfig] = field(default_factory=lambda: list(RUN_SCROLLS))
     train_scroll_dict: Optional[Dict[str, List[int]]] = field(
         default_factory=lambda: {
-            name: list(scroll_ids) for name, scroll_ids in TRAIN_SCROLL_DICT.items()
+            name: list(scroll_ids) for name, scroll_ids in RUN_TRAIN_SCROLL_DICT.items()
         }
     )
     train_scroll_weights: Optional[List[int]] = field(
-        default_factory=lambda: [TRAIN_SCROLL_WEIGHT_BY_DOMAIN.get(name, 1) for name in TRAIN_SCROLL_DICT]
+        default_factory=lambda: [RUN_DOMAIN_WEIGHTS.get(name, 1) for name in RUN_TRAIN_SCROLL_DICT]
     )
     test_scroll_ids: List[int] = field(
         default_factory=lambda: list(DEFAULT_TEST_SCROLL_IDS)
@@ -233,6 +260,8 @@ class DataConfig:
     ring_shell_r: int = 4
     # scrolls whose labels give positives only: no ring negatives are built around their ink
     ring_free_scroll_ids: List[int] = field(default_factory=list)
+    # ring cells of these scrolls are nnPU-unlabelled (label -2) instead of negatives; needs tra.pu_lambda > 0
+    ring_pu_scroll_ids: List[int] = field(default_factory=list)
     simple_split: bool = False  # true: axis/fraction split; false: train_masks/<scroll_id>.png
     # train masks painted the other way round: black = train, white = validation (palette marks unchanged)
     flipped_train_mask_ids: List[int] = field(default_factory=lambda: [20231210121321, 20240304144031])
@@ -241,6 +270,12 @@ class DataConfig:
     coordinate_hash_valid_fraction: float = 0.25
     coordinate_hash_seed: int = 29
     train_mask_dir: str = "./train_masks"
+    # vis scrolls scored on the whole patch: their train mask is ignored and every cell is validation
+    whole_patch_valid_scroll_ids: List[int] = field(default_factory=list)
+    # scrolls trained on everywhere (no validation split); a train mask only adds its painted explicit labels
+    train_only_scroll_ids: List[int] = field(default_factory=lambda: list(RUN_0846A_IDS))
+    # scrolls whose validation cells count toward validation metrics and checkpoints (None = all)
+    validation_scroll_ids: Optional[List[int]] = None
     surface_label_dir: str = "./surface_labels"
     context_size: int = 96
     context_downsample: int = 1
@@ -249,10 +284,10 @@ class DataConfig:
     eval_chunk_gb: float = 3.0  # bounded host-RAM target for the final W044 figure
     tta_mode: str = "light"  # eval TTA view set: "light"=id+hflip (2x), "flips"=id+h+v+180 (4x), "dihedral"=+/-90 too (6x)
     probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
-    vis_scroll_ids: Optional[List[int]] = field(default_factory=lambda: [20260221022814, 20250919125754, 20260928000003])
+    vis_scroll_ids: Optional[List[int]] = field(default_factory=lambda: list(RUN_LABEL_FREE_VIS_IDS))
     vis_preload_persistent: bool = True  # keep each visualized scroll volume in RAM for the whole run
     # vis-only scrolls without ink labels or train masks: zero labels, no train region (never mined or trained)
-    label_free_vis_scroll_ids: List[int] = field(default_factory=list)
+    label_free_vis_scroll_ids: List[int] = field(default_factory=lambda: list(RUN_LABEL_FREE_VIS_IDS))
     eval_stride: int = 32  # figure/inference window step in px; must not exceed the multitile center (grid*subtile)
     inklabel_dir: str = "./dilated_inklabels"
     label_dilate_r: int = 0
@@ -263,10 +298,14 @@ class DataConfig:
     depth_jitter: int = 1  # max slice jitter for depth window start; attacks depth-profile position memorization
     surface_relative_depth_window: bool = True  # center the source window on the literal map
     surface_window_offset: int = 0  # constant slice shift of the surface-centered window (train and eval)
-    surface_window_offset_by_scroll: dict = field(default_factory=dict)  # scroll id -> offset; overrides the constant
+    surface_window_offset_by_scroll: dict = field(  # scroll id -> offset; overrides the constant
+        default_factory=lambda: {
+            scroll_id: -1 for scroll_id in (*RUN_0846A_IDS, *RUN_LABEL_FREE_VIS_IDS)
+        }
+    )
     holdout_domains: List[str] = field(default_factory=list)  # train_scroll_dict names excluded from training only
     explicit_negative_share: float = 0.0  # fraction of character negative draws taken from hand-drawn explicit negatives
-    far_negative_share: float = 0.0  # fraction of character negative draws taken from far-background papyrus windows
+    far_negative_share: float = 0.30  # fraction of character negative draws taken from far-background papyrus windows
     far_negative_min_dist: int = 160  # px from any ink label before unlabeled papyrus counts as far background
     far_negative_forced_positive_dist: int = 200  # px far background must keep from any train-mask forced positive
     # half-brightness strokes in inklabel_dir are assumed letters: True trains them as their own characters,
@@ -281,12 +320,12 @@ class DataConfig:
     # "global": whole-volume z-score and raw min/max; "surface_anchor": gap -> 0.1, surface papyrus -> 0.5;
     # "raw255": raw / 255 (for model.input_tile_norm)
     norm_mode: str = "surface_anchor"
-    # scroll id -> zarr/norm-key suffix, e.g. {"20231210121321": ".translated"} reads <id>.translated.zarr
-    zarr_suffix: dict = field(default_factory=dict)
-    # plan R.3: crossres/build_noise_bank.py output added to training crops of these scrolls ("" = off)
-    native_noise: str = ""
+    # scroll id -> zarr/norm-key suffix, e.g. {"20231210121321": ".matched"} reads <id>.matched.zarr
+    zarr_suffix: dict = field(default_factory=lambda: {str(scroll_id): ".matched" for scroll_id in RUN_FINE_SCAN_IDS})
+    # build_noise_bank.py output added to training crops of these scrolls ("" = off)
+    native_noise: str = "models/native_noise_bank.npy"
     native_noise_scale: float = 1.0
-    native_noise_ids: List[int] = field(default_factory=list)
+    native_noise_ids: List[int] = field(default_factory=lambda: list(RUN_FINE_SCAN_IDS))
     # control: roll training-scroll labels by this fraction of the height (visualized scrolls keep theirs)
     label_shift_frac: float = 0.0
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
@@ -305,8 +344,8 @@ class DataConfig:
 
 @dataclass
 class DataloaderConfig:
-    batch_size: int = 96
-    num_workers: int = 4
+    batch_size: int = 95
+    num_workers: int = 8
     prefetch_factor: int = 2
     data_aug: bool = True
     rotation_prob: float = 0.6
@@ -393,7 +432,7 @@ class DataloaderConfig:
 
 @dataclass
 class TrainingConfig:
-    n_epochs: int = 10
+    n_epochs: int = 8
     aug_start_epoch: int = 0  # dataset transforms switch on at this epoch
     lr: float = 1.5e-4
     encoder_lr_scale: float = 1.0
@@ -405,11 +444,12 @@ class TrainingConfig:
     patience: int = 5
     lr_decay: float = 0.5
     save_int: int = 15
-    log_dir: str = "./runs_train"
-    eval_int: int = 10
-    eval_int_scrolls: int = 3
+    log_dir: str = "./runs"
+    eval_int: int = 8
+    eval_int_scrolls: int = 2
     test_int: int = 999
-    probe_int: int = 9999
+    probe_int: int = 999
+    disable_figures: bool = False  # True skips every eval figure (metrics are still logged)
     loss_type: str = "bce"
     gce_q: float = 0.9
     dice_weight: float = 0.0  # loss = (1 - w) * primary + w * soft Dice over supervised cells
@@ -423,7 +463,7 @@ class TrainingConfig:
     tile_pos_weight_auto: bool = False  # when tile_pos_weight==0, compute pos_weight from data (neg/pos over supervised units) and cache per scroll+mode
     dann: bool = False
     dann_lambda: float = 0.0
-    dann_n_domains: int = 12
+    dann_n_domains: int = 14
     dann_grl_anneal: bool = False
     spill_reduction: bool = False
     spill_lambda: float = 0.0
@@ -510,9 +550,9 @@ class TrainingConfig:
     depth_view_consistency_lambda: float = 0.2
     depth_view_consistency_offset: int = 2
     character_bag_ranking: bool = True
-    character_bag_margin: float = 0.5
-    character_bag_topk_frac: float = 0.5
-    character_bag_lambda: float = 0.2
+    character_bag_margin: float = 1.0
+    character_bag_topk_frac: float = 0.25
+    character_bag_lambda: float = 0.6
     character_groupdro: bool = False
     character_groupdro_eta: float = 0.05
     character_groupdro_max_ratio: float = 3.0
@@ -537,9 +577,11 @@ class TrainingConfig:
     pcgrad_gram_ema: float = 0.0
     # AND-mask: per-step random domain groups, each run as its own sub-batch; only coordinates
     # where at least and_mask_threshold of the groups agree in gradient sign are updated
-    and_mask: bool = False
+    and_mask: bool = True
     and_mask_groups: int = 4
     and_mask_threshold: float = 0.5
+    # "domain": groups are sets of physical domains; "patch": sets of individual segments
+    and_mask_unit: str = "patch"
     # Fish: sequential inner optimizer steps over the same domain groups, then a partial meta step
     # back toward the start; with and_mask the meta step keeps only sign-agreeing coordinates
     fish: bool = False
@@ -562,10 +604,14 @@ class TrainingConfig:
     cross_scroll_rank_pairs: int = 4096
     # non-negative PU risk (Kiryo et al. 2017) on far-background cells (label -2), treated as
     # unlabelled with this ink prior instead of as negatives; needs data.far_negative_share > 0
-    pu_lambda: float = 0.0
-    pu_prior: float = 0.03  # share of positive 16 px cells among far-background cells, not pixel share
+    pu_lambda: float = 1.0
+    pu_prior: float = 0.05  # share of positive 16 px cells among far-background cells, not pixel share
     pu_beta: float = 0.0  # Kiryo's beta/gamma: below -beta the PU risk takes a gamma-scaled ascent step
     pu_gamma: float = 1.0
+    # pairwise logistic ranking of ink cells above nnPU-unlabelled cells of the same physical domain;
+    # PU AUC is affine in PN AUC, so hidden ink among the unlabelled cells does not bias the ranking
+    pu_rank_lambda: float = 0.0
+    pu_rank_pairs: int = 1024  # sampled pairs per domain and step
     # drop cells whose fitted surface shows no papyrus from the loss: "" off, "pos" positives, "both"
     support_drop: str = ""
     support_min_fraction: float = 0.25
@@ -750,13 +796,14 @@ class Config:
     model: ModelConfig = field(default_factory=ModelConfig)
     hm: HardMiningConfig = field(default_factory=HardMiningConfig)
     device: str = field(default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu")
-    # train.py writes here; finetune.py reads <model_dir>/final.pth
-    model_dir: str = "models/train/holdout_n96_combined_surface_norm"
-    exp_name: Optional[str] = "holdout_n96_combined_surface_norm"
-    # exact log folder name (no timestamp appended); campaigns set it equal to the model_dir name
-    run_name: Optional[str] = None
-    init_weights: Optional[str] = "models/mae_nnunet_192_campaign34_early_gated_fiber_native96_surfacenorm_campaign40_2k.pth"
-    save_final: Optional[str] = "models/train/holdout_n96_combined_surface_norm/final.pth"
+    # train.py writes the checkpoints here (models/runs/<run name>) and TensorBoard to tra.log_dir/<run name>
+    model_dir: str = "models/runs/combo_patch_bag_strict"
+    exp_name: Optional[str] = "combo_patch_bag_strict"
+    # exact log folder name (no timestamp appended)
+    run_name: Optional[str] = "combo_patch_bag_strict"
+    # six-patch PHerc0846A MAE continuation of the campaign-40 corpus MAE
+    init_weights: Optional[str] = "models/mae_0846a_six_flat13_m1_2k.pth"
+    save_final: Optional[str] = "models/runs/combo_patch_bag_strict/final.pth"
 
     def scroll_ids(self) -> List[int]:
         return [scroll.scroll_id for scroll in self.data.scrolls]

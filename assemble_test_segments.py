@@ -30,6 +30,17 @@ EXTRAS (--include-extras, off by default)
 usage:
   python assemble_test_segments.py [--workers N] [--out-dir DIR] [--include-extras]
 
+FLAT ALIASES (always)
+  the PHerc0846A patches train and evaluate under flat depth-13 aliases (FLAT_ALIASES): <alias>.zarr and the
+  mask/label/train-mask PNGs are symlinks to the source render, surface_labels/<alias>/ is a flat depth-13
+  map over the mask, and the alias gets its own norm and surface-anchor cache entries.
+
+SECOND-SCAN RENDERS (separate modes; utils/rescan_overlap.py, utils/paris4_137kev.py)
+  --rescan-overlap SEG [SEG ...]   PHercParis4 segments rendered from both the 78 and 137 keV scans
+                                   (ids <seg>78 / <seg>137) plus their verification figures
+  --paris4-validate-78             78 keV crop render of paris4 20231210121321; prints the normal sign
+  --paris4-137kev --paris4-sign S  paris4 rendered from the 137 keV scan as id 20260323153942
+
 output:
     ves_zarrs2/<scroll_id>.zarr
     masks/<scroll_id>.png
@@ -495,21 +506,78 @@ FRAGMENTS = [
     ("20260927134928", "quick_patches_from_D/PHerc0846A/auto_grown_20260927134928530_abf",
      f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
      "14019,7726,7726"),
-    # PHerc0846A patches (2026-10-12); bboxes overlap 20260927134928, z reaches ~3% past the scan top
-    ("20261012065803", "3_new/auto_grown_20261012065803387_abf",
+    # PHerc0846A patches (2026-10-12); bboxes overlap 20260927134928, z reaches ~3% past the scan top.
+    # the original 3_new/auto_grown_20261012065803387_abf sheet (20261012065803) is retired in favour of its
+    # straightened re-trace below; a different mesh, ~70% within 15 vx of it
+    ("20261012065810", "auto_grown_20261012065803387_straight_abf",
      f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
      "14019,7726,7726"),
+    # the straight mesh moved -28 voxels along the render normal (old/offset_mesh.py), opposite to the +29 sheet
+    ("20261012065812", "auto_grown_20261012065803387_straight_abf_m28",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    # Committed original mesh; edited alternatives are retained for reference only.
     ("20261012073244", "3_new/auto_grown_20261012073244544_abf",
      f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
      "14019,7726,7726"),
     ("20261012081237", "3_new/auto_grown_20261012081237255_abf",
      f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
      "14019,7726,7726"),
-    # 20261012073244's mesh moved +29 voxels along its render normal (_ves_tmp/offset_mesh.py): the next sheet
+    # Committed +29 mesh, restored with its original native grid and separate offset inklabels.
+    # Presentation only: base 90 CCW, offset 90 CW; do not rotate stored arrays during assembly.
     ("20261012073249", "3_new_offset/auto_grown_20261012073244544_abf_p29",
      f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
      "14019,7726,7726"),
 ]
+
+# source render -> flat depth-13 alias used by training and the 0846A notebook (see the docstring)
+FLAT_ALIASES = {
+    "20260927134928": "20260927134931",
+    "20261012073244": "20261012073246",
+    "20261012073249": "20261012073250",
+    "20261012081237": "20261012081238",
+    "20261012065810": "20261012065811",
+    "20261012065812": "20261012065813",
+}
+FLAT_DEPTH = 13
+
+
+def _link(link, target_name):
+    """relative symlink link -> target_name (in the same folder); an existing link or file is kept."""
+    if os.path.islink(link) or os.path.exists(link):
+        return
+    os.symlink(target_name, link)
+
+
+def make_flat_alias(src, dst, out_dir):
+    """symlink dst's zarr/mask/labels to src, write its flat surface, and cache its norm + surface anchors."""
+    from utils.norm import compute_norm, ensure_surface_anchors, load_cached_norm
+
+    if not os.path.isdir(os.path.join(out_dir, f"{src}.zarr")) or not os.path.isfile(os.path.join(MASK_DIR, f"{src}.png")):
+        return f"SKIP (source {src} not assembled)"
+    _link(os.path.join(out_dir, f"{dst}.zarr"), f"{src}.zarr")
+    for folder in ("masks", "dilated_inklabels", "train_masks"):
+        if os.path.isfile(os.path.join(SCRIPT_DIR, folder, f"{src}.png")):
+            _link(os.path.join(SCRIPT_DIR, folder, f"{dst}.png"), f"{src}.png")
+    mask = cv2.imread(os.path.join(MASK_DIR, f"{src}.png"), cv2.IMREAD_GRAYSCALE) > 0
+    surface = os.path.join(SURFACE_LABEL_ROOT, dst)
+    depth_path = os.path.join(surface, "depth.npy")
+    if not os.path.isfile(depth_path) or np.load(depth_path, mmap_mode="r").shape != mask.shape:
+        # a new or resized source render invalidates the alias surface and its cached statistics
+        for name in ("norm_cache.json", "surface_anchor_cache.json"):
+            _drop_json_key(os.path.join(SCRIPT_DIR, name), dst)
+        os.makedirs(surface, exist_ok=True)
+        np.save(depth_path, np.where(mask, FLAT_DEPTH, 255).astype(np.uint8))
+        np.save(os.path.join(surface, "confidence.npy"), np.where(mask, 255, 0).astype(np.uint8))
+        with open(os.path.join(surface, "metadata.json"), "w", encoding="utf-8") as handle:
+            json.dump({"scroll_id": int(dst), "flat_from": int(src), "flat_depth": FLAT_DEPTH,
+                       "invalid_depth_value": 255}, handle, indent=2)
+    cache = os.path.join(SCRIPT_DIR, "norm_cache.json")
+    for sid in (src, dst):
+        if load_cached_norm(sid, cache) is None:
+            compute_norm(sid, out_dir, cache_path=cache)
+    ensure_surface_anchors([dst], out_dir)
+    return "OK"
 
 
 def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script_dir,
@@ -944,7 +1012,25 @@ def main():
                     help="comma-separated EXTRA_SETS names in render order (default: %(default)s)")
     ap.add_argument("--parallel", type=int, default=1,
                     help="fragments rendered concurrently in worker processes, started in priority order")
+    ap.add_argument("--rescan-overlap", nargs="+", metavar="SEG", default=None,
+                    help="only render these PHercParis4 segments from both the 78 and 137 keV scans, then verify")
+    ap.add_argument("--paris4-validate-78", action="store_true",
+                    help="only render a 78 keV crop of paris4 20231210121321 and report the normal sign")
+    ap.add_argument("--paris4-137kev", action="store_true",
+                    help="only render paris4 20231210121321 from the 137 keV scan (id 20260323153942)")
+    ap.add_argument("--paris4-sign", type=float, default=None, help="normal sign from --paris4-validate-78")
     args = ap.parse_args()
+    if args.rescan_overlap or args.paris4_validate_78 or args.paris4_137kev:
+        os.chdir(SCRIPT_DIR)
+        if args.rescan_overlap:
+            from utils import rescan_overlap
+            for segment in args.rescan_overlap:
+                rescan_overlap.assemble(segment)
+                rescan_overlap.verify(segment)
+        if args.paris4_validate_78 or args.paris4_137kev:
+            from utils import paris4_137kev
+            paris4_137kev.run(validate_78_only=args.paris4_validate_78, sign=args.paris4_sign)
+        return 0
     if args.upload_extras and (args.only or not args.include_extras):
         ap.error("--upload-extras needs --include-extras and no --only (it would overwrite the R2 zips with a subset)")
     global _MIN_FREE_BYTES
@@ -1028,6 +1114,10 @@ def main():
                         pending.cancel()
     if _LOW_DISK.is_set():
         print(f"\n[assemble] free disk fell below {args.min_free_gb:g} GB -- remaining renders skipped")
+    rendered = {zid for zid, status in results if status.startswith("OK")}
+    for src, dst in FLAT_ALIASES.items():
+        if src in rendered:
+            results.append((f"{dst} (flat alias of {src})", make_flat_alias(src, dst, args.out_dir)))
     if extras:
         sync_extras_artifacts(ats, r2_root, extras, args.out_dir, already_generated=generated_in_loop)
     if args.upload_extras and extras:

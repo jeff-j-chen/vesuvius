@@ -26,7 +26,7 @@ RENDER_LINES = 3
 MIN_TRAINING_CARD_WIDTH = 260
 TEST_CARD_LABEL_HEIGHT = 96
 SECTION_TITLE_HEIGHT = 54
-CANVAS_WIDTH = 3_008
+CANVAS_WIDTH = 3_840
 BACKGROUND = (246, 246, 242)
 PANEL_BACKGROUND = (255, 255, 255)
 TEXT = (25, 25, 25)
@@ -50,6 +50,7 @@ class Patch:
 MASK_OVERLAY_IDS = {
     "20231201215900", "20230301213755", "20230205142449", "20231205222200", "20230301213423",
     "20260930144758", "20260930144760", "20260930144762",
+    "20261007000000", "20260927134931", "20261012073246", "20261012073250",
 }
 
 
@@ -185,7 +186,9 @@ def _label_preview(patch: Patch) -> tuple[np.ndarray, str]:
 
 
 def _mask_overlay_preview(patch: Patch) -> tuple[np.ndarray, str]:
-    mask = _fit_height(_read_gray(ROOT / "masks" / f"{patch.patch_id}.png"))
+    from utils.fast_figure import orient_display
+
+    mask = _fit_height(orient_display(_read_gray(ROOT / "masks" / f"{patch.patch_id}.png"), patch.patch_id))
     inside = mask > 127
     preview = np.full((*mask.shape, 3), 255, np.uint8)
     preview[inside] = (232, 232, 227)
@@ -193,7 +196,7 @@ def _mask_overlay_preview(patch: Patch) -> tuple[np.ndarray, str]:
     outline = cv2.morphologyEx(inside.astype(np.uint8), cv2.MORPH_GRADIENT, kernel) > 0
     preview[outline] = (35, 35, 35)
 
-    overlay = _read_gray(LABEL_DIR / f"{patch.patch_id}.png")
+    overlay = orient_display(_read_gray(LABEL_DIR / f"{patch.patch_id}.png"), patch.patch_id)
     overlay = cv2.resize(
         overlay,
         (preview.shape[1], preview.shape[0]),

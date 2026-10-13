@@ -1,0 +1,45 @@
+{
+ "pairs": [
+  "w044",
+  "w059",
+  "w030",
+  "w043",
+  "w045",
+  "w040",
+  "w041",
+  "w039",
+  "w035",
+  "seg46527"
+ ],
+ "monitor": [
+  "p841"
+ ],
+ "monitor_role": "all",
+ "min_ncc": 0.5,
+ "tiles": {
+  "w044": 18,
+  "w059": 58,
+  "w030": 16,
+  "w043": 31,
+  "w045": 56,
+  "w040": 104,
+  "w041": 64,
+  "w039": 19,
+  "w035": 30,
+  "seg46527": 6,
+  "p841": 40
+ },
+ "input_normalisation": "pooled 2.4 um: per-segment median/MAD -> reference median/MAD",
+ "target_normalisation": "native norm_cache.json entry, clipped to [0, 1]",
+ "reference_native_id": "20260115000000",
+ "report": {
+  "step": 2300,
+  "mse_translated": 0.007390642190704165,
+  "mse_pooled": 0.013917509125984842,
+  "ratio": 0.5310319629613451,
+  "spectrum_translated": 0.35009992122650146,
+  "slice_stats_translated": 0.05151987075805664,
+  "spectrum_pooled": 0.2763502895832062,
+  "slice_stats_pooled": 0.11020612716674805
+ }
+}

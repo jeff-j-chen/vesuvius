@@ -1,0 +1,25 @@
+{
+    "bbox": [
+        [
+            2135.2255859375,
+            2537.955078125,
+            10835.95703125
+        ],
+        [
+            5930.2783203125,
+            3487.76171875,
+            13650.4814453125
+        ]
+    ],
+    "date_last_modified": "20261012093313047",
+    "format": "tifxyz",
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "type": "seg",
+    "uuid": "auto_grown_20261012073244544_abf",
+    "vc3d_segment_display_id": "auto_grown_20261012073244544_abf",
+    "vc3d_segment_folder": "paths",
+    "vc3d_segment_folder_default_palette": true
+}

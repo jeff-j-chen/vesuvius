@@ -24,6 +24,264 @@ def config_for(tid):
 
 
 class LetterCampaignTest(unittest.TestCase):
+    def test_remaining_single_source_suite(self):
+        import campaign_letters_relabel as run
+        import campaign_letters_overnight as previous
+
+        expected = ("single_20260927134931", "single_20261012065806", "single_20261012073250")
+        self.assertEqual(run.REMAINING_SINGLE_ARMS, expected)
+        self.assertEqual(run.SUITES["single_remaining"], expected)
+        for tid in expected:
+            config = run.build_config(tid, "letters_single_remaining_v2")
+            sid = int(tid.removeprefix("single_"))
+            self.assertEqual(config.scroll_ids(), [sid])
+            self.assertEqual(config.data.train_scroll_dict, {"pherc0846a": [sid]})
+            self.assertEqual(config.data.train_only_scroll_ids, [sid])
+            self.assertEqual(config.data.train_scroll_weights, [1])
+            self.assertEqual(config.tra.freeze_prefixes, campaign.FREEZE_PREFIXES)
+            self.assertEqual(config.tra.n_epochs, 6)
+            self.assertEqual(config.tra.eval_int, 6)
+            self.assertEqual(config.tra.eval_int_scrolls, 8)
+            self.assertEqual(config.data.vis_scroll_ids, [*previous.VIS_IDS, *run.NEW_VIS_PATCHES])
+            self.assertEqual(config.tra.pu_lambda, 0)
+            self.assertEqual(config.data.far_negative_share, 0)
+            self.assertFalse(config.dl.data_aug)
+            self.assertEqual(config.init_weights, str(previous.SUPERVISED_WEIGHTS))
+
+    def test_transfer_probe_suite(self):
+        import campaign_letters_relabel as run
+        import campaign_letters_overnight as previous
+
+        name = "letters_transfer_probes_v2"
+        self.assertEqual(run.PROBE_ARMS, ("early_stop_2", "single_20261012073246", "weak_pu"))
+        self.assertEqual(run.suite_arms(run.DEFAULT_RUN), run.ARMS)
+        for tid in run.PROBE_ARMS:
+            config = run.build_config(tid, name)
+            self.assertEqual(config.data.vis_scroll_ids, [*previous.VIS_IDS, *run.NEW_VIS_PATCHES])
+            self.assertEqual(config.tra.eval_int_scrolls, 8)
+            self.assertTrue(set(run.NEW_VIS_PATCHES) <= set(config.data.label_free_vis_scroll_ids))
+            self.assertTrue(set(run.NEW_VIS_PATCHES).isdisjoint(config.scroll_ids()))
+            self.assertEqual(config.tra.eval_int, config.tra.n_epochs)
+            self.assertFalse(config.dl.data_aug)
+        early = run.build_config("early_stop_2", name)
+        self.assertEqual(early.tra.n_epochs, 2)
+        self.assertEqual(len(early.scroll_ids()), 5)
+        single = run.build_config(run.PROBE_ARMS[1], name)
+        self.assertEqual(single.scroll_ids(), [run.SINGLE_SOURCE])
+        self.assertEqual(single.data.train_scroll_dict, {"pherc0846a": [run.SINGLE_SOURCE]})
+        self.assertEqual(single.tra.pu_lambda, 0)
+        weak = run.build_config("weak_pu", name)
+        self.assertEqual((weak.tra.pu_lambda, weak.tra.pu_prior, weak.data.far_negative_share), (0.1, 0.2, 0.15))
+        self.assertEqual(len(weak.scroll_ids()), 5)
+
+    def test_relabel_queue_and_photometric_control(self):
+        import campaign_letters_relabel as run
+        import campaign_letters_overnight as previous
+
+        self.assertEqual(run.ARMS, ("baseline", *(f"loo_{sid}" for sid in previous.TRAIN_IDS), "brightness_contrast"))
+        baseline = run.build_config("baseline")
+        photo = run.build_config("brightness_contrast")
+        self.assertEqual(baseline.init_weights, str(previous.SUPERVISED_WEIGHTS))
+        self.assertNotEqual(baseline.model_dir, previous.finetune_config("baseline").model_dir)
+        self.assertFalse(baseline.dl.data_aug)
+        self.assertTrue(photo.dl.data_aug)
+        self.assertEqual((photo.dl.brightness_prob, photo.dl.brightness_delta), (0.5, 0.15))
+        self.assertEqual((photo.dl.contrast_prob, photo.dl.contrast_delta), (0.5, 0.2))
+        differences = {key for key, value in vars(baseline.dl).items() if value != getattr(photo.dl, key)}
+        self.assertEqual(differences, {"data_aug", "brightness_prob", "contrast_prob", "contrast_delta"})
+        self.assertEqual(vars(baseline.model), vars(photo.model))
+        self.assertEqual(vars(baseline.tra), vars(photo.tra))
+        for tid in run.ARMS:
+            config = run.build_config(tid)
+            self.assertEqual(config.tra.freeze_prefixes, campaign.FREEZE_PREFIXES)
+            self.assertEqual(config.tra.n_epochs, 6)
+            self.assertEqual(config.tra.pu_lambda, 0)
+            self.assertEqual(config.data.depth_jitter, 0)
+            self.assertEqual(config.data.vis_scroll_ids, previous.VIS_IDS)
+            if tid.startswith("loo_"):
+                sid = int(tid.removeprefix("loo_"))
+                self.assertEqual(config.data.validation_scroll_ids, [sid])
+                effective = {value for domain, values in config.data.train_scroll_dict.items()
+                             if domain not in config.data.holdout_domains for value in values}
+                self.assertNotIn(sid, effective)
+
+    def test_display_orientation_preserves_aligned_layers(self):
+        import matplotlib.pyplot as plt
+        from utils.fast_figure import display_rotation, orient_display
+
+        prediction = np.arange(6, dtype=np.float32).reshape(2, 3) / 6
+        original = prediction.copy()
+        trained = np.array([[True, True, True], [False, False, False]])
+        for sid, turns in ((20260927134931, 2), (20261012073246, 1), (20261012073250, 3), (20261012065806, 0)):
+            visualizer = TensorboardVisualizer.__new__(TensorboardVisualizer)
+            visualizer.c = SimpleNamespace(data=SimpleNamespace(eval_cmap_norm="raw"))
+            visualizer.scroll1_id = sid
+            figure = visualizer._create_eval_figure_2x2(prediction, None, np.ones_like(prediction),
+                                                       prediction * 255, None, None, manual_train_grid=trained)
+            np.testing.assert_array_equal(figure.axes[0].images[0].get_array(), np.rot90(prediction, turns))
+            np.testing.assert_array_equal(figure.axes[2].images[0].get_array(), np.rot90(prediction * 255, turns))
+            overlay = np.asarray(figure.axes[1].images[-1].get_array())
+            rotated_train = np.rot90(trained, turns)
+            self.assertTrue(np.all(overlay[rotated_train, 0] > overlay[rotated_train, 2]))
+            self.assertTrue(np.all(overlay[~rotated_train, 2] > overlay[~rotated_train, 0]))
+            plt.close(figure)
+        np.testing.assert_array_equal(prediction, original)
+        for alias in ("20260927134928", "auto_grown_20260927134928530_abf"):
+            self.assertEqual(display_rotation(alias), 2)
+        for alias in ("20261012073244", "auto_grown_20261012073244544_abf"):
+            self.assertEqual(display_rotation(alias), 1)
+        for alias in ("20261012073249", "auto_grown_20261012073244544_abf_p29"):
+            self.assertEqual(display_rotation(alias), 3)
+        self.assertIsNone(orient_display(None, 20261012073246))
+
+    def test_eval_overlay_distinguishes_heldout_letters(self):
+        import matplotlib.pyplot as plt
+
+        visualizer = TensorboardVisualizer.__new__(TensorboardVisualizer)
+        visualizer.c = SimpleNamespace(data=SimpleNamespace(eval_cmap_norm="raw"))
+        prediction = np.full((4, 4), 0.5, np.float32)
+        labels = np.ones((4, 4), bool)
+        trained = np.zeros((4, 4), bool)
+        trained[:2] = True
+        figure = visualizer._create_eval_figure_2x2(prediction, None, labels, None, None, None,
+                                                   manual_train_grid=trained)
+        overlay = np.asarray(figure.axes[1].images[-1].get_array())
+        self.assertGreater(overlay[0, 0, 0], overlay[0, 0, 2])
+        self.assertGreater(overlay[3, 0, 2], overlay[3, 0, 0])
+        self.assertIn("cyan: held out", figure.axes[1].get_title())
+        self.assertTrue(np.all(prediction == 0.5))
+        plt.close(figure)
+
+    def test_streamed_visualization_unwraps_normalized_training_cache(self):
+        import zarr
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "raw.zarr")
+            volume = zarr.open(path, mode="w", shape=(8, 16, 16), chunks=(8, 16, 16), dtype="u1")
+            volume[:] = 123
+            normalized_cache = SimpleNamespace(normalized=True, path=path)
+            visualizer = TensorboardVisualizer.__new__(TensorboardVisualizer)
+            visualizer.c = SimpleNamespace(data=SimpleNamespace(ram_safe_vis=True))
+            visualizer.volume = normalized_cache
+            self.assertFalse(visualizer.load_visualization_volume())
+            self.assertEqual(int(visualizer.volume[0, 0, 0]), 123)
+            self.assertFalse(getattr(visualizer.volume, "normalized", False))
+            visualizer.release_visualization_volume()
+            self.assertIs(visualizer.volume, normalized_cache)
+
+    def test_overnight_stage_and_matrix(self):
+        import campaign_letters_overnight as run
+
+        config = run.supervised_config()
+        self.assertTrue(config.tra.and_mask)
+        self.assertTrue(config.tra.disable_figures)
+        self.assertEqual(config.data.vis_scroll_ids, [])
+        self.assertGreater(config.tra.eval_int, config.tra.n_epochs)
+        self.assertEqual(config.init_weights, str(run.MAE_WEIGHTS))
+        self.assertNotEqual(config.save_final, campaign.DEFAULT_INIT_WEIGHTS)
+        self.assertEqual(len(run.FINE_TUNES), 13)
+        for tid in run.FINE_TUNES:
+            config = run.finetune_config(tid)
+            self.assertEqual(config.init_weights, str(run.SUPERVISED_WEIGHTS))
+            self.assertEqual(config.data.vis_scroll_ids, run.VIS_IDS)
+            self.assertEqual(config.tra.eval_int_scrolls, 6)
+            self.assertEqual(config.tra.n_epochs, 6)
+            self.assertEqual(config.tra.pu_lambda, 0)
+            self.assertEqual(config.data.far_negative_share, 0)
+            self.assertNotIn(run.EXTRA_ID, config.scroll_ids())
+            if tid.startswith("loo_"):
+                heldout = int(tid.removeprefix("loo_"))
+                self.assertEqual(config.data.validation_scroll_ids, [heldout])
+                self.assertNotIn(heldout, config.data.train_only_scroll_ids)
+                effective = {sid for domain, ids in config.data.train_scroll_dict.items()
+                             if domain not in config.data.holdout_domains for sid in ids}
+                self.assertNotIn(heldout, effective)
+                self.assertEqual(len(effective), 4)
+            elif tid.startswith("letters_fold_"):
+                self.assertEqual(config.data.validation_scroll_ids, list(run.TRAIN_IDS))
+                self.assertEqual(config.data.train_only_scroll_ids, [])
+
+    def test_overnight_augmentation_attribution(self):
+        import campaign_letters_overnight as run
+
+        baseline, geometric, bundled = [run.finetune_config(tid) for tid in ("baseline", "geometric", "bundled")]
+        self.assertFalse(baseline.dl.data_aug)
+        self.assertTrue(geometric.dl.data_aug)
+        self.assertGreater(geometric.dl.rotation_prob, 0)
+        self.assertEqual(geometric.data.depth_jitter, 0)
+        self.assertEqual(geometric.dl.cutout_prob, 0)
+        self.assertTrue(bundled.dl.data_aug)
+        self.assertEqual(bundled.data.depth_jitter, 1)
+        self.assertGreater(bundled.dl.cutout_prob, 0)
+        self.assertGreater(bundled.tra.rsc_prob, 0)
+        self.assertTrue(bundled.data.native_noise)
+        self.assertFalse(bundled.tra.physical_patch_groupdro)
+
+    def test_heldout_loader_selection(self):
+        import campaign_letters_overnight as run
+        from train import Trainer
+
+        class Dataset:
+            def __init__(self, scroll_id):
+                self.scroll_id = scroll_id
+
+            def __len__(self):
+                return 4
+
+        class Manager:
+            def __init__(self, config, scroll_id, **kwargs):
+                self.scroll_id = scroll_id
+
+            def get_datasets(self):
+                return Dataset(self.scroll_id), Dataset(self.scroll_id)
+
+        heldout = run.TRAIN_IDS[0]
+        trainer = Trainer.__new__(Trainer)
+        trainer.c = run.finetune_config(f"loo_{heldout}")
+        trainer.c.data.selective_chunk_preload = False
+        with patch("train.DataManager", Manager), patch("train.get_dataloaders", side_effect=lambda train, valid, config: (train, valid)):
+            training, _, validation = trainer._setup_data()
+        self.assertNotIn(heldout, {dataset.scroll_id for dataset in training.datasets})
+        self.assertEqual([dataset.scroll_id for dataset in validation.datasets], [heldout])
+
+    def test_overnight_dependency_order_and_failure(self):
+        import subprocess
+        import campaign_letters_overnight as run
+
+        for returncode in (0, 1):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with patch.object(run, "INPUT_ROOT", root / "inputs"), patch.object(run, "MODEL_ROOT", root / "models"), \
+                     patch.object(run, "preflight"), patch("sys.argv", ["overnight", "--only", "baseline,geometric"]), \
+                     patch.object(run.subprocess, "run", return_value=subprocess.CompletedProcess([], returncode)) as execute:
+                    if returncode:
+                        with self.assertRaisesRegex(RuntimeError, "and_mask failed"):
+                            run.main()
+                    else:
+                        run.main()
+                stages = [call.args[0][-1] for call in execute.call_args_list]
+                self.assertEqual(stages, ["and_mask"] if returncode else ["and_mask", "baseline", "geometric"])
+                status = json.loads((root / "models" / "status.json").read_text())
+                self.assertEqual(status["state"], "failed" if returncode else "complete")
+
+    def test_component_folds_withhold_every_letter_once(self):
+        import campaign_letters_overnight as run
+
+        label = np.zeros((384, 384), dtype=np.uint8)
+        for row in (32, 192):
+            for column in (32, 144, 256):
+                label[row:row + 32, column:column + 32] = 255
+        original = label.copy()
+        masks, inventory = run.component_assignments(label)
+        self.assertEqual(len(inventory), 6)
+        self.assertEqual(len(masks), 5)
+        self.assertTrue(np.array_equal(label, original))
+        training_counts = sum((mask > 0).astype(np.uint8) for mask in masks)
+        self.assertTrue(np.all(training_counts[label > 0] == 4))
+        for entry in inventory:
+            left, top, width, height = entry["bbox"]
+            self.assertFalse(masks[entry["fold"] - 1][top:top + height, left:left + width].any())
+
     def test_six_patch_mae_recipe(self):
         import mae_pretrain_letters as run
 

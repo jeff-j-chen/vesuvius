@@ -115,7 +115,7 @@ def main() -> None:
             score_m = min(soft, 4) * 3 + min(full, 3) * 2 + min(drop, 3) * 2 + min(gap, 3)
             if soft and (best_mixed is None or score_m > best_mixed[0]):
                 best_mixed = (score_m, wd)
-            score_r = min(neg, 10) * 2 + min(gap, 4) * 2
+            score_r = neg * 10 - gap
             if neg and not any(c["label"] for c in cs) and (best_ring is None or score_r > best_ring[0]):
                 best_ring = (score_r, wd)
 

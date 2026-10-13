@@ -1,115 +1,134 @@
-import torch
-import numpy as np
+"""finetune.py -- fine-tune the train.py checkpoint (mirrors ft_all_pioychi_h in campaign_finetune_96.py).
+
+Trains on PHerc1447 w060 x2 + PHerc0009B + PHerc0139 w044/w035 + PHerc0500P2 + PHerc0211.
+
+Starts from the model written by `python3 train.py` (models/train/holdout_n96_combined_surface_norm/final.pth);
+if that file is missing it falls back to models/archs40/holdout_n96_combined_surface_norm/final.pth.
+
+enc1/enc2 are frozen, enc3 + bottleneck train at 1e-6, decoder + head at 5e-5, for 8 epochs.
+PHerc0211 gets domain weight 2, the rest 1. Train/val splits come from train_masks/<scroll_id>.png.
+
+Usage:
+    python3 finetune.py
+"""
+from __future__ import annotations
+
 import argparse
-import time
-import cv2
 import os
-from torch.cuda.amp.grad_scaler import GradScaler
+import sys
 
-from utils.config import Config
-from utils.model import create_model
-from utils.dataloader import load_scroll4_data, get_or_compute_normalization
-from utils.finetune_dataloader import get_finetune_dataloaders
-from utils.training_utils import create_optimizer_and_scheduler, create_loss_function, save_model
-from train import train_epoch, validate_epoch, set_seed
-from utils.visualizer import TensorboardVisualizer
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, REPO_ROOT)
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
-# Locations from your provided file
-locs = [
-    # x, y, width, height
-    # train
-    [5612, 4110, 448, 448], [5060, 3452, 576, 576], [4992, 5032, 576, 576],
-    [4871, 6682, 576, 576], [8746, 3678, 576, 576], [9369, 1574, 576, 576],
-    [6690, 5182, 1280, 576], [2330, 5794, 672, 672], [1097, 3710, 672, 672],
-    [9978, 3384, 448, 1280],
-    # valid
-    [3284, 7940, 832, 448], [1962, 7972, 448, 448], [771, 5132, 384, 384]
+from utils.config import DEFAULT_SCROLLS, Config, ScrollConfig
+
+
+TRAINED_WEIGHTS = "models/train/holdout_n96_combined_surface_norm/final.pth"
+FALLBACK_WEIGHTS = "models/archs40/holdout_n96_combined_surface_norm/final.pth"
+LOG_DIR = "./runs_finetune"
+MODEL_DIR = "models/finetune/ft_all_pioychi_h"
+EXP_NAME = "ft_all_pioychi_h"
+
+PHERC1447_IDS = (20260930144758, 20260930144760)
+PHERC0211_ID = 20260928000003
+TRAIN_SCROLL_DICT = {
+    "pherc1447": list(PHERC1447_IDS),
+    "pherc0009b": [20250919125754],
+    "pherc0139": [20260115000000, 20260317000000],  # w044, w035
+    "pherc0500p2": [20250628074500],
+    "pherc0211": [PHERC0211_ID],
+}
+TRAIN_SCROLL_WEIGHTS = [1, 1, 1, 1, 2]
+_DEFAULT_SCROLL_BY_ID = {int(scroll.scroll_id): scroll for scroll in DEFAULT_SCROLLS}
+SCROLLS = [
+    ScrollConfig(PHERC1447_IDS[0], split_axis="x", train_split_frac=0.75),
+    ScrollConfig(PHERC1447_IDS[1], split_axis="x", train_split_frac=0.75),
+    *(_DEFAULT_SCROLL_BY_ID[scroll_id] for domain in ("pherc0009b", "pherc0139", "pherc0500p2")
+      for scroll_id in TRAIN_SCROLL_DICT[domain]),
+    ScrollConfig(PHERC0211_ID, split_axis="x", train_split_frac=1.0),
 ]
+VIS_SCROLL_IDS = [PHERC0211_ID, PHERC1447_IDS[1]]
 
-def main(config: Config, model_path: str):
-    set_seed(42)
-    
-    # --- 1. Load Model and Freeze Layers ---
-    print("Loading pre-trained model...")
-    if not os.path.exists(model_path):
-        print(f"Error: Model file not found at {model_path}")
+N_EPOCHS = 8
+FREEZE_PREFIXES = ("enc1.", "enc2.")
+ENCODER_LR = 1e-6
+TASK_LR = 5e-5
+
+
+def resolve_init_weights() -> str:
+    for path in (TRAINED_WEIGHTS, FALLBACK_WEIGHTS):
+        full = os.path.join(REPO_ROOT, path)
+        if os.path.isfile(full):
+            if path == FALLBACK_WEIGHTS:
+                print(f"[finetune] {TRAINED_WEIGHTS} not found; falling back to {FALLBACK_WEIGHTS}", flush=True)
+            return full
+    raise FileNotFoundError(f"no starting checkpoint: neither {TRAINED_WEIGHTS} nor {FALLBACK_WEIGHTS} exists")
+
+
+def build_config() -> Config:
+    config = Config()
+    config.exp_name = EXP_NAME
+    config.init_weights = resolve_init_weights()
+    config.tra.log_dir = os.path.normpath(os.path.join(REPO_ROOT, LOG_DIR))
+    config.model_dir = os.path.normpath(os.path.join(REPO_ROOT, MODEL_DIR))
+    config.save_final = os.path.join(config.model_dir, "final.pth")
+
+    config.data.scrolls = list(SCROLLS)
+    config.data.train_scroll_dict = {domain: list(ids) for domain, ids in TRAIN_SCROLL_DICT.items()}
+    config.data.train_scroll_weights = list(TRAIN_SCROLL_WEIGHTS)
+    config.data.vis_scroll_ids = list(VIS_SCROLL_IDS)
+
+    config.tra.n_epochs = N_EPOCHS
+    config.tra.eval_int = N_EPOCHS
+    config.tra.save_int = 1
+    config.tra.eval_int_scrolls = len(VIS_SCROLL_IDS)
+    config.tra.dann_n_domains = len(TRAIN_SCROLL_DICT)
+    config.tra.lr = TASK_LR
+    config.tra.encoder_lr_scale = 1.0
+    config.tra.encoder_freeze_epochs = 0
+    # read by utils/training_utils.py via getattr; not TrainingConfig fields
+    config.tra.freeze_prefixes = FREEZE_PREFIXES
+    config.tra.encoder_lr = ENCODER_LR
+    config.tra.task_lr = TASK_LR
+    return config
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="fine-tune the train.py checkpoint (ft_all_pioychi_h recipe)")
+    parser.add_argument("--dry-run", action="store_true", help="check inputs and print the config, then exit")
+    args = parser.parse_args()
+    # data, label, and cache paths in the config are repo-relative
+    os.chdir(REPO_ROOT)
+    config = build_config()
+
+    from train import Trainer, preflight_inputs
+
+    preflight_inputs(config)
+    if args.dry_run:
+        print(
+            f"[dry-run] scrolls={config.scroll_ids()} "
+            f"domains={dict(zip(config.data.train_scroll_dict, config.data.train_scroll_weights))} "
+            f"vis={config.data.vis_scroll_ids} epochs={config.tra.n_epochs} freeze={config.tra.freeze_prefixes} "
+            f"encoder_lr={config.tra.encoder_lr} task_lr={config.tra.task_lr} "
+            f"init={config.init_weights} -> {config.save_final}",
+            flush=True,
+        )
         return
-        
-    model, params = create_model(config)
-    model.load_state_dict(torch.load(model_path))
-    
-    print("Freezing feature extractor layers...")
-    for param in model.features.parameters():
-        param.requires_grad = False
 
-    # Verify which layers are frozen
-    for name, param in model.named_parameters():
-        print(f"{name}: trainable={param.requires_grad}")
+    from utils.norm import ensure_surface_anchors
 
-    # --- 2. Load Data and Dataloaders ---
-    print("Loading Scroll 4 data for fine-tuning...")
-    volume, mask, _, _ = load_scroll4_data(config)
-    labels_path = f"./eroded_inklabels/{config.data.scroll4_id}.png"
-    labels = cv2.imread(labels_path, cv2.IMREAD_GRAYSCALE) / 255.0
-    
-    print("Getting normalization stats for Scroll 4...")
-    norm_stats = get_or_compute_normalization(config.data.scroll4_id, volume, mask)
-    
-    print("Creating fine-tuning dataloaders...")
-    train_loader, valid_loader = get_finetune_dataloaders(config, volume, labels, mask, norm_stats, locs)
+    ensure_surface_anchors(
+        dict.fromkeys([*config.scroll_ids(), *config.data.vis_scroll_ids]),
+        config.data.zarr_path,
+        surface_dir=config.data.surface_label_dir,
+    )
+    print(f"[finetune] init={config.init_weights} -> {config.save_final}", flush=True)
 
-    # --- 3. Setup Training Components ---
-    # Use a smaller learning rate for fine-tuning
-    config.tra.lr = config.finetune.learning_rate
-    optimizer, scheduler = create_optimizer_and_scheduler(model, config)
-    
-    # For fine-tuning, we can use a simple pos_weight or calculate it on the small dataset
-    pos_weight = torch.tensor([2.0]) # A reasonable default for imbalanced data
-    criterion = create_loss_function(pos_weight, config)
-    
-    # --- 4. Training Loop ---
-    print("Initializing Tensorboard for fine-tuning...")
-    vis = TensorboardVisualizer(config, mode='finetune')
-    best_val_f1 = 0.0
-    best_val_loss = float('inf')
-    scaler = GradScaler()
-    
-    num_epochs = config.finetune.num_epochs
-    
-    for epoch in range(num_epochs):
-        start_time = time.time()
-        
-        train_metrics = train_epoch(model, train_loader, criterion, optimizer, config, scaler)
-        val_metrics = validate_epoch(model, valid_loader, criterion, config, scaler)
-        
-        scheduler.step(val_metrics['loss'])
-        current_lr = optimizer.param_groups[0]['lr']
-
-        # Save best model
-        if val_metrics['f1'] > best_val_f1:
-            best_val_f1 = val_metrics['f1']
-            save_model(model, f'{config.model_dir}/finetuned_best_f1.pth')
-            print(f"New best F1 model saved! Val F1: {best_val_f1:.4f}")
-
-        time_elapsed = time.time() - start_time
-        vis.log_epoch_metrics(epoch, model, train_metrics, val_metrics, current_lr, time_elapsed, params, pos_weight)
-
-    vis.close()
-    print("Fine-tuning completed.")
+    trainer = Trainer(config)
+    trainer.run()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Fine-tuning script for Vesuvius model.")
-    parser.add_argument(
-        "-m", "--model_path", 
-        type=str, 
-        default="models/best_model_f1.pth", 
-        help="Path to the pre-trained model file to fine-tune."
-    )
-    parser.add_argument("-n", "--experiment_name", type=str, default="finetune", help="Name of the fine-tuning experiment")
-    args = parser.parse_args()
-    
-    config = Config()
-    config.exp_name = args.experiment_name
-    
-    main(config, args.model_path)
+    main()

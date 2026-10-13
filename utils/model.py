@@ -2529,8 +2529,7 @@ class NnUnet3dLcndz(nn.Module):
             0, 1, 3, 2, 4
         ).reshape(batch, n * n, sub * sub)
         r = self.lse_r.clamp(min=0.5, max=self._mt_lse_r_max)
-        count = cells.new_tensor(float(cells.shape[-1]))
-        return (torch.logsumexp(r * cells, dim=-1) - torch.log(count)) / r
+        return (torch.logsumexp(r * cells, dim=-1) - math.log(cells.shape[-1])) / r
 
     def _divdis_scores(self, score: torch.Tensor, target_offsets: torch.Tensor | None) -> torch.Tensor:
         """score every DivDis route; training returns head 0, eval the selected head."""

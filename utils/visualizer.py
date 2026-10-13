@@ -30,7 +30,7 @@ from scipy import stats as scipy_stats
 
 from .config import Config
 from .dataloader import DataManager, imread_gray
-from .fast_figure import FAST_PNG
+from .fast_figure import FAST_PNG, display_rotation, orient_display
 from .norm import scale_to_unit
 from .training_utils import calculate_metrics
 
@@ -73,6 +73,7 @@ except Exception:
 SCROLL_CMAP = 'ink_gray_nan'
 # white vanishes on the white-papyrus colormap, so label overlays and split lines use red
 LABEL_TINT = np.array((0.9, 0.1, 0.1))
+HELDOUT_LABEL_TINT = np.array((0.0, 0.65, 0.95))
 SPLIT_COLOR = 'red'
 
 
@@ -947,6 +948,11 @@ class TensorboardVisualizer:
     def load_visualization_volume(self) -> bool:
         """temporarily materialize this scroll for figure inference."""
         if bool(getattr(self.c.data, "ram_safe_vis", False)):
+            if bool(getattr(self.volume, "normalized", False)) and hasattr(self.volume, "path"):
+                import zarr
+
+                self._streamed_volume = self.volume
+                self.volume = zarr.open(self.volume.path, mode="r")
             return False
         if isinstance(self.volume, np.ndarray):
             return False
@@ -2571,9 +2577,9 @@ class TensorboardVisualizer:
             bounds=(y0, y1, x0, x1),
         )
 
-        p1 = self._frag_colorize(raw, (Hc, Wc))
+        p1 = orient_display(self._frag_colorize(raw, (Hc, Wc)), sid)
         p2 = p1.copy()
-        p3 = cv2.cvtColor(comp, cv2.COLOR_GRAY2BGR)
+        p3 = orient_display(cv2.cvtColor(comp, cv2.COLOR_GRAY2BGR), sid)
         panels = [p1, p2, p3.copy(), p3.copy()]
         panels[3] = self._frag_scale_bar(panels[3], float(getattr(self.c.data, "voxel_um", 9.362)))
         # keep the four-panel layout while both prediction panels use one plain pass
@@ -2581,7 +2587,8 @@ class TensorboardVisualizer:
         _labels = [f"{name}  raw", "inference", "composite", "overlay"]
         panels = [self._frag_label(p, lb) for p, lb in zip(panels, _labels)]
         panels = [self._frag_pad(p, 24) for p in panels]
-        big = np.hstack(panels) if Hc >= Wc else np.vstack(panels)   # tall->side by side; wide->stacked
+        display_height, display_width = p1.shape[:2]
+        big = np.hstack(panels) if display_height >= display_width else np.vstack(panels)
 
         out_dir = os.path.join(self.log_path, "test_figs")
         os.makedirs(out_dir, exist_ok=True)
@@ -2696,6 +2703,19 @@ class TensorboardVisualizer:
         the prediction-plus-inklabel overlay. extra_binary (assumed letters) is tinted at half
         the opacity of label_binary.
         """
+        scroll_id = getattr(self, "scroll1_id", None)
+        if display_rotation(scroll_id):
+            if manual_train_grid is None and train_split_n is not None:
+                manual_train_grid = np.zeros_like(reg_pred, dtype=bool)
+                if split_axis == "y":
+                    manual_train_grid[:train_split_n] = True
+                else:
+                    manual_train_grid[:, :train_split_n] = True
+            reg_pred, tta_pred, label_binary, raw_1_1, raw_2_4, manual_train_grid, extra_binary = (
+                orient_display(image, scroll_id)
+                for image in (reg_pred, tta_pred, label_binary, raw_1_1, raw_2_4, manual_train_grid, extra_binary)
+            )
+            train_split_n = None
         h_tiles, w_tiles = reg_pred.shape
         aspect = w_tiles / max(h_tiles, 1)
         panel_w = max(6.0, min(16.0, w_tiles * 0.06))
@@ -2741,6 +2761,10 @@ class TensorboardVisualizer:
                     e[:eh, :ew] = (extra_binary[:eh, :ew] > 0.5) & ~g[:eh, :ew]
                 rgb[:h, :w][~g & ~e] = rgb[:h, :w][~g & ~e] * (1.0 - 0.15)
                 rgb[:h, :w][g] = 0.5 * rgb[:h, :w][g] + 0.5 * LABEL_TINT
+                if manual_train_grid is not None:
+                    mh, mw = min(h, manual_train_grid.shape[0]), min(w, manual_train_grid.shape[1])
+                    heldout = g[:mh, :mw] & ~manual_train_grid[:mh, :mw].astype(bool)
+                    rgb[:mh, :mw][heldout] += 0.5 * (HELDOUT_LABEL_TINT - LABEL_TINT)
                 rgb[:h, :w][e] = 0.75 * rgb[:h, :w][e] + 0.25 * LABEL_TINT
                 ax.imshow(rgb, aspect='equal', interpolation='nearest')
             else:
@@ -2756,7 +2780,10 @@ class TensorboardVisualizer:
         tp = tta_pred if tta_pred is not None else reg_pred
         tp_disp = self._display_norm(tp)
         _pred_panel(axes[0, 0], tp_disp, "inference")
-        _pred_panel(axes[0, 1], tp_disp, "inference + inklabel", overlay=True)
+        overlay_title = "inference + inklabel"
+        if manual_train_grid is not None:
+            overlay_title += " | red: trained, cyan: held out"
+        _pred_panel(axes[0, 1], tp_disp, overlay_title, overlay=True)
 
         for ax, raw, ttl in ((axes[1, 0], raw_1_1, "1.1um inklabel_raw"),
                              (axes[1, 1], raw_2_4, "2.4um inklabel_raw")):

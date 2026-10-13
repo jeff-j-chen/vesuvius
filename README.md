@@ -9,31 +9,21 @@ Experiment history and campaign-specific details are kept in `old/KNOWLEDGE.md`.
 The project normally runs in a Docker image with system Python. No project virtual environment is required.
 
 ```bash
-# assemble all configured training fragments
+# training zarrs, the degraded <id>.matched fine-scan volumes, norms and surface labels
 python3 assemble_training_segments.py
 
-# faster: assemble selected training fragments
-python3 assemble_training_segments.py --only w044,w013,500P2_front
-
-# optional: assemble the thirteen test fragments
+# test surfaces, plus the PHerc0846A patches and their flat aliases
 python3 assemble_test_segments.py
 
-# run training from the shared configuration
-python3 train.py -n experiment_name
+# check every input, then train the default run (combo_patch_bag_strict, 8 epochs)
+python3 train.py --dry-run
+python3 train.py
+tensorboard --logdir ./runs --bind-all
 ```
 
-Campaign files define complete experiments and call `train.py`. Checkpoints are stored under `models/`; TensorBoard logs are stored in the corresponding `runs_*` directory.
-
-Campaign 29 extends the Campaign 28 mid-3D/2D + gated baseline with physical-domain
-robust objectives, depth-localization variants, 8px multitile targets, and fragment-only
-controls. It performs architecture-matched MAE pretraining over every configured training
-and test zarr before the selected arms and intentionally produces no evaluation figures.
-
-```bash
-python3 campaign_archs_29.py --dry-run
-python3 campaign_archs_29.py --only physical_groupdro
-python3 campaign_archs_29.py --from domain_vrex
-```
+`python3 train.py` trains the configuration in `utils/config.py` (see [PHerc0846A](#pherc0846a)). Checkpoints go to
+`models/runs/<run>/` and TensorBoard logs to `runs/<run>/`; an existing run is never overwritten (`_2`, `_3`, ...).
+The reference model is `models/runs/combo_patch_bag_strict/final.pth`. Earlier campaign scripts live in `old/`.
 
 ## Evaluation notebooks
 
@@ -76,10 +66,14 @@ Run a model on every single test scroll. 13 test patches correspond to 10 test s
 | `20231205222200` | Cr4 Fr8 | PHerc51 | 3.24µm / 88keV | **High-energy rescan** through the 53keV surface PPM (fitted affine) | |
 | `20230301213423` | Fr34 | PHercParis1 | 3.24µm / 88keV | **High-energy rescan** through the 54keV exposed-surface PPM (fitted affine) | |
 | `20250511003658` | tifxyz segment | PHerc0343P | 8.64µm / 116keV | 31-layer surface volume resampled in XYZ to 28 layers | |
+| `20261007000000` | w047-w048 letters | PHerc0343P | 8.64µm / 116keV | Community tifxyz mesh (`concat_w047-w048_R5B2_z9500-11000`) rendered and resampled in XYZ to 9.362µm | Hand-drawn letters |
 | `20260221022814` | auto-grown 405 | PHerc0841 | 9.366µm / 113keV | Native surface volume, upstream re-crop (2026-09-22) to 3760×4900; copied without resampling (0.04% off the 9.362µm grid) | |
 | `20260930144758` | w058 | PHerc1447 | 8.64µm / 116keV | Hugging Face 24-layer render; depth reversed, resampled in XYZ to 28 layers | Released `labels/inklabels.png`; fine-tune only |
 | `20260930144760` | w060 | PHerc1447 | 8.64µm / 116keV | Hugging Face 24-layer render; depth reversed, resampled in XYZ to 28 layers | Released `labels/inklabels.png`; fine-tune only |
 | `20260930144762` | w062 | PHerc1447 | 8.64µm / 116keV | Hugging Face 24-layer render; depth reversed, resampled in XYZ to 28 layers | Pseudo-label from held-out `loo_w062.png`; no train mask |
+| `20260927134931` | ABF patch | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20260927134928`), flat depth-13 alias | Hand-drawn labels; train-only |
+| `20261012073246` | 073244 patch | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20261012073244`), flat depth-13 alias | Hand-drawn labels; train-only |
+| `20261012073250` | 073244 +29 offset | PHerc0846A | 9.362µm / 113keV | 073244 mesh moved +29 voxels along its normal (`20261012073249`), flat depth-13 alias | Own hand-drawn labels; train-only |
 
 ### Special rendering
 
@@ -110,6 +104,32 @@ These are still assembled (9.362µm / 113keV, native surface volumes). They have
 | ID | Fragment | Physical scroll | Scan | Purpose |
 |---|---|---|---|---|
 | `20251226000000` | w055 | PHerc0139 | 9.362µm / 113keV | Deliberately excluded from supervised training; checks whether a model reproduces known text rather than familiar texture |
+
+## PHerc0846A
+
+PHerc0846A is the submission scroll. Every patch is rendered by `assemble_test_segments.py` from the
+9.362µm / 113keV volume `20250728152254` and is read through a **flat depth-13 alias** (`FLAT_ALIASES`):
+`<alias>.zarr` and the mask / label / train-mask PNGs are symlinks to the source render, and
+`surface_labels/<alias>/` is a constant depth 13 over the mask (no detected surface). With
+`surface_window_offset = -1` the model reads slices 9-16. Aliases get their own norm and surface-anchor entries.
+
+| Render | Alias | Mesh (`tifxyz/`) | Default run |
+|---|---|---|---|
+| `20260927134928` | `20260927134931` | `quick_patches_from_D/PHerc0846A/auto_grown_20260927134928530_abf` | trained |
+| `20261012073244` | `20261012073246` | `3_new/auto_grown_20261012073244544_abf` | trained |
+| `20261012073249` | `20261012073250` | `3_new_offset/auto_grown_20261012073244544_abf_p29` (the 073244 mesh +29 voxels along its normal, own labels) | trained |
+| `20261012065810` | `20261012065811` | `auto_grown_20261012065803387_straight_abf` (straightened re-trace) | vis-only, label-free |
+| `20261012065812` | `20261012065813` | `auto_grown_20261012065803387_straight_abf_m28` (the straight mesh -28 voxels along its normal, `old/offset_mesh.py`) | vis-only, label-free |
+| `20261012081237` | `20261012081238` | `3_new/auto_grown_20261012081237255_abf` | not used |
+
+- the three trained patches form domain `pherc0846a` (weight 5) and are train-only: no validation split, a train mask only adds its painted explicit labels. Labels are hand-drawn in `dilated_inklabels/<render>.png`
+- the two straight sheets are never trained and carry no labels; they are only rendered at the end of training
+- the default run starts from `models/mae_0846a_six_flat13_m1_2k.pth`, a 2k-step MAE continuation of the campaign-40 corpus MAE on six PHerc0846A patches (unlabeled, including the retired sheet)
+- display only: the 073244 render/alias is shown rotated 90° CCW, the +29 offset 90° CW and the ABF patch 180° (`utils/fast_figure.display_rotation`); arrays and metrics stay in the native frame
+
+`0846A_eval.ipynb` runs the selected checkpoint on these patches and the 35 PHerc0846A quick patches
+(`--include-extras`), sweeps the depth offset, combines the per-offset predictions (max, corroborated
+mid-boost, top-k mean, z-score), and redraws the training-time eval figures of the three trained patches.
 
 ## Test surfaces
 
@@ -258,11 +278,11 @@ Files in `inklabels/` are retained for alignment checks and figures. They are no
 
 ### Ring negatives
 
-The dataset does not treat all unlabeled papyrus as negative. Negative samples come from a narrow closed ring around known ink:
+The dataset does not treat all unlabeled papyrus as negative. Negative samples come from a narrow closed ring around known ink (radii in 16 px tiles):
 
-- close radius: 3
-- gap radius: 3
-- shell radius: 2
+- close radius: 2 (letter holes closed)
+- gap radius: 2 (unsupervised band between letter and ring)
+- shell radius: 4 (negative ring width)
 
 This concentrates training near the ink boundary and reduces the chance of teaching the model that unknown ink is blank papyrus. Ink-free ring windows provide negative supervision.
 

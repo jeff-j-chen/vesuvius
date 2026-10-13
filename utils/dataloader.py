@@ -1330,6 +1330,12 @@ class InkVolumeDataset(IterableDataset):
             if not self._mt or self._character_grid is None:
                 raise ValueError("character-aware mode requires multitile labels and a character grid")
             self._prepare_character_targets()
+        if (self.shuffle and not self.block_coords and self._far_neg_coords
+                and int(self.scroll_id) in _train_only_ids(self.c)):
+            # blank train-only scroll: every draw is a far-background (unlabelled) window
+            self.samples_per_epoch = len(self._far_neg_coords)
+            if self._max_samples is not None:
+                self.samples_per_epoch = min(self.samples_per_epoch, int(self._max_samples))
         if prepared_state is None and (self._context_replace_prob > 0 or self._context_consistency) and self.shuffle:
             self._prepare_context_donors()
 
@@ -2827,7 +2833,7 @@ class DataManager:
             "zarr_path", "tile_size", "depth", "d_start", "d_end", "train_d_start",
             "train_d_end", "mask_memmap", "mask_bitpack", "preload_volumes",
             "ring_negatives", "ring_label_source", "ring_from_inklabel_dir", "ring_close_r", "ring_gap_r",
-            "ring_shell_r", "ring_free_scroll_ids", "simple_split", "coordinate_hash_split",
+            "ring_shell_r", "ring_free_scroll_ids", "ring_pu_scroll_ids", "simple_split", "coordinate_hash_split",
             "coordinate_hash_block_size", "coordinate_hash_valid_fraction",
             "coordinate_hash_seed", "train_mask_dir", "surface_label_dir",
             "inklabel_dir", "label_dilate_r", "context_size", "context_downsample", "ctx_jitter",
@@ -2837,7 +2843,7 @@ class DataManager:
             "character_min_pixels", "max_samples_per_epoch",
             "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
             "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "vis_scroll_ids", "norm_mode",
-            "train_only_scroll_ids", "label_free_vis_scroll_ids",
+            "train_only_scroll_ids", "label_free_vis_scroll_ids", "whole_patch_valid_scroll_ids", "holdout_domains",
             "zarr_suffix", "extra_inklabels", "flipped_train_mask_ids",
         )
         dataloader_fields = (
@@ -2996,6 +3002,11 @@ class DataManager:
             if label_free:
                 manual_mask = np.zeros(mask.shape, dtype=np.uint8)
                 train_mask_path = "<label-free vis: no train region>"
+            elif int(self.scroll_id) in {
+                int(scroll_id) for scroll_id in (getattr(self.c.data, "whole_patch_valid_scroll_ids", ()) or ())
+            }:
+                manual_mask = np.zeros(mask.shape, dtype=np.uint8)
+                train_mask_path = "<whole-patch validation: no train region>"
             if manual_mask is None and train_only:
                 # train-only scrolls need no mask; an existing one only contributes painted explicit labels
                 manual_mask = np.zeros(mask.shape, dtype=np.uint8)
@@ -3842,6 +3853,11 @@ class DataManager:
             f"[far-negatives] scroll {self.scroll_id}: min_dist={min_dist:.0f}px "
             f"far_units={int(far_units.sum())} windows={len(coords)}"
         )
+        if int(self.scroll_id) in {int(s) for s in (getattr(self.c.data, "ring_pu_scroll_ids", ()) or ())}:
+            # ring cells join the unlabelled (-2) set; their windows stay character negatives, not far windows
+            ring_units = papyrus & supervised & ~ink
+            far_units = far_units | ring_units
+            print(f"[ring-pu] scroll {self.scroll_id}: {int(ring_units.sum())} ring units are nnPU-unlabelled")
         return far_units, coords
 
     def _make_ring_mask(self):

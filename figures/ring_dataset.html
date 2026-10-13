@@ -221,13 +221,14 @@ sample(R.mixed, ZX, SY, "A", "edge of a stroke", [
   "drops all its negatives (none here).",
 ]);
 sample(R.ringwin, ZX, SY + ZW + 64, "B", "ring window", [
-  "no ink anywhere in the 64-px centre:",
-  "every cell fully inside ring tiles is a",
-  "hard negative (target 0, blue).",
+  "no ink anywhere in the 64-px centre and",
+  "every cell fully inside ring tiles: all",
+  "16 cells are hard negatives (target 0).",
   "",
-  "Cells reaching into the hatched gap are",
-  "ignored, so the model never sees a",
-  "negative within 32 px of a closed letter.",
+  "Near a letter, cells reaching into the",
+  "hatched gap would be ignored, so the model",
+  "never sees a negative within 32 px of a",
+  "closed letter.",
 ]);
 
 // ------------------------------------------------------------------ softening curve

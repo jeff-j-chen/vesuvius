@@ -1,4 +1,0 @@
-nohup: ignoring input
-[w030] low (28, 7140, 7460) z=14  high L2 (109, 6940, 7260) z=54
-[w030] dice as_rendered=0.699 phase=0.712 sift=0.779 (inliers 1055) best=shape_ratio_shift residual_scale=1.0032 depth_offset=+0.50 slices reversed=False (r=1.00) -> check
-wrote /vesuvius/crossres/sanity/registration.json

@@ -18,17 +18,7 @@ PHerc0813_spiral_dataset/*
 # atlas extras are synced through R2 (assemble_test_segments.py --include-extras), never git
 tifxyz/atlas/
 masks/extras/
-surface_labels/extras/
-output/surface_review/extras/
-output/composite_cache/extras/
-output/test_visualizations/*/extras/
-crossres/pairs/*
-crossres/sanity/*
-models/v8in/
+surface_labels/
+output/
+crossres/
 # run outputs stay local to keep LFS under quota; already-tracked files are unaffected
-models/*/
-runs_*.log
-!runs_finetune2/
-output/surface_review/
-output/test_visualizations/
-output/models/

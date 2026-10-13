@@ -1,0 +1,40 @@
+{
+    "area_cm2": 5.179518033224598,
+    "area_vx2": 5909518.218577455,
+    "bbox": [
+        [
+            2264.125732421875,
+            2781.16796875,
+            11698.3642578125
+        ],
+        [
+            5112.34033203125,
+            3567.219970703125,
+            13951.494140625
+        ]
+    ],
+    "date_last_modified": "20261013094418986",
+    "elapsed_time_s": 25.4333806,
+    "format": "tifxyz",
+    "grid_offset": [
+        2,
+        2
+    ],
+    "max_gen": 58,
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "seed": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "seed_surface_id": "auto_grown_20261012065803387_straight_abf",
+    "type": "seg",
+    "uuid": "auto_grown_20261012065803387_straight_abf_m28",
+    "normal_offset_from": {
+        "mesh": "auto_grown_20261012065803387_straight_abf",
+        "offset_voxels": -28.0
+    }
+}

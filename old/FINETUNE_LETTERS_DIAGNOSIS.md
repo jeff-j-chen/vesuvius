@@ -6,6 +6,176 @@ and TensorBoard events in `runs_finetune_letters/`. Historical claims in `KNOWLE
 
 ## Findings
 
+### Remaining single-source experiments
+
+The `single_remaining` suite in `campaign_letters_relabel.py` adds independent runs on
+20260927134931, 20261012065806 and 20261012073250. Run identity `letters_single_remaining_v2`
+uses byte-identical labels to `letters_transfer_probes_v2`, the same supervised initialization,
+six epochs, frozen encoders, no PU or augmentation, and all eight evaluation targets.
+Only the named source is in each training dataset; all other training masks are zero and
+PHerc0009B is excluded. The original probe and relabel suites are unchanged.
+
+The initial dependency wait was blocked because the probe process exited during weak-PU
+final-figure rendering with a stale `running` status. After verifying no workers remained and
+the GPU was free, these independent runs were started directly in `tra`; the incomplete
+weak-PU run was not restarted or modified:
+
+```bash
+python3 campaign_letters_relabel.py --run-name letters_single_remaining_v2 --suite single_remaining
+```
+
+Status: `models/letters_single_remaining_v2/status.json`; log:
+`_ves_tmp/letters_single_remaining_v2/runner.log`. Preflight, label-hash/mask-isolation
+checks, and 23 regression tests passed before queuing.
+
+### Queued transfer probes and early stopping
+
+The current six-arm `letters_relabel_v2` run is preserved. A separate
+`letters_transfer_probes_v2` suite uses the same immutable inklabel snapshot and original
+supervised initialization, and waits for successful completion of the current run using
+its runner lock. It is queued in tmux window `tra:transfer_probes_v2`.
+
+- `early_stop_2`: the all-patch baseline for two epochs, with `eval_int=2` and all eight
+  visualization patches rendered at the final epoch.
+- `single_20261012073246`: only this PHerc0846A patch is trained; PHerc0009B is excluded too.
+  Other labeled PHerc0846A patches have zero train masks for display and are not in the
+  training dataset. Six epochs, frozen encoders, no PU. Single-source epoch lengths differ
+  from the multi-source baseline, so compare exposure and visual transfer, not raw epoch counts alone.
+- `weak_pu`: the six-epoch all-patch baseline with `pu_lambda=0.1`, `pu_prior=0.2`, and
+  far-background sampling share 0.15. This retains the inherited prior as an explicit
+  assumption and tests weak unlabeled-background pressure rather than a new prior estimate.
+
+New run identities include two more vis-only targets: `auto_grown_20260927200859829_abf`
+(flat forward alias 20260927200859) and `auto_grown_20261002075023617_abf` (20261002075023).
+Both join the existing four labeled patches and two unlabeled evaluation patches; they never
+enter training. The active six-arm run retains its original visualization contract and snapshots.
+
+`0846A_eval.ipynb` now has individual cells for both new segments and comments marking each
+segment's baseline train/vis-only role. Every render also prints its actual supervised role
+for the selected checkpoint, accounting for patch holdouts and source/flat aliases. The batch
+cell excludes all eight individual entries and currently contains 30 remaining quick patches.
+Rerun setup cells after updating the notebook to refresh the registry and role helper.
+
+Validated: 22 regression tests, new-input preflight, actual single-source sampling with zero
+validation windows, weak-PU sampling with positive and unlabeled cells, notebook schema/syntax
+and exactly-once routing. Queue command:
+
+```bash
+python3 campaign_letters_relabel.py --run-name letters_transfer_probes_v2 --suite probes --after-run letters_relabel_v2
+```
+
+Status: `models/letters_transfer_probes_v2/status.json`; log:
+`_ves_tmp/letters_transfer_probes_v2/runner.log`. No active experiment was interrupted.
+
+### Updated-label six-run comparison
+
+`campaign_letters_relabel.py` defines a fresh baseline, four patch-level holdouts, and one
+`brightness_contrast` arm. The new default run identity is `letters_relabel_v2`, with separate
+model/log folders and an immutable snapshot under `_ves_tmp/letters_relabel_v2/`.
+Every arm initializes independently from the completed
+`models/letters_mae_overnight/and_mask/final.pth`; neither MAE nor supervised retraining is queued.
+
+The baseline retains frozen encoders, no PU, ring 2/2/4, positive-only windows, fixed -1 depth,
+5:1 domain sampling, six epochs, and all six overnight visualization targets. The photometric
+arm adds only brightness gain 0.85-1.15 and contrast gain 0.8-1.2, probability 0.5 each, shared
+across depth. Flips, rotations, depth/context jitter, cutout and other augmentations remain off.
+
+The snapshot uses current `dilated_inklabels` and preserves the original overnight baseline
+split masks. ABF's current label image has one additional row beyond the volume/mask frame;
+the source and snapshot are preserved byte-for-byte, and the existing loader clips to the
+common 3041x3661 frame. Its extra border row is not an additional trainable character.
+Effective component counts on the four PHerc0846A patches are now 7/10/10/5 (32 total).
+
+Validated: 21 regression tests, initialization checksum and shape compatibility, all six
+input preflights, all four real heldout datasets (zero training windows/nonempty validation),
+and finite real brightness/contrast samples. No component-fold runs are included.
+Launch command: `python3 campaign_letters_relabel.py`; subsequent label revisions require
+a fresh `--run-name`. Console log: `_ves_tmp/letters_relabel_v2/runner.log`; progress:
+`models/letters_relabel_v2/status.json`. Compare old/new models on a common grading label
+version rather than comparing AP from different annotation versions directly.
+
+### Fold review and future display orientation
+
+The corrected review completed all five component folds, four labeled patches per fold, under
+`output/letters_overnight_review/corrected/letters_fold_<n>/eval_figs/`. The overlay distinguishes
+red trained labels from cyan held-out labels. These are corrected inference renders of existing
+checkpoints, not retraining. Do not use the original double-normalized ABF figures to assess learning.
+
+Future evaluation displays rotate 20260927134931 by 180 degrees, and 20261012073246 and
+20261012073250 by 90 degrees counterclockwise. Source-ID and mesh-name aliases use the same
+orientation, including in `0846A_eval.ipynb`. Predictions, composites, labels and split masks rotate
+together; titles and scale bars stay upright. Training arrays, inference coordinates, depth windows,
+metric calculations and existing saved files are unchanged. Twenty regression tests passed.
+
+For subsequent annotation review, use held-out predictions as candidates for inspection rather than
+replacement labels. A training/held-out discrepancy measures dependence on supervision, not which
+prediction is correct. Current LOO/folds are not independent of all shared visual cues, MAE exposure,
+or physical overlap between patches; model disagreement is not independent ground truth.
+
+### Overnight AND-mask and transfer matrix
+
+`campaign_letters_overnight.py` runs a sequential, process-isolated dependency chain. Its supervised
+stage is campaign 41 **and_mask**, not baseline: 12 epochs on the existing 26-patch corpus, initialized
+from `models/mae_0846a_six_flat13_m1_2k.pth`. Full-scroll and diagnostic plots are disabled; scalar
+training and validation metrics remain enabled. The original `models/archs41/and_mask/` is untouched.
+
+Launch verified in tmux `tra` on 2026-10-12 after all 17 regression tests and the complete smoke
+sequence passed (AND-mask, baseline, one patch holdout, encoder, geometric, bundled, component fold).
+The production status was `running` / `and_mask`, preparing its 26 datasets. Full console log:
+`_ves_tmp/letters_mae_overnight/runner.log`. Production training is intentionally running overnight;
+the completed smoke results are not production results.
+
+New outputs are rooted at `models/letters_mae_overnight/` and `runs_letters_mae_overnight/`.
+Every fine-tune starts independently from `and_mask/final.pth` in that new root, only after the
+supervised worker exits successfully and checkpoint tensors and completed epoch history verify.
+It does not chain fine-tune checkpoints together.
+
+The fine-tune order is:
+
+1. `baseline`: frozen encoders, no PU, loose ring 2/2/4, positive-only windows, fixed depth -1,
+  5:1 PHerc0846A:PHerc0009B, six epochs.
+2. Four `loo_<id>` runs, withholding each of 20260927134931, 20261012065806, 20261012073246 and
+  20261012073250. The withheld patch contributes zero training windows. It is represented by its
+  own heldout domain and is the only validation source, so checkpoint grading and reported validation
+  metrics refer to that patch, not PHerc0009B.
+3. `encoder_1e6`: previously frozen encoder/cue parameters train at 1e-6; decoder/adapters at 1e-4.
+4. `geometric`: synchronized in-plane flips and right-angle rotations only, probability 0.5 each.
+5. `bundled`: geometric transforms plus the established context/cutout/depth/dropout bundle
+  (including one-slice depth jitter), RSC and native noise on the fine-tune domains. Loss and
+  patch GroupDRO remain unchanged/off; this tests the augmentation bundle, not a new loss stack.
+6. `letters_fold_1` through `letters_fold_5`: keep the full labels for positive and ring construction,
+  but partition supervision using private masks. Every connected component is withheld once and
+  trained in four runs. Current full-brightness labels yield 21 components (2/7/7/5 by patch),
+  assigned to validation folds of 5/4/4/4/4 components. Validation includes only the held-out
+  component regions on PHerc0846A, not PHerc0009B. Some components represent connected strokes
+  rather than separate Greek letters; component IDs, pixel counts, boxes and centroids are recorded.
+
+All 13 fine-tunes render the four labeled PHerc0846A patches plus unlabeled 20261012081238 and
+`auto_grown_20261002131432623_b_abf` (forward flat alias 20261002131432), regardless of training inclusion.
+Rendering is streamed per patch. A stage is not marked complete unless every requested final PNG exists.
+
+Authoritative inklabels are never erased or regenerated. Immutable copies and experiment-specific
+train masks are under `_ves_tmp/letters_mae_overnight/`; `inputs.json` holds hashes and the component
+inventory. The labels in the snapshot are identical in every component fold: withheld ink is not
+converted to background. The target masks are disjoint, but this does not remove heldout texture
+from nearby input context or address overlap between distinct renderings. Whole-patch LOO is a
+supervised holdout only because the discovery MAE has seen several target patches. Do not claim
+submission-ready physical independence without the separate overlap/rules audit.
+
+One runner owns the sequence via an exclusive file lock; no watcher is needed. Each worker uses
+fresh process state and verifies its initialization. Per-stage `complete.json` files record hashes;
+`models/letters_mae_overnight/status.json` records progress or failure. A rerun skips only completed,
+verified stages with matching configuration and initialization. Unverified partial outputs stop the
+runner rather than being silently reused or overwritten. No software can guarantee against OOM,
+hardware or disk failure; this protocol prevents a failed supervised job from launching invalid
+fine-tunes and prevents missing figures from silently passing.
+
+```bash
+python3 campaign_letters_overnight.py --dry-run
+python3 campaign_letters_overnight.py --smoke --only baseline,loo_20260927134931,encoder_1e6,geometric,bundled,letters_fold_1
+python3 campaign_letters_overnight.py
+```
+
 ### Completed six-patch MAE continuation
 
 `mae_pretrain_letters.py` completed 2,000 adaptation steps from the matched campaign-40 MAE,

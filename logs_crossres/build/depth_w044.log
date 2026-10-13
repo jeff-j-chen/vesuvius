@@ -1,5 +1,0 @@
-nohup: ignoring input
-[w044] ink bbox y[3844,4742] x[1887,4406] (5% of the frame) -> 18 tiles (bbox, margin 256px)
-[w044] prefetched 200/325 chunks (0s)
-[w044] prefetched 325/325 chunks (0s)
-[w044] kept 18 tiles (median midslice NCC 0.880869565033428, median depth shift +0.19 slices), dropped 0 -> /vesuvius/crossres/pairs/depth/20260115000000

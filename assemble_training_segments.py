@@ -13,15 +13,20 @@ per fragment, in order (each step skips if its output already exists):
     2. verify the required labels exist and match the zarr/mask XY dimensions
     3. precompute normalization stats
     4. precompute surface supervision under surface_labels/<id>/
+    5. fine scans resampled from 2.4/3.24 um (MATCHED_SIGMAS) only: degrade to the native 9.362 um / 113 keV
+       spectrum -> ves_zarrs2/<id>.matched.zarr, the volume training reads (data.zarr_suffix), plus its norm and
+       surface anchors. the PSF per fragment is pinned (MATCHED_SIGMAS) so every assembly is identical.
 
 usage:
   python assemble_training_segments.py --only w058          # one fragment (pilot)
   python assemble_training_segments.py                       # all fragments
   python assemble_training_segments.py --from w039           # resume from a fragment
   python assemble_training_segments.py --skip-norm           # skip the (slow) norm precompute
-    python assemble_training_segments.py --skip-surface        # skip the surface supervision precompute
+  python assemble_training_segments.py --skip-surface        # skip the surface supervision precompute
+  python assemble_training_segments.py --no-degrade          # skip step 5
   python assemble_training_segments.py --no-r2 --only paris1_fr34   # re-render an 88 keV fragment from dl.ash2txt
-  python assemble_training_segments.py --degrader models/degrader_pooled_native.pth   # plan R translated siblings
+  python assemble_training_segments.py --spectral-match      # refit the step-5 PSFs against the native references
+  python assemble_training_segments.py --degrader models/c39_degrader.pth   # learned-degrader .translated siblings
 """
 from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys, time
@@ -290,6 +295,17 @@ RESCAN_MARKER = "rescan_88kev"
 # plan R (crossres/PLAN.md 0.7): fragments whose local zarr is a clean downscaling of a finer scan (2.4 um
 # pooled, 3.24 um resampled); --degrader writes a translated sibling <id>.translated.zarr for each
 TRANSLATE_NAMES = ("w013", "w018", "cr1fr3", "paris4", "paris2_fr143", "paris2_fr47", "scroll6_fr8", "paris1_fr34")
+# depth slices the surface search scans (generate_surface_supervision.py --z-start/--z-end); default (4, 28)
+SURFACE_Z_RANGE = {
+    **{name: (3, 25) for name in ("paris2_fr143", "paris2_fr47", "scroll6_fr8", "paris1_fr34", "cr1fr3")},
+    **{name: (4, 25) for name in ("ph1447_w058", "ph1447_w060", "ph1447_w062")},
+}
+# gaussian PSF (sigma_xy, sigma_z) per fine scan for its default <id>.matched sibling: the values utils/spectral_match.py
+# fitted against the native references, pinned so every assembly degrades exactly like the reference training run
+MATCHED_SIGMAS = {
+    "w013": (0.75, 0.5), "w018": (0.75, 0.7), "cr1fr3": (0.9, 0.9), "paris4": (0.75, 0.5),
+    "paris2_fr143": (1.05, 1.1), "paris2_fr47": (1.05, 1.1), "scroll6_fr8": (0.9, 0.9), "paris1_fr34": (0.9, 1.1),
+}
 # pre-rendered RESCAN_88KEV archives (<zid>.tar.gz = <zid>.zarr/ + <zid>.png mask, listed in SHA256SUMS) under
 # $R2_PUBLIC_URL/<R2_PREFIX>/; the render from dl.ash2txt (~1 h, ~20 MB/s server) runs only with --no-r2
 R2_PREFIX = "fragments_88kev"
@@ -1684,10 +1700,19 @@ def step3_norm(name, seg, zid, skip, force=False):
 
 
 def step4_surface(name, zid, skip, force=False):
+    """write surface_labels/<id>/ with generate_surface_supervision.py unless labels for this frame exist."""
     if skip:
         print(f"  [4/4] --skip-surface -> skip")
         return
-    opts = FRAG_OPTS.get(name, {})
+    depth_path = os.path.join("surface_labels", str(zid), "depth.npy")
+    mask = cv2.imread(os.path.join("masks", f"{zid}.png"), cv2.IMREAD_GRAYSCALE)
+    if not force and os.path.isfile(depth_path) and mask is not None \
+            and np.load(depth_path, mmap_mode="r").shape == mask.shape:
+        print(f"  [4/4] surface labels exist -> skip")
+        return
+    z_start, z_end = SURFACE_Z_RANGE.get(name, (4, 28))
+    run([sys.executable, "generate_surface_supervision.py", "--scroll-id", str(zid), "--zarr-dir", ZARR_DIR,
+         "--z-start", str(z_start), "--z-end", str(z_end)])
 
 
 def step4_translate(name, zid, checkpoint, force=False):
@@ -1721,8 +1746,9 @@ def step4_translate(name, zid, checkpoint, force=False):
     ensure_surface_anchors([volume_id], ZARR_DIR)
 
 
-def step4_spectral_match(name, zid, reference, force=False):
-    """write ves_zarrs2/<id>.matched.zarr: the local zarr blurred to the native spectrum, plus its norm and anchors."""
+def step4_spectral_match(name, zid, reference=None, force=False, sigmas=None):
+    """write ves_zarrs2/<id>.matched.zarr: the local zarr blurred to the native spectrum, plus its norm and anchors.
+    sigmas=(sigma_xy, sigma_z) applies a fixed PSF; otherwise the PSF is fitted against reference."""
     from utils.norm import UNIFIED_CACHE_PATH, compute_norm, ensure_surface_anchors, load_cached_norm
     from utils.spectral_match import MATCHED_SUFFIX, fit_sigmas, is_matched, load_crops, match_zarr
 
@@ -1731,12 +1757,21 @@ def step4_spectral_match(name, zid, reference, force=False):
     dst = os.path.join(ZARR_DIR, f"{volume_id}.zarr")
     if not os.path.isdir(src):
         raise FileNotFoundError(f"{name}: {src} missing; assemble it first")
-    if is_matched(dst) and not force:
-        print(f"  [match] {dst} exists -> skip")
+    current = None
+    if is_matched(dst):
+        with open(os.path.join(dst, ".zattrs"), encoding="utf-8") as handle:
+            attrs = json.load(handle)["spectral_match"]
+        current = (attrs["sigma_xy"], attrs["sigma_z"])
+    if current is not None and not force and (sigmas is None or tuple(sigmas) == current):
+        print(f"  [match] {dst} exists (sigma_xy={current[0]} sigma_z={current[1]}) -> skip")
     else:
-        sigma_xy, sigma_z, fitted = fit_sigmas(load_crops(src), reference)
-        print(f"  [match] {name}: sigma_xy={sigma_xy} sigma_z={sigma_z} fitted {np.round(fitted, 3).tolist()} "
-              f"reference {np.round(reference, 3).tolist()}", flush=True)
+        if sigmas is not None:
+            sigma_xy, sigma_z = sigmas
+            print(f"  [match] {name}: sigma_xy={sigma_xy} sigma_z={sigma_z} (pinned)", flush=True)
+        else:
+            sigma_xy, sigma_z, fitted = fit_sigmas(load_crops(src), reference)
+            print(f"  [match] {name}: sigma_xy={sigma_xy} sigma_z={sigma_z} fitted {np.round(fitted, 3).tolist()} "
+                  f"reference {np.round(reference, 3).tolist()}", flush=True)
         match_zarr(src, dst, sigma_xy, sigma_z)
         force = True
     if force or load_cached_norm(volume_id, UNIFIED_CACHE_PATH) is None:
@@ -1750,9 +1785,10 @@ def step4_spectral_match(name, zid, reference, force=False):
 
 
 def process_fragment(name, seg, zid, workers, skip_norm, skip_surface, chunk_depth, chunk_y, chunk_x,
-                     prefix="", force=False):
+                     prefix="", force=False, degrade=True):
     """run the full assembly pipeline for one fragment. isolated in try/except so a
-    single failure never kills a concurrent batch. respects FRAG_OPTS (skip_labels)."""
+    single failure never kills a concurrent batch. respects FRAG_OPTS (skip_labels).
+    degrade: fine scans (MATCHED_SIGMAS) also get their <id>.matched training volume."""
     opts = FRAG_OPTS.get(name, {})
     tag = f"{prefix}{name} ({zid})"
     try:
@@ -1776,6 +1812,8 @@ def process_fragment(name, seg, zid, workers, skip_norm, skip_surface, chunk_dep
             force=force or bool(opts.get("force_norm", False)),
         )
         step4_surface(name, zid, skip_surface, force=force)
+        if degrade and name in MATCHED_SIGMAS:
+            step4_spectral_match(name, zid, force=force, sigmas=MATCHED_SIGMAS[name])
         print(f"[done] {tag}")
         return (name, "OK")
     except Exception as e:
@@ -1813,8 +1851,11 @@ def main():
                     help="plan R only: translate the existing local zarrs of TRANSLATE_NAMES (or --only) with this "
                          "utils/degrader.py checkpoint into <id>.translated.zarr siblings; nothing is downloaded")
     ap.add_argument("--spectral-match", action="store_true",
-                    help="write <id>.matched.zarr siblings of TRANSLATE_NAMES (or --only): each local zarr blurred "
-                         "with a fitted gaussian PSF to the native 113 keV spectrum (utils/spectral_match.py)")
+                    help="only refit the gaussian PSF of TRANSLATE_NAMES (or --only) against the native 113 keV "
+                         "spectrum and rewrite their <id>.matched.zarr siblings (utils/spectral_match.py); the "
+                         "default assembly already writes them with the pinned MATCHED_SIGMAS")
+    ap.add_argument("--no-degrade", action="store_true",
+                    help="skip the default <id>.matched.zarr degradation of the fine scans (MATCHED_SIGMAS)")
     args = ap.parse_args()
 
     if args.spectral_match:
@@ -1888,14 +1929,14 @@ def main():
         for name, seg, zid in segs:
             results.append(process_fragment(name, seg, zid, args.workers, args.skip_norm, args.skip_surface,
                                           args.chunk_depth, args.chunk_y, args.chunk_x,
-                                          force=args.force))
+                                          force=args.force, degrade=not args.no_degrade))
     else:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         with ThreadPoolExecutor(max_workers=cf) as ex:
             futs = {ex.submit(process_fragment, name, seg, zid, args.workers,
                               args.skip_norm, args.skip_surface,
                               args.chunk_depth, args.chunk_y, args.chunk_x,
-                              prefix=f"[{name}] ", force=args.force): name
+                              prefix=f"[{name}] ", force=args.force, degrade=not args.no_degrade): name
                     for name, seg, zid in segs}
             for fut in as_completed(futs):
                 results.append(fut.result())

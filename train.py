@@ -1,3 +1,9 @@
+"""Vesuvius ink-detection training.
+
+`python3 train.py` trains the default run in utils/config.py (combo_patch_bag_strict): AND-mask over patch groups,
+strong character bag ranking and strict nnPU from the six-patch PHerc0846A MAE, 8 epochs. Checkpoints go to
+models/runs/<run>/ and TensorBoard to runs/<run>/; an existing run is never overwritten (a _2, _3 ... suffix is used).
+"""
 import functools
 import gc
 import json
@@ -7,6 +13,10 @@ import random
 import sys
 import time
 from contextlib import contextmanager
+from typing import NamedTuple
+
+# query CUDA through NVML so the data-cache warmup forks loader workers before any CUDA context exists
+os.environ.setdefault("PYTORCH_NVML_BASED_CUDA_CHECK", "1")
 
 import numpy as np
 import torch
@@ -289,29 +299,67 @@ def character_bag_ranking_loss(
     margin: float = 0.5,
     topk_frac: float = 0.5,
 ) -> tuple[torch.Tensor, int]:
-    """rank each character's positive bag above its assigned local-ring bag."""
-    flat_logits = logits.reshape(-1)
-    flat_labels = labels.reshape(-1)
-    flat_mask = mask.reshape(-1) > 0
-    flat_ids = character_ids.reshape(-1).to(device=logits.device, dtype=torch.long)
-    losses = []
+    """rank each character's positive bag above its assigned local-ring bag.
+
+    bag membership is resolved from host copies of labels/mask/ids (free when they are CPU tensors),
+    so the logits are only gathered and the loss adds no device->host synchronisation."""
+    flat_labels = labels.detach().reshape(-1).cpu()
+    flat_mask = mask.detach().reshape(-1).cpu() > 0
+    flat_ids = character_ids.detach().reshape(-1).cpu().long()
     fraction = min(max(float(topk_frac), 1e-6), 1.0)
-    for value in torch.unique(flat_ids[flat_mask]):
-        if int(value.item()) <= 0:
+    positive_bags, negative_bags = [], []
+    for value in torch.unique(flat_ids[flat_mask]).tolist():
+        if value <= 0:
             continue
         selected = flat_mask & (flat_ids == value)
-        positives = flat_logits[selected & (flat_labels > 0.5)]
-        negatives = flat_logits[selected & (flat_labels <= 0.5)]
+        positives = torch.nonzero(selected & (flat_labels > 0.5)).view(-1)
+        negatives = torch.nonzero(selected & (flat_labels <= 0.5)).view(-1)
         if positives.numel() == 0 or negatives.numel() == 0:
             continue
-        pos_k = max(1, int(math.ceil(positives.numel() * fraction)))
-        neg_k = max(1, int(math.ceil(negatives.numel() * fraction)))
-        positive_score = torch.topk(positives, pos_k).values.mean()
-        negative_score = torch.topk(negatives, neg_k).values.mean()
-        losses.append(F.softplus(float(margin) + negative_score - positive_score))
-    if not losses:
+        positive_bags.append(positives)
+        negative_bags.append(negatives)
+    if not positive_bags:
         return logits.new_zeros(()), 0
-    return torch.stack(losses).mean(), len(losses)
+    flat_logits = logits.reshape(-1)
+    positive_score = _topk_bag_means(flat_logits, positive_bags, fraction)
+    negative_score = _topk_bag_means(flat_logits, negative_bags, fraction)
+    return F.softplus(float(margin) + negative_score - positive_score).mean(), len(positive_bags)
+
+
+class _PendingGroup(NamedTuple):
+    """a deferred-step group's results still on the device, plus the host-known metric arrays."""
+    scores: torch.Tensor
+    diagnostics: torch.Tensor
+    label_values: np.ndarray
+    character_values: np.ndarray
+    keep: np.ndarray | None
+
+
+def _pinned_to(tensor: torch.Tensor, device) -> torch.Tensor:
+    """host -> device copy that cannot stall the stream: pageable sources are staged through pinned memory."""
+    if tensor.device.type != "cpu" or torch.device(device).type != "cuda":
+        return tensor.to(device)
+    if not tensor.is_pinned():
+        tensor = tensor.pin_memory()
+    return tensor.to(device, non_blocking=True)
+
+
+def _topk_bag_means(flat_logits: torch.Tensor, bags: list[torch.Tensor], fraction: float) -> torch.Tensor:
+    """mean of the top ceil(fraction * size) logits of every host index bag, in one padded gather."""
+    sizes = [int(bag.numel()) for bag in bags]
+    counts = [max(1, int(math.ceil(size * fraction))) for size in sizes]
+    index = torch.zeros(len(bags), max(sizes), dtype=torch.long)
+    for row, bag in enumerate(bags):
+        index[row, :sizes[row]] = bag
+    valid = torch.arange(max(sizes)).unsqueeze(0) < torch.tensor(sizes).unsqueeze(1)
+    take = torch.arange(max(counts)).unsqueeze(0) < torch.tensor(counts).unsqueeze(1)
+    device = flat_logits.device
+    values = flat_logits[_pinned_to(index, device)].masked_fill(
+        ~_pinned_to(valid, device), float("-inf"),
+    )
+    top = values.topk(max(counts), dim=1).values
+    top = torch.where(_pinned_to(take, device), top, torch.zeros_like(top))
+    return top.sum(dim=1) / _pinned_to(torch.tensor(counts, dtype=top.dtype), device)
 
 
 def character_cvar_loss(
@@ -447,16 +495,23 @@ def _physical_patch_group_losses(
     mask: torch.Tensor,
     patch_ids: torch.Tensor,
 ) -> tuple[list[int], list[torch.Tensor]]:
-    """reduce supervised target losses separately for each source patch."""
-    valid_patch_ids = patch_ids[patch_ids >= 0]
-    group_ids = []
-    group_losses = []
-    for patch_id in torch.unique(valid_patch_ids):
-        selected = (patch_ids == patch_id).unsqueeze(1) & (mask > 0)
+    """reduce supervised target losses separately for each source patch.
+
+    membership is resolved from host copies of mask/patch ids (free when they are CPU tensors) and the
+    losses reduce in one masked sum, so no device->host synchronisation is added."""
+    host_mask = mask.detach().cpu() > 0
+    host_ids = patch_ids.detach().cpu().view(-1)
+    group_ids, members = [], []
+    for patch_id in torch.unique(host_ids[host_ids >= 0]).tolist():
+        selected = (host_ids == patch_id).unsqueeze(1) & host_mask
         if selected.any():
-            group_ids.append(int(patch_id.item()))
-            group_losses.append(per_target_loss[selected].mean())
-    return group_ids, group_losses
+            group_ids.append(int(patch_id))
+            members.append(selected.expand_as(per_target_loss))
+    if not group_ids:
+        return [], []
+    member = _pinned_to(torch.stack(members).to(per_target_loss.dtype), per_target_loss.device)
+    losses = (member * per_target_loss.unsqueeze(0)).flatten(1).sum(dim=1) / member.flatten(1).sum(dim=1)
+    return group_ids, list(losses.unbind(0))
 
 
 def fishr_head_penalty(
@@ -510,6 +565,34 @@ def cross_scroll_rank_loss(
     if not cross.any():
         return None
     return F.softplus(scores[right[cross]] - scores[left[cross]]).mean()
+
+
+def pu_rank_loss(
+    outputs: torch.Tensor,
+    labels: torch.Tensor,
+    mask: torch.Tensor,
+    domain_ids: torch.Tensor,
+    n_pairs: int,
+) -> torch.Tensor | None:
+    """logistic loss for ink cells scored above nnPU-unlabelled (-2) cells of the same physical domain."""
+    scores = outputs.float().reshape(-1)
+    cell_domains = domain_ids.view(-1, 1).expand_as(labels).reshape(-1)
+    supervised = mask.reshape(-1) > 0
+    flat_labels = labels.reshape(-1)
+    positive = supervised & (flat_labels > 0.5)
+    unlabeled = supervised & (flat_labels < -1.5)
+    losses = []
+    for domain in torch.unique(cell_domains[positive]):
+        positives = torch.nonzero(positive & (cell_domains == domain)).view(-1)
+        others = torch.nonzero(unlabeled & (cell_domains == domain)).view(-1)
+        if others.numel() == 0:
+            continue
+        left = positives[torch.randint(positives.numel(), (n_pairs,), device=scores.device)]
+        right = others[torch.randint(others.numel(), (n_pairs,), device=scores.device)]
+        losses.append(F.softplus(scores[right] - scores[left]).mean())
+    if not losses:
+        return None
+    return torch.stack(losses).mean()
 
 
 def _connected_domain_clusters(
@@ -675,6 +758,13 @@ class Trainer:
                 raise ValueError("tra.pu_prior must lie in (0, 1)")
             if float(getattr(config.tra, "sam_rho", 0.0)) > 0:
                 raise ValueError("the SAM objective treats far-background cells as negatives; it cannot run with nnPU")
+        if float(getattr(config.tra, "pu_lambda", 0.0)) <= 0 and (
+            float(getattr(config.tra, "pu_rank_lambda", 0.0)) > 0
+            or getattr(config.data, "ring_pu_scroll_ids", None)
+        ):
+            raise ValueError("pu_rank_lambda and ring_pu_scroll_ids need nnPU (tra.pu_lambda > 0)")
+        if str(getattr(config.tra, "and_mask_unit", "domain")) not in ("domain", "patch"):
+            raise ValueError("and_mask_unit must be 'domain' or 'patch'")
         set_seed(
             int(getattr(config.tra, "seed", 41)),
             deterministic=bool(getattr(config.tra, "deterministic", False)),
@@ -724,6 +814,9 @@ class Trainer:
         self._character_groupdro_log_weights: dict[int, float] = {}
         self._physical_domain_groupdro_log_weights: dict[int, float] = {}
         self._physical_patch_groupdro_log_weights: dict[int, float] = {}
+        # patch GroupDRO keeps its log weights on the device (slot per patch id) so updates never sync
+        self._patch_groupdro_slots: dict[int, int] = {}
+        self._patch_groupdro_state: tuple[torch.Tensor, torch.Tensor] | None = None
         self._domain_gradient_ema: dict[tuple[int, int], float] = {}
         self._pcgrad_gram_cosines: dict[tuple[int, int], float] = {}
         self._pcgrad_gram_log_norms: dict[int, float] = {}
@@ -779,6 +872,7 @@ class Trainer:
             "pu_loss": 0.0,
             "pu_risk": 0.0,
             "pu_unlabeled_mean_prob": 0.0,
+            "pu_rank_loss": 0.0,
             "unsupported_pos_frac": 0.0,
             "unsupported_neg_frac": 0.0,
             "and_mask_kept_frac": 0.0,
@@ -1310,9 +1404,10 @@ class Trainer:
         if head_input is None or outputs.shape != mask.shape:
             raise RuntimeError("RSC requires the early-2D multitile output head")
         batch = outputs.shape[0]
-        selected = torch.rand(batch, device=outputs.device) < probability
+        selected = torch.rand(batch) < probability
         if not selected.any():
             return outputs
+        selected = _pinned_to(selected, outputs.device)
         sign = torch.where(labels > 0.5, 1.0, -1.0) * (mask > 0).float()
         gradient = torch.autograd.grad(
             (outputs.float() * sign).sum(), head_input, retain_graph=True,
@@ -1331,6 +1426,43 @@ class Trainer:
         muted = head_input * keep.view(keep_shape).to(head_input.dtype)
         challenged = self.model.score_from_head_input(muted, target_offsets)
         return torch.where(selected.unsqueeze(1), challenged, outputs)
+
+    def _patch_groupdro_objective(
+        self,
+        group_ids: list[int],
+        group_losses: list[torch.Tensor],
+        eta: float,
+        max_ratio: float,
+    ) -> torch.Tensor | None:
+        """character_groupdro_loss for source patches with the log weights held on the device: the
+        same online update (add eta * loss, clamp to max_ratio below the max, re-centre) without syncs."""
+        if not group_losses:
+            return None
+        losses = torch.stack(group_losses)
+        for group_id in group_ids:
+            self._patch_groupdro_slots.setdefault(group_id, len(self._patch_groupdro_slots))
+        needed = len(self._patch_groupdro_slots)
+        if self._patch_groupdro_state is None or self._patch_groupdro_state[0].numel() < needed:
+            log_weights = torch.zeros(max(64, 2 * needed), dtype=torch.float64, device=losses.device)
+            seen = torch.zeros_like(log_weights, dtype=torch.bool)
+            if self._patch_groupdro_state is not None:
+                old_weights, old_seen = self._patch_groupdro_state
+                log_weights[:old_weights.numel()] = old_weights
+                seen[:old_seen.numel()] = old_seen
+            self._patch_groupdro_state = (log_weights, seen)
+        log_weights, seen = self._patch_groupdro_state
+        slots = _pinned_to(
+            torch.tensor([self._patch_groupdro_slots[group_id] for group_id in group_ids], dtype=torch.long),
+            losses.device,
+        )
+        log_weights.index_add_(0, slots, float(eta) * losses.detach().double())
+        seen.index_fill_(0, slots, True)
+        maximum = log_weights.masked_fill(~seen, float("-inf")).max()
+        floor = maximum - math.log(max(float(max_ratio), 1.0))
+        log_weights.copy_(torch.where(seen, torch.maximum(log_weights, floor) - maximum, log_weights))
+        weights = log_weights[slots].exp().to(losses.dtype)
+        weights = weights / weights.sum().clamp(min=1e-8)
+        return (weights * losses).sum()
 
     def _and_mask_partition(self, domain_ids: torch.Tensor) -> tuple[torch.Tensor, list[tuple[int, int]]]:
         """sample order grouping random disjoint sets of physical domains, and each group's slice."""
@@ -1369,7 +1501,8 @@ class Trainer:
                     for key, value in kwargs.items()
                 }
                 result = self._train_batch(images[start:end], labels[start:end], mask[start:end], **group_kwargs)
-                cells = float(len(result[0])) if np.ndim(result[0]) else 0.0
+                # deferred groups return a _PendingGroup whose host arrays are already known
+                cells = float(len(result.label_values)) if isinstance(result, _PendingGroup) else 0.0
                 if cells == 0:
                     continue
                 after_group()
@@ -1385,9 +1518,16 @@ class Trainer:
 
     def _merge_group_results(self, weights, outputs, domains, dg_totals, patch_dro_total, extra_dg):
         total = sum(weights)
+        # one device->host transfer per group, issued only after every group (and the step) is queued
+        finished = [self._finish_pending(result) for result in outputs]
+        outputs = [result for result, _ in finished]
+        for w, (_, tail) in zip(weights, finished):
+            for key, value in tail.items():
+                dg_totals[key] = dg_totals.get(key, 0.0) + w * value
         self._last_dg_losses.update({key: value / total for key, value in dg_totals.items()})
         self._last_dg_losses.update(extra_dg)
         self._last_physical_patch_groupdro_loss = patch_dro_total / total
+        self._resolve_host_scalars()
         self._last_metric_domains = np.concatenate(domains)
         scalars = [
             sum(w * float(result[3 + k]) for w, result in zip(weights, outputs)) / total
@@ -1416,8 +1556,9 @@ class Trainer:
         group_gradients = []
 
         def capture():
+            # every group starts with zero_grad(set_to_none=True), so these tensors are never touched again
             group_gradients.append([
-                None if parameter.grad is None else parameter.grad.detach().clone()
+                None if parameter.grad is None else parameter.grad.detach()
                 for parameter in parameters
             ])
 
@@ -1428,28 +1569,40 @@ class Trainer:
             return np.empty([]), np.empty([]), np.empty([]), *([0.0] * 11)
         total = sum(weights)
         threshold = float(getattr(self.c.tra, "and_mask_threshold", 0.5))
-        kept = counted = 0.0
+        kept, counted = None, 0
         self.optimizer.zero_grad(set_to_none=True)
         with torch.no_grad():
+            # parameters with a gradient in any group, bucketed by dtype and merged as flat vectors
+            buckets: dict[torch.dtype, list[int]] = {}
             for index, parameter in enumerate(parameters):
-                if all(gradients[index] is None for gradients in group_gradients):
-                    continue
-                grads = [
-                    torch.zeros_like(parameter) if gradients[index] is None else gradients[index]
+                if any(gradients[index] is not None for gradients in group_gradients):
+                    buckets.setdefault(parameter.dtype, []).append(index)
+            for indices in buckets.values():
+                stacked = torch.stack([
+                    torch.cat([
+                        (torch.zeros_like(parameters[index]) if gradients[index] is None
+                         else gradients[index]).reshape(-1)
+                        for index in indices
+                    ])
                     for gradients in group_gradients
-                ]
-                keep = self._sign_agreement_mask(grads, threshold)
-                combined = sum(w * g for w, g in zip(weights, grads)) / total
-                parameter.grad = torch.where(keep, combined, torch.zeros_like(combined))
-                kept += float(keep.sum())
+                ])
+                keep = self._sign_agreement_mask(list(stacked.unbind(0)), threshold)
+                combined = sum(w * g for w, g in zip(weights, stacked.unbind(0))) / total
+                merged = torch.where(keep, combined, torch.zeros_like(combined))
+                sizes = [parameters[index].numel() for index in indices]
+                for index, chunk in zip(indices, merged.split(sizes)):
+                    parameters[index].grad = chunk.view_as(parameters[index])
+                kept = keep.sum() if kept is None else kept + keep.sum()
                 counted += keep.numel()
+        del group_gradients[:]
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.c.tra.grad_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()
         self._update_model_ema(epoch)
+        kept_frac = kept.double() / max(counted, 1) if kept is not None else 0.0
         return self._merge_group_results(
             weights, outputs, domains, dg_totals, patch_dro_total,
-            {"and_mask_kept_frac": kept / max(counted, 1.0)},
+            {"and_mask_kept_frac": kept_frac},
         )
 
     def _fish_train_batch(self, bounds: list[tuple[int, int]], images, labels, mask, **kwargs):
@@ -2116,6 +2269,19 @@ class Trainer:
         if mask.reshape(mask.size(0), -1).sum().item() <= 0:
             print("[ERROR] Mask sum is zero, skipping loss calculation.")
             return (np.empty([]), np.empty([]), np.empty([]), *([0.0] * 11))
+        # host mirrors of the target grids (inputs arrive as CPU tensors): loss bookkeeping that needs
+        # data-dependent shapes or branches reads these instead of syncing on device tensors
+        labels_host = labels.detach().cpu().reshape(mask.size(0), -1).float()
+        labels_host = torch.where(
+            (labels_host > 0.5) & (labels_host < 1.0), torch.ones_like(labels_host), labels_host,
+        )
+        mask_host = mask.detach().cpu().reshape(mask.size(0), -1)
+        if mask_host.shape[1] == labels_host.shape[1]:
+            mask_host = (mask_host > 0).float()
+        else:
+            mask_host = (mask_host.sum(dim=1) > 0).float().unsqueeze(1)
+        domain_ids_host = domain_ids.detach().cpu().view(-1) if domain_ids is not None else None
+        patch_ids_host = patch_ids.detach().cpu().view(-1) if patch_ids is not None else None
         images = images.to(self.c.device, non_blocking=True)
         surface_source = images
         if surface_depth is not None:
@@ -2296,8 +2462,12 @@ class Trainer:
 
             per_target_loss = self.criterion(outputs, targets)
             loss_mask = mask
+            # host mirror of loss_mask; None once a data-dependent rule (top-k, support drop) edits it
+            loss_mask_host = mask_host
+            labelled_mask_host = mask_host
             topk_fraction = float(getattr(self.c.tra, "topk_positive_fraction", 0.0))
             if 0.0 < topk_fraction < 1.0 and outputs.shape == mask.shape:
+                loss_mask_host = None
                 group_ids_for_topk = (
                     character_ids_device
                     if character_ids_device is not None
@@ -2317,14 +2487,20 @@ class Trainer:
                 )
             pu_lambda = float(getattr(self.c.tra, "pu_lambda", 0.0))
             pu_unlabeled = None
+            pu_unlabeled_host = None
             labelled_mask = mask
             if pu_lambda > 0 and outputs.shape == mask.shape:
                 # far-background cells may hold unlabelled ink: they leave every negative-treating loss
                 pu_unlabeled = (labels < -1.5) & (mask > 0)
+                pu_unlabeled_host = (labels_host < -1.5) & (mask_host > 0)
                 labelled_mask = mask * (~pu_unlabeled).to(mask.dtype)
                 loss_mask = loss_mask * (~pu_unlabeled).to(loss_mask.dtype)
+                labelled_mask_host = mask_host * (~pu_unlabeled_host).float()
+                if loss_mask_host is not None:
+                    loss_mask_host = loss_mask_host * (~pu_unlabeled_host).float()
             support_drop = str(getattr(self.c.tra, "support_drop", "") or "")
             if support_drop:
+                loss_mask_host = None
                 if outputs.shape != mask.shape:
                     raise RuntimeError("support_drop requires multitile cell outputs")
                 unsupported = self._unsupported_cells(
@@ -2493,15 +2669,15 @@ class Trainer:
             if bool(getattr(self.c.tra, "physical_patch_groupdro", False)):
                 if patch_ids is None:
                     raise RuntimeError("physical-patch GroupDRO requires patch IDs")
+                host_dro = loss_mask_host is not None and extra_cells is None
                 patch_group_ids, patch_group_losses = _physical_patch_group_losses(
                     per_target_loss,
-                    dro_mask,
-                    patch_ids,
+                    loss_mask_host if host_dro else dro_mask,
+                    patch_ids_host,
                 )
-                robust_loss, _ = character_groupdro_loss(
+                robust_loss = self._patch_groupdro_objective(
                     patch_group_ids,
                     patch_group_losses,
-                    self._physical_patch_groupdro_log_weights,
                     eta=float(getattr(self.c.tra, "physical_patch_groupdro_eta", 0.05)),
                     max_ratio=float(
                         getattr(self.c.tra, "physical_patch_groupdro_max_ratio", 3.0)
@@ -2509,9 +2685,7 @@ class Trainer:
                 )
                 if robust_loss is not None:
                     primary_loss = _blend_extra_cells(robust_loss, per_target_loss, loss_mask, extra_cells)
-                    self._last_physical_patch_groupdro_loss = float(
-                        robust_loss.detach()
-                    )
+                    self._last_physical_patch_groupdro_loss = robust_loss.detach().float()
             if bool(getattr(self.c.tra, "domain_vrex", False)) and domain_group_losses:
                 vrex_lambda = (
                     float(getattr(self.c.tra, "domain_vrex_lambda", 1.0))
@@ -2627,6 +2801,16 @@ class Trainer:
                 if rank_loss is not None:
                     loss = loss + rank_lambda * rank_loss
                     self._last_dg_losses["cross_scroll_rank_loss"] = float(rank_loss.detach())
+            pu_rank_lambda = float(getattr(self.c.tra, "pu_rank_lambda", 0.0))
+            if pu_rank_lambda > 0 and outputs.shape == mask.shape:
+                if domain_ids is None:
+                    raise RuntimeError("PU ranking requires domain IDs")
+                pu_rank = pu_rank_loss(
+                    outputs, labels, mask, domain_ids, int(getattr(self.c.tra, "pu_rank_pairs", 1024)),
+                )
+                if pu_rank is not None:
+                    loss = loss + pu_rank_lambda * pu_rank
+                    self._last_dg_losses["pu_rank_loss"] = float(pu_rank.detach())
             dice_weight = float(getattr(self.c.tra, "dice_weight", 0.0))
             if dice_weight > 0 and outputs.shape == loss_mask.shape:
                 probabilities = torch.sigmoid(outputs.float())
@@ -2731,9 +2915,9 @@ class Trainer:
             ):
                 bag_rank_loss_value, _ = character_bag_ranking_loss(
                     outputs,
-                    labels,
-                    labelled_mask,
-                    character_ids_device,
+                    labels_host,
+                    labelled_mask_host,
+                    character_ids,
                     margin=float(getattr(self.c.tra, "character_bag_margin", 0.5)),
                     topk_frac=float(getattr(self.c.tra, "character_bag_topk_frac", 0.5)),
                 )
@@ -2741,25 +2925,30 @@ class Trainer:
 
             if pu_unlabeled is not None:
                 pu_positive = (labels > 0.5) & (mask > 0)
-                if pu_unlabeled.any() and pu_positive.any():
+                pu_positive_host = (labels_host > 0.5) & (mask_host > 0)
+                if pu_unlabeled_host.any() and pu_positive_host.any():
                     logits = outputs.float()
+                    unlabeled_weight = pu_unlabeled.float()
+                    positive_weight = pu_positive.float()
                     # negative-class risk of U minus the share of it that hidden positives explain
                     pu_risk = (
-                        F.softplus(logits[pu_unlabeled]).mean()
-                        - float(getattr(self.c.tra, "pu_prior", 0.03)) * F.softplus(logits[pu_positive]).mean()
+                        (F.softplus(logits) * unlabeled_weight).sum() / unlabeled_weight.sum()
+                        - float(getattr(self.c.tra, "pu_prior", 0.03))
+                        * (F.softplus(logits) * positive_weight).sum() / positive_weight.sum()
                     )
                     pu_beta = float(getattr(self.c.tra, "pu_beta", 0.0))
                     # Kiryo et al.: below -beta the network is overfitting U, so step back up instead
-                    pu_loss = (
-                        pu_risk if float(pu_risk.detach()) >= -pu_beta
-                        else -float(getattr(self.c.tra, "pu_gamma", 1.0)) * pu_risk
+                    pu_loss = torch.where(
+                        pu_risk.detach() >= -pu_beta,
+                        pu_risk,
+                        -float(getattr(self.c.tra, "pu_gamma", 1.0)) * pu_risk,
                     )
                     loss = loss + pu_lambda * pu_loss
-                    self._last_dg_losses["pu_loss"] = float(pu_loss.detach())
-                    self._last_dg_losses["pu_risk"] = float(pu_risk.detach())
-                    self._last_dg_losses["pu_unlabeled_mean_prob"] = float(
-                        torch.sigmoid(logits[pu_unlabeled]).mean().detach()
-                    )
+                    self._last_dg_losses["pu_loss"] = pu_loss.detach()
+                    self._last_dg_losses["pu_risk"] = pu_risk.detach()
+                    self._last_dg_losses["pu_unlabeled_mean_prob"] = (
+                        (torch.sigmoid(logits) * unlabeled_weight).sum() / unlabeled_weight.sum()
+                    ).detach()
 
             tta_lambda = float(getattr(self.c.tra, "tta_consistency_lambda", 0.0))
             _tta_on = getattr(self.c.tra, "tta_consistency", False) and tta_lambda > 0
@@ -3279,7 +3468,7 @@ class Trainer:
             self.scaler.step(self.optimizer)
             self.scaler.update()
             self._update_model_ema(epoch)
-        diagnostic_values = torch.stack((
+        diagnostics = torch.stack((
             loss.detach().float(),
             raw_loss_value.detach().float(),
             dann_loss_value.detach().float(),
@@ -3300,7 +3489,59 @@ class Trainer:
             dann_grl_value.detach().float(),
             clam_loss_value.detach().float(),
             elr_loss_value.detach().float(),
-        )).cpu().tolist()
+            prototype_loss_value.detach().float(),
+            coral_loss_value.detach().float(),
+            cdan_loss_value.detach().float(),
+            sagnet_loss_value.detach().float(),
+            mae_reconstruction_loss_value.detach().float(),
+        ))
+
+        if hasattr(self.model, "prototype_head") and self.model.prototype_head is not None:
+            emb = getattr(self.model, "last_embedding_detached", None)
+            if emb is not None:
+                self.model.prototype_head.update(emb, sample_pos.view(-1, 1))
+
+        # metric arrays come from the host mirrors; only scores and diagnostics cross from the device
+        label_values = labels_host.clamp(min=0).numpy().flatten().astype(int)
+        if character_ids is not None:
+            character_values = character_ids.view(B, -1).cpu().numpy().flatten().astype(np.int64)
+        else:
+            character_values = np.zeros_like(label_values, dtype=np.int64)
+        keep = None
+        if labels.shape[1] > 1:  # multitile: drop out-of-mask sub-tiles from the metric arrays
+            keep = (mask_host > 0).numpy().flatten()
+            label_values = label_values[keep]
+            character_values = character_values[keep]
+        if domain_ids_host is not None:
+            metric_domains = domain_ids_host.unsqueeze(1).expand(B, labels.shape[1]).numpy().flatten()
+            self._last_metric_domains = (
+                metric_domains[keep] if keep is not None else metric_domains
+            ).astype(np.int64)
+        pending = _PendingGroup(
+            torch.sigmoid(outputs).detach().float().flatten(),
+            diagnostics,
+            label_values,
+            character_values,
+            keep,
+        )
+        if self._defer_optimizer_step:
+            return pending
+        result, _ = self._finish_pending(pending)
+        self._resolve_host_scalars()
+        return result
+
+    _PENDING_TAIL = (
+        "prototype_align_loss", "coral_align_loss", "cdan_loss", "sagnet_loss", "mae_reconstruction_loss",
+    )
+
+    def _finish_pending(self, pending: "_PendingGroup") -> tuple[tuple, dict[str, float]]:
+        """copy one group's scores and diagnostics to the host (a single transfer) and publish them."""
+        host = torch.cat((pending.diagnostics, pending.scores)).cpu().numpy()
+        count = pending.diagnostics.numel()
+        diagnostic_values = host[:count].tolist()
+        scores = host[count:]
+        if pending.keep is not None:
+            scores = scores[pending.keep]
         self._last_depth_consistency = diagnostic_values[12]
         self._last_character_objectives = (
             diagnostic_values[11],
@@ -3310,41 +3551,28 @@ class Trainer:
         self._last_grl_scale = diagnostic_values[17]
         self._last_clam_loss = diagnostic_values[18]
         self._last_elr_loss = diagnostic_values[19]
-        self._last_dg_losses.update({
-            "prototype_align_loss": float(prototype_loss_value.detach()),
-            "coral_align_loss": float(coral_loss_value.detach()),
-            "cdan_loss": float(cdan_loss_value.detach()),
-            "sagnet_loss": float(sagnet_loss_value.detach()),
-            "mae_reconstruction_loss": float(mae_reconstruction_loss_value.detach()),
-        })
-
-        if hasattr(self.model, "prototype_head") and self.model.prototype_head is not None:
-            emb = getattr(self.model, "last_embedding_detached", None)
-            if emb is not None:
-                self.model.prototype_head.update(emb, sample_pos.view(-1, 1))
-
-        scores = torch.sigmoid(outputs).detach().cpu().numpy().flatten()
-        label_values = labels.clamp(min=0).detach().cpu().numpy().flatten().astype(int)
-        if character_ids is not None:
-            character_values = character_ids.view(B, -1).cpu().numpy().flatten().astype(np.int64)
-        else:
-            character_values = np.zeros_like(label_values, dtype=np.int64)
-        if labels.shape[1] > 1:  # multitile: drop out-of-mask sub-tiles from the metric arrays
-            keep = (mask > 0).detach().cpu().numpy().flatten()
-            scores = scores[keep]
-            label_values = label_values[keep]
-            character_values = character_values[keep]
-        if domain_ids is not None:
-            metric_domains = domain_ids.unsqueeze(1).expand_as(labels).detach().cpu().numpy().flatten()
-            self._last_metric_domains = (
-                metric_domains[keep] if labels.shape[1] > 1 else metric_domains
-            ).astype(np.int64)
+        tail = dict(zip(self._PENDING_TAIL, diagnostic_values[20:25]))
+        self._last_dg_losses.update(tail)
         return (
             scores,
-            label_values,
-            character_values,
+            pending.label_values,
+            pending.character_values,
             *diagnostic_values[:11],
-        )
+        ), tail
+
+    def _resolve_host_scalars(self) -> None:
+        """turn the detached device scalars left in the per-step loss logs into floats in one transfer."""
+        keys = [key for key, value in self._last_dg_losses.items() if torch.is_tensor(value)]
+        patch_dro = torch.is_tensor(self._last_physical_patch_groupdro_loss)
+        values = [self._last_dg_losses[key] for key in keys]
+        if patch_dro:
+            values.append(self._last_physical_patch_groupdro_loss)
+        if not values:
+            return
+        host = torch.stack([value.detach().double().reshape(()) for value in values]).cpu().tolist()
+        if patch_dro:
+            self._last_physical_patch_groupdro_loss = host.pop()
+        self._last_dg_losses.update(zip(keys, host))
 
     def _ins_hard_samples(
         self,
@@ -3512,7 +3740,14 @@ class Trainer:
             if use_fish or bool(getattr(self.c.tra, "and_mask", False)):
                 if domain_ids is None:
                     raise RuntimeError("AND-mask and Fish require physical-domain IDs")
-                order, bounds = self._and_mask_partition(domain_ids)
+                by_patch = str(getattr(self.c.tra, "and_mask_unit", "domain")) == "patch"
+                if by_patch and batch_patch_ids is None:
+                    raise RuntimeError("patch-level AND-mask requires patch IDs")
+                order, bounds = self._and_mask_partition(batch_patch_ids if by_patch else domain_ids)
+                # bulky inputs go to the device whole (async from the loader's pinned buffers) and are
+                # reordered there; small target tensors stay on the host, pinned so group slices copy async
+                on_device = {id(t) for t in (images, batch_surface_depth, batch_surface_confidence) if t is not None}
+                order_device = _pinned_to(order, self.c.device)
                 (
                     images, batch_labels, mask, domain_ids, batch_patch_ids, batch_character_ids,
                     batch_target_offsets, batch_surface_depth, batch_surface_confidence,
@@ -3520,7 +3755,11 @@ class Trainer:
                     batch_depth_pair, batch_depth_pair_surface, batch_depth_pair_confidence,
                     batch_depth_pair_active,
                 ) = (
-                    None if tensor is None else tensor[order.to(tensor.device)]
+                    None if tensor is None
+                    else _pinned_to(tensor, self.c.device)[order_device] if id(tensor) in on_device
+                    else tensor[order.to(tensor.device)].pin_memory() if tensor.device.type == "cpu"
+                    and torch.cuda.is_available()
+                    else tensor[order.to(tensor.device)]
                     for tensor in (
                         images, batch_labels, mask, domain_ids, batch_patch_ids, batch_character_ids,
                         batch_target_offsets, batch_surface_depth, batch_surface_confidence,
@@ -4116,6 +4355,7 @@ class Trainer:
             ("pu_loss", "PU/Loss"),
             ("pu_risk", "PU/Risk"),
             ("pu_unlabeled_mean_prob", "PU/UnlabeledMeanProb"),
+            ("pu_rank_loss", "PU/RankLoss"),
         ):
             if key in train_metrics:
                 self.vis.writer.add_scalar(tag, train_metrics[key], epoch)
@@ -4319,6 +4559,9 @@ def _zarr_download_commands(scroll_ids) -> list[str]:
 
     training_names = {str(zid): name for name, _segment, zid in assemble_training_segments.SEGMENTS}
     test_ids = {str(fragment[0]) for fragment in assemble_test_segments.FRAGMENTS}
+    # flat aliases are written when their source render is assembled
+    sources = {alias: source for source, alias in assemble_test_segments.FLAT_ALIASES.items()}
+    scroll_ids = list(dict.fromkeys(sources.get(str(sid), str(sid)) for sid in scroll_ids))
     names = [training_names[str(sid)] for sid in scroll_ids if str(sid) in training_names]
     tests = [str(sid) for sid in scroll_ids if str(sid) in test_ids]
     unknown = [str(sid) for sid in scroll_ids if str(sid) not in training_names and str(sid) not in test_ids]
@@ -4341,19 +4584,27 @@ def preflight_inputs(config) -> None:
     train_ids = [int(sid) for sid in config.scroll_ids()]
     scroll_ids = list(dict.fromkeys([*train_ids, *(int(sid) for sid in config.data.vis_scroll_ids or [])]))
     missing_zarrs, missing_files, lfs_pointers = [], [], []
+    label_free = {int(sid) for sid in config.data.label_free_vis_scroll_ids or []}
     for sid in scroll_ids:
         if not os.path.isdir(os.path.join(config.data.zarr_path, f"{sid}{suffixes.get(str(sid), '')}.zarr")):
             missing_zarrs.append(sid)
         paths = [
             os.path.join("masks", f"{sid}.png"),
-            os.path.join(config.data.inklabel_dir, f"{sid}.png"),
             os.path.join(config.data.surface_label_dir, str(sid), "depth.npy"),
             os.path.join(config.data.surface_label_dir, str(sid), "confidence.npy"),
         ]
+        if sid not in label_free:
+            paths.append(os.path.join(config.data.inklabel_dir, f"{sid}.png"))
         if sid in train_ids and not config.data.simple_split:
             paths.append(os.path.join(config.data.train_mask_dir, f"{sid}.png"))
         for path in paths:
             if not os.path.exists(path):
+                missing_files.append(path)
+            elif _is_lfs_pointer(path):
+                lfs_pointers.append(path)
+    if config.data.native_noise:
+        for path in (config.data.native_noise, os.path.splitext(config.data.native_noise)[0] + ".json"):
+            if not os.path.isfile(path):
                 missing_files.append(path)
             elif _is_lfs_pointer(path):
                 lfs_pointers.append(path)
@@ -4373,7 +4624,9 @@ def preflight_inputs(config) -> None:
     if missing_files:
         problems.append(
             f"{len(missing_files)} repo file(s) missing:\n    " + "\n    ".join(missing_files)
-            + "\n  these are tracked in git: re-clone or `git checkout -- <path>`, then `git lfs pull`"
+            + "\n  surface_labels/ and the flat-alias PNGs are written by assemble_training_segments.py / "
+            "assemble_test_segments.py; labels and train masks are tracked in git (`git checkout -- <path>`); "
+            "models/ ships with the docker image"
         )
     if lfs_pointers:
         problems.append(
@@ -4385,40 +4638,50 @@ def preflight_inputs(config) -> None:
     print(f"[preflight] {len(scroll_ids)} scroll(s) and init weights present", flush=True)
 
 
+def _free_run_name(config, repo_root: str) -> str:
+    """the configured run name, or the first free <name>_2, <name>_3 ... so an existing run is never overwritten."""
+    base = str(config.run_name or config.exp_name)
+    models_root = os.path.dirname(os.path.join(repo_root, config.model_dir))
+    log_root = os.path.join(repo_root, config.tra.log_dir)
+    name, index = base, 1
+    while any(
+        os.path.isdir(path) and os.listdir(path)
+        for path in (os.path.join(models_root, name), os.path.join(log_root, name))
+    ):
+        index += 1
+        name = f"{base}_{index}"
+    return name
+
+
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Vesuvius ink-detection training")
-    parser.add_argument(
-        "-n",
-        "--experiment_name",
-        type=str,
-        default="",
-        help="experiment name (used for TensorBoard log dir and checkpoint naming)",
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-n", "--run-name", default="", help="run name (default: utils/config.py run_name)")
     parser.add_argument("--dry-run", action="store_true", help="check inputs and print the config, then exit")
     args = parser.parse_args()
 
-    # defaults = campaign_archs_40 holdout_n96_combined_surface_norm; finetune.py loads config.save_final
     config = Config()
-    if args.experiment_name:
-        config.exp_name = args.experiment_name
-
     repo_root = os.path.dirname(os.path.abspath(__file__))
     # data, label, and cache paths in the config are repo-relative
     os.chdir(repo_root)
-    if not os.path.isabs(config.tra.log_dir):
-        config.tra.log_dir = os.path.normpath(os.path.join(repo_root, config.tra.log_dir))
-    if not os.path.isabs(config.model_dir):
-        config.model_dir = os.path.normpath(os.path.join(repo_root, config.model_dir))
+    if args.run_name:
+        config.run_name = args.run_name
+    name = _free_run_name(config, repo_root)
+    models_root = os.path.dirname(os.path.normpath(os.path.join(repo_root, config.model_dir)))
+    config.exp_name = config.run_name = name
+    config.model_dir = os.path.join(models_root, name)
+    config.save_final = os.path.join(config.model_dir, "final.pth")
+    config.tra.log_dir = os.path.normpath(os.path.join(repo_root, config.tra.log_dir))
 
     preflight_inputs(config)
     if args.dry_run:
         print(
-            f"[dry-run] ctx={config.data.context_size} ds={config.data.context_downsample} "
-            f"norm={config.data.norm_mode} domains={dict(zip(config.data.train_scroll_dict, config.data.train_scroll_weights))} "
+            f"[dry-run] run={name} ctx={config.data.context_size} norm={config.data.norm_mode} "
+            f"domains={dict(zip(config.data.train_scroll_dict, config.data.train_scroll_weights))} "
             f"scrolls={len(config.data.scrolls)} vis={config.data.vis_scroll_ids} epochs={config.tra.n_epochs} "
-            f"batch={config.dl.batch_size} lr={config.tra.lr} init={config.init_weights} -> {config.save_final}",
+            f"batch={config.dl.batch_size} lr={config.tra.lr} init={config.init_weights} -> {config.save_final} "
+            f"(TensorBoard {os.path.join(config.tra.log_dir, name)})",
             flush=True,
         )
         return
@@ -4432,8 +4695,25 @@ def main() -> None:
             surface_dir=config.data.surface_label_dir,
         )
 
+    # prepare every dataset and fill the RAM chunk caches before the Trainer seeds and builds its loaders,
+    # exactly as the campaign runner that trained the reference model did
+    with startup_output():
+        warmup = Trainer.__new__(Trainer)
+        warmup.c = config
+        warmup_outputs = warmup._setup_data()
+    del warmup, warmup_outputs
+    gc.collect()
+
     trainer = Trainer(config)
-    trainer.run()
+    try:
+        trainer.vis.writer.add_scalar("Run/Initialized", 1.0, 0)
+        trainer.vis.writer.flush()
+        trainer.run()
+    finally:
+        trainer.close()
+        from utils.dataloader import cleanup_mmap_files
+
+        cleanup_mmap_files()
 
 
 if __name__ == "__main__":

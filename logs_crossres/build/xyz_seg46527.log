@@ -1,6 +1,0 @@
-nohup: ignoring input
-[seg46527] ink bbox y[1209,2058] x[309,1423] (12% of the frame) -> 6 tiles (bbox, margin 256px)
-[seg46527] prefetched 200/408 chunks (41s)
-[seg46527] prefetched 400/408 chunks (78s)
-[seg46527] prefetched 408/408 chunks (78s)
-[seg46527] kept 6 tiles (median midslice NCC 0.7775510807915353, median depth shift +0.50 slices), dropped 0 -> /vesuvius/crossres/pairs/xyz/20260226000000

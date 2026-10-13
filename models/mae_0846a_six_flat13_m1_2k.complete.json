@@ -1,0 +1,219 @@
+{
+  "purpose": "six-patch discovery MAE continuation, not a held-out-patch initialization",
+  "init_weights": "/vesuvius/models/mae_nnunet_192_campaign34_early_gated_fiber_native96_surfacenorm_campaign40_2k.pth",
+  "init_sha256": "df49efc2e6096379680c1dadef88426fcdee7a36165e494ce4b2865eb1dda3a2",
+  "sources": [
+    {
+      "alias": 20260927134931,
+      "source_id": "20260927134928",
+      "zarr": "/vesuvius/ves_zarrs2/20260927134928.zarr",
+      "mask": "/vesuvius/masks/20260927134928.png",
+      "shape": [
+        28,
+        3041,
+        3661
+      ],
+      "norm_id": 20260927134931,
+      "flat_depth": 13,
+      "global_norm": {
+        "mean": 124.39655581125307,
+        "std": 26.316145634165757,
+        "min": -4.727005145075324,
+        "max": 4.962863711287072
+      },
+      "anchors": {
+        "gap": 51.0,
+        "papyrus": 128.0,
+        "surface_mad": 6.2901390827230514,
+        "tiles": 384
+      }
+    },
+    {
+      "alias": 20261012065806,
+      "source_id": "20261012065803",
+      "zarr": "/vesuvius/ves_zarrs2/20261012065803.zarr",
+      "mask": "/vesuvius/masks/20261012065803.png",
+      "shape": [
+        28,
+        3461,
+        3141
+      ],
+      "norm_id": 20261012065806,
+      "flat_depth": 13,
+      "global_norm": {
+        "mean": 127.04552423904796,
+        "std": 24.907283544685185,
+        "min": -5.100737862927547,
+        "max": 5.137231265360348
+      },
+      "anchors": {
+        "gap": 56.0,
+        "papyrus": 130.0,
+        "surface_mad": 6.2901390827230514,
+        "tiles": 384
+      }
+    },
+    {
+      "alias": 20261012073246,
+      "source_id": "20261012073244",
+      "zarr": "/vesuvius/ves_zarrs2/20261012073244.zarr",
+      "mask": "/vesuvius/masks/20261012073244.png",
+      "shape": [
+        28,
+        3941,
+        2861
+      ],
+      "norm_id": 20261012073246,
+      "flat_depth": 13,
+      "global_norm": {
+        "mean": 126.44185637676709,
+        "std": 24.628865038717183,
+        "min": -5.133888881115609,
+        "max": 5.219815993190768
+      },
+      "anchors": {
+        "gap": 59.0,
+        "papyrus": 130.0,
+        "surface_mad": 5.241782568935876,
+        "tiles": 384
+      }
+    },
+    {
+      "alias": 20261012081238,
+      "source_id": "20261012081237",
+      "zarr": "/vesuvius/ves_zarrs2/20261012081237.zarr",
+      "mask": "/vesuvius/masks/20261012081237.png",
+      "shape": [
+        28,
+        4181,
+        3141
+      ],
+      "norm_id": 20261012081238,
+      "flat_depth": 13,
+      "global_norm": {
+        "mean": 124.63903732891632,
+        "std": 25.791921498981516,
+        "min": -4.832483587306131,
+        "max": 5.054333104892222
+      },
+      "anchors": {
+        "gap": 51.0,
+        "papyrus": 128.0,
+        "surface_mad": 5.241782568935876,
+        "tiles": 384
+      }
+    },
+    {
+      "alias": 20260927143929,
+      "source_id": "auto_grown_20260927143929299_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20260927143929299_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20260927143929299_abf.png",
+      "shape": [
+        28,
+        2241,
+        3061
+      ],
+      "norm_id": null,
+      "flat_depth": 13,
+      "global_norm": {
+        "mean": 125.6420082947455,
+        "std": 27.593577279096664,
+        "min": -4.553306264857684,
+        "max": 4.687974683269821
+      },
+      "anchors": {
+        "gap": 51.0,
+        "papyrus": 129.0,
+        "surface_mad": 6.2901390827230514,
+        "tiles": 384
+      }
+    },
+    {
+      "alias": 20260927154033,
+      "source_id": "auto_grown_20260927154033403_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20260927154033403_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20260927154033403_abf.png",
+      "shape": [
+        28,
+        3761,
+        3641
+      ],
+      "norm_id": null,
+      "flat_depth": 13,
+      "global_norm": {
+        "mean": 126.94285943639437,
+        "std": 27.459434989262654,
+        "min": -4.622923213315652,
+        "max": 4.663502385015542
+      },
+      "anchors": {
+        "gap": 52.0,
+        "papyrus": 130.0,
+        "surface_mad": 5.241782568935876,
+        "tiles": 384
+      }
+    }
+  ],
+  "command": [
+    "/usr/bin/python",
+    "-u",
+    "/vesuvius/mae_pretrain_nnunet.py",
+    "--name",
+    "mae_0846a_six_flat13_m1_2k",
+    "--init-weights",
+    "/vesuvius/models/mae_nnunet_192_campaign34_early_gated_fiber_native96_surfacenorm_campaign40_2k.pth",
+    "--early-2d-unet",
+    "--gated-stems",
+    "--norm-mode",
+    "ibn_full",
+    "--fiber-coordinate-branch",
+    "--data-norm-mode",
+    "surface_anchor",
+    "--ctx",
+    "96",
+    "--ds",
+    "1",
+    "--depth",
+    "8",
+    "--d-start",
+    "9",
+    "--d-end",
+    "17",
+    "--scroll-ids",
+    "20260927134931",
+    "20261012065806",
+    "20261012073246",
+    "20261012081238",
+    "20260927143929",
+    "20260927154033",
+    "--require-all-scrolls",
+    "--steps",
+    "2000",
+    "--batch-size",
+    "24",
+    "--lr",
+    "1e-4",
+    "--seed",
+    "41",
+    "--log-dir",
+    "/vesuvius/runs_mae_letters",
+    "--log-int",
+    "50",
+    "--save-int",
+    "500",
+    "--no-figures"
+  ],
+  "cwd": "/vesuvius/_ves_tmp/mae_0846a/mae_0846a_six_flat13_m1_2k",
+  "steps": 2000,
+  "supervised_labels_used": false,
+  "surface_teacher_input": false,
+  "surface_normalization_depth": 13,
+  "window": [
+    9,
+    17
+  ],
+  "sampling": "equal patch round-robin",
+  "output": "/vesuvius/models/mae_0846a_six_flat13_m1_2k.pth",
+  "complete": true,
+  "output_sha256": "0badcf1e45d1905e9c6608b3fc9521cd55f269435e7b2ceeab45ec1fcd37885e"
+}
