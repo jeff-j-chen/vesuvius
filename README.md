@@ -117,15 +117,16 @@ PHerc0846A is the submission scroll. Every patch is rendered by `assemble_test_s
 `<alias>.zarr` and the mask / label / train-mask PNGs are symlinks to the source render, and
 `surface_labels/<alias>/` is a constant depth 13 over the mask (no detected surface). With
 `surface_window_offset = -1` the model reads slices 9-16. Aliases get their own norm and surface-anchor entries.
+Every render in the table below is a default `FRAGMENTS` entry, so a plain `python3 assemble_test_segments.py`
+(no `--include-extras`) always assembles it and builds its alias; the script refuses to start if a `FLAT_ALIASES`
+source is missing from `FRAGMENTS`.
 
 | Render | Alias | Mesh (`tifxyz/`) | Default run |
 |---|---|---|---|
 | `20260927134928` | `20260927134931` | `quick_patches_from_D/PHerc0846A/auto_grown_20260927134928530_abf` | trained |
 | `20261012073244` | `20261012073246` | `3_new/auto_grown_20261012073244544_abf` | trained |
-| `20261012073249` | `20261012073250` | `3_new_offset/auto_grown_20261012073244544_abf_p29` (p29: the 073244 mesh +29 voxels along its normal, own labels) | vis-only, scored on the whole patch |
 | `20261012065810` | `20261012065811` | `auto_grown_20261012065803387_straight_abf` (straightened re-trace) | vis-only, label-free |
 | `20261012065812` | `20261012065813` | `auto_grown_20261012065803387_straight_abf_m28` (the straight mesh -28 voxels along its normal, `old/offset_mesh.py`) | vis-only, label-free |
-| `20261012081237` | `20261012081238` | `3_new/auto_grown_20261012081237255_abf` | not used |
 
 - the two trained patches form domain `pherc0846a` (weight 5) and are train-only: no validation split, a train mask only adds its painted explicit labels. Labels are hand-drawn in `dilated_inklabels/<render>.png`
 - p29 is out of the default training set; it is still rendered at the end of training and scored over its whole patch
@@ -140,7 +141,7 @@ half of each patch's letters (connected ink components, plus the papyrus nearest
 letter is held out once; `only_<id>` trains one patch and scores the other on the whole patch. 8 epochs each; logs
 and figures go to `runs_kfolds/<run>/`, fold masks and previews to `runs_kfolds/splits/`.
 
-`0846A_eval.ipynb` runs the selected checkpoint on these patches and the 35 PHerc0846A quick patches
+`0846A_eval.ipynb` runs the selected checkpoint on these patches and the 37 PHerc0846A quick patches
 (`--include-extras`), sweeps the depth offset, combines the per-offset predictions (max, corroborated
 mid-boost, top-k mean, z-score), and redraws the training-time eval figures of the labeled patches.
 
@@ -197,8 +198,8 @@ Besides the numbered test surfaces, `assemble_test_segments.py --include-extras`
 
 | Scroll | quick_patches_from_D segments | Scan |
 |---|---:|---|
-| PHerc0846A | 35 | 9.362µm / 113keV |
-| PHerc0175A | 11 | 8.640µm / 116keV |
+| PHerc0846A | 37 | 9.362µm / 113keV |
+| PHerc0175A | 25 | 8.640µm / 116keV |
 
 A few PHerc0846A meshes reach up to ~4% past the top of the scan; those points are clamped to the last slice.
 

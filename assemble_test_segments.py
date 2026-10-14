@@ -1033,6 +1033,9 @@ def main():
         return 0
     if args.upload_extras and (args.only or not args.include_extras):
         ap.error("--upload-extras needs --include-extras and no --only (it would overwrite the R2 zips with a subset)")
+    unaliased = set(FLAT_ALIASES) - {fragment[0] for fragment in FRAGMENTS}
+    if unaliased:
+        ap.error(f"FLAT_ALIASES sources missing from FRAGMENTS (never assembled by default): {sorted(unaliased)}")
     global _MIN_FREE_BYTES
     _MIN_FREE_BYTES = int(args.min_free_gb * 1e9)
     os.makedirs("_ves_tmp", exist_ok=True)
