@@ -10,8 +10,6 @@ ves_3zars.tar
 ves_zarrs*
 # cross-resolution tile stores are rebuilt by crossres/build_pairs.py; their meta.json files stay tracked
 crossres/pairs/**/pairs.zarr/
-runs_old/
-runs/
 .vscode/*
 _ves_tmp/
 PHerc0813_spiral_dataset/*

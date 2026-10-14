@@ -15,7 +15,7 @@ python3 assemble_training_segments.py
 # test surfaces, plus the PHerc0846A patches and their flat aliases
 python3 assemble_test_segments.py
 
-# check every input, then train the default run (combo_patch_bag_strict, 8 epochs)
+# check every input, then train the default run (nop29: p29 left out, 6 epochs)
 python3 train.py --dry-run
 python3 train.py
 tensorboard --logdir ./runs --bind-all
@@ -23,7 +23,12 @@ tensorboard --logdir ./runs --bind-all
 
 `python3 train.py` trains the configuration in `utils/config.py` (see [PHerc0846A](#pherc0846a)). Checkpoints go to
 `models/runs/<run>/` and TensorBoard logs to `runs/<run>/`; an existing run is never overwritten (`_2`, `_3`, ...).
-The reference model is `models/runs/combo_patch_bag_strict/final.pth`. Earlier campaign scripts live in `old/`.
+The previous reference model, which also trained p29, is `models/runs/combo_patch_bag_strict/final.pth`. Earlier
+campaign scripts live in `old/`.
+
+`python3 k_folds.py` runs four variants of the default run that change only the PHerc0846A patches (see
+[PHerc0846A](#pherc0846a)); `python3 train_nop29.py --resume <weights> --start-epoch <n>` continues an interrupted
+default run from saved weights.
 
 ## Evaluation notebooks
 
@@ -73,7 +78,7 @@ Run a model on every single test scroll. 13 test patches correspond to 10 test s
 | `20260930144762` | w062 | PHerc1447 | 8.64µm / 116keV | Hugging Face 24-layer render; depth reversed, resampled in XYZ to 28 layers | Pseudo-label from held-out `loo_w062.png`; no train mask |
 | `20260927134931` | ABF patch | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20260927134928`), flat depth-13 alias | Hand-drawn labels; train-only |
 | `20261012073246` | 073244 patch | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20261012073244`), flat depth-13 alias | Hand-drawn labels; train-only |
-| `20261012073250` | 073244 +29 offset | PHerc0846A | 9.362µm / 113keV | 073244 mesh moved +29 voxels along its normal (`20261012073249`), flat depth-13 alias | Own hand-drawn labels; train-only |
+| `20261012073250` | 073244 +29 offset (p29) | PHerc0846A | 9.362µm / 113keV | 073244 mesh moved +29 voxels along its normal (`20261012073249`), flat depth-13 alias | Own hand-drawn labels; not trained by default (vis-only) |
 
 ### Special rendering
 
@@ -117,19 +122,27 @@ PHerc0846A is the submission scroll. Every patch is rendered by `assemble_test_s
 |---|---|---|---|
 | `20260927134928` | `20260927134931` | `quick_patches_from_D/PHerc0846A/auto_grown_20260927134928530_abf` | trained |
 | `20261012073244` | `20261012073246` | `3_new/auto_grown_20261012073244544_abf` | trained |
-| `20261012073249` | `20261012073250` | `3_new_offset/auto_grown_20261012073244544_abf_p29` (the 073244 mesh +29 voxels along its normal, own labels) | trained |
+| `20261012073249` | `20261012073250` | `3_new_offset/auto_grown_20261012073244544_abf_p29` (p29: the 073244 mesh +29 voxels along its normal, own labels) | vis-only, scored on the whole patch |
 | `20261012065810` | `20261012065811` | `auto_grown_20261012065803387_straight_abf` (straightened re-trace) | vis-only, label-free |
 | `20261012065812` | `20261012065813` | `auto_grown_20261012065803387_straight_abf_m28` (the straight mesh -28 voxels along its normal, `old/offset_mesh.py`) | vis-only, label-free |
 | `20261012081237` | `20261012081238` | `3_new/auto_grown_20261012081237255_abf` | not used |
 
-- the three trained patches form domain `pherc0846a` (weight 5) and are train-only: no validation split, a train mask only adds its painted explicit labels. Labels are hand-drawn in `dilated_inklabels/<render>.png`
-- the two straight sheets are never trained and carry no labels; they are only rendered at the end of training
+- the two trained patches form domain `pherc0846a` (weight 5) and are train-only: no validation split, a train mask only adds its painted explicit labels. Labels are hand-drawn in `dilated_inklabels/<render>.png`
+- p29 is out of the default training set; it is still rendered at the end of training and scored over its whole patch
+- the two straight sheets are never trained by the default run and are read label-free there; they are only rendered at the end of training. Hand-drawn labels for both exist in `dilated_inklabels/` (used by `old/train_m28.py`)
+- every default run renders the end-of-training eval figures for all five patches above
 - the default run starts from `models/mae_0846a_six_flat13_m1_2k.pth`, a 2k-step MAE continuation of the campaign-40 corpus MAE on six PHerc0846A patches (unlabeled, including the retired sheet)
 - display only: the 073244 render/alias is shown rotated 90° CCW, the +29 offset 90° CW and the ABF patch 180° (`utils/fast_figure.display_rotation`); arrays and metrics stay in the native frame
 
+`k_folds.py` keeps the rest of the default run and uses exactly four PHerc0846A scrolls, the two trained patches and
+the two straight sheets (vis-only); p29 is left out entirely. `fold_1` and `fold_2` train both patches but hold out
+half of each patch's letters (connected ink components, plus the papyrus nearest to them) as validation, so every
+letter is held out once; `only_<id>` trains one patch and scores the other on the whole patch. 8 epochs each; logs
+and figures go to `runs_kfolds/<run>/`, fold masks and previews to `runs_kfolds/splits/`.
+
 `0846A_eval.ipynb` runs the selected checkpoint on these patches and the 35 PHerc0846A quick patches
 (`--include-extras`), sweeps the depth offset, combines the per-offset predictions (max, corroborated
-mid-boost, top-k mean, z-score), and redraws the training-time eval figures of the three trained patches.
+mid-boost, top-k mean, z-score), and redraws the training-time eval figures of the labeled patches.
 
 ## Test surfaces
 
@@ -312,6 +325,8 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 | Path | Purpose |
 |---|---|
 | `train.py` | Training loop, losses, metrics, checkpoints, and logging |
+| `k_folds.py` | Letter k-folds and train-one-patch variants of the default run on the PHerc0846A patches |
+| `train_nop29.py` | The default run under its own name, plus `--resume`/`--start-epoch` to continue from saved weights |
 | `campaign_archs_*.py` | Complete experiment definitions and campaign runners |
 | `campaign_finetune.py` | Fine-tunes the archs40 native-96 nnPU checkpoint with PHerc1447; PHerc0211 and PHerc0813 are label-free, end-of-training visualizations only |
 | `campaign_finetune_96.py` | Fine-tunes the archs40 native-96 combined-surface checkpoint on PHerc1447 + selected scrolls |

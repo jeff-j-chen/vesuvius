@@ -1,11 +1,41 @@
 """Campaign-lifetime selective cache for local zarr volume chunks."""
 from __future__ import annotations
 
+import json
+import mmap
 import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterable
 
 import numpy as np
+
+# below this many chunks the forked reader costs more than it saves
+_PROCESS_PRELOAD_MIN_CHUNKS = 2000
+_PROCESS_PRELOAD_WORKERS = 16
+# set in the parent just before forking; children write through the inherited shared mapping
+_FORK_JOB = None
+
+
+def _fork_read(task):
+    """child: copy raw zarr chunk files for a slice of the job's keys into the shared buffer."""
+    start, stop = task
+    job = _FORK_JOB
+    depth, chunk_z, chunk_y, chunk_x = job["depth"], job["chunk_z"], job["chunk_y"], job["chunk_x"]
+    dtype, root, sep, fill = job["dtype"], job["root"], job["sep"], job["fill"]
+    for (cy, cx), offset, (height, width) in job["items"][start:stop]:
+        out = np.ndarray((depth, height, width), dtype=dtype, buffer=job["buffer"], offset=offset)
+        for cz in range(-(-depth // chunk_z)):
+            z0 = cz * chunk_z
+            z1 = min(z0 + chunk_z, depth)
+            try:
+                with open(os.path.join(root, f"{cz}{sep}{cy}{sep}{cx}"), "rb") as handle:
+                    raw = handle.read()
+            except FileNotFoundError:
+                out[z0:z1] = fill
+                continue
+            chunk = np.frombuffer(raw, dtype=dtype).reshape(chunk_z, chunk_y, chunk_x)
+            out[z0:z1] = chunk[:z1 - z0, :height, :width]
+    return stop - start
 
 
 class SelectiveChunkVolume:
@@ -56,6 +86,58 @@ class SelectiveChunkVolume:
     def _prepare_cached_array(self, array) -> np.ndarray:
         return np.ascontiguousarray(array, dtype=self.source_dtype)
 
+    def _preload_forked(self, missing: list[tuple[int, int]]) -> bool:
+        """read uncompressed zarr v2 chunk files in forked processes; False when the store doesn't qualify.
+
+        threads stall on per-file work in this process, so separate readers fill one shared buffer instead.
+        """
+        global _FORK_JOB
+        import multiprocessing
+
+        try:
+            with open(os.path.join(self.path, ".zarray"), encoding="utf-8") as handle:
+                meta = json.load(handle)
+        except (OSError, ValueError):
+            return False
+        dtype = np.dtype(meta.get("dtype"))
+        if (meta.get("zarr_format") != 2 or meta.get("compressor") is not None or meta.get("filters")
+                or meta.get("order", "C") != "C" or dtype != self.source_dtype
+                or tuple(meta.get("chunks", ())) != self.chunks or tuple(meta.get("shape", ())) != self.shape
+                or meta.get("fill_value") is None or "fork" not in multiprocessing.get_all_start_methods()):
+            return False
+        depth, height, width = self.shape
+        chunk_y, chunk_x = self.chunks[1], self.chunks[2]
+        items, offset = [], 0
+        for cy, cx in missing:
+            h = min(chunk_y, height - cy * chunk_y)
+            w = min(chunk_x, width - cx * chunk_x)
+            items.append(((cy, cx), offset, (h, w)))
+            offset += depth * h * w * dtype.itemsize
+        buffer = mmap.mmap(-1, max(offset, 1))
+        workers = max(1, min(_PROCESS_PRELOAD_WORKERS, os.cpu_count() or 1))
+        bounds = np.linspace(0, len(items), workers * 8 + 1).astype(int)
+        tasks = [(int(a), int(b)) for a, b in zip(bounds[:-1], bounds[1:]) if b > a]
+        _FORK_JOB = {
+            "items": items, "buffer": buffer, "depth": depth, "chunk_z": self.chunks[0],
+            "chunk_y": chunk_y, "chunk_x": chunk_x, "dtype": dtype, "root": self.path,
+            "sep": meta.get("dimension_separator") or ".", "fill": meta["fill_value"],
+        }
+        try:
+            with multiprocessing.get_context("fork").Pool(workers) as pool:
+                done = sum(pool.imap_unordered(_fork_read, tasks))
+        except Exception as exc:
+            print(f"[selective-cache] forked preload failed ({exc}); using threads", flush=True)
+            return False
+        finally:
+            _FORK_JOB = None
+        if done != len(items):
+            return False
+        for key, start, (h, w) in items:
+            array = np.ndarray((depth, h, w), dtype=dtype, buffer=buffer, offset=start)
+            array.setflags(write=False)
+            self._cache[key] = array
+        return True
+
     def preload(self, spatial_chunks: Iterable[tuple[int, int]], source, workers: int = 8) -> None:
         requested = sorted(set(spatial_chunks))
         missing = [key for key in requested if key not in self._cache]
@@ -79,6 +161,13 @@ class SelectiveChunkVolume:
             return key, array
 
         worker_count = max(1, min(int(workers), len(missing)))
+        if len(missing) >= _PROCESS_PRELOAD_MIN_CHUNKS and self._preload_forked(missing):
+            print(
+                f"[selective-cache] ready {os.path.basename(self.path)}: chunks={len(self._cache):,} "
+                f"ram={self.cached_nbytes / 1024**3:.2f} GiB (forked readers)",
+                flush=True,
+            )
+            return
         print(
             f"[selective-cache] preload {os.path.basename(self.path)}: "
             f"new={len(missing):,} requested={len(requested):,} workers={worker_count}",

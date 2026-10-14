@@ -167,10 +167,34 @@ TRAIN_SCROLL_DICT = {
 }
 TRAIN_SCROLL_WEIGHT_BY_DOMAIN = {"pherc0139": 2, "pherc0343p": 4, "pherc0500p2": 3, "pherc0814": 5}
 
-# ---- default run: combo_patch_bag_strict (python3 train.py) ----
-# the campaign-40 set (TRAIN_SCROLLS without PHerc0009B), PHerc1447 x2 and the p343 letters patch, the three
-# labeled PHerc0846A patches (flat depth-13 aliases, train-only), then PHerc0009B. order sets the domain ids.
-RUN_0846A_IDS = (20260927134931, 20261012073246, 20261012073250)
+# ---- default run: nop29 (python3 train.py) ----
+# training order (sets the domain ids): the campaign-40 set with PHerc0009B moved to the end, PHerc1447 x2, the p343
+# letters patch, two labeled PHerc0846A patches (flat depth-13 aliases, train-only), then PHerc0009B.
+RUN_0846A_IDS = (20260927134931, 20261012073246)
+# PHerc0846A p29 (auto_grown_20261012073244544_abf_p29, flat alias of the +29 offset sheet): not trained, vis-only
+RUN_P29_ID = 20261012073250
+
+
+def add_0846a_train_patch(config, scroll_id: int) -> None:
+    """train one more train-only 0846A patch in the slot right after the default ones (p29's former slot)."""
+    scroll_id = int(scroll_id)
+    index = 1 + max(i for i, scroll in enumerate(config.data.scrolls) if int(scroll.scroll_id) in RUN_0846A_IDS)
+    config.data.scrolls = [
+        *config.data.scrolls[:index],
+        ScrollConfig(scroll_id, split_axis="x", train_split_frac=1.0),
+        *config.data.scrolls[index:],
+    ]
+    config.data.train_scroll_dict = {
+        name: [*ids, scroll_id] if name == "pherc0846a" else list(ids)
+        for name, ids in config.data.train_scroll_dict.items()
+    }
+    config.data.train_only_scroll_ids = [*config.data.train_only_scroll_ids, scroll_id]
+    config.data.whole_patch_valid_scroll_ids = [
+        sid for sid in config.data.whole_patch_valid_scroll_ids if int(sid) != scroll_id
+    ]
+    config.data.label_free_vis_scroll_ids = [
+        sid for sid in config.data.label_free_vis_scroll_ids if int(sid) != scroll_id
+    ]
 # vis-only, never trained and label-free: the straightened 0846A re-trace (flat alias 20261012065811 of
 # auto_grown_20261012065803387_straight_abf) and that mesh moved -28 voxels along its normal (alias 20261012065813)
 RUN_LABEL_FREE_VIS_IDS = (20261012065811, 20261012065813)
@@ -271,7 +295,7 @@ class DataConfig:
     coordinate_hash_seed: int = 29
     train_mask_dir: str = "./train_masks"
     # vis scrolls scored on the whole patch: their train mask is ignored and every cell is validation
-    whole_patch_valid_scroll_ids: List[int] = field(default_factory=list)
+    whole_patch_valid_scroll_ids: List[int] = field(default_factory=lambda: [RUN_P29_ID])
     # scrolls trained on everywhere (no validation split); a train mask only adds its painted explicit labels
     train_only_scroll_ids: List[int] = field(default_factory=lambda: list(RUN_0846A_IDS))
     # scrolls whose validation cells count toward validation metrics and checkpoints (None = all)
@@ -284,7 +308,9 @@ class DataConfig:
     eval_chunk_gb: float = 3.0  # bounded host-RAM target for the final W044 figure
     tta_mode: str = "light"  # eval TTA view set: "light"=id+hflip (2x), "flips"=id+h+v+180 (4x), "dihedral"=+/-90 too (6x)
     probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
-    vis_scroll_ids: Optional[List[int]] = field(default_factory=lambda: list(RUN_LABEL_FREE_VIS_IDS))
+    vis_scroll_ids: Optional[List[int]] = field(
+        default_factory=lambda: [*RUN_0846A_IDS, RUN_P29_ID, *RUN_LABEL_FREE_VIS_IDS]
+    )
     vis_preload_persistent: bool = True  # keep each visualized scroll volume in RAM for the whole run
     # vis-only scrolls without ink labels or train masks: zero labels, no train region (never mined or trained)
     label_free_vis_scroll_ids: List[int] = field(default_factory=lambda: list(RUN_LABEL_FREE_VIS_IDS))
@@ -300,7 +326,7 @@ class DataConfig:
     surface_window_offset: int = 0  # constant slice shift of the surface-centered window (train and eval)
     surface_window_offset_by_scroll: dict = field(  # scroll id -> offset; overrides the constant
         default_factory=lambda: {
-            scroll_id: -1 for scroll_id in (*RUN_0846A_IDS, *RUN_LABEL_FREE_VIS_IDS)
+            scroll_id: -1 for scroll_id in (*RUN_0846A_IDS, RUN_P29_ID, *RUN_LABEL_FREE_VIS_IDS)
         }
     )
     holdout_domains: List[str] = field(default_factory=list)  # train_scroll_dict names excluded from training only
@@ -432,7 +458,9 @@ class DataloaderConfig:
 
 @dataclass
 class TrainingConfig:
-    n_epochs: int = 8
+    n_epochs: int = 6
+    # resume: epochs before this count as done (weights come from init_weights); warmup lr picks up where it was
+    start_epoch: int = 0
     aug_start_epoch: int = 0  # dataset transforms switch on at this epoch
     lr: float = 1.5e-4
     encoder_lr_scale: float = 1.0
@@ -446,7 +474,7 @@ class TrainingConfig:
     save_int: int = 15
     log_dir: str = "./runs"
     eval_int: int = 8
-    eval_int_scrolls: int = 2
+    eval_int_scrolls: int = 5
     test_int: int = 999
     probe_int: int = 999
     disable_figures: bool = False  # True skips every eval figure (metrics are still logged)
@@ -797,13 +825,13 @@ class Config:
     hm: HardMiningConfig = field(default_factory=HardMiningConfig)
     device: str = field(default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu")
     # train.py writes the checkpoints here (models/runs/<run name>) and TensorBoard to tra.log_dir/<run name>
-    model_dir: str = "models/runs/combo_patch_bag_strict"
-    exp_name: Optional[str] = "combo_patch_bag_strict"
+    model_dir: str = "models/runs/nop29"
+    exp_name: Optional[str] = "nop29"
     # exact log folder name (no timestamp appended)
-    run_name: Optional[str] = "combo_patch_bag_strict"
+    run_name: Optional[str] = "nop29"
     # six-patch PHerc0846A MAE continuation of the campaign-40 corpus MAE
     init_weights: Optional[str] = "models/mae_0846a_six_flat13_m1_2k.pth"
-    save_final: Optional[str] = "models/runs/combo_patch_bag_strict/final.pth"
+    save_final: Optional[str] = "models/runs/nop29/final.pth"
 
     def scroll_ids(self) -> List[int]:
         return [scroll.scroll_id for scroll in self.data.scrolls]

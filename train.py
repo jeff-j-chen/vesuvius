@@ -1,8 +1,9 @@
 """Vesuvius ink-detection training.
 
-`python3 train.py` trains the default run in utils/config.py (combo_patch_bag_strict): AND-mask over patch groups,
-strong character bag ranking and strict nnPU from the six-patch PHerc0846A MAE, 8 epochs. Checkpoints go to
-models/runs/<run>/ and TensorBoard to runs/<run>/; an existing run is never overwritten (a _2, _3 ... suffix is used).
+`python3 train.py` trains the default run in utils/config.py (nop29): AND-mask over patch groups, strong character
+bag ranking and strict nnPU from the six-patch PHerc0846A MAE. Two labeled PHerc0846A patches train; the +29 offset
+sheet (p29) is vis-only. Checkpoints go to models/runs/<run>/ and TensorBoard to runs/<run>/; an existing run is never
+overwritten (a _2, _3 ... suffix is used).
 """
 import functools
 import gc
@@ -4462,7 +4463,15 @@ class Trainer:
 
     def _run(self) -> None:
         self._hm_active_this_epoch = self.c.hm.enabled
-        for epoch in range(self.c.tra.n_epochs):
+        start_epoch = int(getattr(self.c.tra, "start_epoch", 0))
+        if start_epoch > 0:
+            # optimizer moments and plateau history are not saved; restore the warmup position only
+            self.scheduler.completed_epochs = start_epoch
+            warmup = self.scheduler.warmup_epochs
+            self.scheduler._set_lr(self.c.tra.lr * min(start_epoch + 1, warmup) / warmup if warmup > 0 else self.c.tra.lr)
+            print(f"[resume] starting at epoch {start_epoch + 1}/{self.c.tra.n_epochs} "
+                  f"lr={self.optimizer.param_groups[0]['lr']:.3e} from {self.c.init_weights}", flush=True)
+        for epoch in range(start_epoch, self.c.tra.n_epochs):
             print(f"\n--- Epoch {epoch + 1}/{self.c.tra.n_epochs} ---")
             start_time = time.time()
 

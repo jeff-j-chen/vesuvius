@@ -1,14 +1,17 @@
-"""six runs of the default train.py config (combo_patch_bag_strict) that vary only the PHerc0846A patches.
+"""four runs of the default train.py config that vary only the PHerc0846A patches; p29 appears nowhere.
 
-fold_1..fold_3: all three labeled 0846A patches train, but in each fold a third of every patch's letters
-    (8-connected ink components, as the trainer's character grid defines them) and the papyrus nearest to
-    them become validation. every letter is held out in exactly one fold.
-only_<id>: one labeled 0846A patch trains (train-only, as in the default run); the other two become vis-only
-    and are scored on the whole patch.
+the 0846A scrolls in every run are exactly four: the two labeled patches (20260927134931 ABF, 20261012073246) and
+the two label-free prize vis scrolls (20261012065811 straight, 20261012065813 m28).
 
-every run renders the final eval figures for all five 0846A patches (3 labeled + 2 label-free vis-only) at
-n_epochs = eval_int = 8. TensorBoard, figures and config.json go to runs_kfolds/<arm>, console logs to
-runs_kfolds/logs/<arm>.log, checkpoints to models/runs_kfolds/<arm>, fold masks and previews to runs_kfolds/splits.
+fold_1, fold_2: both labeled patches train, but in each fold half of every patch's letters (8-connected ink
+    components, as the trainer's character grid defines them) and the papyrus nearest to them become validation.
+    every letter is held out in exactly one fold.
+only_<id>: one labeled patch trains (train-only, as in the default run); the other becomes vis-only, scored on the
+    whole patch.
+
+every run renders the final eval figures for all four 0846A scrolls at n_epochs = eval_int = 8. TensorBoard, figures
+and config.json go to runs_kfolds/<arm>, console logs to runs_kfolds/logs/<arm>.log, checkpoints to
+models/runs_kfolds/<arm>, fold masks and previews to runs_kfolds/splits.
 
 usage: python3 k_folds.py [--only fold_1,only_20260927134931] [--dry-run]
 """
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -28,10 +32,10 @@ REPO = Path(__file__).resolve().parent
 LOG_ROOT = REPO / "runs_kfolds"
 MODEL_ROOT = REPO / "models" / "runs_kfolds"
 SPLIT_ROOT = LOG_ROOT / "splits"
-N_FOLDS = 3
+N_FOLDS = 2
 N_EPOCHS = 8
 EVAL_INT = 8
-FOLD_COLORS = ((230, 120, 60), (70, 170, 90), (60, 110, 230))  # BGR per fold
+FOLD_COLORS = ((230, 120, 60), (70, 170, 90))  # BGR per fold
 
 
 def labeled_ids() -> list[int]:
@@ -108,6 +112,8 @@ def build_splits() -> dict:
     min_pixels = int(config.data.character_min_pixels)
     labeled = labeled_ids()
     summary = {}
+    # generated files only; rebuilt from scratch so no mask from an older fold layout survives
+    shutil.rmtree(SPLIT_ROOT, ignore_errors=True)
     for k in range(1, N_FOLDS + 1):
         folder = fold_mask_dir(k)
         folder.mkdir(parents=True, exist_ok=True)
@@ -146,15 +152,22 @@ def build_splits() -> dict:
         cv2.putText(preview, f"{sid}  held out per fold: {summary[sid]}", (12, 32), cv2.FONT_HERSHEY_SIMPLEX,
                     0.8, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.imwrite(str(SPLIT_ROOT / f"{sid}_folds.png"), preview)
-    print(f"[splits] letters held out per fold (fold 1/2/3): {summary} -> {SPLIT_ROOT}", flush=True)
+    print(f"[splits] letters held out per fold (fold 1/2): {summary} -> {SPLIT_ROOT}", flush=True)
     return summary
 
 
 def configure(config, arm: str) -> None:
     """the only changes to the default run config."""
-    from utils.config import RUN_LABEL_FREE_VIS_IDS
+    from utils.config import RUN_LABEL_FREE_VIS_IDS, RUN_P29_ID
 
     labeled = labeled_ids()
+    # p29 is not part of these runs at all, not even as a vis-only scroll
+    config.data.whole_patch_valid_scroll_ids = [
+        sid for sid in config.data.whole_patch_valid_scroll_ids if int(sid) != RUN_P29_ID
+    ]
+    config.data.surface_window_offset_by_scroll = {
+        sid: offset for sid, offset in config.data.surface_window_offset_by_scroll.items() if int(sid) != RUN_P29_ID
+    }
     config.run_name = config.exp_name = arm
     config.model_dir = os.path.join("models", "runs_kfolds", arm)
     config.tra.log_dir = "runs_kfolds"
@@ -193,7 +206,7 @@ def run_worker(arm: str, dry_run: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--only", default="", help="comma-separated arms (default: all six)")
+    parser.add_argument("--only", default="", help="comma-separated arms (default: all four)")
     parser.add_argument("--dry-run", action="store_true", help="build the splits and preflight every arm, no training")
     parser.add_argument("--worker", default="", help=argparse.SUPPRESS)
     args = parser.parse_args()

@@ -1300,6 +1300,7 @@ class InkVolumeDataset(IterableDataset):
         self.x_start, self.x_end = x_range
         
         # pre-calculate all valid block coordinates unless immutable preparation was reused
+        self._mt_tables = self._mt_lattice_tables() if prepared_state is None else None
         if prepared_state is None:
             self.block_coords = self._gen_tile_coords()
         else:
@@ -1330,6 +1331,7 @@ class InkVolumeDataset(IterableDataset):
             if not self._mt or self._character_grid is None:
                 raise ValueError("character-aware mode requires multitile labels and a character grid")
             self._prepare_character_targets()
+        self._mt_tables = None
         if (self.shuffle and not self.block_coords and self._far_neg_coords
                 and int(self.scroll_id) in _train_only_ids(self.c)):
             # blank train-only scroll: every draw is a far-background (unlabelled) window
@@ -1411,8 +1413,12 @@ class InkVolumeDataset(IterableDataset):
             return
         for coord in self.block_coords:
             _, y_off, x_off = coord
-            labels = self._fetch_label_mt(y_off, x_off).numpy()
-            valid = self._fetch_mask_mt(y_off, x_off).numpy() > 0
+            cached = self._mt_table_lookup(y_off, x_off)
+            if cached is None:
+                labels = self._fetch_label_mt(y_off, x_off).numpy()
+                valid = self._fetch_mask_mt(y_off, x_off).numpy() > 0
+            else:
+                labels, valid = cached
             component_ids = self._fetch_character_ids(y_off, x_off, labels, valid)
             positive_ids = np.unique(component_ids[(labels > 0) & valid])
             if positive_ids.size:
@@ -1592,39 +1598,46 @@ class InkVolumeDataset(IterableDataset):
         ink_integral = cv2.integral(coarse_ink)
         min_fraction = float(getattr(self.c.dl, "context_replace_min_mask_frac", 0.8))
         height, width = scroll.shape
-        donors = []
         step = max(1, int(getattr(self.c.data, "multitile_train_step", self.tile_size)))
         y_span = max(0, self.y_end - self.y_start - self.tile_size + 1)
         x_span = max(0, self.x_end - self.x_start - self.tile_size + 1)
-        for y_off in range(0, y_span, step):
-            for x_off in range(0, x_span, step):
-                y = self.y_start + y_off
-                x = self.x_start + x_off
-                if self._has_split_mask and not np.all(
-                    self.split_mask[y:y + self.tile_size, x:x + self.tile_size] > 0
-                ):
-                    continue
-                y0 = y - pad
-                x0 = x - pad
-                if y0 < 0 or x0 < 0 or y0 + ctx > height or x0 + ctx > width:
-                    continue
-                cy0, cx0 = y0 // stride, x0 // stride
-                cy1, cx1 = (y0 + ctx) // stride, (x0 + ctx) // stride
-                total = (cy1 - cy0) * (cx1 - cx0)
-                valid_count = (
-                    mask_integral[cy1, cx1] - mask_integral[cy0, cx1]
-                    - mask_integral[cy1, cx0] + mask_integral[cy0, cx0]
-                )
-                ink_count = (
-                    ink_integral[cy1, cx1] - ink_integral[cy0, cx1]
-                    - ink_integral[cy1, cx0] + ink_integral[cy0, cx0]
-                )
-                if (
-                    total > 0
-                    and float(valid_count) / total >= min_fraction
-                    and int(ink_count) == 0
-                ):
-                    donors.append((y_off, x_off))
+        y_offs = np.arange(0, y_span, step)
+        x_offs = np.arange(0, x_span, step)
+        ys = (self.y_start + y_offs)[:, None]
+        xs = (self.x_start + x_offs)[None, :]
+        keep = np.ones((len(y_offs), len(x_offs)), dtype=bool)
+        if self._has_split_mask and keep.size:
+            # every pixel of the clipped target tile must be split-assigned
+            split = np.asarray(self.split_mask) > 0
+            split_integral = cv2.integral(split.astype(np.uint8)).astype(np.int64)
+            ye = np.minimum(ys + self.tile_size, split.shape[0])
+            xe = np.minimum(xs + self.tile_size, split.shape[1])
+            ysc, xsc = np.minimum(ys, split.shape[0]), np.minimum(xs, split.shape[1])
+            inside = (
+                split_integral[ye, xe] - split_integral[ysc, xe]
+                - split_integral[ye, xsc] + split_integral[ysc, xsc]
+            )
+            keep &= inside == (ye - ysc) * (xe - xsc)
+        y0 = ys - pad
+        x0 = xs - pad
+        keep &= (y0 >= 0) & (x0 >= 0) & (y0 + ctx <= height) & (x0 + ctx <= width)
+        cy0 = np.clip(y0 // stride, 0, mask_integral.shape[0] - 1)
+        cx0 = np.clip(x0 // stride, 0, mask_integral.shape[1] - 1)
+        cy1 = np.clip((y0 + ctx) // stride, 0, mask_integral.shape[0] - 1)
+        cx1 = np.clip((x0 + ctx) // stride, 0, mask_integral.shape[1] - 1)
+        total = (cy1 - cy0) * (cx1 - cx0)
+        valid_count = (
+            mask_integral[cy1, cx1] - mask_integral[cy0, cx1]
+            - mask_integral[cy1, cx0] + mask_integral[cy0, cx0]
+        )
+        ink_count = (
+            ink_integral[cy1, cx1] - ink_integral[cy0, cx1]
+            - ink_integral[cy1, cx0] + ink_integral[cy0, cx0]
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            keep &= (total > 0) & (valid_count / np.maximum(total, 1) >= min_fraction) & (ink_count == 0)
+        rows, cols = np.nonzero(keep)
+        donors = [(int(y_offs[a]), int(x_offs[b])) for a, b in zip(rows, cols)]
         self._context_donor_coords = donors
         if not donors:
             # small ink-dense splits can have no ink-free window at large contexts; skip replacement there
@@ -1828,37 +1841,45 @@ class InkVolumeDataset(IterableDataset):
         """enumerate every spatial chunk reachable by candidates, jitter, or donors."""
         chunk_y, chunk_x = int(chunk_shape[1]), int(chunk_shape[2])
         height, width = self._volume_shape[1:]
-        required: set[tuple[int, int]] = set()
+        windows: list[np.ndarray] = []
 
-        def add_window(y0: int, x0: int, size: int) -> None:
-            ys, ye = max(0, int(y0)), min(height, int(y0 + size))
-            xs, xe = max(0, int(x0)), min(width, int(x0 + size))
-            if ys >= ye or xs >= xe:
-                return
-            for cy in range(ys // chunk_y, (ye - 1) // chunk_y + 1):
-                for cx in range(xs // chunk_x, (xe - 1) // chunk_x + 1):
-                    required.add((cy, cx))
+        def add_windows(y0, x0, size: int) -> None:
+            if len(y0):
+                windows.append(np.stack([np.asarray(y0, dtype=np.int64), np.asarray(x0, dtype=np.int64),
+                                         np.full(len(y0), size, dtype=np.int64)], axis=1))
 
         context = int(getattr(self.c.data, "context_size", 0) or self.tile_size)
         has_context = context > self.tile_size
         pad = (context - self.tile_size) // 2 if has_context else 0
         jitter = int(getattr(self.c.data, "ctx_jitter", 0)) if self.shuffle else 0
-        for _, y_offset, x_offset in [*self.block_coords, *self._far_neg_coords]:
-            y = self.y_start + int(y_offset)
-            x = self.x_start + int(x_offset)
+        coords = [*self.block_coords, *self._far_neg_coords]
+        if coords:
+            offsets = np.asarray([(c[1], c[2]) for c in coords], dtype=np.int64)
+            y = self.y_start + offsets[:, 0]
+            x = self.x_start + offsets[:, 1]
             if has_context:
-                add_window(y - pad - jitter, x - pad - jitter, context + 2 * jitter)
+                add_windows(y - pad - jitter, x - pad - jitter, context + 2 * jitter)
             else:
-                add_window(y, x, self.tile_size)
-
-        if has_context:
-            for donor_y, donor_x in self._context_donor_coords:
-                add_window(
-                    self.y_start + int(donor_y) - pad,
-                    self.x_start + int(donor_x) - pad,
-                    context,
-                )
-        return required
+                add_windows(y, x, self.tile_size)
+        if has_context and self._context_donor_coords:
+            donors = np.asarray(self._context_donor_coords, dtype=np.int64)
+            add_windows(self.y_start + donors[:, 0] - pad, self.x_start + donors[:, 1] - pad, context)
+        if not windows:
+            return set()
+        boxes = np.concatenate(windows)
+        ys, ye = np.maximum(0, boxes[:, 0]), np.minimum(height, boxes[:, 0] + boxes[:, 2])
+        xs, xe = np.maximum(0, boxes[:, 1]), np.minimum(width, boxes[:, 1] + boxes[:, 2])
+        nonempty = (ys < ye) & (xs < xe)
+        cy0, cy1 = ys[nonempty] // chunk_y, (ye[nonempty] - 1) // chunk_y
+        cx0, cx1 = xs[nonempty] // chunk_x, (xe[nonempty] - 1) // chunk_x
+        keys = []
+        for dy in range(int((cy1 - cy0).max(initial=0)) + 1):
+            for dx in range(int((cx1 - cx0).max(initial=0)) + 1):
+                hit = (cy0 + dy <= cy1) & (cx0 + dx <= cx1)
+                keys.append((cy0[hit] + dy) * (width // chunk_x + 2) + cx0[hit] + dx)
+        unique = np.unique(np.concatenate(keys))
+        stride = width // chunk_x + 2
+        return {(int(key // stride), int(key % stride)) for key in unique}
 
     def _gen_tile_coords(self):
         """generates all valid (z, y, x) block start coordinates"""
@@ -1875,6 +1896,22 @@ class InkVolumeDataset(IterableDataset):
 
         # iterate over the volume with specified step sizes to generate coordinates
         depth_offsets = [0] if self._surface_relative_depth_window else range(0, z_range_size, z_step)
+        tables = getattr(self, "_mt_tables", None)
+        if tables is not None and (self.shuffle or self._manual_split):
+            keep = tables["interior"] & tables["touch"] & tables["valid"].any(axis=2)
+            step = tables["step"]
+            for a, b in zip(*np.nonzero(~tables["interior"])):
+                y, x = int(a) * step, int(b) * step
+                keep[a, b] = bool(
+                    self._mt_window_touches_ring(y, x)
+                    and self._mt_window_touches_split(y, x)
+                    and self._fetch_mask_mt(y, x).sum().item() > 0
+                )
+            pairs = [(int(a) * step, int(b) * step) for a, b in zip(*np.nonzero(keep))]
+            for d in depth_offsets:
+                if self.z_start + d + self.depth <= self.z_end:
+                    coords.extend((d, y, x) for y, x in pairs)
+            return coords
         for d in depth_offsets:
             if self.z_start + d + self.depth > self.z_end: continue
             for y in range(0, y_range_size, xy_step):
@@ -2213,6 +2250,108 @@ class InkVolumeDataset(IterableDataset):
             if peak < 0.98:
                 values[index] = max(self._edge_soft_floor, peak)
         return torch.from_numpy(values)
+
+    def _mt_lattice_tables(self):
+        """_fetch_label_mt, _fetch_mask_mt and the window gates for every window of the coordinate lattice at once.
+
+        on a multitile_train_step lattice that is a multiple of the sub-tile, all windows share one fixed cell grid,
+        so each per-cell reduction runs once per scroll instead of once per window. windows with any cell outside
+        an array are marked non-interior and keep the per-window functions.
+        """
+        if not self._mt:
+            return None
+        from numpy.lib.stride_tricks import sliding_window_view
+
+        n, sub, tile = self._mt_grid, self._mt_sub, self.tile_size
+        step = max(1, int(getattr(self.c.data, "multitile_train_step", tile)))
+        y_count = len(range(0, max(0, self.y_end - self.y_start - tile + 1), step))
+        x_count = len(range(0, max(0, self.x_end - self.x_start - tile + 1), step))
+        if step % sub or not y_count or not x_count:
+            return None
+        labels, scroll, split = self.labels, self.scroll_mask, self.split_mask
+        supervision = self.mask if self._mt_ring_gate else None
+        negative, positive = self.explicit_negative_mask, self.explicit_positive_mask
+        arrays = [array for array in (labels, scroll, split, self.mask, negative, positive) if array is not None]
+        height = min(int(array.shape[0]) for array in arrays)
+        width = min(int(array.shape[1]) for array in arrays)
+        offset = (tile - n * sub) // 2
+        first_y, first_x = self.y_start + offset, self.x_start + offset
+        oy, ox = first_y % sub, first_x % sub
+        ny, nx = (height - oy) // sub, (width - ox) // sub
+        if ny < n or nx < n:
+            return None
+
+        def cells(array, reduce, threshold=0.0):
+            block = np.asarray(array[oy:oy + ny * sub, ox:ox + nx * sub]) > threshold
+            return reduce(block.reshape(ny, sub, nx, sub), axis=(1, 3))
+
+        value = cells(labels, np.any, 0.5).astype(np.float32)
+        if positive is not None:
+            value[cells(positive, np.any)] = 1.0
+        if negative is not None:
+            far = np.zeros((ny, nx), dtype=bool)
+            if self._far_neg_units is not None:
+                units = np.asarray(self._far_neg_units)
+                rows = np.minimum((oy + np.arange(ny) * sub + sub // 2) // sub, units.shape[0] - 1)
+                cols = np.minimum((ox + np.arange(nx) * sub + sub // 2) // sub, units.shape[1] - 1)
+                far = units[rows][:, cols].astype(bool)
+            value = np.where(cells(negative, np.any), np.where(far, -2.0, -1.0), value).astype(np.float32)
+        valid = cells(scroll, np.all)
+        if split is not None:
+            valid &= cells(split, np.all)
+        if supervision is not None:
+            gate = cells(supervision, np.all)
+            if negative is not None:
+                gate |= cells(negative, np.all)
+            if positive is not None:
+                gate |= cells(positive, np.any)
+            valid &= gate
+        if self._mt_pos_only:
+            # non-ink cells whose parent base tile (holding the cell's top-left pixel) has ink stay unlabeled
+            rows = (oy + np.arange(ny) * sub) // tile
+            cols = (ox + np.arange(nx) * sub) // tile
+            tile_h, tile_w = int(rows.max()) + 1, int(cols.max()) + 1
+            region = np.asarray(labels[:tile_h * tile, :tile_w * tile]) > 0.5
+            padded = np.zeros((tile_h * tile, tile_w * tile), dtype=bool)
+            padded[:region.shape[0], :region.shape[1]] = region
+            parent = padded.reshape(tile_h, tile, tile_w, tile).any(axis=(1, 3))[rows][:, cols]
+            valid &= ~((value == 0) & parent)
+        ring = cells(self.mask, np.any, 0.5)
+        touched = cells(split, np.any) if split is not None else np.ones((ny, nx), dtype=bool)
+
+        k = step // sub
+        row0 = (first_y - oy) // sub + np.arange(y_count) * k
+        col0 = (first_x - ox) // sub + np.arange(x_count) * k
+        interior = ((row0 >= 0) & (row0 + n <= ny))[:, None] & ((col0 >= 0) & (col0 + n <= nx))[None, :]
+        rr = np.clip(row0, 0, ny - n)[:, None]
+        cc = np.clip(col0, 0, nx - n)[None, :]
+
+        def windows(table):
+            return sliding_window_view(table, (n, n))[rr, cc].reshape(y_count, x_count, n * n)
+
+        window_labels = windows(value)
+        window_valid = windows(valid)
+        if self._mt_pos_only:
+            # a window with a supervised positive keeps only its labeled cells
+            mixed = ((window_labels > 0) & window_valid).any(axis=2, keepdims=True)
+            window_valid = np.where(mixed, window_valid & (window_labels != 0), window_valid)
+        touch = windows(ring).any(axis=2) & windows(touched).any(axis=2)
+        return {
+            "step": step, "y_count": y_count, "x_count": x_count, "interior": interior,
+            "labels": window_labels, "valid": window_valid, "touch": touch,
+        }
+
+    def _mt_table_lookup(self, y_off, x_off):
+        """(labels, valid) of one lattice window from _mt_lattice_tables, or None to use the per-window functions."""
+        tables = getattr(self, "_mt_tables", None)
+        if tables is None:
+            return None
+        a, y_rest = divmod(int(y_off), tables["step"])
+        b, x_rest = divmod(int(x_off), tables["step"])
+        if (y_rest or x_rest or not 0 <= a < tables["y_count"] or not 0 <= b < tables["x_count"]
+                or not tables["interior"][a, b]):
+            return None
+        return tables["labels"][a, b], tables["valid"][a, b]
 
     def _fetch_mask_mt(self, y_off, x_off):
         """per-sub-tile validity over the grid in row-major order.
@@ -2833,7 +2972,7 @@ class DataManager:
             "zarr_path", "tile_size", "depth", "d_start", "d_end", "train_d_start",
             "train_d_end", "mask_memmap", "mask_bitpack", "preload_volumes",
             "ring_negatives", "ring_label_source", "ring_from_inklabel_dir", "ring_close_r", "ring_gap_r",
-            "ring_shell_r", "ring_free_scroll_ids", "ring_pu_scroll_ids", "simple_split", "coordinate_hash_split",
+            "ring_shell_r", "simple_split", "coordinate_hash_split",
             "coordinate_hash_block_size", "coordinate_hash_valid_fraction",
             "coordinate_hash_seed", "train_mask_dir", "surface_label_dir",
             "inklabel_dir", "label_dilate_r", "context_size", "context_downsample", "ctx_jitter",
@@ -2842,9 +2981,17 @@ class DataManager:
             "character_balanced_sampling",
             "character_min_pixels", "max_samples_per_epoch",
             "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
-            "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "vis_scroll_ids", "norm_mode",
-            "train_only_scroll_ids", "label_free_vis_scroll_ids", "whole_patch_valid_scroll_ids", "holdout_domains",
-            "zarr_suffix", "extra_inklabels", "flipped_train_mask_ids",
+            "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "norm_mode", "holdout_domains",
+            "zarr_suffix", "extra_inklabels",
+        )
+        # preparation only tests this scroll's membership, so swapping another scroll keeps this entry valid
+        membership_fields = (
+            "vis_scroll_ids", "train_only_scroll_ids", "label_free_vis_scroll_ids", "whole_patch_valid_scroll_ids",
+            "ring_free_scroll_ids", "ring_pu_scroll_ids", "flipped_train_mask_ids",
+        )
+        membership = tuple(
+            (name, self.scroll_id in {int(sid) for sid in (getattr(self.c.data, name, None) or ())})
+            for name in membership_fields
         )
         dataloader_fields = (
             "context_replace_prob", "context_replace_min_mask_frac",
@@ -2865,6 +3012,7 @@ class DataManager:
             self.character_namespace,
             _freeze_cache_value(vars(scroll) if scroll is not None else None),
             _selected_config_key(self.c.data, data_fields),
+            membership,
             _selected_config_key(self.c.dl, dataloader_fields),
             _selected_config_key(self.c.model, model_fields),
             _selected_config_key(self.c.tra, training_fields),
@@ -3900,19 +4048,15 @@ class DataManager:
         # build tile-level maps using ring_labels for boundary, eroded for positives
         n_ty = h // T
         n_tx = w // T
-        # ink_tile: positive training tiles (eroded)
-        ink_tile_eroded = np.zeros((n_ty, n_tx), dtype=np.uint8)
-        # ink_tile for ring boundary (original or eroded depending on ring_source)
-        ink_tile_ring   = np.zeros((n_ty, n_tx), dtype=np.uint8)
-        mask_tile = np.zeros((n_ty, n_tx), dtype=np.uint8)
-        for ty in range(n_ty):
-            for tx in range(n_tx):
-                tile_lbl_ero  = labels_crop[ty*T:(ty+1)*T, tx*T:(tx+1)*T]
-                tile_lbl_ring = ring_labels[ty*T:(ty+1)*T, tx*T:(tx+1)*T]
-                tile_mask     = mask_crop[ty*T:(ty+1)*T, tx*T:(tx+1)*T]
-                if np.any(tile_lbl_ero  > 0.5): ink_tile_eroded[ty, tx] = 1
-                if np.any(tile_lbl_ring > 0.5): ink_tile_ring[ty, tx]   = 1
-                if np.any(tile_mask     > 0.5): mask_tile[ty, tx]        = 1
+
+        def tile_any(array):
+            region = np.asarray(array)[:n_ty * T, :n_tx * T] > 0.5
+            return region.reshape(n_ty, T, n_tx, T).any(axis=(1, 3)).astype(np.uint8)
+
+        # ink_tile: positive training tiles (eroded); ring tiles use ring_labels for the boundary
+        ink_tile_eroded = tile_any(labels_crop)
+        ink_tile_ring = tile_any(ring_labels)
+        mask_tile = tile_any(mask_crop)
 
         # for 'closed': close letter holes then add explicit air gap before ring.
         # base map is the (hand-cleaned) eroded ink (see ring_labels above). radii are in
@@ -3980,11 +4124,8 @@ class DataManager:
 
         # expand back to pixel level: positive = eroded ink, negative = ring
         train_mask = np.zeros_like(self.mask, dtype=np.float32)
-        for ty in range(n_ty):
-            for tx in range(n_tx):
-                if ink_tile_eroded[ty, tx] or ring[ty, tx]:
-                    y0, x0 = ty*T, tx*T
-                    train_mask[y0:y0+T, x0:x0+T] = 1.0
+        selected = ((ink_tile_eroded > 0) | (ring > 0)).astype(np.float32)
+        train_mask[:n_ty * T, :n_tx * T] = np.repeat(np.repeat(selected, T, axis=0), T, axis=1)
 
         return train_mask
 
