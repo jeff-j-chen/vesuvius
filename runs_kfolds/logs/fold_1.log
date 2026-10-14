@@ -1,0 +1,1283 @@
+2026-10-14 04:30:13.557362: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1791952213.574113 1516158 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1791952213.579438 1516158 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1791952213.594402 1516158 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1791952213.594423 1516158 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1791952213.594426 1516158 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1791952213.594427 1516158 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2026-10-14 04:30:13.598172: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[preflight] 31 scroll(s) and init weights present
+Creating datasets...
+[multi-scroll] physical groups={'pherc0139': [20260115000000, 20260317000000, 20250223000000, 20250108000005, 20260112000000, 20260126000000, 20250831000000, 20260108000000, 20260302000000], 'pherc0172': [20251111010954, 20251112000002], 'pherc1667': [20240304141531, 20240304144031, 20231201215900], 'phercparis4': [20231210121321], 'pherc0500p2': [20250628074500], 'pherc0814': [20260226000000], 'phercparis2_fr143': [20230301213755, 20230205142449], 'pherc51cr4_fr8': [20231205222200], 'phercparis1_fr34': [20230301213423], 'pherc0343p': [20250511003658, 20261007000000], 'pherc0841': [20260221022814], 'pherc1447': [20260930144758, 20260930144760], 'pherc0009b': [20250919125754], 'pherc0846a': [20260927134931, 20261012073246]} weights=[2, 1, 1, 1, 3, 5, 1, 1, 1, 4, 1, 1, 1, 5]
+[explicit-negative] scroll 20260115000000: overriding 685 ink-label pixels
+[split] scroll 20260115000000: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20260115000000.png train_pixels=8.8% explicit_negative_pixels=577,024 explicit_positive_pixels=114,075
+[split] scroll 20260115000000: axis=y train_frac=0.8055
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=4314
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2935  ring_tiles=3238  ratio=1.10
+[character-components] 37 components at 16px target resolution
+[character-split] majority rule: 2 crossing character(s) -> train, 1 -> valid
+[manual-split] scroll 20260115000000: unit=16px train_ring=1275904px valid_ring=304128px train_only=False
+[far-negatives] scroll 20260115000000: min_dist=160px far_units=9291 windows=7546
+[character-sampling] scroll 20260115000000: 12 characters with positive and ring-negative windows
+[context-replace] scroll 20260115000000: 12702 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260115000000: manifest=2,092/12,160 spatial chunks (17.2%)
+[selective-cache] ready 20260115000000.zarr: chunks=2,092 ram=0.45 GiB (forked readers)
+[multi-scroll] scroll 20260115000000: train_tiles=6667 valid_tiles=1865
+[split] scroll 20260317000000: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20260317000000.png train_pixels=11.2% explicit_negative_pixels=775,168 explicit_positive_pixels=177,450
+[split] scroll 20260317000000: axis=y train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=3992
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=3037  ring_tiles=4213  ratio=1.39
+[character-components] 54 components at 16px target resolution
+[manual-split] scroll 20260317000000: unit=16px train_ring=1538560px valid_ring=317440px train_only=False
+[far-negatives] scroll 20260317000000: min_dist=160px far_units=4240 windows=2539
+[character-sampling] scroll 20260317000000: 28 characters with positive and ring-negative windows
+[context-replace] scroll 20260317000000: 9202 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260317000000: manifest=2,367/7,462 spatial chunks (31.7%)
+[selective-cache] ready 20260317000000.zarr: chunks=2,367 ram=0.51 GiB (forked readers)
+[multi-scroll] scroll 20260317000000: train_tiles=6667 valid_tiles=1956
+[explicit-negative] scroll 20250223000000: overriding 541 ink-label pixels
+[split] scroll 20250223000000: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20250223000000.png train_pixels=2.6% explicit_negative_pixels=649,472 explicit_positive_pixels=178,451
+[split] scroll 20250223000000: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=6717
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=4386  ring_tiles=6644  ratio=1.51
+[character-components] 64 components at 16px target resolution
+[character-split] majority rule: 1 crossing character(s) -> train, 0 -> valid
+[manual-split] scroll 20250223000000: unit=16px train_ring=1215744px valid_ring=1606656px train_only=False
+[far-negatives] scroll 20250223000000: min_dist=160px far_units=585 windows=73
+[character-sampling] scroll 20250223000000: 23 characters with positive and ring-negative windows
+[context-replace] scroll 20250223000000: 4241 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20250223000000: manifest=2,316/17,741 spatial chunks (13.1%)
+[selective-cache] ready 20250223000000.zarr: chunks=2,316 ram=0.49 GiB (forked readers)
+[multi-scroll] scroll 20250223000000: train_tiles=6667 valid_tiles=9371
+[split] scroll 20250108000005: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20250108000005.png train_pixels=7.3% explicit_negative_pixels=191,744 explicit_positive_pixels=5,547
+[split] scroll 20250108000005: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=2478
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=1314  ring_tiles=2344  ratio=1.78
+[character-components] 9 components at 16px target resolution
+[character-split] majority rule: 0 crossing character(s) -> train, 1 -> valid
+[manual-split] scroll 20250108000005: unit=16px train_ring=852992px valid_ring=83456px train_only=False
+[far-negatives] scroll 20250108000005: min_dist=160px far_units=9954 windows=7598
+[character-sampling] scroll 20250108000005: 6 characters with positive and ring-negative windows
+[context-replace] scroll 20250108000005: 13281 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20250108000005: manifest=1,451/13,104 spatial chunks (11.1%)
+[selective-cache] preload 20250108000005.zarr: new=1,451 requested=1,451 workers=8
+[selective-cache] 20250108000005.zarr 1,000/1,451
+[selective-cache] 20250108000005.zarr 1,451/1,451
+[selective-cache] ready 20250108000005.zarr: chunks=1,451 ram=0.31 GiB
+[multi-scroll] scroll 20250108000005: train_tiles=5968 valid_tiles=511
+[explicit-negative] scroll 20260112000000: overriding 51 ink-label pixels
+[split] scroll 20260112000000: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20260112000000.png train_pixels=6.4% explicit_negative_pixels=210,944 explicit_positive_pixels=24,037
+[split] scroll 20260112000000: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=2013
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=1207  ring_tiles=2125  ratio=1.76
+[character-components] 19 components at 16px target resolution
+[manual-split] scroll 20260112000000: unit=16px train_ring=679168px valid_ring=167936px train_only=False
+[far-negatives] scroll 20260112000000: min_dist=160px far_units=7476 windows=5727
+[character-sampling] scroll 20260112000000: 9 characters with positive and ring-negative windows
+[context-replace] scroll 20260112000000: 10684 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260112000000: manifest=1,330/12,192 spatial chunks (10.9%)
+[selective-cache] preload 20260112000000.zarr: new=1,330 requested=1,330 workers=8
+[selective-cache] 20260112000000.zarr 1,000/1,330
+[selective-cache] 20260112000000.zarr 1,330/1,330
+[selective-cache] ready 20260112000000.zarr: chunks=1,330 ram=0.28 GiB
+[multi-scroll] scroll 20260112000000: train_tiles=5098 valid_tiles=983
+[split] scroll 20260126000000: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20260126000000.png train_pixels=8.8% explicit_negative_pixels=265,472 explicit_positive_pixels=42,527
+[split] scroll 20260126000000: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=1630
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=1089  ring_tiles=1909  ratio=1.75
+[character-components] 28 components at 16px target resolution
+[character-split] majority rule: 0 crossing character(s) -> train, 1 -> valid
+[manual-split] scroll 20260126000000: unit=16px train_ring=651264px valid_ring=110848px train_only=False
+[far-negatives] scroll 20260126000000: min_dist=160px far_units=11809 windows=10291
+[character-sampling] scroll 20260126000000: 18 characters with positive and ring-negative windows
+[context-replace] scroll 20260126000000: 15461 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260126000000: manifest=1,767/12,126 spatial chunks (14.6%)
+[selective-cache] preload 20260126000000.zarr: new=1,767 requested=1,767 workers=8
+[selective-cache] 20260126000000.zarr 1,000/1,767
+[selective-cache] 20260126000000.zarr 1,767/1,767
+[selective-cache] ready 20260126000000.zarr: chunks=1,767 ram=0.38 GiB
+[multi-scroll] scroll 20260126000000: train_tiles=5560 valid_tiles=697
+[align] scroll 20250831000000: volume=(6400, 7980) mask=(6400, 7980) labels=(6401, 7982) -> common=(6400, 7980)
+[split] scroll 20250831000000: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20250831000000.png train_pixels=16.4% explicit_negative_pixels=239,616 explicit_positive_pixels=36,206
+[split] scroll 20250831000000: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=6918
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=3883  ring_tiles=6904  ratio=1.78
+[character-components] 36 components at 16px target resolution
+[manual-split] scroll 20250831000000: unit=16px train_ring=2384896px valid_ring=372736px train_only=False
+[far-negatives] scroll 20250831000000: min_dist=160px far_units=15654 windows=10893
+[character-sampling] scroll 20250831000000: 18 characters with positive and ring-negative windows
+[context-replace] scroll 20250831000000: 26278 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20250831000000: manifest=3,139/12,500 spatial chunks (25.1%)
+[selective-cache] ready 20250831000000.zarr: chunks=3,139 ram=0.67 GiB (forked readers)
+[multi-scroll] scroll 20250831000000: train_tiles=6667 valid_tiles=2204
+[split] scroll 20260108000000: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20260108000000.png train_pixels=2.8% explicit_negative_pixels=141,568 explicit_positive_pixels=12,943
+[split] scroll 20260108000000: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=2067
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=1225  ring_tiles=1946  ratio=1.59
+[character-components] 11 components at 16px target resolution
+[manual-split] scroll 20260108000000: unit=16px train_ring=582144px valid_ring=225792px train_only=False
+[far-negatives] scroll 20260108000000: min_dist=160px far_units=1473 windows=463
+[character-sampling] scroll 20260108000000: 8 characters with positive and ring-negative windows
+[context-replace] scroll 20260108000000: 3794 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260108000000: manifest=673/12,222 spatial chunks (5.5%)
+[selective-cache] preload 20260108000000.zarr: new=673 requested=673 workers=8
+[selective-cache] 20260108000000.zarr 673/673
+[selective-cache] ready 20260108000000.zarr: chunks=673 ram=0.14 GiB
+[multi-scroll] scroll 20260108000000: train_tiles=4051 valid_tiles=1317
+[split] scroll 20260302000000: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20260302000000.png train_pixels=2.8% explicit_negative_pixels=175,872 explicit_positive_pixels=18,490
+[split] scroll 20260302000000: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=1580
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=905  ring_tiles=1592  ratio=1.76
+[character-components] 15 components at 16px target resolution
+[manual-split] scroll 20260302000000: unit=16px train_ring=537088px valid_ring=102144px train_only=False
+[far-negatives] scroll 20260302000000: min_dist=160px far_units=3749 windows=2482
+[character-sampling] scroll 20260302000000: 4 characters with positive and ring-negative windows
+[context-replace] scroll 20260302000000: 5858 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260302000000: manifest=852/16,214 spatial chunks (5.3%)
+[selective-cache] preload 20260302000000.zarr: new=852 requested=852 workers=8
+[selective-cache] 20260302000000.zarr 852/852
+[selective-cache] ready 20260302000000.zarr: chunks=852 ram=0.18 GiB
+[multi-scroll] scroll 20260302000000: train_tiles=4533 valid_tiles=634
+[split] scroll 20251111010954: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20251111010954.png train_pixels=9.7% explicit_negative_pixels=1,125,120 explicit_positive_pixels=0
+[split] scroll 20251111010954: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=7536
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=3507  ring_tiles=8536  ratio=2.43
+[character-components] 19 components at 16px target resolution
+[manual-split] scroll 20251111010954: unit=16px train_ring=2850304px valid_ring=232704px train_only=False
+[far-negatives] scroll 20251111010954: min_dist=160px far_units=34329 windows=26975
+[character-sampling] scroll 20251111010954: 17 characters with positive and ring-negative windows
+[context-replace] scroll 20251111010954: 46014 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20251111010954: manifest=4,861/34,081 spatial chunks (14.3%)
+[selective-cache] ready 20251111010954.zarr: chunks=4,861 ram=1.04 GiB (forked readers)
+[multi-scroll] scroll 20251111010954: train_tiles=6667 valid_tiles=1389
+[explicit-negative] scroll 20251112000002: overriding 119 ink-label pixels
+[split] scroll 20251112000002: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20251112000002.png train_pixels=15.2% explicit_negative_pixels=1,833,216 explicit_positive_pixels=0
+[split] scroll 20251112000002: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=19026
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=10012  ring_tiles=17450  ratio=1.74
+[character-components] 38 components at 16px target resolution
+[character-split] majority rule: 0 crossing character(s) -> train, 1 -> valid
+[manual-split] scroll 20251112000002: unit=16px train_ring=5154048px valid_ring=1876224px train_only=False
+[far-negatives] scroll 20251112000002: min_dist=160px far_units=17653 windows=10048
+[character-sampling] scroll 20251112000002: 28 characters with positive and ring-negative windows
+[context-replace] scroll 20251112000002: 35618 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20251112000002: manifest=5,861/20,828 spatial chunks (28.1%)
+[selective-cache] ready 20251112000002.zarr: chunks=5,861 ram=1.25 GiB (forked readers)
+[multi-scroll] scroll 20251112000002: train_tiles=6667 valid_tiles=10958
+[split] scroll 20240304141531: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20240304141531.png train_pixels=19.6% explicit_negative_pixels=600,320 explicit_positive_pixels=0
+[split] scroll 20240304141531: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=9778
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=5088  ring_tiles=9057  ratio=1.78
+[character-components] 19 components at 16px target resolution
+[manual-split] scroll 20240304141531: unit=16px train_ring=3269120px valid_ring=352000px train_only=False
+[far-negatives] scroll 20240304141531: min_dist=160px far_units=19822 windows=14900
+[character-sampling] scroll 20240304141531: 18 characters with positive and ring-negative windows
+[context-replace] scroll 20240304141531: 30190 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20240304141531: manifest=3,897/12,714 spatial chunks (30.7%)
+[selective-cache] ready 20240304141531.matched.zarr: chunks=3,897 ram=0.83 GiB (forked readers)
+[multi-scroll] scroll 20240304141531: train_tiles=6667 valid_tiles=1955
+[split] scroll 20240304144031: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20240304144031.png train_pixels=98.3% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20240304144031: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=29526
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=15881  ring_tiles=27269  ratio=1.72
+[character-components] 52 components at 16px target resolution
+[character-split] majority rule: 2 crossing character(s) -> train, 0 -> valid
+[manual-split] scroll 20240304144031: unit=16px train_ring=10398464px valid_ring=647936px train_only=False
+[far-negatives] scroll 20240304144031: min_dist=160px far_units=795305 windows=771605
+[character-sampling] scroll 20240304144031: 49 characters with positive and ring-negative windows
+[context-replace] scroll 20240304144031: 828790 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20240304144031: manifest=55,995/63,744 spatial chunks (87.8%)
+[selective-cache] ready 20240304144031.matched.zarr: chunks=55,995 ram=5.98 GiB (forked readers)
+[multi-scroll] scroll 20240304144031: train_tiles=6667 valid_tiles=3815
+[split] scroll 20231201215900: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20231201215900.png train_pixels=31.3% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20231201215900: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=2704
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=1139  ring_tiles=2940  ratio=2.58
+[character-components] 13 components at 16px target resolution
+[manual-split] scroll 20231201215900: unit=16px train_ring=843008px valid_ring=201216px train_only=False
+[far-negatives] scroll 20231201215900: min_dist=160px far_units=119 windows=27
+[character-sampling] scroll 20231201215900: 9 characters with positive and ring-negative windows
+[context-replace] scroll 20231201215900: 2344 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20231201215900: manifest=620/1,000 spatial chunks (62.0%)
+[selective-cache] preload 20231201215900.matched.zarr: new=620 requested=620 workers=8
+[selective-cache] 20231201215900.matched.zarr 620/620
+[selective-cache] ready 20231201215900.matched.zarr: chunks=620 ram=0.13 GiB
+[multi-scroll] scroll 20231201215900: train_tiles=5223 valid_tiles=1270
+[split] scroll 20231210121321: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20231210121321.png train_pixels=95.5% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20231210121321: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=27630
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=14598  ring_tiles=22756  ratio=1.56
+[character-components] 44 components at 16px target resolution
+[character-split] majority rule: 3 crossing character(s) -> train, 0 -> valid
+[manual-split] scroll 20231210121321: unit=16px train_ring=8183808px valid_ring=1378816px train_only=False
+[far-negatives] scroll 20231210121321: min_dist=160px far_units=352013 windows=337207
+[character-sampling] scroll 20231210121321: 37 characters with positive and ring-negative windows
+[context-replace] scroll 20231210121321: 377118 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20231210121321: manifest=27,067/31,400 spatial chunks (86.2%)
+[selective-cache] ready 20231210121321.matched.zarr: chunks=27,067 ram=5.78 GiB (forked readers)
+[multi-scroll] scroll 20231210121321: train_tiles=6667 valid_tiles=8063
+[split] scroll 20250628074500: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20250628074500.png train_pixels=11.8% explicit_negative_pixels=862,976 explicit_positive_pixels=0
+[split] scroll 20250628074500: axis=x train_frac=0.6
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=7242
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=3609  ring_tiles=6541  ratio=1.81
+[character-components] 22 components at 16px target resolution
+[manual-split] scroll 20250628074500: unit=16px train_ring=1554944px valid_ring=1043456px train_only=False
+[far-negatives] scroll 20250628074500: min_dist=160px far_units=606 windows=18
+[character-sampling] scroll 20250628074500: 13 characters with positive and ring-negative windows
+[context-replace] scroll 20250628074500: 5354 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20250628074500: manifest=1,557/5,544 spatial chunks (28.1%)
+[selective-cache] preload 20250628074500.zarr: new=1,557 requested=1,557 workers=8
+[selective-cache] 20250628074500.zarr 1,000/1,557
+[selective-cache] 20250628074500.zarr 1,557/1,557
+[selective-cache] ready 20250628074500.zarr: chunks=1,557 ram=0.33 GiB
+[multi-scroll] scroll 20250628074500: train_tiles=6667 valid_tiles=6468
+[explicit-negative] scroll 20260226000000: overriding 33 ink-label pixels
+[split] scroll 20260226000000: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20260226000000.png train_pixels=22.1% explicit_negative_pixels=132,476 explicit_positive_pixels=0
+[split] scroll 20260226000000: axis=y train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=1859
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=1007  ring_tiles=1238  ratio=1.23
+[character-components] 6 components at 16px target resolution
+[character-split] majority rule: 0 crossing character(s) -> train, 1 -> valid
+[manual-split] scroll 20260226000000: unit=16px train_ring=474368px valid_ring=100352px train_only=False
+[far-negatives] scroll 20260226000000: min_dist=160px far_units=3080 windows=2246
+[character-sampling] scroll 20260226000000: 5 characters with positive and ring-negative windows
+[context-replace] scroll 20260226000000: 4322 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260226000000: manifest=571/1,960 spatial chunks (29.1%)
+[selective-cache] preload 20260226000000.zarr: new=571 requested=571 workers=8
+[selective-cache] 20260226000000.zarr 571/571
+[selective-cache] ready 20260226000000.zarr: chunks=571 ram=0.12 GiB
+[multi-scroll] scroll 20260226000000: train_tiles=3151 valid_tiles=598
+[split] scroll 20230301213755: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20230301213755.png train_pixels=51.4% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20230301213755: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=21395
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=9472  ring_tiles=16648  ratio=1.76
+[character-components] 110 components at 16px target resolution
+[character-split] majority rule: 0 crossing character(s) -> train, 6 -> valid
+[manual-split] scroll 20230301213755: unit=16px train_ring=5777920px valid_ring=908800px train_only=False
+[far-negatives] scroll 20230301213755: min_dist=160px far_units=124 windows=1
+[character-sampling] scroll 20230301213755: 95 characters with positive and ring-negative windows
+[context-replace] scroll 20230301213755: 13032 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20230301213755: manifest=2,988/4,212 spatial chunks (70.9%)
+[selective-cache] ready 20230301213755.matched.zarr: chunks=2,988 ram=0.64 GiB (forked readers)
+[multi-scroll] scroll 20230301213755: train_tiles=6667 valid_tiles=5517
+[split] scroll 20230205142449: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20230205142449.png train_pixels=50.1% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20230205142449: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=6926
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=3296  ring_tiles=3707  ratio=1.12
+[character-components] 29 components at 16px target resolution
+[manual-split] scroll 20230205142449: unit=16px train_ring=1558272px valid_ring=234496px train_only=False
+[far-negatives] scroll 20230205142449: min_dist=160px far_units=596 windows=170
+[character-sampling] scroll 20230205142449: 24 characters with positive and ring-negative windows
+[context-replace] scroll 20230205142449: 3337 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20230205142449: manifest=935/1,575 spatial chunks (59.4%)
+[selective-cache] preload 20230205142449.matched.zarr: new=935 requested=935 workers=8
+[selective-cache] 20230205142449.matched.zarr 935/935
+[selective-cache] ready 20230205142449.matched.zarr: chunks=935 ram=0.20 GiB
+[multi-scroll] scroll 20230205142449: train_tiles=6667 valid_tiles=1420
+[split] scroll 20231205222200: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20231205222200.png train_pixels=37.8% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20231205222200: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=5983
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2596  ring_tiles=5688  ratio=2.19
+[character-components] 27 components at 16px target resolution
+[character-split] majority rule: 0 crossing character(s) -> train, 2 -> valid
+[manual-split] scroll 20231205222200: unit=16px train_ring=1635840px valid_ring=484864px train_only=False
+[far-negatives] scroll 20231205222200: min_dist=160px far_units=27 windows=0
+[character-sampling] scroll 20231205222200: 19 characters with positive and ring-negative windows
+[context-replace] scroll 20231205222200: 4159 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20231205222200: manifest=1,040/1,632 spatial chunks (63.7%)
+[selective-cache] preload 20231205222200.matched.zarr: new=1,040 requested=1,040 workers=8
+[selective-cache] 20231205222200.matched.zarr 1,000/1,040
+[selective-cache] 20231205222200.matched.zarr 1,040/1,040
+[selective-cache] ready 20231205222200.matched.zarr: chunks=1,040 ram=0.22 GiB
+[multi-scroll] scroll 20231205222200: train_tiles=6667 valid_tiles=2887
+[split] scroll 20230301213423: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20230301213423.png train_pixels=21.7% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20230301213423: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=3807
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=1573  ring_tiles=3087  ratio=1.96
+[character-components] 21 components at 16px target resolution
+[character-split] majority rule: 0 crossing character(s) -> train, 1 -> valid
+[manual-split] scroll 20230301213423: unit=16px train_ring=657152px valid_ring=535808px train_only=False
+[far-negatives] scroll 20230301213423: min_dist=160px far_units=0 windows=0
+[character-sampling] scroll 20230301213423: 16 characters with positive and ring-negative windows
+[context-replace] scroll 20230301213423: 924 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20230301213423: manifest=654/1,218 spatial chunks (53.7%)
+[selective-cache] preload 20230301213423.matched.zarr: new=654 requested=654 workers=8
+[selective-cache] 20230301213423.matched.zarr 654/654
+[selective-cache] ready 20230301213423.matched.zarr: chunks=654 ram=0.14 GiB
+[multi-scroll] scroll 20230301213423: train_tiles=4349 valid_tiles=3345
+[split] scroll 20250511003658: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20250511003658.png train_pixels=17.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20250511003658: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=2161
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=999  ring_tiles=2110  ratio=2.11
+[character-components] 8 components at 16px target resolution
+[character-split] majority rule: 0 crossing character(s) -> train, 1 -> valid
+[manual-split] scroll 20250511003658: unit=16px train_ring=609280px valid_ring=186624px train_only=False
+[far-negatives] scroll 20250511003658: min_dist=160px far_units=238 windows=4
+[character-sampling] scroll 20250511003658: 5 characters with positive and ring-negative windows
+[context-replace] scroll 20250511003658: 2073 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20250511003658: manifest=476/1,500 spatial chunks (31.7%)
+[selective-cache] preload 20250511003658.zarr: new=476 requested=476 workers=8
+[selective-cache] 20250511003658.zarr 476/476
+[selective-cache] ready 20250511003658.zarr: chunks=476 ram=0.10 GiB
+[multi-scroll] scroll 20250511003658: train_tiles=3678 valid_tiles=1112
+[split] scroll 20260221022814: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20260221022814.png train_pixels=16.8% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20260221022814: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=3680
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=1899  ring_tiles=3082  ratio=1.62
+[character-components] 8 components at 16px target resolution
+[manual-split] scroll 20260221022814: unit=16px train_ring=1128960px valid_ring=146176px train_only=False
+[far-negatives] scroll 20260221022814: min_dist=160px far_units=5148 windows=3638
+[character-sampling] scroll 20260221022814: 6 characters with positive and ring-negative windows
+[context-replace] scroll 20260221022814: 8902 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260221022814: manifest=1,040/4,543 spatial chunks (22.9%)
+[selective-cache] preload 20260221022814.zarr: new=1,040 requested=1,040 workers=8
+[selective-cache] 20260221022814.zarr 1,000/1,040
+[selective-cache] 20260221022814.zarr 1,040/1,040
+[selective-cache] ready 20260221022814.zarr: chunks=1,040 ram=0.22 GiB
+[multi-scroll] scroll 20260221022814: train_tiles=6667 valid_tiles=842
+[split] scroll 20260930144758: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20260930144758.png train_pixels=16.4% explicit_negative_pixels=239,615 explicit_positive_pixels=0
+[split] scroll 20260930144758: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=7038
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=3936  ring_tiles=4829  ratio=1.23
+[character-components] 9 components at 16px target resolution
+[manual-split] scroll 20260930144758: unit=16px train_ring=1990656px valid_ring=253184px train_only=False
+[far-negatives] scroll 20260930144758: min_dist=160px far_units=7511 windows=5312
+[character-sampling] scroll 20260930144758: 8 characters with positive and ring-negative windows
+[context-replace] scroll 20260930144758: 13080 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260930144758: manifest=1,579/7,854 spatial chunks (20.1%)
+[selective-cache] preload 20260930144758.zarr: new=1,579 requested=1,579 workers=8
+[selective-cache] 20260930144758.zarr 1,000/1,579
+[selective-cache] 20260930144758.zarr 1,579/1,579
+[selective-cache] ready 20260930144758.zarr: chunks=1,579 ram=0.34 GiB
+[multi-scroll] scroll 20260930144758: train_tiles=6667 valid_tiles=1464
+[split] scroll 20260930144760: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20260930144760.png train_pixels=15.9% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20260930144760: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=6661
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=3605  ring_tiles=4882  ratio=1.35
+[character-components] 10 components at 16px target resolution
+[manual-split] scroll 20260930144760: unit=16px train_ring=1820416px valid_ring=352256px train_only=False
+[far-negatives] scroll 20260930144760: min_dist=160px far_units=7660 windows=5264
+[character-sampling] scroll 20260930144760: 7 characters with positive and ring-negative windows
+[context-replace] scroll 20260930144760: 13026 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260930144760: manifest=1,632/8,118 spatial chunks (20.1%)
+[selective-cache] preload 20260930144760.zarr: new=1,632 requested=1,632 workers=8
+[selective-cache] 20260930144760.zarr 1,000/1,632
+[selective-cache] 20260930144760.zarr 1,632/1,632
+[selective-cache] ready 20260930144760.zarr: chunks=1,632 ram=0.35 GiB
+[multi-scroll] scroll 20260930144760: train_tiles=6667 valid_tiles=2091
+[split] scroll 20261007000000: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20261007000000.png train_pixels=28.4% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20261007000000: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=4668
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2302  ring_tiles=4174  ratio=1.81
+[character-components] 12 components at 16px target resolution
+[manual-split] scroll 20261007000000: unit=16px train_ring=1458688px valid_ring=199168px train_only=False
+[far-negatives] scroll 20261007000000: min_dist=160px far_units=5111 windows=3106
+[character-sampling] scroll 20261007000000: 10 characters with positive and ring-negative windows
+[context-replace] scroll 20261007000000: 9994 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20261007000000: manifest=1,221/3,395 spatial chunks (36.0%)
+[selective-cache] preload 20261007000000.zarr: new=1,221 requested=1,221 workers=8
+[selective-cache] 20261007000000.zarr 1,000/1,221
+[selective-cache] 20261007000000.zarr 1,221/1,221
+[selective-cache] ready 20261007000000.zarr: chunks=1,221 ram=0.26 GiB
+[multi-scroll] scroll 20261007000000: train_tiles=6667 valid_tiles=1217
+[split] scroll 20260927134931: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20260927134931.png train_pixels=44.9% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20260927134931: axis=x train_frac=1.0
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=3289
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=1601  ring_tiles=3532  ratio=2.21
+[character-components] 9 components at 16px target resolution
+[manual-split] scroll 20260927134931: unit=16px train_ring=559104px valid_ring=754944px train_only=False
+[far-negatives] scroll 20260927134931: min_dist=160px far_units=11042 windows=9244
+[character-sampling] scroll 20260927134931: 4 characters with positive and ring-negative windows
+[context-replace] scroll 20260927134931: 12990 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260927134931: manifest=1,560/2,784 spatial chunks (56.0%)
+[selective-cache] preload 20260927134931.zarr: new=1,560 requested=1,560 workers=8
+[selective-cache] 20260927134931.zarr 1,000/1,560
+[selective-cache] 20260927134931.zarr 1,560/1,560
+[selective-cache] ready 20260927134931.zarr: chunks=1,560 ram=0.33 GiB
+[multi-scroll] scroll 20260927134931: train_tiles=3512 valid_tiles=4436
+[split] scroll 20261012073246: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20261012073246.png train_pixels=45.8% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20261012073246: axis=x train_frac=1.0
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=3027
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=1377  ring_tiles=2628  ratio=1.91
+[character-components] 10 components at 16px target resolution
+[manual-split] scroll 20261012073246: unit=16px train_ring=486144px valid_ring=539136px train_only=False
+[far-negatives] scroll 20261012073246: min_dist=160px far_units=14400 windows=13016
+[character-sampling] scroll 20261012073246: 5 characters with positive and ring-negative windows
+[context-replace] scroll 20261012073246: 15534 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20261012073246: manifest=1,557/2,790 spatial chunks (55.8%)
+[selective-cache] preload 20261012073246.zarr: new=1,557 requested=1,557 workers=8
+[selective-cache] 20261012073246.zarr 1,000/1,557
+[selective-cache] 20261012073246.zarr 1,557/1,557
+[selective-cache] ready 20261012073246.zarr: chunks=1,557 ram=0.33 GiB
+[multi-scroll] scroll 20261012073246: train_tiles=2970 valid_tiles=3228
+[explicit-negative] scroll 20250919125754: overriding 30 ink-label pixels
+[split] scroll 20250919125754: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20250919125754.png train_pixels=26.8% explicit_negative_pixels=44,439 explicit_positive_pixels=408
+[split] scroll 20250919125754: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=16083
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=8584  ring_tiles=11279  ratio=1.31
+[character-components] 45 components at 16px target resolution
+[character-split] majority rule: 1 crossing character(s) -> train, 1 -> valid
+[manual-split] scroll 20250919125754: unit=16px train_ring=3861248px valid_ring=1222656px train_only=False
+[far-negatives] scroll 20250919125754: min_dist=160px far_units=8149 windows=4805
+[character-sampling] scroll 20250919125754: 26 characters with positive and ring-negative windows
+[context-replace] scroll 20250919125754: 20978 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20250919125754: manifest=3,356/8,466 spatial chunks (39.6%)
+[selective-cache] ready 20250919125754.zarr: chunks=3,356 ram=0.72 GiB (forked readers)
+[multi-scroll] scroll 20250919125754: train_tiles=6667 valid_tiles=7295
+[multi-scroll] merged train_tiles=168099 valid_tiles=88908
+Data setup done in 229.36s
+[seed] fast mode (seed=41) — cudnn benchmark on, tiny run-to-run fp noise
+[threads] cpu budget 12: main process 4 thread(s), 8 loader worker(s) x 1
+[seed] AND-mask/Fish domain groups use variable batch sizes -- cudnn benchmark off
+--- Configuration ---
+data: DataConfig(zarr_path='/vesuvius/ves_zarrs2', scrolls=[ScrollConfig(scroll_id=20260115000000, split_axis='y', train_split_frac=0.8055, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260317000000, split_axis='y', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250223000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250108000005, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260112000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260126000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250831000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260108000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260302000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20251111010954, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20251112000002, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20240304141531, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20240304144031, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20231201215900, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20231210121321, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250628074500, split_axis='x', train_split_frac=0.6, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260226000000, split_axis='y', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20230301213755, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20230205142449, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20231205222200, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20230301213423, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250511003658, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260221022814, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260930144758, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260930144760, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20261007000000, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20260927134931, split_axis='x', train_split_frac=1.0, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20261012073246, split_axis='x', train_split_frac=1.0, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250919125754, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0))], train_scroll_dict={'pherc0139': [20260115000000, 20260317000000, 20250223000000, 20250108000005, 20260112000000, 20260126000000, 20250831000000, 20260108000000, 20260302000000], 'pherc0172': [20251111010954, 20251112000002], 'pherc1667': [20240304141531, 20240304144031, 20231201215900], 'phercparis4': [20231210121321], 'pherc0500p2': [20250628074500], 'pherc0814': [20260226000000], 'phercparis2_fr143': [20230301213755, 20230205142449], 'pherc51cr4_fr8': [20231205222200], 'phercparis1_fr34': [20230301213423], 'pherc0343p': [20250511003658, 20261007000000], 'pherc0841': [20260221022814], 'pherc1447': [20260930144758, 20260930144760], 'pherc0009b': [20250919125754], 'pherc0846a': [20260927134931, 20261012073246]}, train_scroll_weights=[2, 1, 1, 1, 3, 5, 1, 1, 1, 4, 1, 1, 1, 5], test_scroll_ids=[20260814140748, 20260717193517, 20260720090842, 20250703034159, 20260723112922, 20260921094413, 20260918132724, 20260922073234, 20260922161631, 20260925085345, 20260928000001, 20260928000002, 20260928000003, 20260928000004], holdout_scroll_ids=[20251226000000], tile_size=16, depth=8, d_start=4, d_end=28, train_d_start=4, train_d_end=28, composite_method='maxproj', composite_d0=10, composite_d1=18, composite_display='raw', voxel_um=9.362, mask_memmap=False, mask_bitpack=True, preload_volumes=False, selective_chunk_preload=True, selective_chunk_workers=8, ram_safe_vis=False, ring_negatives=True, ring_label_source='closed', ring_close_r=2, ring_gap_r=2, ring_shell_r=4, ring_free_scroll_ids=[], ring_pu_scroll_ids=[], simple_split=False, flipped_train_mask_ids=[20231210121321, 20240304144031], coordinate_hash_split=False, coordinate_hash_block_size=512, coordinate_hash_valid_fraction=0.25, coordinate_hash_seed=29, train_mask_dir='/vesuvius/runs_kfolds/splits/fold_1/train_masks', whole_patch_valid_scroll_ids=[], train_only_scroll_ids=[], validation_scroll_ids=None, surface_label_dir='./surface_labels', context_size=96, context_downsample=1, eval_infer_bs=192, eval_prefetch=3, eval_chunk_gb=3.0, tta_mode='light', probe_rois={}, vis_scroll_ids=[20260927134931, 20261012073246, 20261012065811, 20261012065813], vis_preload_persistent=True, label_free_vis_scroll_ids=[20261012065811, 20261012065813], eval_stride=32, inklabel_dir='./dilated_inklabels', label_dilate_r=0, dot_inklabel_dir='', dot_scroll_whitelist=[], ctx_jitter=10, target_aware_ctx_jitter=True, depth_jitter=1, surface_relative_depth_window=True, surface_window_offset=0, surface_window_offset_by_scroll={20260927134931: -1, 20261012073246: -1, 20261012065811: -1, 20261012065813: -1}, holdout_domains=[], explicit_negative_share=0.0, far_negative_share=0.3, far_negative_min_dist=160, far_negative_forced_positive_dist=200, extra_inklabels=False, extra_label_share=0.0, divdis_target_scroll_ids=[], edge_soft_sigma=8.0, edge_soft_floor=0.55, norm_mode='surface_anchor', zarr_suffix={'20240304141531': '.matched', '20240304144031': '.matched', '20231210121321': '.matched', '20230301213755': '.matched', '20231205222200': '.matched', '20230301213423': '.matched', '20231201215900': '.matched', '20230205142449': '.matched'}, native_noise='models/native_noise_bank.npy', native_noise_scale=1.0, native_noise_ids=[20240304141531, 20240304144031, 20231210121321, 20230301213755, 20231205222200, 20230301213423, 20231201215900, 20230205142449], label_shift_frac=0.0, multitile_train_step=16, multitile_pos_only=True, multitile_ring_gate=True, ring_from_inklabel_dir=True, character_balanced_sampling=True, character_balance_scrolls=True, character_min_pixels=8, max_samples_per_epoch=6667)
+dl: DataloaderConfig(batch_size=95, num_workers=8, prefetch_factor=2, data_aug=True, rotation_prob=0.6, flip_prob=0.6, noise_prob=0.0, brightness_prob=0.0, contrast_prob=0.0, brightness_delta=0.15, contrast_delta=0.15, noise_std_min=0.001, noise_std_max=0.005, cutout_prob=0.2, cutout_max_frac=0.16, cutout_n_patches=3, depth_mask_prob=0.0, depth_mask_mode='zero', fda_prob=0.0, fda_beta=0.05, elastic_prob=0.0, elastic_alpha=15.0, elastic_sigma=5.0, depth_warp_prob=0.0, depth_warp_max=2.0, depth_warp_sigma=24.0, surface_atten_prob=0.0, surface_atten_min=0.1, surface_atten_max=0.35, surface_atten_sigma=2.0, acquisition_blur_prob=0.0, acquisition_blur_min=0.4, acquisition_blur_max=0.9, correlated_noise_prob=0.0, correlated_noise_min=0.003, correlated_noise_max=0.015, correlated_noise_sigma=6.0, phase_filter_prob=0.0, phase_filter_min=0.5, phase_filter_max=20.0, phase_filter_max_gain=4.0, tone_curve_prob=0.0, tone_curve_knots=6, tone_curve_concentration=0.5, resolution_degrade_prob=0.0, resolution_degrade_min=1.5, resolution_degrade_max=4.0, depth_scale_prob=0.0, depth_scale_min=0.6, depth_scale_max=1.6, fine_native_scroll_ids=None, scan_regime_prob=0.0, scan_regime_min=0.5, scan_regime_max=1.0, quality_transfer=None, randconv_prob=0.0, randconv_kernel_sizes=[1, 3, 5, 7], randconv_depth_kernel=1, randconv_layers_max=1, randconv_mix_min=0.0, cutout_protect_center=True, context_replace_prob=0.15, context_replace_keep_size=0, context_replace_margin=7, context_replace_feather=13, context_replace_min_mask_frac=0.8, context_replace_surface_align=True, context_replace_cross_prob=0.0, protected_rotation_prob=0.0, protected_elastic_prob=0.0, protected_elastic_alpha=16.0, protected_elastic_sigma=5.0, protected_warp_margin=4, protected_warp_feather=12)
+tra: TrainingConfig(n_epochs=8, start_epoch=0, aug_start_epoch=0, lr=0.00015, encoder_lr_scale=1.0, encoder_freeze_epochs=0, warmup_epochs=5, weight_decay=0.0, l1_lambda=0.0, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=15, log_dir='/vesuvius/runs_kfolds', eval_int=8, eval_int_scrolls=4, test_int=999, probe_int=999, disable_figures=False, loss_type='bce', gce_q=0.9, dice_weight=0.0, label_smooth_pos=0.0, label_smooth_neg=0.0, tta_consistency=False, tta_consistency_lambda=0.3, tta_consistency_mode='flips', tta_consistency_prob=1.0, tile_pos_weight=1.0, tile_pos_weight_auto=False, dann=False, dann_lambda=0.0, dann_n_domains=14, dann_grl_anneal=False, spill_reduction=False, spill_lambda=0.0, spill_depth_threshold=0.35, spill_active_depth_tau=0.08, spill_max_active_depth_frac=0.35, spill_min_depth_var=0.8, spill_prob=False, spill_entropy=False, spill_entropy_lambda=0.3, spill_max_depth_entropy=2.1, new_surface_lambda=0.2, new_surface_smooth_lambda=0.02, surface_target_sigma=0.75, seed=41, deterministic=False, epoch_cooldown_secs=0, val_cooldown_secs=0, eval_cooldown_secs=0, fig_chunk_cooldown_ms=0, save_vis=False, fast_eval_figure=False, test_on_final=False, supcon=False, supcon_lambda=0.1, supcon_temp=0.07, supcon_proj_dim=128, supcon_hidden_dim=256, supcon_curriculum=True, supcon_lambda_start=0.05, supcon_lambda_end=0.5, supcon_curriculum_epochs=8, supcon_cross_frag=False, supcon_ignore_same_domain_same_class=False, per_scroll_metrics=True, prototype_align=False, prototype_align_lambda=0.1, prototype_margin=0.5, coral_align=False, coral_align_lambda=0.1, coral_mean_weight=1.0, cdan=False, cdan_lambda=0.1, mldg=False, mldg_holdout_domain=-1, mldg_random_holdout=False, mldg_inner_lr=0.0005, mldg_beta=1.0, sagnet_lambda=0.1, mae_reconstruction=False, mae_reconstruction_lambda=0.1, mae_reconstruction_start_epoch=4, mae_reconstruction_mask_frac=0.5, mae_reconstruction_patch=4, entropy_min_lambda=0.0, entropy_min_batch_size=8, divdis_mi_lambda=1.0, divdis_reg_lambda=1.0, divdis_target_prior=0.15, divdis_batch_size=32, divdis_num_workers=3, divdis_select_domains=[], character_macro_metrics=True, character_score_threshold=0.5, character_calibrate_threshold=True, character_threshold_min=0.1, character_threshold_max=0.9, character_threshold_steps=33, character_recall_target=0.5, character_max_ring_fpr=0.1, character_checkpoint_metric='character_ap_macro', sanity_guard_epoch=0, sanity_min_character_ap=0.0, sanity_min_specificity=0.0, context_consistency=False, context_consistency_prob=0.25, context_consistency_lambda=0.1, depth_view_consistency=False, depth_view_consistency_prob=0.5, depth_view_consistency_lambda=0.2, depth_view_consistency_offset=2, character_bag_ranking=True, character_bag_margin=1.0, character_bag_topk_frac=0.25, character_bag_lambda=0.6, character_groupdro=False, character_groupdro_eta=0.05, character_groupdro_max_ratio=3.0, physical_domain_groupdro=False, physical_domain_groupdro_eta=0.05, physical_domain_groupdro_max_ratio=3.0, physical_patch_groupdro=True, physical_patch_groupdro_eta=0.05, physical_patch_groupdro_max_ratio=3.0, domain_vrex=False, domain_vrex_lambda=1.0, domain_vrex_warmup_epochs=2, domain_cvar=False, domain_cvar_alpha=0.25, pcgrad=False, pcgrad_lite=False, pcgrad_lite_max_domains=4, pcgrad_lite_scope='head', pcgrad_groups=0, pcgrad_gram=False, pcgrad_gram_interval=1, pcgrad_gram_ema=0.0, and_mask=True, and_mask_groups=4, and_mask_threshold=0.5, and_mask_unit='patch', fish=False, fish_meta_step=0.5, spectral_decoupling_lambda=0.0, rsc_prob=0.33, rsc_drop_frac=0.33, fishr_lambda=0.0, fishr_warmup_epochs=1, private_head_shared_weight=0.5, private_head_l2=0.01, cross_scroll_rank_lambda=0.0, cross_scroll_rank_pairs=4096, pu_lambda=1.0, pu_prior=0.05, pu_beta=0.0, pu_gamma=1.0, pu_rank_lambda=0.0, pu_rank_pairs=1024, support_drop='', support_min_fraction=0.25, mid_depth_entropy_lambda=0.0, topk_positive_fraction=0.0, character_forgetting=False, character_forgetting_path='', character_forgetting_max_weight=4.0, character_forgetting_static=False, model_ema=False, model_ema_decay=0.995, model_ema_start_epoch=0, mae_anchor_lambda=0.0, domain_gradient_mode='', domain_gradient_threshold=0.0, domain_gradient_strength=4.0, domain_gradient_ema=0.9, domain_gradient_blend=1.0, character_cvar=False, character_cvar_alpha=0.25, clam_instance=False, clam_instance_k=4, clam_instance_lambda=0.1, sam_rho=0.0, elr=False, elr_start_epoch=5, elr_beta=0.7, elr_lambda=0.1, depth_shift_aux=False, depth_shift_aux_lambda=0.1, depth_shift_aux_classes=3, text_region_lambda=0.5)
+model: ModelConfig(arch='nnunet3d_lcndz', compile_model=False, require_architecture_init=True, conv1_drop=0.2, conv2_drop=0.2, head_drop=0.3, attn_mil=False, attn_entropy_weight=0.03, feature_attn_mil=False, feature_depth_fusion=False, minimum_support_k=0, minimum_support_kernel=3, weldon_k=0, weldon_top_k=0, weldon_bottom_k=0, weldon_top_weight=0.5, weldon_multi_k=False, weldon_top_k2=0, weldon_bottom_k2=0, weldon_multi_mix=0.5, weldon_depth_support_k=0, fiber_coordinate_branch=True, surface_relief_input=False, input_denoise_sigma=0.0, input_denoiser='', input_upsampler='', input_generator='', input_tile_norm='', private_domain_heads=False, private_head_detach_shared=False, divdis_heads=1, early_2d_unet=True, early_2d_channels_mult=1.0, mid_2d_unet=False, mid_2d_channels_mult=1.0, residual_2d_unet=False, two_d_block_depth=2, two_d_bottleneck_channels=0, two_d_extra_levels=0, two_d_extra_channels=(), factorized_2plus1d=False, residual_unet=False, gated_stems=True, raw_only_stem=False, cue_dropout=0.0, explicit_depth_channels=False, overlapping_depth_windows=False, overlapping_depth_window_size=4, overlapping_depth_window_stride=2, mid_depth_entropy_floor=0.0, mid_depth_max_mode='amax', mid_depth_topk_frac=0.5, mt_lse_r_max=10.0, planar_early_convs=False, text_region_gate=False, multi_depth_collapse=False, two_d_strided_down=False, depth_antialias=False, sparse_deep_supervision=False, sparse_deep_supervision_dec2_weight=0.3, sparse_deep_supervision_dec3_weight=0.1, depth_attention_2d_head=False, divided_attention=False, divided_attention_spatial=False, divided_attention_heads=4, divided_attention_window=8, mednext_adapters=False, mednext_kernel=5, mednext_expansion=2, mixstyle=False, mixstyle_prob=0.8, mixstyle_alpha=0.1, sagnet=False, dual_scale=False, dual_scale_local_size=64, dual_scale_mix=0.25, dual_scale_deep=False, dual_scale_local_only=False, dual_scale_outer_size=0, dual_scale_outer_mix=0.0, dual_scale_adaptive_gate=False, dual_scale_gate_max=1.0, scan_film=False, scan_film_bands=8, scan_film_hidden=32, depth_profile_expert=False, depth_profile_mix=0.5, depth_profile_hidden=16, depth_profile_pool=5, expert_dropout=0.0, style_film=False, style_film_hidden=64, mae_reconstruction_head=False, learned_surface=False, new_learned_surface=False, better_surface=False, surface_teacher_input=True, surface_canonicalize=False, surface_canonical_depth=24, surface_guided_mil=False, surface_guided_mix=0.5, surface_band_sigma=1.5, use_ibn=False, norm_mode='ibn_full', use_prototype=False, prototype_ema=0.99, skip_drop=0.2, use_depth_profile=False, no_dz=False, channels_mult=1.0, allow_depth4=False, multitile=True, multitile_subtile=16, multitile_grid=4)
+hm: HardMiningConfig(enabled=False, hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1, dir='./hard_negs')
+device: cuda
+model_dir: /vesuvius/models/runs_kfolds/fold_1
+exp_name: fold_1
+run_name: fold_1
+init_weights: models/mae_0846a_six_flat13_m1_2k.pth
+save_final: /vesuvius/models/runs_kfolds/fold_1/final.pth
+---------------------
+Creating datasets...
+[multi-scroll] physical groups={'pherc0139': [20260115000000, 20260317000000, 20250223000000, 20250108000005, 20260112000000, 20260126000000, 20250831000000, 20260108000000, 20260302000000], 'pherc0172': [20251111010954, 20251112000002], 'pherc1667': [20240304141531, 20240304144031, 20231201215900], 'phercparis4': [20231210121321], 'pherc0500p2': [20250628074500], 'pherc0814': [20260226000000], 'phercparis2_fr143': [20230301213755, 20230205142449], 'pherc51cr4_fr8': [20231205222200], 'phercparis1_fr34': [20230301213423], 'pherc0343p': [20250511003658, 20261007000000], 'pherc0841': [20260221022814], 'pherc1447': [20260930144758, 20260930144760], 'pherc0009b': [20250919125754], 'pherc0846a': [20260927134931, 20261012073246]} weights=[2, 1, 1, 1, 3, 5, 1, 1, 1, 4, 1, 1, 1, 5]
+[dataset-cache] scroll 20260115000000: reusing prepared RAM assets
+[selective-cache] scroll 20260115000000: prepared manifest already bound
+[multi-scroll] scroll 20260115000000: train_tiles=6667 valid_tiles=1865
+[dataset-cache] scroll 20260317000000: reusing prepared RAM assets
+[selective-cache] scroll 20260317000000: prepared manifest already bound
+[multi-scroll] scroll 20260317000000: train_tiles=6667 valid_tiles=1956
+[dataset-cache] scroll 20250223000000: reusing prepared RAM assets
+[selective-cache] scroll 20250223000000: prepared manifest already bound
+[multi-scroll] scroll 20250223000000: train_tiles=6667 valid_tiles=9371
+[dataset-cache] scroll 20250108000005: reusing prepared RAM assets
+[selective-cache] scroll 20250108000005: prepared manifest already bound
+[multi-scroll] scroll 20250108000005: train_tiles=5968 valid_tiles=511
+[dataset-cache] scroll 20260112000000: reusing prepared RAM assets
+[selective-cache] scroll 20260112000000: prepared manifest already bound
+[multi-scroll] scroll 20260112000000: train_tiles=5098 valid_tiles=983
+[dataset-cache] scroll 20260126000000: reusing prepared RAM assets
+[selective-cache] scroll 20260126000000: prepared manifest already bound
+[multi-scroll] scroll 20260126000000: train_tiles=5560 valid_tiles=697
+[dataset-cache] scroll 20250831000000: reusing prepared RAM assets
+[selective-cache] scroll 20250831000000: prepared manifest already bound
+[multi-scroll] scroll 20250831000000: train_tiles=6667 valid_tiles=2204
+[dataset-cache] scroll 20260108000000: reusing prepared RAM assets
+[selective-cache] scroll 20260108000000: prepared manifest already bound
+[multi-scroll] scroll 20260108000000: train_tiles=4051 valid_tiles=1317
+[dataset-cache] scroll 20260302000000: reusing prepared RAM assets
+[selective-cache] scroll 20260302000000: prepared manifest already bound
+[multi-scroll] scroll 20260302000000: train_tiles=4533 valid_tiles=634
+[dataset-cache] scroll 20251111010954: reusing prepared RAM assets
+[selective-cache] scroll 20251111010954: prepared manifest already bound
+[multi-scroll] scroll 20251111010954: train_tiles=6667 valid_tiles=1389
+[dataset-cache] scroll 20251112000002: reusing prepared RAM assets
+[selective-cache] scroll 20251112000002: prepared manifest already bound
+[multi-scroll] scroll 20251112000002: train_tiles=6667 valid_tiles=10958
+[dataset-cache] scroll 20240304141531: reusing prepared RAM assets
+[selective-cache] scroll 20240304141531: prepared manifest already bound
+[multi-scroll] scroll 20240304141531: train_tiles=6667 valid_tiles=1955
+[dataset-cache] scroll 20240304144031: reusing prepared RAM assets
+[selective-cache] scroll 20240304144031: prepared manifest already bound
+[multi-scroll] scroll 20240304144031: train_tiles=6667 valid_tiles=3815
+[dataset-cache] scroll 20231201215900: reusing prepared RAM assets
+[selective-cache] scroll 20231201215900: prepared manifest already bound
+[multi-scroll] scroll 20231201215900: train_tiles=5223 valid_tiles=1270
+[dataset-cache] scroll 20231210121321: reusing prepared RAM assets
+[selective-cache] scroll 20231210121321: prepared manifest already bound
+[multi-scroll] scroll 20231210121321: train_tiles=6667 valid_tiles=8063
+[dataset-cache] scroll 20250628074500: reusing prepared RAM assets
+[selective-cache] scroll 20250628074500: prepared manifest already bound
+[multi-scroll] scroll 20250628074500: train_tiles=6667 valid_tiles=6468
+[dataset-cache] scroll 20260226000000: reusing prepared RAM assets
+[selective-cache] scroll 20260226000000: prepared manifest already bound
+[multi-scroll] scroll 20260226000000: train_tiles=3151 valid_tiles=598
+[dataset-cache] scroll 20230301213755: reusing prepared RAM assets
+[selective-cache] scroll 20230301213755: prepared manifest already bound
+[multi-scroll] scroll 20230301213755: train_tiles=6667 valid_tiles=5517
+[dataset-cache] scroll 20230205142449: reusing prepared RAM assets
+[selective-cache] scroll 20230205142449: prepared manifest already bound
+[multi-scroll] scroll 20230205142449: train_tiles=6667 valid_tiles=1420
+[dataset-cache] scroll 20231205222200: reusing prepared RAM assets
+[selective-cache] scroll 20231205222200: prepared manifest already bound
+[multi-scroll] scroll 20231205222200: train_tiles=6667 valid_tiles=2887
+[dataset-cache] scroll 20230301213423: reusing prepared RAM assets
+[selective-cache] scroll 20230301213423: prepared manifest already bound
+[multi-scroll] scroll 20230301213423: train_tiles=4349 valid_tiles=3345
+[dataset-cache] scroll 20250511003658: reusing prepared RAM assets
+[selective-cache] scroll 20250511003658: prepared manifest already bound
+[multi-scroll] scroll 20250511003658: train_tiles=3678 valid_tiles=1112
+[dataset-cache] scroll 20260221022814: reusing prepared RAM assets
+[selective-cache] scroll 20260221022814: prepared manifest already bound
+[multi-scroll] scroll 20260221022814: train_tiles=6667 valid_tiles=842
+[dataset-cache] scroll 20260930144758: reusing prepared RAM assets
+[selective-cache] scroll 20260930144758: prepared manifest already bound
+[multi-scroll] scroll 20260930144758: train_tiles=6667 valid_tiles=1464
+[dataset-cache] scroll 20260930144760: reusing prepared RAM assets
+[selective-cache] scroll 20260930144760: prepared manifest already bound
+[multi-scroll] scroll 20260930144760: train_tiles=6667 valid_tiles=2091
+[dataset-cache] scroll 20261007000000: reusing prepared RAM assets
+[selective-cache] scroll 20261007000000: prepared manifest already bound
+[multi-scroll] scroll 20261007000000: train_tiles=6667 valid_tiles=1217
+[dataset-cache] scroll 20260927134931: reusing prepared RAM assets
+[selective-cache] scroll 20260927134931: prepared manifest already bound
+[multi-scroll] scroll 20260927134931: train_tiles=3512 valid_tiles=4436
+[dataset-cache] scroll 20261012073246: reusing prepared RAM assets
+[selective-cache] scroll 20261012073246: prepared manifest already bound
+[multi-scroll] scroll 20261012073246: train_tiles=2970 valid_tiles=3228
+[dataset-cache] scroll 20250919125754: reusing prepared RAM assets
+[selective-cache] scroll 20250919125754: prepared manifest already bound
+[multi-scroll] scroll 20250919125754: train_tiles=6667 valid_tiles=7295
+[multi-scroll] merged train_tiles=168099 valid_tiles=88908
+Data setup done in 0.17s
+Creating model and loss... l1 lambda 0.0... Model parameters (nnunet3d_lcndz): 7,522,842
+[init-weights] loaded 188/188 tensors from models/mae_0846a_six_flat13_m1_2k.pth (shape-skipped=0 missing=1 unexpected=0)
+ done in 1.33s
+Initializing Tensorboard...
+[test] test_int=999 > n_epochs=8 and test_on_final=False -> skipping test-frag load
+TensorBoard logs will be saved to: /vesuvius/runs_kfolds/fold_1
+To view, run: tensorboard --logdir=/vesuvius/runs_kfolds
+[split] scroll 20260927134931: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20260927134931.png train_pixels=44.9% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20260927134931: axis=x train_frac=1.0
+[vis-preload] scroll 20260927134931: loading full volume into RAM
+[vis-preload] scroll 20260927134931: ready 0.58 GiB
+[split] scroll 20261012073246: manual mask=/vesuvius/runs_kfolds/splits/fold_1/train_masks/20261012073246.png train_pixels=45.8% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20261012073246: axis=x train_frac=1.0
+[vis-preload] scroll 20261012073246: loading full volume into RAM
+[vis-preload] scroll 20261012073246: ready 0.59 GiB
+[split] scroll 20261012065811: manual mask=<label-free vis: no train region> train_pixels=0.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[vis-preload] scroll 20261012065811: loading full volume into RAM
+[vis-preload] scroll 20261012065811: ready 0.41 GiB
+[split] scroll 20261012065813: manual mask=<label-free vis: no train region> train_pixels=0.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[vis-preload] scroll 20261012065813: loading full volume into RAM
+[vis-preload] scroll 20261012065813: ready 0.41 GiB
+[config] saved run config -> /vesuvius/runs_kfolds/fold_1/config.json
+[config] saved run config -> /vesuvius/models/runs_kfolds/fold_1/config.json
+/vesuvius/train.py:802: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = GradScaler(enabled=self.c.device == "cuda")
+
+--- Epoch 1/8 ---
+
+Training:   0%|          | 0/1769 [00:00<?, ?it/s]
+Training:   0%|          | 1/1769 [00:07<3:31:04,  7.16s/it]
+Training:   1%|          | 21/1769 [00:12<14:13,  2.05it/s] 
+Training:   3%|▎         | 58/1769 [00:17<06:43,  4.24it/s]
+Training:   5%|▌         | 94/1769 [00:22<05:14,  5.33it/s]
+Training:   7%|▋         | 131/1769 [00:27<04:32,  6.00it/s]
+Training:   9%|▉         | 168/1769 [00:32<04:09,  6.41it/s]
+Training:  12%|█▏        | 206/1769 [00:37<03:51,  6.74it/s]
+Training:  14%|█▎        | 243/1769 [00:42<03:39,  6.94it/s]
+Training:  16%|█▌        | 279/1769 [00:47<03:33,  6.97it/s]
+Training:  18%|█▊        | 315/1769 [00:52<03:26,  7.04it/s]
+Training:  20%|█▉        | 350/1769 [00:57<03:22,  7.00it/s]
+Training:  22%|██▏       | 387/1769 [01:02<03:15,  7.08it/s]
+Training:  24%|██▍       | 424/1769 [01:08<03:09,  7.08it/s]
+Training:  26%|██▌       | 461/1769 [01:13<03:02,  7.16it/s]
+Training:  28%|██▊       | 499/1769 [01:18<02:55,  7.24it/s]
+Training:  30%|███       | 537/1769 [01:23<02:48,  7.29it/s]
+Training:  33%|███▎      | 575/1769 [01:28<02:42,  7.34it/s]
+Training:  35%|███▍      | 613/1769 [01:33<02:36,  7.37it/s]
+Training:  37%|███▋      | 651/1769 [01:38<02:30,  7.43it/s]
+Training:  39%|███▉      | 691/1769 [01:43<02:22,  7.55it/s]
+Training:  41%|████▏     | 730/1769 [01:48<02:16,  7.62it/s]
+Training:  43%|████▎     | 768/1769 [01:53<02:11,  7.59it/s]
+Training:  46%|████▌     | 806/1769 [01:58<02:06,  7.59it/s]
+Training:  48%|████▊     | 845/1769 [02:03<02:01,  7.63it/s]
+Training:  50%|████▉     | 881/1769 [02:09<01:58,  7.47it/s]
+Training:  52%|█████▏    | 920/1769 [02:14<01:52,  7.53it/s]
+Training:  54%|█████▍    | 960/1769 [02:19<01:46,  7.62it/s]
+Training:  57%|█████▋    | 1000/1769 [02:24<01:39,  7.70it/s]
+Training:  59%|█████▊    | 1039/1769 [02:29<01:34,  7.69it/s]
+Training:  61%|██████    | 1079/1769 [02:34<01:28,  7.76it/s]
+Training:  63%|██████▎   | 1119/1769 [02:39<01:23,  7.77it/s]
+Training:  66%|██████▌   | 1159/1769 [02:44<01:18,  7.78it/s]
+Training:  68%|██████▊   | 1198/1769 [02:49<01:13,  7.76it/s]
+Training:  70%|██████▉   | 1238/1769 [02:54<01:08,  7.78it/s]
+Training:  72%|███████▏  | 1277/1769 [02:59<01:03,  7.77it/s]
+Training:  74%|███████▍  | 1316/1769 [03:05<00:58,  7.71it/s]
+Training:  77%|███████▋  | 1354/1769 [03:10<00:54,  7.65it/s]
+Training:  79%|███████▉  | 1394/1769 [03:15<00:48,  7.72it/s]
+Training:  81%|████████  | 1433/1769 [03:20<00:43,  7.71it/s]
+Training:  83%|████████▎ | 1473/1769 [03:25<00:38,  7.77it/s]
+Training:  85%|████████▌ | 1507/1769 [03:30<00:35,  7.47it/s]
+Training:  87%|████████▋ | 1542/1769 [03:35<00:30,  7.33it/s]
+Training:  89%|████████▉ | 1579/1769 [03:40<00:25,  7.32it/s]
+Training:  92%|█████████▏| 1619/1769 [03:45<00:20,  7.47it/s]
+Training:  94%|█████████▎| 1657/1769 [03:50<00:14,  7.49it/s]
+Training:  96%|█████████▌| 1696/1769 [03:55<00:09,  7.54it/s]
+Training:  98%|█████████▊| 1732/1769 [04:00<00:04,  7.44it/s]
+Training: 100%|█████████▉| 1768/1769 [04:05<00:00,  7.21it/s]
+
+Validating:   0%|          | 0/936 [00:00<?, ?it/s]
+Validating:   7%|▋         | 69/936 [00:05<01:03, 13.58it/s]
+Validating:  18%|█▊        | 164/936 [00:10<00:46, 16.63it/s]
+Validating:  28%|██▊       | 263/936 [00:15<00:37, 18.06it/s]
+Validating:  39%|███▉      | 367/936 [00:20<00:29, 19.09it/s]
+Validating:  53%|█████▎    | 499/936 [00:25<00:20, 21.71it/s]
+Validating:  64%|██████▍   | 603/936 [00:30<00:15, 21.36it/s]
+Validating:  75%|███████▌  | 704/936 [00:35<00:11, 20.95it/s]
+Validating:  90%|████████▉ | 838/936 [00:40<00:04, 22.77it/s]
+Validating: 939it [00:44, 21.13it/s]                         
+New best character model saved! Val character_ap_macro: 0.4171
+New best F1 model saved! Val F1: 0.0177
+New best loss model saved! Val Loss: 0.6556
+[METRICS] epoch=1 train_loss=2.0958 val_loss=0.6556 train_f1=0.1635 val_character_success=0.0000
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+
+--- Epoch 2/8 ---
+
+Training:   0%|          | 0/1769 [00:00<?, ?it/s]
+Training:   2%|▏         | 27/1769 [00:05<05:26,  5.34it/s]
+Training:   4%|▍         | 68/1769 [00:10<04:06,  6.91it/s]
+Training:   6%|▌         | 108/1769 [00:15<03:47,  7.31it/s]
+Training:   8%|▊         | 146/1769 [00:20<03:39,  7.41it/s]
+Training:  10%|█         | 185/1769 [00:25<03:30,  7.54it/s]
+Training:  12%|█▏        | 221/1769 [00:30<03:28,  7.42it/s]
+Training:  15%|█▍        | 260/1769 [00:35<03:20,  7.52it/s]
+Training:  17%|█▋        | 300/1769 [00:40<03:12,  7.64it/s]
+Training:  19%|█▉        | 340/1769 [00:45<03:04,  7.74it/s]
+Training:  21%|██▏       | 379/1769 [00:50<02:59,  7.76it/s]
+Training:  24%|██▎       | 419/1769 [00:55<02:52,  7.82it/s]
+Training:  26%|██▌       | 459/1769 [01:00<02:47,  7.83it/s]
+Training:  28%|██▊       | 498/1769 [01:05<02:42,  7.81it/s]
+Training:  30%|███       | 537/1769 [01:10<02:38,  7.76it/s]
+Training:  33%|███▎      | 575/1769 [01:15<02:35,  7.70it/s]
+Training:  35%|███▍      | 614/1769 [01:20<02:29,  7.71it/s]
+Training:  37%|███▋      | 655/1769 [01:25<02:22,  7.82it/s]
+Training:  39%|███▉      | 695/1769 [01:30<02:17,  7.83it/s]
+Training:  41%|████▏     | 734/1769 [01:36<02:12,  7.81it/s]
+Training:  44%|████▎     | 770/1769 [01:41<02:11,  7.62it/s]
+Training:  46%|████▌     | 806/1769 [01:46<02:08,  7.49it/s]
+Training:  48%|████▊     | 844/1769 [01:51<02:03,  7.49it/s]
+Training:  50%|████▉     | 884/1769 [01:56<01:56,  7.63it/s]
+Training:  52%|█████▏    | 923/1769 [02:01<01:50,  7.67it/s]
+Training:  54%|█████▍    | 963/1769 [02:06<01:44,  7.74it/s]
+Training:  57%|█████▋    | 1003/1769 [02:11<01:38,  7.79it/s]
+Training:  59%|█████▉    | 1040/1769 [02:16<01:35,  7.64it/s]
+Training:  61%|██████    | 1079/1769 [02:21<01:30,  7.64it/s]
+Training:  63%|██████▎   | 1118/1769 [02:26<01:25,  7.65it/s]
+Training:  65%|██████▌   | 1156/1769 [02:31<01:20,  7.58it/s]
+Training:  67%|██████▋   | 1193/1769 [02:36<01:16,  7.49it/s]
+Training:  70%|██████▉   | 1231/1769 [02:41<01:11,  7.49it/s]
+Training:  72%|███████▏  | 1269/1769 [02:46<01:06,  7.49it/s]
+Training:  74%|███████▍  | 1307/1769 [02:51<01:01,  7.48it/s]
+Training:  76%|███████▌  | 1344/1769 [02:56<00:57,  7.45it/s]
+Training:  78%|███████▊  | 1382/1769 [03:02<00:51,  7.47it/s]
+Training:  80%|████████  | 1421/1769 [03:07<00:46,  7.52it/s]
+Training:  82%|████████▏ | 1459/1769 [03:12<00:41,  7.50it/s]
+Training:  85%|████████▍ | 1497/1769 [03:17<00:36,  7.49it/s]
+Training:  87%|████████▋ | 1534/1769 [03:22<00:31,  7.42it/s]
+Training:  89%|████████▉ | 1573/1769 [03:27<00:26,  7.47it/s]
+Training:  91%|█████████ | 1611/1769 [03:32<00:21,  7.50it/s]
+Training:  93%|█████████▎| 1650/1769 [03:37<00:15,  7.53it/s]
+Training:  95%|█████████▌| 1688/1769 [03:42<00:10,  7.52it/s]
+Training:  98%|█████████▊| 1727/1769 [03:47<00:05,  7.57it/s]
+Training: 100%|█████████▉| 1766/1769 [03:52<00:00,  7.62it/s]
+Training: 100%|█████████▉| 1768/1769 [03:53<00:00,  7.58it/s]
+
+Validating:   0%|          | 0/936 [00:00<?, ?it/s]
+Validating:  14%|█▍        | 135/936 [00:05<00:29, 26.79it/s]
+Validating:  29%|██▉       | 271/936 [00:10<00:24, 26.93it/s]
+Validating:  43%|████▎     | 405/936 [00:15<00:19, 26.81it/s]
+Validating:  58%|█████▊    | 544/936 [00:20<00:14, 27.17it/s]
+Validating:  71%|███████▏  | 668/936 [00:25<00:10, 26.29it/s]
+Validating:  83%|████████▎ | 781/936 [00:30<00:06, 25.02it/s]
+Validating:  99%|█████████▊| 922/936 [00:35<00:00, 26.04it/s]
+Validating: 939it [00:35, 26.36it/s]                         
+New best character model saved! Val character_ap_macro: 0.4863
+New best F1 model saved! Val F1: 0.4022
+[METRICS] epoch=2 train_loss=1.9194 val_loss=0.6746 train_f1=0.3567 val_character_success=0.0088
+Logging metrics for epoch: 2
+
+--- Epoch 3/8 ---
+
+Training:   0%|          | 0/1769 [00:00<?, ?it/s]
+Training:   2%|▏         | 31/1769 [00:05<04:42,  6.15it/s]
+Training:   4%|▍         | 70/1769 [00:10<03:59,  7.08it/s]
+Training:   6%|▌         | 110/1769 [00:15<03:43,  7.43it/s]
+Training:   8%|▊         | 150/1769 [00:20<03:32,  7.62it/s]
+Training:  11%|█         | 191/1769 [00:25<03:23,  7.77it/s]
+Training:  13%|█▎        | 231/1769 [00:30<03:17,  7.79it/s]
+Training:  15%|█▌        | 271/1769 [00:35<03:10,  7.85it/s]
+Training:  18%|█▊        | 311/1769 [00:40<03:05,  7.86it/s]
+Training:  20%|█▉        | 351/1769 [00:45<03:00,  7.86it/s]
+Training:  22%|██▏       | 391/1769 [00:50<02:55,  7.85it/s]
+Training:  24%|██▍       | 431/1769 [00:55<02:50,  7.83it/s]
+Training:  27%|██▋       | 470/1769 [01:00<02:46,  7.79it/s]
+Training:  29%|██▊       | 507/1769 [01:06<02:45,  7.62it/s]
+Training:  31%|███       | 545/1769 [01:11<02:41,  7.58it/s]
+Training:  33%|███▎      | 583/1769 [01:16<02:37,  7.54it/s]
+Training:  35%|███▌      | 622/1769 [01:21<02:31,  7.58it/s]
+Training:  37%|███▋      | 661/1769 [01:26<02:25,  7.62it/s]
+Training:  40%|███▉      | 700/1769 [01:31<02:19,  7.64it/s]
+Training:  42%|████▏     | 739/1769 [01:36<02:15,  7.63it/s]
+Training:  44%|████▍     | 778/1769 [01:41<02:09,  7.65it/s]
+Training:  46%|████▌     | 818/1769 [01:46<02:02,  7.74it/s]
+Training:  49%|████▊     | 858/1769 [01:51<01:56,  7.80it/s]
+Training:  51%|█████     | 898/1769 [01:56<01:51,  7.82it/s]
+Training:  53%|█████▎    | 938/1769 [02:01<01:45,  7.86it/s]
+Training:  55%|█████▌    | 978/1769 [02:06<01:40,  7.88it/s]
+Training:  58%|█████▊    | 1018/1769 [02:12<01:35,  7.85it/s]
+Training:  60%|█████▉    | 1057/1769 [02:17<01:31,  7.82it/s]
+Training:  62%|██████▏   | 1096/1769 [02:22<01:26,  7.78it/s]
+Training:  64%|██████▍   | 1136/1769 [02:27<01:21,  7.81it/s]
+Training:  66%|██████▋   | 1176/1769 [02:32<01:15,  7.85it/s]
+Training:  69%|██████▊   | 1214/1769 [02:37<01:11,  7.77it/s]
+Training:  71%|███████   | 1252/1769 [02:42<01:07,  7.71it/s]
+Training:  73%|███████▎  | 1290/1769 [02:47<01:02,  7.63it/s]
+Training:  75%|███████▌  | 1327/1769 [02:52<00:58,  7.56it/s]
+Training:  77%|███████▋  | 1365/1769 [02:57<00:53,  7.57it/s]
+Training:  79%|███████▉  | 1405/1769 [03:02<00:47,  7.65it/s]
+Training:  82%|████████▏ | 1444/1769 [03:07<00:42,  7.69it/s]
+Training:  84%|████████▍ | 1483/1769 [03:12<00:37,  7.69it/s]
+Training:  86%|████████▌ | 1522/1769 [03:17<00:32,  7.67it/s]
+Training:  88%|████████▊ | 1560/1769 [03:22<00:27,  7.64it/s]
+Training:  90%|█████████ | 1599/1769 [03:27<00:22,  7.64it/s]
+Training:  93%|█████████▎| 1639/1769 [03:32<00:16,  7.69it/s]
+Training:  95%|█████████▍| 1677/1769 [03:37<00:12,  7.66it/s]
+Training:  97%|█████████▋| 1713/1769 [03:42<00:07,  7.50it/s]
+Training:  99%|█████████▉| 1750/1769 [03:48<00:02,  7.44it/s]
+Training: 100%|█████████▉| 1768/1769 [03:50<00:00,  7.68it/s]
+
+Validating:   0%|          | 0/936 [00:00<?, ?it/s]
+Validating:  12%|█▏        | 116/936 [00:05<00:35, 23.04it/s]
+Validating:  25%|██▍       | 230/936 [00:10<00:30, 22.86it/s]
+Validating:  39%|███▉      | 364/936 [00:15<00:23, 24.59it/s]
+Validating:  51%|█████     | 474/936 [00:20<00:19, 23.45it/s]
+Validating:  64%|██████▍   | 598/936 [00:25<00:14, 23.85it/s]
+Validating:  74%|███████▍  | 694/936 [00:30<00:10, 22.26it/s]
+Validating:  85%|████████▌ | 799/936 [00:35<00:06, 21.82it/s]
+Validating:  96%|█████████▌| 897/936 [00:40<00:01, 20.97it/s]
+Validating: 939it [00:42, 22.19it/s]                         
+New best character model saved! Val character_ap_macro: 0.5308
+New best F1 model saved! Val F1: 0.4705
+[METRICS] epoch=3 train_loss=1.7268 val_loss=0.6727 train_f1=0.5047 val_character_success=0.0088
+Logging metrics for epoch: 3
+
+--- Epoch 4/8 ---
+
+Training:   0%|          | 0/1769 [00:00<?, ?it/s]
+Training:   2%|▏         | 30/1769 [00:05<04:53,  5.93it/s]
+Training:   4%|▍         | 69/1769 [00:10<04:02,  7.01it/s]
+Training:   6%|▌         | 108/1769 [00:15<03:45,  7.36it/s]
+Training:   8%|▊         | 148/1769 [00:20<03:34,  7.55it/s]
+Training:  11%|█         | 188/1769 [00:25<03:25,  7.70it/s]
+Training:  13%|█▎        | 228/1769 [00:30<03:18,  7.75it/s]
+Training:  15%|█▌        | 268/1769 [00:35<03:12,  7.80it/s]
+Training:  17%|█▋        | 307/1769 [00:40<03:08,  7.75it/s]
+Training:  20%|█▉        | 345/1769 [00:45<03:05,  7.66it/s]
+Training:  22%|██▏       | 384/1769 [00:50<02:59,  7.70it/s]
+Training:  24%|██▍       | 424/1769 [00:55<02:52,  7.78it/s]
+Training:  26%|██▌       | 463/1769 [01:00<02:47,  7.78it/s]
+Training:  28%|██▊       | 503/1769 [01:05<02:42,  7.81it/s]
+Training:  31%|███       | 542/1769 [01:10<02:37,  7.78it/s]
+Training:  33%|███▎      | 581/1769 [01:15<02:32,  7.77it/s]
+Training:  35%|███▌      | 620/1769 [01:20<02:27,  7.76it/s]
+Training:  37%|███▋      | 659/1769 [01:25<02:23,  7.76it/s]
+Training:  40%|███▉      | 699/1769 [01:30<02:17,  7.80it/s]
+Training:  42%|████▏     | 739/1769 [01:36<02:11,  7.82it/s]
+Training:  44%|████▍     | 779/1769 [01:41<02:06,  7.82it/s]
+Training:  46%|████▋     | 819/1769 [01:46<02:00,  7.87it/s]
+Training:  49%|████▊     | 859/1769 [01:51<01:55,  7.89it/s]
+Training:  51%|█████     | 899/1769 [01:56<01:49,  7.92it/s]
+Training:  53%|█████▎    | 939/1769 [02:01<01:44,  7.93it/s]
+Training:  55%|█████▌    | 977/1769 [02:06<01:41,  7.81it/s]
+Training:  57%|█████▋    | 1016/1769 [02:11<01:36,  7.80it/s]
+Training:  60%|█████▉    | 1056/1769 [02:16<01:30,  7.85it/s]
+Training:  62%|██████▏   | 1097/1769 [02:21<01:24,  7.92it/s]
+Training:  64%|██████▍   | 1137/1769 [02:26<01:19,  7.92it/s]
+Training:  66%|██████▋   | 1175/1769 [02:31<01:16,  7.78it/s]
+Training:  69%|██████▊   | 1212/1769 [02:36<01:12,  7.63it/s]
+Training:  71%|███████   | 1251/1769 [02:41<01:07,  7.67it/s]
+Training:  73%|███████▎  | 1288/1769 [02:46<01:03,  7.55it/s]
+Training:  75%|███████▍  | 1326/1769 [02:51<00:58,  7.54it/s]
+Training:  77%|███████▋  | 1363/1769 [02:56<00:54,  7.47it/s]
+Training:  79%|███████▉  | 1400/1769 [03:01<00:49,  7.45it/s]
+Training:  81%|████████  | 1437/1769 [03:06<00:44,  7.41it/s]
+Training:  83%|████████▎ | 1475/1769 [03:12<00:39,  7.40it/s]
+Training:  86%|████████▌ | 1513/1769 [03:17<00:34,  7.42it/s]
+Training:  88%|████████▊ | 1551/1769 [03:22<00:29,  7.46it/s]
+Training:  90%|████████▉ | 1587/1769 [03:27<00:24,  7.33it/s]
+Training:  92%|█████████▏| 1625/1769 [03:32<00:19,  7.37it/s]
+Training:  94%|█████████▍| 1662/1769 [03:37<00:14,  7.35it/s]
+Training:  96%|█████████▌| 1700/1769 [03:42<00:09,  7.35it/s]
+Training:  98%|█████████▊| 1738/1769 [03:47<00:04,  7.37it/s]
+Training: 100%|█████████▉| 1768/1769 [03:51<00:00,  7.63it/s]
+
+Validating:   0%|          | 0/936 [00:00<?, ?it/s]
+Validating:  10%|█         | 96/936 [00:05<00:43, 19.18it/s]
+Validating:  21%|██        | 195/936 [00:10<00:37, 19.51it/s]
+Validating:  34%|███▎      | 314/936 [00:15<00:29, 21.41it/s]
+Validating:  44%|████▍     | 411/936 [00:20<00:25, 20.57it/s]
+Validating:  54%|█████▍    | 506/936 [00:25<00:21, 20.01it/s]
+Validating:  68%|██████▊   | 640/936 [00:30<00:13, 22.29it/s]
+Validating:  83%|████████▎ | 775/936 [00:35<00:06, 23.82it/s]
+Validating:  93%|█████████▎| 875/936 [00:40<00:02, 22.58it/s]
+Validating: 939it [00:42, 21.92it/s]                         
+New best character model saved! Val character_ap_macro: 0.5894
+New best F1 model saved! Val F1: 0.4862
+New best loss model saved! Val Loss: 0.6370
+[METRICS] epoch=4 train_loss=1.5927 val_loss=0.6370 train_f1=0.5895 val_character_success=0.0351
+Logging metrics for epoch: 4
+
+--- Epoch 5/8 ---
+
+Training:   0%|          | 0/1769 [00:00<?, ?it/s]
+Training:   2%|▏         | 30/1769 [00:05<04:50,  5.99it/s]
+Training:   4%|▍         | 68/1769 [00:10<04:07,  6.88it/s]
+Training:   6%|▌         | 106/1769 [00:15<03:51,  7.18it/s]
+Training:   8%|▊         | 145/1769 [00:20<03:39,  7.41it/s]
+Training:  10%|█         | 185/1769 [00:25<03:28,  7.59it/s]
+Training:  13%|█▎        | 223/1769 [00:30<03:23,  7.58it/s]
+Training:  15%|█▍        | 261/1769 [00:35<03:19,  7.57it/s]
+Training:  17%|█▋        | 299/1769 [00:40<03:14,  7.55it/s]
+Training:  19%|█▉        | 338/1769 [00:45<03:09,  7.57it/s]
+Training:  21%|██▏       | 377/1769 [00:50<03:02,  7.63it/s]
+Training:  24%|██▎       | 417/1769 [00:55<02:55,  7.69it/s]
+Training:  26%|██▌       | 457/1769 [01:00<02:48,  7.76it/s]
+Training:  28%|██▊       | 496/1769 [01:05<02:44,  7.76it/s]
+Training:  30%|███       | 536/1769 [01:10<02:38,  7.79it/s]
+Training:  33%|███▎      | 576/1769 [01:15<02:32,  7.81it/s]
+Training:  35%|███▍      | 615/1769 [01:20<02:28,  7.75it/s]
+Training:  37%|███▋      | 653/1769 [01:25<02:24,  7.70it/s]
+Training:  39%|███▉      | 691/1769 [01:31<02:21,  7.64it/s]
+Training:  41%|████▏     | 730/1769 [01:36<02:15,  7.67it/s]
+Training:  44%|████▎     | 770/1769 [01:41<02:09,  7.73it/s]
+Training:  46%|████▌     | 810/1769 [01:46<02:03,  7.78it/s]
+Training:  48%|████▊     | 847/1769 [01:51<02:00,  7.66it/s]
+Training:  50%|████▉     | 883/1769 [01:56<01:58,  7.48it/s]
+Training:  52%|█████▏    | 920/1769 [02:01<01:54,  7.41it/s]
+Training:  54%|█████▍    | 958/1769 [02:06<01:49,  7.40it/s]
+Training:  56%|█████▋    | 997/1769 [02:11<01:43,  7.46it/s]
+Training:  59%|█████▊    | 1035/1769 [02:16<01:37,  7.50it/s]
+Training:  61%|██████    | 1074/1769 [02:21<01:32,  7.53it/s]
+Training:  63%|██████▎   | 1114/1769 [02:26<01:25,  7.64it/s]
+Training:  65%|██████▌   | 1154/1769 [02:31<01:19,  7.72it/s]
+Training:  67%|██████▋   | 1194/1769 [02:37<01:14,  7.74it/s]
+Training:  70%|██████▉   | 1233/1769 [02:42<01:09,  7.76it/s]
+Training:  72%|███████▏  | 1272/1769 [02:47<01:04,  7.71it/s]
+Training:  74%|███████▍  | 1309/1769 [02:52<01:00,  7.62it/s]
+Training:  76%|███████▌  | 1345/1769 [02:57<00:56,  7.47it/s]
+Training:  78%|███████▊  | 1382/1769 [03:02<00:52,  7.40it/s]
+Training:  80%|████████  | 1419/1769 [03:07<00:47,  7.36it/s]
+Training:  82%|████████▏ | 1456/1769 [03:12<00:42,  7.31it/s]
+Training:  84%|████████▍ | 1494/1769 [03:17<00:37,  7.38it/s]
+Training:  87%|████████▋ | 1533/1769 [03:22<00:31,  7.47it/s]
+Training:  89%|████████▉ | 1571/1769 [03:27<00:26,  7.49it/s]
+Training:  91%|█████████ | 1609/1769 [03:32<00:21,  7.50it/s]
+Training:  93%|█████████▎| 1648/1769 [03:37<00:16,  7.55it/s]
+Training:  95%|█████████▌| 1686/1769 [03:42<00:10,  7.55it/s]
+Training:  97%|█████████▋| 1722/1769 [03:47<00:06,  7.43it/s]
+Training: 100%|█████████▉| 1762/1769 [03:53<00:00,  7.55it/s]
+Training: 100%|█████████▉| 1768/1769 [03:53<00:00,  7.56it/s]
+
+Validating:   0%|          | 0/936 [00:00<?, ?it/s]
+Validating:  14%|█▍        | 132/936 [00:05<00:30, 26.18it/s]
+Validating:  24%|██▍       | 229/936 [00:10<00:32, 22.04it/s]
+Validating:  35%|███▍      | 325/936 [00:15<00:29, 20.74it/s]
+Validating:  46%|████▌     | 429/936 [00:20<00:24, 20.65it/s]
+Validating:  57%|█████▋    | 533/936 [00:25<00:19, 20.70it/s]
+Validating:  68%|██████▊   | 640/936 [00:30<00:14, 20.94it/s]
+Validating:  80%|████████  | 753/936 [00:35<00:08, 21.44it/s]
+Validating:  95%|█████████▍| 886/936 [00:40<00:02, 22.94it/s]
+Validating: 939it [00:42, 22.25it/s]                         
+New best character model saved! Val character_ap_macro: 0.5975
+New best F1 model saved! Val F1: 0.5598
+[METRICS] epoch=5 train_loss=1.5130 val_loss=0.6983 train_f1=0.6449 val_character_success=0.0351
+Logging metrics for epoch: 5
+
+--- Epoch 6/8 ---
+
+Training:   0%|          | 0/1769 [00:00<?, ?it/s]
+Training:   2%|▏         | 32/1769 [00:05<04:31,  6.39it/s]
+Training:   4%|▍         | 72/1769 [00:10<03:54,  7.24it/s]
+Training:   6%|▋         | 111/1769 [00:15<03:42,  7.45it/s]
+Training:   8%|▊         | 150/1769 [00:20<03:35,  7.51it/s]
+Training:  11%|█         | 188/1769 [00:25<03:31,  7.48it/s]
+Training:  13%|█▎        | 225/1769 [00:30<03:28,  7.42it/s]
+Training:  15%|█▍        | 263/1769 [00:35<03:23,  7.42it/s]
+Training:  17%|█▋        | 300/1769 [00:40<03:19,  7.36it/s]
+Training:  19%|█▉        | 338/1769 [00:45<03:13,  7.40it/s]
+Training:  21%|██▏       | 376/1769 [00:50<03:07,  7.42it/s]
+Training:  23%|██▎       | 413/1769 [00:55<03:02,  7.41it/s]
+Training:  25%|██▌       | 450/1769 [01:00<02:58,  7.38it/s]
+Training:  28%|██▊       | 488/1769 [01:06<02:52,  7.42it/s]
+Training:  30%|██▉       | 526/1769 [01:11<02:47,  7.43it/s]
+Training:  32%|███▏      | 564/1769 [01:16<02:41,  7.44it/s]
+Training:  34%|███▍      | 601/1769 [01:21<02:37,  7.41it/s]
+Training:  36%|███▌      | 639/1769 [01:26<02:32,  7.43it/s]
+Training:  38%|███▊      | 677/1769 [01:31<02:27,  7.42it/s]
+Training:  41%|████      | 717/1769 [01:36<02:18,  7.57it/s]
+Training:  43%|████▎     | 757/1769 [01:41<02:12,  7.65it/s]
+Training:  45%|████▍     | 796/1769 [01:46<02:07,  7.66it/s]
+Training:  47%|████▋     | 836/1769 [01:51<02:00,  7.74it/s]
+Training:  50%|████▉     | 876/1769 [01:56<01:54,  7.80it/s]
+Training:  52%|█████▏    | 916/1769 [02:01<01:49,  7.82it/s]
+Training:  54%|█████▍    | 953/1769 [02:06<01:46,  7.69it/s]
+Training:  56%|█████▌    | 990/1769 [02:11<01:43,  7.56it/s]
+Training:  58%|█████▊    | 1026/1769 [02:17<01:39,  7.43it/s]
+Training:  60%|██████    | 1065/1769 [02:22<01:33,  7.52it/s]
+Training:  62%|██████▏   | 1104/1769 [02:27<01:27,  7.56it/s]
+Training:  65%|██████▍   | 1143/1769 [02:32<01:22,  7.60it/s]
+Training:  67%|██████▋   | 1182/1769 [02:37<01:16,  7.64it/s]
+Training:  69%|██████▉   | 1221/1769 [02:42<01:11,  7.67it/s]
+Training:  71%|███████▏  | 1261/1769 [02:47<01:05,  7.72it/s]
+Training:  73%|███████▎  | 1300/1769 [02:52<01:00,  7.74it/s]
+Training:  76%|███████▌  | 1338/1769 [02:57<00:56,  7.68it/s]
+Training:  78%|███████▊  | 1376/1769 [03:02<00:51,  7.65it/s]
+Training:  80%|███████▉  | 1413/1769 [03:07<00:47,  7.56it/s]
+Training:  82%|████████▏ | 1451/1769 [03:12<00:42,  7.56it/s]
+Training:  84%|████████▍ | 1490/1769 [03:17<00:36,  7.57it/s]
+Training:  86%|████████▋ | 1528/1769 [03:22<00:31,  7.56it/s]
+Training:  89%|████████▊ | 1568/1769 [03:27<00:26,  7.65it/s]
+Training:  91%|█████████ | 1607/1769 [03:32<00:21,  7.68it/s]
+Training:  93%|█████████▎| 1647/1769 [03:37<00:15,  7.74it/s]
+Training:  95%|█████████▌| 1686/1769 [03:43<00:10,  7.71it/s]
+Training:  97%|█████████▋| 1724/1769 [03:48<00:05,  7.63it/s]
+Training: 100%|█████████▉| 1762/1769 [03:53<00:00,  7.60it/s]
+Training: 100%|█████████▉| 1768/1769 [03:53<00:00,  7.56it/s]
+
+Validating:   0%|          | 0/936 [00:00<?, ?it/s]
+Validating:  12%|█▎        | 117/936 [00:05<00:35, 23.19it/s]
+Validating:  24%|██▍       | 223/936 [00:10<00:32, 22.02it/s]
+Validating:  35%|███▌      | 330/936 [00:15<00:27, 21.68it/s]
+Validating:  47%|████▋     | 443/936 [00:20<00:22, 21.99it/s]
+Validating:  61%|██████    | 571/936 [00:25<00:15, 23.24it/s]
+Validating:  75%|███████▌  | 704/936 [00:30<00:09, 24.33it/s]
+Validating:  85%|████████▌ | 800/936 [00:35<00:06, 22.61it/s]
+Validating:  98%|█████████▊| 915/936 [00:40<00:00, 22.73it/s]
+Validating: 939it [00:41, 22.74it/s]                         
+New best character model saved! Val character_ap_macro: 0.6340
+New best loss model saved! Val Loss: 0.6302
+[METRICS] epoch=6 train_loss=1.4269 val_loss=0.6302 train_f1=0.6807 val_character_success=0.0526
+Logging metrics for epoch: 6
+
+--- Epoch 7/8 ---
+
+Training:   0%|          | 0/1769 [00:00<?, ?it/s]
+Training:   2%|▏         | 27/1769 [00:05<05:23,  5.39it/s]
+Training:   4%|▎         | 64/1769 [00:10<04:19,  6.56it/s]
+Training:   6%|▌         | 102/1769 [00:15<03:58,  6.98it/s]
+Training:   8%|▊         | 141/1769 [00:20<03:45,  7.23it/s]
+Training:  10%|█         | 180/1769 [00:25<03:35,  7.39it/s]
+Training:  12%|█▏        | 220/1769 [00:30<03:25,  7.53it/s]
+Training:  15%|█▍        | 258/1769 [00:35<03:20,  7.55it/s]
+Training:  17%|█▋        | 298/1769 [00:40<03:12,  7.66it/s]
+Training:  19%|█▉        | 338/1769 [00:45<03:05,  7.72it/s]
+Training:  21%|██▏       | 377/1769 [00:50<03:00,  7.73it/s]
+Training:  24%|██▎       | 416/1769 [00:55<02:55,  7.71it/s]
+Training:  26%|██▌       | 453/1769 [01:00<02:52,  7.61it/s]
+Training:  28%|██▊       | 493/1769 [01:05<02:46,  7.67it/s]
+Training:  30%|██▉       | 529/1769 [01:10<02:44,  7.52it/s]
+Training:  32%|███▏      | 565/1769 [01:16<02:44,  7.34it/s]
+Training:  34%|███▍      | 601/1769 [01:21<02:40,  7.28it/s]
+Training:  36%|███▌      | 636/1769 [01:26<02:37,  7.17it/s]
+Training:  38%|███▊      | 672/1769 [01:31<02:32,  7.17it/s]
+Training:  40%|████      | 708/1769 [01:36<02:28,  7.14it/s]
+Training:  42%|████▏     | 744/1769 [01:41<02:24,  7.11it/s]
+Training:  44%|████▍     | 783/1769 [01:46<02:15,  7.28it/s]
+Training:  46%|████▋     | 822/1769 [01:51<02:07,  7.41it/s]
+Training:  49%|████▊     | 861/1769 [01:56<02:01,  7.48it/s]
+Training:  51%|█████     | 901/1769 [02:01<01:54,  7.57it/s]
+Training:  53%|█████▎    | 940/1769 [02:06<01:48,  7.64it/s]
+Training:  55%|█████▌    | 979/1769 [02:11<01:43,  7.64it/s]
+Training:  57%|█████▋    | 1016/1769 [02:16<01:39,  7.54it/s]
+Training:  60%|█████▉    | 1055/1769 [02:22<01:34,  7.58it/s]
+Training:  62%|██████▏   | 1094/1769 [02:27<01:28,  7.65it/s]
+Training:  64%|██████▍   | 1132/1769 [02:32<01:23,  7.59it/s]
+Training:  66%|██████▌   | 1169/1769 [02:37<01:19,  7.52it/s]
+Training:  68%|██████▊   | 1206/1769 [02:42<01:15,  7.47it/s]
+Training:  70%|███████   | 1242/1769 [02:47<01:11,  7.35it/s]
+Training:  72%|███████▏  | 1279/1769 [02:52<01:06,  7.32it/s]
+Training:  74%|███████▍  | 1316/1769 [02:57<01:01,  7.33it/s]
+Training:  77%|███████▋  | 1354/1769 [03:02<00:56,  7.39it/s]
+Training:  79%|███████▊  | 1390/1769 [03:07<00:51,  7.32it/s]
+Training:  81%|████████  | 1428/1769 [03:12<00:46,  7.38it/s]
+Training:  83%|████████▎ | 1466/1769 [03:17<00:40,  7.41it/s]
+Training:  85%|████████▍ | 1503/1769 [03:22<00:35,  7.39it/s]
+Training:  87%|████████▋ | 1540/1769 [03:27<00:31,  7.34it/s]
+Training:  89%|████████▉ | 1577/1769 [03:32<00:26,  7.31it/s]
+Training:  91%|█████████▏| 1615/1769 [03:38<00:20,  7.35it/s]
+Training:  93%|█████████▎| 1652/1769 [03:43<00:15,  7.35it/s]
+Training:  95%|█████████▌| 1689/1769 [03:48<00:10,  7.34it/s]
+Training:  98%|█████████▊| 1726/1769 [03:53<00:05,  7.32it/s]
+Training: 100%|█████████▉| 1764/1769 [03:58<00:00,  7.36it/s]
+Training: 100%|█████████▉| 1768/1769 [03:58<00:00,  7.40it/s]
+
+Validating:   0%|          | 0/936 [00:00<?, ?it/s]
+Validating:  14%|█▎        | 128/936 [00:05<00:31, 25.53it/s]
+Validating:  27%|██▋       | 257/936 [00:10<00:26, 25.66it/s]
+Validating:  42%|████▏     | 392/936 [00:15<00:20, 26.27it/s]
+Validating:  55%|█████▌    | 517/936 [00:20<00:16, 25.66it/s]
+Validating:  68%|██████▊   | 632/936 [00:25<00:12, 24.69it/s]
+Validating:  82%|████████▏ | 766/936 [00:30<00:06, 25.34it/s]
+Validating:  95%|█████████▍| 887/936 [00:35<00:01, 24.96it/s]
+Validating: 939it [00:36, 25.40it/s]                         
+New best character model saved! Val character_ap_macro: 0.6393
+New best F1 model saved! Val F1: 0.5804
+[METRICS] epoch=7 train_loss=1.3191 val_loss=0.7140 train_f1=0.7155 val_character_success=0.0526
+Logging metrics for epoch: 7
+
+--- Epoch 8/8 ---
+
+Training:   0%|          | 0/1769 [00:00<?, ?it/s]
+Training:   2%|▏         | 27/1769 [00:05<05:26,  5.34it/s]
+Training:   4%|▎         | 64/1769 [00:10<04:22,  6.50it/s]
+Training:   6%|▌         | 103/1769 [00:15<03:56,  7.04it/s]
+Training:   8%|▊         | 142/1769 [00:20<03:43,  7.27it/s]
+Training:  10%|█         | 181/1769 [00:25<03:34,  7.41it/s]
+Training:  12%|█▏        | 220/1769 [00:30<03:27,  7.48it/s]
+Training:  15%|█▍        | 260/1769 [00:35<03:17,  7.63it/s]
+Training:  17%|█▋        | 299/1769 [00:40<03:11,  7.68it/s]
+Training:  19%|█▉        | 339/1769 [00:45<03:04,  7.74it/s]
+Training:  21%|██▏       | 378/1769 [00:50<03:00,  7.71it/s]
+Training:  24%|██▎       | 417/1769 [00:55<02:55,  7.69it/s]
+Training:  26%|██▌       | 456/1769 [01:00<02:51,  7.66it/s]
+Training:  28%|██▊       | 496/1769 [01:05<02:44,  7.76it/s]
+Training:  30%|███       | 536/1769 [01:11<02:38,  7.78it/s]
+Training:  32%|███▏      | 574/1769 [01:16<02:34,  7.71it/s]
+Training:  35%|███▍      | 613/1769 [01:21<02:29,  7.71it/s]
+Training:  37%|███▋      | 652/1769 [01:26<02:25,  7.69it/s]
+Training:  39%|███▉      | 692/1769 [01:31<02:19,  7.73it/s]
+Training:  41%|████▏     | 731/1769 [01:36<02:15,  7.68it/s]
+Training:  43%|████▎     | 768/1769 [01:41<02:12,  7.57it/s]
+Training:  46%|████▌     | 808/1769 [01:46<02:05,  7.67it/s]
+Training:  48%|████▊     | 848/1769 [01:51<01:59,  7.73it/s]
+Training:  50%|█████     | 887/1769 [01:56<01:54,  7.73it/s]
+Training:  52%|█████▏    | 925/1769 [02:01<01:50,  7.67it/s]
+Training:  54%|█████▍    | 963/1769 [02:06<01:46,  7.59it/s]
+Training:  57%|█████▋    | 1000/1769 [02:12<01:42,  7.52it/s]
+Training:  59%|█████▊    | 1038/1769 [02:17<01:37,  7.52it/s]
+Training:  61%|██████    | 1076/1769 [02:22<01:31,  7.54it/s]
+Training:  63%|██████▎   | 1114/1769 [02:27<01:27,  7.52it/s]
+Training:  65%|██████▌   | 1152/1769 [02:32<01:22,  7.49it/s]
+Training:  67%|██████▋   | 1190/1769 [02:37<01:17,  7.48it/s]
+Training:  70%|██████▉   | 1230/1769 [02:42<01:10,  7.60it/s]
+Training:  72%|███████▏  | 1270/1769 [02:47<01:04,  7.71it/s]
+Training:  74%|███████▍  | 1310/1769 [02:52<00:59,  7.76it/s]
+Training:  76%|███████▋  | 1349/1769 [02:57<00:54,  7.77it/s]
+Training:  79%|███████▊  | 1389/1769 [03:02<00:48,  7.83it/s]
+Training:  81%|████████  | 1429/1769 [03:07<00:43,  7.86it/s]
+Training:  83%|████████▎ | 1469/1769 [03:12<00:38,  7.86it/s]
+Training:  85%|████████▌ | 1509/1769 [03:17<00:32,  7.88it/s]
+Training:  87%|████████▋ | 1547/1769 [03:22<00:28,  7.75it/s]
+Training:  90%|████████▉ | 1586/1769 [03:27<00:23,  7.75it/s]
+Training:  92%|█████████▏| 1624/1769 [03:32<00:18,  7.68it/s]
+Training:  94%|█████████▍| 1662/1769 [03:38<00:14,  7.63it/s]
+Training:  96%|█████████▌| 1701/1769 [03:43<00:08,  7.64it/s]
+Training:  98%|█████████▊| 1738/1769 [03:48<00:04,  7.56it/s]
+Training: 100%|█████████▉| 1768/1769 [03:52<00:00,  7.62it/s]
+
+Validating:   0%|          | 0/936 [00:00<?, ?it/s]
+Validating:  12%|█▏        | 113/936 [00:05<00:37, 22.17it/s]
+Validating:  24%|██▍       | 225/936 [00:10<00:31, 22.27it/s]
+Validating:  34%|███▍      | 317/936 [00:15<00:30, 20.48it/s]
+Validating:  48%|████▊     | 446/936 [00:20<00:21, 22.53it/s]
+Validating:  61%|██████    | 573/936 [00:25<00:15, 23.50it/s]
+Validating:  74%|███████▎  | 688/936 [00:30<00:10, 23.30it/s]
+Validating:  84%|████████▎ | 783/936 [00:35<00:07, 21.85it/s]
+Validating:  94%|█████████▍| 879/936 [00:40<00:02, 21.01it/s]
+Validating: 939it [00:42, 22.18it/s]                         
+[METRICS] epoch=8 train_loss=1.2804 val_loss=1.4733 train_f1=0.7275 val_character_success=0.0000
+Logging metrics for epoch: 8
+Starting evaluation figure generation...
+[predict] reading 8675 tiles in 93 row-strips (eval)
+
+Read eval:   0%|          | 0/93 [00:00<?, ?it/s]
+Read eval:   6%|▋         | 6/93 [00:00<00:01, 58.11it/s]
+Read eval:  13%|█▎        | 12/93 [00:00<00:01, 42.08it/s]
+Read eval:  18%|█▊        | 17/93 [00:00<00:02, 34.30it/s]
+Read eval:  24%|██▎       | 22/93 [00:00<00:01, 37.25it/s]
+Read eval:  28%|██▊       | 26/93 [00:00<00:02, 32.30it/s]
+Read eval:  32%|███▏      | 30/93 [00:00<00:02, 28.25it/s]
+Read eval:  37%|███▋      | 34/93 [00:01<00:02, 27.22it/s]
+Read eval:  41%|████      | 38/93 [00:01<00:01, 29.60it/s]
+Read eval:  45%|████▌     | 42/93 [00:01<00:02, 25.33it/s]
+Read eval:  49%|████▉     | 46/93 [00:01<00:01, 27.78it/s]
+Read eval:  53%|█████▎    | 49/93 [00:01<00:01, 27.93it/s]
+Read eval:  56%|█████▌    | 52/93 [00:01<00:01, 27.82it/s]
+Read eval:  59%|█████▉    | 55/93 [00:01<00:01, 28.00it/s]
+Read eval:  62%|██████▏   | 58/93 [00:01<00:01, 27.00it/s]
+Read eval:  66%|██████▌   | 61/93 [00:02<00:01, 27.39it/s]
+Read eval:  69%|██████▉   | 64/93 [00:02<00:01, 27.73it/s]
+Read eval:  72%|███████▏  | 67/93 [00:02<00:00, 27.72it/s]
+Read eval:  75%|███████▌  | 70/93 [00:02<00:00, 27.86it/s]
+Read eval:  78%|███████▊  | 73/93 [00:02<00:00, 27.95it/s]
+Read eval:  82%|████████▏ | 76/93 [00:02<00:00, 26.72it/s]
+Read eval:  85%|████████▍ | 79/93 [00:02<00:00, 25.49it/s]
+Read eval:  88%|████████▊ | 82/93 [00:02<00:00, 26.28it/s]
+                                                          
+
+Predict chunk:   0%|          | 0/46 [00:00<?, ?it/s]
+Predict chunk:   4%|▍         | 2/46 [00:00<00:03, 11.16it/s]
+Predict chunk:   9%|▊         | 4/46 [00:00<00:03, 12.05it/s]
+Predict chunk:  13%|█▎        | 6/46 [00:00<00:03, 12.45it/s]
+Predict chunk:  17%|█▋        | 8/46 [00:00<00:03, 12.66it/s]
+Predict chunk:  22%|██▏       | 10/46 [00:00<00:02, 12.90it/s]
+Predict chunk:  26%|██▌       | 12/46 [00:00<00:02, 13.04it/s]
+Predict chunk:  30%|███       | 14/46 [00:01<00:02, 12.99it/s]
+Predict chunk:  35%|███▍      | 16/46 [00:01<00:02, 12.93it/s]
+Predict chunk:  39%|███▉      | 18/46 [00:01<00:02, 12.91it/s]
+Predict chunk:  43%|████▎     | 20/46 [00:01<00:02, 12.92it/s]
+Predict chunk:  48%|████▊     | 22/46 [00:01<00:01, 13.02it/s]
+Predict chunk:  52%|█████▏    | 24/46 [00:01<00:01, 13.02it/s]
+Predict chunk:  57%|█████▋    | 26/46 [00:02<00:01, 13.08it/s]
+Predict chunk:  61%|██████    | 28/46 [00:02<00:01, 13.03it/s]
+Predict chunk:  65%|██████▌   | 30/46 [00:02<00:01, 13.09it/s]
+Predict chunk:  70%|██████▉   | 32/46 [00:02<00:01, 13.06it/s]
+Predict chunk:  74%|███████▍  | 34/46 [00:02<00:00, 13.03it/s]
+Predict chunk:  78%|███████▊  | 36/46 [00:02<00:00, 12.99it/s]
+Predict chunk:  83%|████████▎ | 38/46 [00:02<00:00, 12.98it/s]
+Predict chunk:  87%|████████▋ | 40/46 [00:03<00:00, 12.95it/s]
+Predict chunk:  91%|█████████▏| 42/46 [00:03<00:00, 13.06it/s]
+Predict chunk:  96%|█████████▌| 44/46 [00:03<00:00, 13.04it/s]
+                                                              
+[predict] eval done in   6.4s  predict   3.5s (54.5%)  read/wait   2.9s (45.5%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_kfolds/fold_1/eval_figs/eval_s20260927134931_ep08.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+Starting evaluation figure generation...
+[predict] reading 8938 tiles in 122 row-strips (eval)
+
+Read eval:   0%|          | 0/122 [00:00<?, ?it/s]
+Read eval:   5%|▍         | 6/122 [00:00<00:02, 47.34it/s]
+Read eval:  10%|▉         | 12/122 [00:00<00:02, 51.18it/s]
+Read eval:  15%|█▍        | 18/122 [00:00<00:01, 52.42it/s]
+Read eval:  20%|█▉        | 24/122 [00:00<00:02, 47.47it/s]
+Read eval:  24%|██▍       | 29/122 [00:00<00:01, 47.22it/s]
+Read eval:  28%|██▊       | 34/122 [00:00<00:02, 43.83it/s]
+Read eval:  32%|███▏      | 39/122 [00:00<00:02, 40.64it/s]
+Read eval:  36%|███▌      | 44/122 [00:00<00:01, 41.07it/s]
+Read eval:  40%|████      | 49/122 [00:01<00:01, 37.89it/s]
+Read eval:  43%|████▎     | 53/122 [00:01<00:01, 37.90it/s]
+Read eval:  47%|████▋     | 57/122 [00:01<00:01, 37.66it/s]
+Read eval:  50%|█████     | 61/122 [00:01<00:01, 37.09it/s]
+Read eval:  53%|█████▎    | 65/122 [00:01<00:01, 35.95it/s]
+Read eval:  57%|█████▋    | 70/122 [00:01<00:01, 37.55it/s]
+Read eval:  61%|██████    | 74/122 [00:01<00:01, 36.47it/s]
+Read eval:  65%|██████▍   | 79/122 [00:01<00:01, 38.11it/s]
+Read eval:  68%|██████▊   | 83/122 [00:02<00:01, 36.98it/s]
+Read eval:  71%|███████▏  | 87/122 [00:02<00:00, 37.75it/s]
+Read eval:  75%|███████▍  | 91/122 [00:02<00:00, 36.31it/s]
+Read eval:  79%|███████▊  | 96/122 [00:02<00:00, 34.97it/s]
+Read eval:  84%|████████▎ | 102/122 [00:02<00:00, 35.96it/s]
+Read eval:  89%|████████▊ | 108/122 [00:02<00:00, 36.84it/s]
+Read eval:  93%|█████████▎| 114/122 [00:02<00:00, 38.08it/s]
+                                                            
+
+Predict chunk:   0%|          | 0/47 [00:00<?, ?it/s]
+Predict chunk:   4%|▍         | 2/47 [00:00<00:03, 12.81it/s]
+Predict chunk:   9%|▊         | 4/47 [00:00<00:03, 12.59it/s]
+Predict chunk:  13%|█▎        | 6/47 [00:00<00:03, 12.72it/s]
+Predict chunk:  17%|█▋        | 8/47 [00:00<00:03, 12.70it/s]
+Predict chunk:  21%|██▏       | 10/47 [00:00<00:02, 12.78it/s]
+Predict chunk:  26%|██▌       | 12/47 [00:00<00:02, 12.68it/s]
+Predict chunk:  30%|██▉       | 14/47 [00:01<00:02, 12.66it/s]
+Predict chunk:  34%|███▍      | 16/47 [00:01<00:02, 12.65it/s]
+Predict chunk:  38%|███▊      | 18/47 [00:01<00:02, 12.64it/s]
+Predict chunk:  43%|████▎     | 20/47 [00:01<00:02, 12.61it/s]
+Predict chunk:  47%|████▋     | 22/47 [00:01<00:01, 12.65it/s]
+Predict chunk:  51%|█████     | 24/47 [00:01<00:01, 12.67it/s]
+Predict chunk:  55%|█████▌    | 26/47 [00:02<00:01, 12.55it/s]
+Predict chunk:  60%|█████▉    | 28/47 [00:02<00:01, 12.51it/s]
+Predict chunk:  64%|██████▍   | 30/47 [00:02<00:01, 12.50it/s]
+Predict chunk:  68%|██████▊   | 32/47 [00:02<00:01, 12.57it/s]
+Predict chunk:  72%|███████▏  | 34/47 [00:02<00:01, 12.59it/s]
+Predict chunk:  77%|███████▋  | 36/47 [00:02<00:00, 12.62it/s]
+Predict chunk:  81%|████████  | 38/47 [00:03<00:00, 12.72it/s]
+Predict chunk:  85%|████████▌ | 40/47 [00:03<00:00, 12.75it/s]
+Predict chunk:  89%|████████▉ | 42/47 [00:03<00:00, 12.70it/s]
+Predict chunk:  94%|█████████▎| 44/47 [00:03<00:00, 12.73it/s]
+Predict chunk:  98%|█████████▊| 46/47 [00:03<00:00, 12.66it/s]
+                                                              
+[predict] eval done in   6.7s  predict   3.7s (55.4%)  read/wait   3.0s (44.6%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_kfolds/fold_1/eval_figs/eval_s20261012073246_ep08.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+Starting evaluation figure generation...
+[predict] reading 5354 tiles in 66 row-strips (eval)
+
+Read eval:   0%|          | 0/66 [00:00<?, ?it/s]
+Read eval:   9%|▉         | 6/66 [00:00<00:01, 54.71it/s]
+Read eval:  18%|█▊        | 12/66 [00:00<00:01, 42.39it/s]
+Read eval:  26%|██▌       | 17/66 [00:00<00:01, 34.79it/s]
+Read eval:  32%|███▏      | 21/66 [00:00<00:01, 35.33it/s]
+Read eval:  38%|███▊      | 25/66 [00:00<00:01, 29.23it/s]
+Read eval:  44%|████▍     | 29/66 [00:00<00:01, 31.61it/s]
+Read eval:  50%|█████     | 33/66 [00:00<00:01, 32.47it/s]
+Read eval:  56%|█████▌    | 37/66 [00:01<00:01, 28.47it/s]
+Read eval:  62%|██████▏   | 41/66 [00:01<00:00, 28.19it/s]
+Read eval:  67%|██████▋   | 44/66 [00:01<00:00, 27.66it/s]
+Read eval:  71%|███████   | 47/66 [00:01<00:00, 27.43it/s]
+Read eval:  76%|███████▌  | 50/66 [00:01<00:00, 26.74it/s]
+Read eval:  80%|████████  | 53/66 [00:01<00:00, 26.55it/s]
+Read eval:  86%|████████▋ | 57/66 [00:01<00:00, 28.41it/s]
+Read eval:  91%|█████████ | 60/66 [00:01<00:00, 28.57it/s]
+Read eval:  97%|█████████▋| 64/66 [00:02<00:00, 30.97it/s]
+                                                          
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s]
+Predict chunk:   7%|▋         | 2/28 [00:00<00:02, 12.58it/s]
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:01, 12.83it/s]
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:01, 12.85it/s]
+Predict chunk:  29%|██▊       | 8/28 [00:00<00:01, 12.87it/s]
+Predict chunk:  36%|███▌      | 10/28 [00:00<00:01, 12.85it/s]
+Predict chunk:  43%|████▎     | 12/28 [00:00<00:01, 13.02it/s]
+Predict chunk:  50%|█████     | 14/28 [00:01<00:01, 12.94it/s]
+Predict chunk:  57%|█████▋    | 16/28 [00:01<00:00, 12.91it/s]
+Predict chunk:  64%|██████▍   | 18/28 [00:01<00:00, 12.88it/s]
+Predict chunk:  71%|███████▏  | 20/28 [00:01<00:00, 12.91it/s]
+Predict chunk:  79%|███████▊  | 22/28 [00:01<00:00, 12.93it/s]
+Predict chunk:  86%|████████▌ | 24/28 [00:01<00:00, 12.85it/s]
+Predict chunk:  93%|█████████▎| 26/28 [00:02<00:00, 12.84it/s]
+Predict chunk: 100%|██████████| 28/28 [00:02<00:00, 13.12it/s]
+                                                              
+[predict] eval done in   4.3s  predict   2.2s (50.5%)  read/wait   2.1s (49.5%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_kfolds/fold_1/eval_figs/eval_s20261012065811_ep08.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+Starting evaluation figure generation...
+[predict] reading 5335 tiles in 66 row-strips (eval)
+
+Read eval:   0%|          | 0/66 [00:00<?, ?it/s]
+Read eval:  12%|█▏        | 8/66 [00:00<00:01, 57.69it/s]
+Read eval:  21%|██        | 14/66 [00:00<00:01, 43.53it/s]
+Read eval:  29%|██▉       | 19/66 [00:00<00:01, 35.58it/s]
+Read eval:  35%|███▍      | 23/66 [00:00<00:01, 35.02it/s]
+Read eval:  41%|████      | 27/66 [00:00<00:01, 31.91it/s]
+Read eval:  47%|████▋     | 31/66 [00:00<00:01, 30.79it/s]
+Read eval:  53%|█████▎    | 35/66 [00:01<00:00, 31.27it/s]
+Read eval:  59%|█████▉    | 39/66 [00:01<00:00, 32.93it/s]
+Read eval:  65%|██████▌   | 43/66 [00:01<00:00, 29.71it/s]
+Read eval:  71%|███████   | 47/66 [00:01<00:00, 31.39it/s]
+Read eval:  77%|███████▋  | 51/66 [00:01<00:00, 32.64it/s]
+Read eval:  83%|████████▎ | 55/66 [00:01<00:00, 32.18it/s]
+Read eval:  91%|█████████ | 60/66 [00:01<00:00, 32.31it/s]
+Read eval:  97%|█████████▋| 64/66 [00:01<00:00, 33.49it/s]
+                                                          
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s]
+Predict chunk:   7%|▋         | 2/28 [00:00<00:02, 12.80it/s]
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:01, 12.84it/s]
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:01, 12.86it/s]
+Predict chunk:  29%|██▊       | 8/28 [00:00<00:01, 12.88it/s]
+Predict chunk:  36%|███▌      | 10/28 [00:00<00:01, 12.98it/s]
+Predict chunk:  43%|████▎     | 12/28 [00:00<00:01, 12.99it/s]
+Predict chunk:  50%|█████     | 14/28 [00:01<00:01, 12.97it/s]
+Predict chunk:  57%|█████▋    | 16/28 [00:01<00:00, 12.96it/s]
+Predict chunk:  64%|██████▍   | 18/28 [00:01<00:00, 12.95it/s]
+Predict chunk:  71%|███████▏  | 20/28 [00:01<00:00, 12.92it/s]
+Predict chunk:  79%|███████▊  | 22/28 [00:01<00:00, 12.93it/s]
+Predict chunk:  86%|████████▌ | 24/28 [00:01<00:00, 12.95it/s]
+Predict chunk:  93%|█████████▎| 26/28 [00:02<00:00, 12.97it/s]
+Predict chunk: 100%|██████████| 28/28 [00:02<00:00, 13.38it/s]
+                                                              
+[predict] eval done in   4.1s  predict   2.1s (52.7%)  read/wait   1.9s (47.3%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_kfolds/fold_1/eval_figs/eval_s20261012065813_ep08.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+[save-final] wrote final model to /vesuvius/models/runs_kfolds/fold_1/final.pth
+TensorBoard logs saved to: /vesuvius/runs_kfolds/fold_1
+Training completed.
