@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>archs40 holdout_n96_combined_surface_norm - architecture</title>
+<title>iter2_asf_cue (best run) - architecture</title>
 <style>
   html, body { margin: 0; background: #1b1c1f; }
   svg { display: block; }
@@ -66,7 +66,7 @@ for (const c of [ACC, DASH, "#7fc79a", "#79b4f0", "#c7a0f0"]) {
 }
 
 // ---------------------------------------------------------------- title
-text(28, 40, "archs40 · holdout_n96_combined_surface_norm  —  early-2D nnU-Net ink detector (nnunet3d_lcndz, early_2d_unet, multitile 4×4)",
+text(28, 40, "iter2_asf_cue (best run)  —  early-2D nnU-Net ink detector at 192 px: ASF cue head, dual-scale expert, text-region gate (multitile 4×4)",
   "t2", "start", { style: "font-size:20px;fill:#e6e6e8" });
 
 // ---------------------------------------------------------------- headers
@@ -86,7 +86,7 @@ for (let i = 7; i >= 0; i--) {
     fill: i === 0 ? "#34363b" : "#2d2f33", stroke: "#8a8b90", "stroke-width": 1.5 });
 }
 text(115, MY + 82, "surface volume patch", "t1");
-text(115, MY + 108, "8 slices, 96×96 px", "t3");
+text(115, MY + 108, "8 slices, 192×192 px", "t3");
 text(115, MY + 130, "surface-relative depth window", "t4");
 text(115, MY + 149, "surface-anchor z-score norm", "t4");
 
@@ -99,18 +99,23 @@ for (const [i, lab] of [[0, "depth"], [1, "conf."]]) {
   text(gx + 27, TY + 74, lab, "t4");
 }
 text(115, TY - 16, "literal surface label", "t3");
-text(115, TY + 100, "2 × 96 × 96", "t4 mono");
+text(115, TY + 100, "2 × 192 × 192", "t4 mono");
 
 // ---------------------------------------------------------------- cue stem
 box(240, MY - 92, 214, 184);
-text(347, MY - 56, "three cues", "t1b");
-lines(347, MY - 22, ["raw intensity", "LCN (5×5 local", "contrast norm.)", "∂z slice diff."], "t3", 22);
+text(347, MY - 56, "four cues", "t1b");
+lines(347, MY - 22, ["raw intensity", "LCN (5×5 local", "contrast norm.)", "∂z slice diff.", "ASF cue map (9th slice)"], "t3", 22);
 arrow(200, MY - 14, 236, MY - 14);
+// precomputed ASF cue joins the stem as the fourth head
+box(240, 124, 250, 82, { fill: "#2a2438", stroke: "#8a6fc0" });
+text(365, 152, "ASF cue map", "t2", "middle", { style: "fill:#c7a0f0" });
+lines(365, 176, ["precomputed asf_morph prior", "1×192×192, appended slice"], "t4", 19);
+arrow(365, 206, 365, MY - 96, "#c7a0f0", 2.4);
 
 box(486, MY - 92, 250, 184);
 text(611, MY - 56, "gated cue stem", "t1b");
 lines(611, MY - 24, ["per cue: 3×3×3 conv (8) →", "IN → GELU → 1×1, residual",
-  "gate: MLP on cue mean/std", "→ softmax × 3 reweights cues"], "t3", 22);
+  "gate: MLP on cue mean/std", "→ softmax × 4 reweights cues"], "t3", 22);
 arrow(454, MY - 14, 482, MY - 14);
 
 // enc1 (below the cue boxes)
@@ -134,8 +139,8 @@ path(`M200,${TY + 27} L222,${TY + 27} L222,${SY + 150} L618,${SY + 150} L618,${S
 path(`M358,${SY} L358,${EY + 150} L470,${EY + 150} L470,${EY + 136}`, "#7fc79a", 1.8);
 path(`M618,${SY} L618,${EY + 136}`, "#79b4f0", 1.8);
 text(470, EY + 168, "⊕ added to enc1 output", "t4", "middle");
-text(358, SY + 136, "4 × 8 × 96 × 96", "t4 mono");
-text(694, SY + 136, "3 × 8 × 96 × 96", "t4 mono");
+text(358, SY + 136, "4 × 8 × 192 × 192", "t4 mono");
+text(694, SY + 136, "3 × 8 × 192 × 192", "t4 mono");
 
 // ---------------------------------------------------------------- depth collapse
 const DX = 780;
@@ -160,7 +165,7 @@ text(DX + 144, MY - 176, "pool over depth: 3D features → 2D map", "t2");
 // ---------------------------------------------------------------- 2D U-Net bars
 const ux0 = 1112, step = 62, cy = MY - 14;
 const levels = [
-  { c: 32, s: 96, h: 236 }, { c: 64, s: 48, h: 188 }, { c: 128, s: 24, h: 142 }, { c: 256, s: 12, h: 96 },
+  { c: 32, s: 192, h: 236 }, { c: 64, s: 96, h: 188 }, { c: 128, s: 48, h: 142 }, { c: 256, s: 24, h: 96 },
 ];
 const order = [0, 1, 2, 3, 2, 1, 0];
 const barX = [];
@@ -182,7 +187,7 @@ order.forEach((lv, i) => {
 });
 text((barX[0] + barX[6]) / 2, cy - 186, "skip connections (concat, skip-drop 0.2)", "t2");
 text(barX[3], cy - 72, "bottleneck", "t4");
-text(barX[3], cy - 56, "256@12", "t4 mono");
+text(barX[3], cy - 56, "256@24", "t4 mono");
 // level labels
 lines(1337, cy + 196, ["4 levels, two (3×3 conv · InstanceNorm · LeakyReLU) per block",
   "encoder: 2×2 max-pool halves resolution",
@@ -194,22 +199,22 @@ arrow(barX[6] + 18, cy, 1606, cy);
 // ---------------------------------------------------------------- head
 const HX = 1612;
 text(1735, MY - 140, "1×1 conv → logit map", "t2");
-text(1735, MY - 118, "1 × 96 × 96", "t4 mono");
+text(1735, MY - 118, "1 × 192 × 192", "t4 mono");
 // logit map illustration from the ring-data letter (illustrative)
 const mapX = 1676, mapY = MY - 100, mapS = 120;
 el("rect", { x: mapX, y: mapY, width: mapS, height: mapS, fill: "#111", stroke: "#8a8b90", "stroke-width": 1.5 });
 if (window.RING && RING.mixed) {
-  const s = mapS / 96, w = RING.mixed;
+  const s = mapS / 192, w = RING.mixed;
   const g = el("g", {});
   const clip = el("clipPath", { id: "mapclip" }, defs);
   el("rect", { x: mapX, y: mapY, width: mapS, height: mapS }, clip);
   g.setAttribute("clip-path", "url(#mapclip)");
-  el("image", { href: RING.blur_png, x: mapX - (w.cx - 40) * s, y: mapY - (w.cy - 40) * s,
+  el("image", { href: RING.blur_png, x: mapX - (w.cx - 88) * s, y: mapY - (w.cy - 88) * s,
     width: RING.tiles.ink[0].length * RING.tile * s, height: RING.tiles.ink.length * RING.tile * s,
     style: "filter: blur(1.2px)", opacity: 0.95 }, g);
 }
 // center crop + grid
-const cs = mapS * 64 / 96, co = mapX + (mapS - cs) / 2, coy = mapY + (mapS - cs) / 2;
+const cs = mapS * 64 / 192, co = mapX + (mapS - cs) / 2, coy = mapY + (mapS - cs) / 2;
 el("rect", { x: co, y: coy, width: cs, height: cs, fill: "none", stroke: ACC, "stroke-width": 2 });
 for (let k = 1; k < 4; k++) {
   el("line", { x1: co + k * cs / 4, y1: coy, x2: co + k * cs / 4, y2: coy + cs, stroke: ACC, "stroke-width": 0.9, opacity: 0.8 });
@@ -236,10 +241,18 @@ text(1738, gY + 146, "sigmoid of 16 logits", "t3");
 // ---------------------------------------------------------------- dims row
 const DY = 846;
 el("line", { x1: 28, y1: DY - 34, x2: 1876, y2: DY - 34, stroke: "#36373b", "stroke-width": 1 });
-[[115, "1 × 8 × 96 × 96"], [347, "3 × 8 × 96 × 96"], [611, "3 × 8 × 96 × 96"], [800, "32 × 8 × 96 × 96"],
- [1018, "32 × 96 × 96"], [1300, "256 × 12 × 12"], [1500, "32 × 96 × 96"], [1650, "1 × 96 × 96"], [1810, "16"]]
+[[115, "1 × 8 × 192 × 192"], [347, "3 × 8 × 192 × 192"], [611, "3 × 8 × 192 × 192"], [815, "32 × 8 × 192 × 192"],
+ [1018, "32 × 192 × 192"], [1300, "256 × 24 × 24"], [1500, "32 × 192 × 192"], [1660, "1 × 192 × 192"], [1810, "16"]]
   .forEach(([x, s]) => text(x, DY, s, "dim mono"));
 text(950, DY + 30, "tensor shapes per sample: channels × depth (slices) × height × width", "t3");
+
+// ---------------------------------------------------------------- dual-scale expert + text-region gate
+box(1100, 650, 240, 124, { fill: "#2a2438", stroke: "#8a6fc0" });
+text(1220, 678, "dual-scale local expert", "t2", "middle", { style: "fill:#c7a0f0" });
+lines(1220, 704, ["64×64 centre crop, raw/LCN/∂z", "3D conv (32) → 1×1×1 → cell logits", "× 0.5, added to the main logits", "(no ASF cue in the local stem)"], "t4", 19);
+box(1352, 650, 230, 124, { fill: "#232a26", stroke: "#4f7a5f" });
+text(1467, 678, "text-region gate", "t2 grn");
+lines(1467, 704, ["1×1 conv on the 256@24", "bottleneck, upsampled", "logσ(region) added to ink logits", "aux loss λ 0.5"], "t4", 19);
 
 // ---------------------------------------------------------------- training-only + params
 const BY = 904;
@@ -247,31 +260,33 @@ box(28, BY, 1188, 206, { fill: "#202124", stroke: "#45464b", dash: "7 5" });
 text(48, BY + 32, "TRAINING ONLY", "hdr mono", "start", { style: "font-size:16px" });
 const tr = [
   ["RSC", "p=0.33 of samples: mute the 33% of dec1 channels (or positions) whose gradient most supports the correct cell logits, re-score"],
-  ["targets", "16 masked cell targets, soft BCE; ring negatives, edge-softened positives (see ring figure)"],
-  ["character bags", "bag-ranking loss λ=0.2, margin 0.5, top-50% of cells per character"],
-  ["reweighting", "patch GroupDRO (η=0.05) · per-domain sampling weights · flips, cutout, context replace, ctx/depth jitter"],
-  ["init", "MAE checkpoint (early-gated, fiber, native-96, surface-norm, 2k steps) · batch 96 · lr 1e-4 · 10 epochs"],
+  ["targets", "16 masked cell targets, BCE; ring negatives, edge-softened positives, faint half-brightness letters as hard negatives"],
+  ["character bags", "bag-ranking loss λ=0.6, margin 1.0, top-25% of cells per character"],
+  ["nnPU", "far-background share 0.5 (≥96 px from ink), prior 0.05, λ=3 on unlabelled cells"],
+  ["reweighting", "patch GroupDRO (η=0.05) · AND-mask (4 random patches, sign agreement ≥ 3 of 4) · flips, cutout, context replace, jitter"],
+  ["init", "MAE 192 checkpoint grown by a fourth (ASF cue) head · batch 32 · lr 1e-4 (cue head ×5) · 5 warm-up, 10 epochs"],
 ];
 tr.forEach(([k, v], i) => {
-  text(48, BY + 66 + i * 27, k, "t3 acc", "start", { style: "font-size:15.5px;font-weight:600" });
-  text(196, BY + 66 + i * 27, v, "t3", "start");
+  text(48, BY + 62 + i * 24, k, "t3 acc", "start", { style: "font-size:15.5px;font-weight:600" });
+  text(196, BY + 62 + i * 24, v, "t3", "start");
 });
 
 box(1240, BY, 636, 206, { fill: "#202124", stroke: "#45464b" });
 text(1260, BY + 32, "PARAMETERS", "hdr mono", "start", { style: "font-size:16px" });
 const pr = [
-  ["cue stem + enc1 + fiber + surface", "31,478"],
+  ["cue stem + enc1 + fiber + surface", "32,632"],
   ["depth attention + 1×1 fuse", "2,081"],
   ["2D U-Net (enc2 … dec1)", "1,916,768"],
+  ["dual-scale expert + text-region", "30,658"],
   ["head 1×1 conv + LSE r", "34"],
-  ["active total", "1,950,361"],
+  ["active total", "1,982,173"],
 ];
 pr.forEach(([k, v], i) => {
-  const bold = i === 4 ? "font-weight:700;fill:#fff" : "";
-  text(1260, BY + 66 + i * 25, k, "t3", "start", { style: bold });
-  text(1640, BY + 66 + i * 25, v, "t3 mono", "end", { style: bold });
+  const bold = i === 5 ? "font-weight:700;fill:#fff" : "";
+  text(1260, BY + 62 + i * 25, k, "t3", "start", { style: bold });
+  text(1640, BY + 62 + i * 25, v, "t3 mono", "end", { style: bold });
 });
-lines(1856, BY + 66, ["state dict: 7,522,842", "5,572,481 belong to the", "unused 3D enc2/enc3/", "bottleneck/dec path", "(kept from MAE init)"], "t4", 22, "end");
+lines(1856, BY + 66, ["parameters: 7,554,654", "5,572,481 belong to the", "unused 3D enc2/enc3/", "bottleneck/dec path", "(kept from MAE init)"], "t4", 22, "end");
 </script>
 </body>
 </html>

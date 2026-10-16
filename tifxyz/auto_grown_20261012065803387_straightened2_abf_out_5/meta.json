@@ -1,0 +1,33 @@
+{
+    "bbox": [
+        [
+            2649.274169921875,
+            2458.627197265625,
+            11619.59375
+        ],
+        [
+            6301.423828125,
+            3490.489501953125,
+            13553.462890625
+        ]
+    ],
+    "format": "tifxyz",
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "source": "vc_grow_seg_from_seed",
+    "target_volume": "20250728152254-surface-20260413222639-surface-m7-L0-th0.2.zarr",
+    "type": "seg",
+    "uuid": "neighbor_out_20261015130613681",
+    "vc_gsfs_mode": "gen_neighbor",
+    "vc_gsfs_params": {
+        "mode": "gen_neighbor",
+        "neighbor_dir": "out",
+        "neighbor_max_distance": 250,
+        "neighbor_step": 1.0,
+        "neighbor_threshold": 1.0,
+        "thread_limit": 1
+    },
+    "vc_gsfs_version": "dev"
+}

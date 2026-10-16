@@ -334,10 +334,18 @@ class DataConfig:
     far_negative_share: float = 0.30  # fraction of character negative draws taken from far-background papyrus windows
     far_negative_min_dist: int = 160  # px from any ink label before unlabeled papyrus counts as far background
     far_negative_forced_positive_dist: int = 200  # px far background must keep from any train-mask forced positive
+    # text-line layout (utils/line_grid.py): cells of a patch's line bands that are neither ink, ring nor hard negative
+    # become line-unlabelled cells (label -3) with their own prior; needs far_negative_share > 0
+    line_prior_scroll_ids: List[int] = field(default_factory=list)
+    line_prior_source: str = "own"  # "own" bands from this patch's labels, "cross" pools the neighbouring windings
+    line_gap_negative_scroll_ids: List[int] = field(default_factory=list)  # stretches between two lines become explicit negatives
     # half-brightness strokes in inklabel_dir are assumed letters: True trains them as their own characters,
     # False erases them (the label file then reads exactly as it did before they were drawn)
     extra_inklabels: bool = False
     extra_label_share: float = 0.0  # fraction of all training draws taken from assumed-letter characters
+    # scrolls whose half-brightness regions (erased when extra_inklabels is False) train as hard negatives instead; a 16px
+    # target cell that also holds regular ink keeps its ink target
+    extra_hard_negative_scroll_ids: List[int] = field(default_factory=list)
     divdis_target_scroll_ids: List[int] = field(default_factory=list)  # unlabeled DivDis crops come from these
     # training-only soft positives: a positive cell's target is the max of its gaussian-blurred
     # ink label, floored at edge_soft_floor (>0.5 so the cell still counts as positive). 0 = off
@@ -362,6 +370,9 @@ class DataConfig:
     character_balance_scrolls: bool = True
     character_min_pixels: int = 8
     max_samples_per_epoch: Optional[int] = 6667
+    cue_dir: str = "./cue_clahe"  # per-volume precomputed cue maps for model.input_cue = "pre_clahe"
+    # blank (label-free, train-only) scrolls draw at most this many windows per epoch; None = max_samples_per_epoch
+    blank_scroll_samples_per_epoch: Optional[int] = None
 
     @property
     def test_scroll_id(self) -> Optional[int]:
@@ -375,11 +386,15 @@ class DataloaderConfig:
     prefetch_factor: int = 2
     data_aug: bool = True
     rotation_prob: float = 0.6
+    # any-angle rotation about the prediction centre (train only); labels are re-derived on the rotated cell lattice
+    arbitrary_rotation_prob: float = 0.0
+    arbitrary_rotation_max_deg: float = 180.0
     flip_prob: float = 0.6
     noise_prob: float = 0.0
     brightness_prob: float = 0.0
     contrast_prob: float = 0.0
     brightness_delta: float = 0.15
+    brightness_low: float = -1.0  # >= 0: the factor range is [1 - brightness_low, 1 + brightness_delta], else symmetric
     contrast_delta: float = 0.15
     noise_std_min: float = 0.001
     noise_std_max: float = 0.005
@@ -577,6 +592,14 @@ class TrainingConfig:
     depth_view_consistency_prob: float = 0.5
     depth_view_consistency_lambda: float = 0.2
     depth_view_consistency_offset: int = 2
+    # depth-offset MIL: a positive cell is explained by whichever of the two depth views fits it better (min BCE), a negative
+    # cell must be negative in both; needs depth_view_consistency (the paired view) with depth_view_consistency_lambda 0
+    depth_view_mil: bool = False
+    # line prior terms on label -3 cells: nnPU risk with its own prior, and label-proportion matching of the batch mean
+    line_pu_lambda: float = 0.0
+    line_pu_prior: float = 0.2
+    line_llp_lambda: float = 0.0
+    line_llp_prior: float = 0.2
     character_bag_ranking: bool = True
     character_bag_margin: float = 1.0
     character_bag_topk_frac: float = 0.25
@@ -640,11 +663,20 @@ class TrainingConfig:
     # PU AUC is affine in PN AUC, so hidden ink among the unlabelled cells does not bias the ranking
     pu_rank_lambda: float = 0.0
     pu_rank_pairs: int = 1024  # sampled pairs per domain and step
+    # label-free target crops (data.divdis_target_scroll_ids) turned by 90/180/270 degrees must give the same cell
+    # probabilities: weight of that squared difference (0 = off); crops per step are tra.divdis_batch_size
+    target_consistency_lambda: float = 0.0
     # drop cells whose fitted surface shows no papyrus from the loss: "" off, "pos" positives, "both"
     support_drop: str = ""
     support_min_fraction: float = 0.25
     mid_depth_entropy_lambda: float = 0.0
     topk_positive_fraction: float = 0.0  # 0 disables; else supervise only each character's top positives
+    # stroke floor: the weakest stroke_floor_fraction of each stroke's positive cells (one character) of the stroke_floor_domain
+    # must reach a mean logit of stroke_floor_margin; closes gaps inside strokes at the cost of noise (0 = off)
+    stroke_floor_lambda: float = 0.0
+    stroke_floor_fraction: float = 0.3
+    stroke_floor_margin: float = 2.0
+    stroke_floor_domain: str = "pherc0846a"
     character_forgetting: bool = False
     character_forgetting_path: str = ""
     character_forgetting_max_weight: float = 4.0
@@ -674,6 +706,9 @@ class TrainingConfig:
     depth_shift_aux_lambda: float = 0.1
     depth_shift_aux_classes: int = 3
     text_region_lambda: float = 0.5  # weight of the text-region auxiliary loss when the gate is enabled
+    # parameters whose name starts with one of these prefixes train at lr * cue_head_lr_scale (a freshly grown input head)
+    cue_head_prefixes: tuple = ()
+    cue_head_lr_scale: float = 1.0
 
 @dataclass
 class ModelConfig:
@@ -704,6 +739,13 @@ class ModelConfig:
     # fixed in-plane gaussian on the (downsampled) input; 0.6 px cuts white-noise variance ~4x like 2x2 pooling
     input_denoise_sigma: float = 0.0
     input_denoiser: str = ""
+    # fixed per-slice filter on the input, "asf" or "clahe" (utils/prefilter.py), blended with the input by mix
+    input_prefilter: str = ""
+    input_prefilter_mix: float = 1.0
+    # fourth gated input head next to raw, lcn and dz: "asf" or "clahe" of the max over slices computed per crop
+    # (utils/prefilter.py), or "pre_clahe": the whole-patch CLAHE map of data.cue_dir appended as a ninth slice of every
+    # block (utils/precomputed_cue.py)
+    input_cue: str = ""
     # frozen utils/upsampler.py checkpoint (or "trilinear") applied to the normalised crop before the backbone;
     # the network grid becomes scale x wider and depth_factor / depth_pool x deeper, labels stay native
     input_upsampler: str = ""
@@ -841,3 +883,67 @@ class Config:
             scroll.scroll_id: {"axis": scroll.split_axis, "frac": scroll.train_split_frac}
             for scroll in self.data.scrolls
         }
+
+# ---- the best run so far (iter2_asf_cue): what `python3 train.py` trains ----
+# 192 px field with the precomputed nonml asf_morph map as a fourth input head, on the new PHerc0846A set (ABF, 073246, m28 and
+# the straightened2 neighbours in_1 / out_1 / out_2 / out_3) plus PHerc0009B. straightened2 (the winning sheet) and out_4 / out_5
+# are rendered at the end and never trained on.
+BEST_NEW_SET = (20260927134931, 20261012073246, 20261012065813,
+                20261012065817, 20261012065819, 20261012065821, 20261012065823)
+BEST_HOLDOUT = 20261012065815
+BEST_OUT_VIS = (20261012065825, 20261012065827)
+BEST_PHERC0009B = 20250919125754
+BEST_INIT = "models/runs_iter2/init_mae192_cue4.pth"
+BEST_CUE_DIR = "./cue_asf_morph"
+BEST_EPOCHS = 10
+
+
+def apply_best_run(config) -> None:
+    """turn a default Config into the iter2_asf_cue run: same corpus, geometry, losses, input cue and schedule."""
+    data, tra, dl, model = config.data, config.tra, config.dl, config.model
+    for scroll_id in BEST_NEW_SET[2:]:
+        add_0846a_train_patch(config, scroll_id)
+    for scroll_id in (*BEST_NEW_SET, BEST_HOLDOUT, *BEST_OUT_VIS):
+        data.surface_window_offset_by_scroll[scroll_id] = -1
+    # 192 px field
+    config.init_weights = BEST_INIT
+    data.context_size = 192
+    dl.batch_size = 32
+    tra.lr = 1e-4
+    data.eval_infer_bs = 64
+    data.eval_chunk_gb = 2.0
+    data.ctx_jitter = 20
+    dl.context_replace_margin = 14
+    dl.context_replace_feather = 26
+    # new set plus PHerc0009B only
+    keep = ("pherc0846a", "pherc0009b")
+    weights = dict(zip(data.train_scroll_dict, data.train_scroll_weights))
+    data.train_scroll_dict = {k: v for k, v in data.train_scroll_dict.items() if k in keep}
+    weights["pherc0846a"] = 3
+    data.train_scroll_weights = [weights[k] for k in data.train_scroll_dict]
+    kept = {int(s) for ids in data.train_scroll_dict.values() for s in ids}
+    data.scrolls = [s for s in data.scrolls if int(s.scroll_id) in kept]
+    tra.dann_n_domains = len(data.train_scroll_dict)
+    data.native_noise = ""
+    # dual scale + strong nnPU + text-region gate
+    model.dual_scale = True
+    model.dual_scale_mix = 0.5
+    tra.pu_lambda = 3.0
+    data.far_negative_share = 0.5
+    data.far_negative_min_dist = 96
+    model.text_region_gate = True
+    # half-brightness regions of the new-set labels are hard negatives; straightened2, out_4 and out_5 are whole-patch vis only
+    data.extra_hard_negative_scroll_ids = list(BEST_NEW_SET)
+    data.whole_patch_valid_scroll_ids = [BEST_HOLDOUT, *BEST_OUT_VIS]
+    data.label_free_vis_scroll_ids = []
+    data.vis_scroll_ids = [*BEST_NEW_SET, BEST_HOLDOUT, *BEST_OUT_VIS, BEST_PHERC0009B]
+    tra.eval_int_scrolls = len(data.vis_scroll_ids)
+    # precomputed asf_morph map as the fourth input head, its branch trained at 5x the learning rate
+    model.input_cue = "pre_clahe"
+    data.cue_dir = BEST_CUE_DIR
+    tra.cue_head_prefixes = ("gated_cue_stem.branches.3.",)
+    tra.cue_head_lr_scale = 5.0
+    tra.n_epochs = tra.eval_int = tra.save_int = BEST_EPOCHS
+    config.run_name = config.exp_name = "asf_cue"
+    config.model_dir = "models/runs/asf_cue"
+    config.save_final = "models/runs/asf_cue/final.pth"

@@ -1,0 +1,12 @@
+2026-10-16 17:50:36.555766: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1792173036.573641 2215101 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1792173036.579443 2215101 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1792173036.596916 2215101 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792173036.596940 2215101 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792173036.596943 2215101 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792173036.596945 2215101 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2026-10-16 17:50:36.600812: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[preflight] 11 scroll(s) and init weights present
+[dry-run] run=cv_fold_2 ctx=192 norm=surface_anchor domains={'pherc0009b': 1, 'pherc0846a': 3} scrolls=8 vis=[20260927134931, 20261012073246, 20261012065813, 20261012065817, 20261012065819, 20261012065821, 20261012065823, 20261012065815, 20261012065825, 20261012065827, 20250919125754] epochs=10 batch=32 lr=0.0001 init=models/runs_iter2/init_mae192_cue4.pth -> /vesuvius/models/runs_kfolds/cv_fold_2/final.pth (TensorBoard /vesuvius/runs_kfolds/cv_fold_2)

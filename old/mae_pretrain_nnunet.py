@@ -180,6 +180,31 @@ class CropSampler:
         b = (blk - self.mean) / self.std
         return np.clip((b - self.g_min) / (self.g_max - self.g_min + 1e-12), 0, 1)
 
+    rotate_prob = 0.0  # share of crops turned by a uniform random angle about their centre
+
+    def _read_rotated(self, z, yy, xx, angle):
+        """(D, ctx, ctx) crop at (yy, xx) turned by `angle`; bilinear, raw zero outside the volume."""
+        import cv2
+        ctx, D = self.ctx, self.D
+        side = int(np.ceil(ctx * np.sqrt(2.0))) + 4
+        side += (side - ctx) % 2
+        margin = (side - ctx) // 2
+        y0, x0 = yy - margin, xx - margin
+        raw = np.zeros((D, side, side), dtype=np.float32)
+        H, W = int(self.vol.shape[1]), int(self.vol.shape[2])
+        ys, ye, xs, xe = max(0, y0), min(H, y0 + side), max(0, x0), min(W, x0 + side)
+        if ys >= ye or xs >= xe:
+            return None
+        raw[:, ys - y0:ye - y0, xs - x0:xe - x0] = np.asarray(self.vol[z:z + D, ys:ye, xs:xe], dtype=np.float32)
+        cos, sin = np.cos(angle), np.sin(angle)
+        src, dst = (side - 1) / 2, (ctx - 1) / 2
+        matrix = np.array([[cos, -sin, src - cos * dst + sin * dst],
+                           [sin, cos, src - sin * dst - cos * dst]], dtype=np.float64)
+        warped = cv2.warpAffine(np.ascontiguousarray(raw.transpose(1, 2, 0)), matrix, (ctx, ctx),
+                                flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+                                borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        return np.ascontiguousarray(warped.reshape(ctx, ctx, D).transpose(2, 0, 1))
+
     def sample(self, n, rng):
         """return (n, 1, D, ctx, ctx) float32 tensor or None if too few valid tiles."""
         ctx, D = self.ctx, self.D
@@ -191,7 +216,12 @@ class CropSampler:
             yy, xx = (int(value) for value in coords[index])
             z = self.z0 if z_range == 0 else int(rng.integers(self.z0, self.z0 + z_range + 1))
             try:
-                blk = np.array(self.vol[z:z + D, yy:yy + ctx, xx:xx + ctx], dtype=np.float32)
+                if self.rotate_prob > 0 and rng.random() < self.rotate_prob:
+                    blk = self._read_rotated(z, yy, xx, float(rng.uniform(-np.pi, np.pi)))
+                    if blk is None:
+                        continue
+                else:
+                    blk = np.array(self.vol[z:z + D, yy:yy + ctx, xx:xx + ctx], dtype=np.float32)
             except Exception:
                 continue
             if blk.shape != (D, ctx, ctx):
@@ -235,12 +265,12 @@ class MultiSampler:
         return torch.cat(parts, dim=0)
 
 
-def make_physical_sampler(samplers):
+def make_physical_sampler(samplers, scroll_dict=None):
     """balance physical scrolls first, then their component segments."""
     by_id = {sampler.scroll_id: sampler for sampler in samplers}
     assigned = set()
     groups = []
-    for name, scroll_ids in DEFAULT_TRAIN_SCROLL_DICT.items():
+    for name, scroll_ids in (scroll_dict or DEFAULT_TRAIN_SCROLL_DICT).items():
         members = [by_id[scroll_id] for scroll_id in scroll_ids if scroll_id in by_id]
         if members:
             groups.append(MultiSampler(members, name=name))
@@ -363,6 +393,10 @@ def main():
                     help="abort rather than silently skipping any requested scroll")
     ap.add_argument("--include-test-scrolls", action="store_true",
                     help="append the configured unseen test zarrs to the sampler")
+    ap.add_argument("--rotate-prob", type=float, default=0.0,
+                    help="share of training crops rotated by a uniform random angle about their centre")
+    ap.add_argument("--physical-groups", default="",
+                    help="JSON {name: [scroll ids]} replacing the default physical groups of --physical-round-robin")
     ap.add_argument("--physical-round-robin", action="store_true",
                     help="balance physical scrolls before their component segments")
     ap.add_argument("--init-weights", default=None,
@@ -403,6 +437,10 @@ def main():
     ap.add_argument("--fiber-coordinate-branch", action="store_true")
     ap.add_argument("--input-denoise-sigma", type=float, default=0.0)
     ap.add_argument("--input-denoiser", default="")
+    ap.add_argument("--input-prefilter", default="", choices=("", "asf", "clahe"))
+    ap.add_argument("--input-prefilter-mix", type=float, default=1.0)
+    ap.add_argument("--input-cue", default="", choices=("", "asf", "clahe"),
+                    help="fourth gated input head: asf or clahe of the max over slices")
     ap.add_argument("--data-norm-mode", default="global", choices=("global", "surface_anchor"))
     ap.add_argument("--depth", type=int, default=24)
     ap.add_argument("--d-start", type=int, default=4)
@@ -493,6 +531,9 @@ def main():
     cfg.model.fiber_coordinate_branch = bool(args.fiber_coordinate_branch)
     cfg.model.input_denoise_sigma = float(args.input_denoise_sigma)
     cfg.model.input_denoiser = str(args.input_denoiser)
+    cfg.model.input_prefilter = str(args.input_prefilter)
+    cfg.model.input_prefilter_mix = float(args.input_prefilter_mix)
+    cfg.model.input_cue = str(args.input_cue)
     cfg.data.norm_mode = str(args.data_norm_mode)
     cfg.tra.supcon = False
     cfg.data.tile_size = 16
@@ -542,6 +583,7 @@ def main():
                          holdout_frac=args.holdout_frac)
         mc = CropSampler(sid, zarr_path, cfg, y0, y1, x0, x1, "monitor",
                  holdout_frac=args.holdout_frac, shared=sc)
+        sc.rotate_prob = float(args.rotate_prob)
         train_samplers.append(sc)
         mon_samplers.append(mc)
 
@@ -554,8 +596,10 @@ def main():
         raise RuntimeError("no usable scrolls")
 
     if args.physical_round_robin:
-        train_s, physical_count = make_physical_sampler(train_samplers)
-        mon_s, monitor_physical_count = make_physical_sampler(mon_samplers)
+        groups = {name: [int(v) for v in ids] for name, ids in json.loads(args.physical_groups).items()} \
+            if args.physical_groups else None
+        train_s, physical_count = make_physical_sampler(train_samplers, groups)
+        mon_s, monitor_physical_count = make_physical_sampler(mon_samplers, groups)
         if physical_count != monitor_physical_count:
             raise RuntimeError("train and monitor physical groups do not match")
         print(
@@ -587,8 +631,15 @@ def main():
         backbone.input_denoiser = None
     if input_denoiser is not None:
         input_denoiser = input_denoiser.to(dev)
+    # likewise filter the crop once before masking; the backbone must not filter the masked input again
+    prefilter, prefilter_mix = backbone._input_prefilter, backbone._input_prefilter_mix
+    backbone._input_prefilter = ""
 
     def _denoised(batch):
+        if prefilter:
+            from utils.prefilter import apply_prefilter
+            with torch.no_grad():
+                batch = apply_prefilter(batch, prefilter, prefilter_mix)
         if input_denoiser is None:
             return batch
         with torch.no_grad():
@@ -604,6 +655,9 @@ def main():
             for key, value in state.items()
         }
         backbone_state = model.backbone.state_dict()
+        if args.input_cue:
+            from utils.cue_expand import expand_cue_state
+            cleaned = expand_cue_state(cleaned, backbone_state)
         loaded_keys = {
             key for key, value in cleaned.items()
             if key in backbone_state and value.shape == backbone_state[key].shape

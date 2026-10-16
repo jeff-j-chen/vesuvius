@@ -42,6 +42,8 @@ def create_optimizer_and_scheduler(model, config: Config):
     encoder_lr_scale = float(getattr(config.tra, "encoder_lr_scale", 1.0))
     encoder_freeze_epochs = int(getattr(config.tra, "encoder_freeze_epochs", 0))
     freeze_prefixes = tuple(getattr(config.tra, "freeze_prefixes", ()) or ())
+    cue_head_prefixes = tuple(getattr(config.tra, "cue_head_prefixes", ()) or ())  # trainable even under freeze_prefixes
+    cue_head_lr_scale = float(getattr(config.tra, "cue_head_lr_scale", 1.0))
     encoder_lr = getattr(config.tra, "encoder_lr", None)   # absolute lr for non-frozen encoder layers
     task_lr = getattr(config.tra, "task_lr", None)         # absolute lr for decoder + head
     base_lr = float(config.tra.lr)
@@ -60,7 +62,7 @@ def create_optimizer_and_scheduler(model, config: Config):
     parameter_groups = model.parameters()
     needs_groups = (
         encoder_lr_scale != 1.0 or task_lr_scale != 1.0
-        or encoder_freeze_epochs > 0 or bool(freeze_prefixes)
+        or encoder_freeze_epochs > 0 or bool(freeze_prefixes) or bool(cue_head_prefixes)
     )
     if needs_groups:
         encoder_prefixes = tuple(getattr(config.tra, "encoder_prefixes", None) or (
@@ -68,8 +70,12 @@ def create_optimizer_and_scheduler(model, config: Config):
         ))
         encoder_parameters = []
         task_parameters = []
+        cue_head_parameters = []
         frozen_count = 0
         for name, parameter in model.named_parameters():
+            if cue_head_prefixes and name.startswith(cue_head_prefixes):
+                cue_head_parameters.append(parameter)
+                continue
             if freeze_prefixes and name.startswith(freeze_prefixes):
                 # permanently frozen: no grad, not given to the optimizer (no weight decay either)
                 parameter.requires_grad_(False)
@@ -91,6 +97,12 @@ def create_optimizer_and_scheduler(model, config: Config):
                 "group_name": "encoder",
                 "lr_scale": encoder_lr_scale,
                 "lr_enabled": encoder_freeze_epochs == 0,
+            },
+            {
+                "params": cue_head_parameters,
+                "group_name": "cue_head",
+                "lr_scale": cue_head_lr_scale,
+                "lr_enabled": True,
             },
         ]
         parameter_groups = [group for group in parameter_groups if group["params"]]

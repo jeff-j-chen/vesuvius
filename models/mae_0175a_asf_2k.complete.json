@@ -1,0 +1,506 @@
+{
+  "purpose": "0175A + six 0846A patches MAE continuation with rotation augmentation; no ink labels",
+  "init_weights": "/vesuvius/models/mae_0175a_plus_0846a_rot_4k.pth",
+  "init_sha256": "de4e35e66723f3f2fa2520b514fd1912659c77f5c4b77668a32a3d4e73c2f53b",
+  "sources": [
+    {
+      "alias": 20260927134931,
+      "source_id": "20260927134928",
+      "zarr": "/vesuvius/ves_zarrs2/20260927134928.zarr",
+      "mask": "/vesuvius/masks/20260927134928.png",
+      "shape": [
+        28,
+        3041,
+        3661
+      ],
+      "norm_id": 20260927134931,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261012065811,
+      "source_id": "20261012065810",
+      "zarr": "/vesuvius/ves_zarrs2/20261012065810.zarr",
+      "mask": "/vesuvius/masks/20261012065810.png",
+      "shape": [
+        28,
+        2421,
+        3241
+      ],
+      "norm_id": 20261012065811,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261012073246,
+      "source_id": "20261012073244",
+      "zarr": "/vesuvius/ves_zarrs2/20261012073244.zarr",
+      "mask": "/vesuvius/masks/20261012073244.png",
+      "shape": [
+        28,
+        3941,
+        2861
+      ],
+      "norm_id": 20261012073246,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261012081238,
+      "source_id": "20261012081237",
+      "zarr": "/vesuvius/ves_zarrs2/20261012081237.zarr",
+      "mask": "/vesuvius/masks/20261012081237.png",
+      "shape": [
+        28,
+        4181,
+        3141
+      ],
+      "norm_id": 20261012081238,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20260927143929,
+      "source_id": "auto_grown_20260927143929299_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20260927143929299_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20260927143929299_abf.png",
+      "shape": [
+        28,
+        2241,
+        3061
+      ],
+      "norm_id": null,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20260927154033,
+      "source_id": "auto_grown_20260927154033403_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20260927154033403_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20260927154033403_abf.png",
+      "shape": [
+        28,
+        3761,
+        3641
+      ],
+      "norm_id": null,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261009055810,
+      "source_id": "auto_grown_20261009055810922_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261009055810922_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261009055810922_abf.png",
+      "shape": [
+        28,
+        4486,
+        4357
+      ],
+      "norm_id": 20261009055810,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261009074508,
+      "source_id": "auto_grown_20261009074508220_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261009074508220_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261009074508220_abf.png",
+      "shape": [
+        28,
+        4339,
+        5188
+      ],
+      "norm_id": 20261009074508,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261009123716,
+      "source_id": "auto_grown_20261009123716339_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261009123716339_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261009123716339_abf.png",
+      "shape": [
+        28,
+        4763,
+        5723
+      ],
+      "norm_id": 20261009123716,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261009171909,
+      "source_id": "auto_grown_20261009171909804_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261009171909804_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261009171909804_abf.png",
+      "shape": [
+        28,
+        8879,
+        7550
+      ],
+      "norm_id": 20261009171909,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261010071653,
+      "source_id": "auto_grown_20261010071652255_a_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261010071652255_a_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261010071652255_a_abf.png",
+      "shape": [
+        28,
+        4246,
+        3914
+      ],
+      "norm_id": 20261010071653,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261010071654,
+      "source_id": "auto_grown_20261010071652255_b_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261010071652255_b_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261010071652255_b_abf.png",
+      "shape": [
+        28,
+        4542,
+        4375
+      ],
+      "norm_id": 20261010071654,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261010071655,
+      "source_id": "auto_grown_20261010071652255_c_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261010071652255_c_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261010071652255_c_abf.png",
+      "shape": [
+        28,
+        4117,
+        4412
+      ],
+      "norm_id": 20261010071655,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261010144621,
+      "source_id": "auto_grown_20261010144621865_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261010144621865_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261010144621865_abf.png",
+      "shape": [
+        28,
+        3656,
+        4154
+      ],
+      "norm_id": 20261010144621,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261010151014,
+      "source_id": "auto_grown_20261010151014932_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261010151014932_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261010151014932_abf.png",
+      "shape": [
+        28,
+        2179,
+        1699
+      ],
+      "norm_id": 20261010151014,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261010151234,
+      "source_id": "auto_grown_20261010151234827_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261010151234827_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261010151234827_abf.png",
+      "shape": [
+        28,
+        3397,
+        4080
+      ],
+      "norm_id": 20261010151234,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261010151349,
+      "source_id": "auto_grown_20261010151349852_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261010151349852_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261010151349852_abf.png",
+      "shape": [
+        28,
+        2161,
+        3969
+      ],
+      "norm_id": 20261010151349,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261010151517,
+      "source_id": "auto_grown_20261010151517317_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261010151517317_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261010151517317_abf.png",
+      "shape": [
+        28,
+        2216,
+        3250
+      ],
+      "norm_id": 20261010151517,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261010151715,
+      "source_id": "auto_grown_20261010151714096_a_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261010151714096_a_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261010151714096_a_abf.png",
+      "shape": [
+        28,
+        3157,
+        4615
+      ],
+      "norm_id": 20261010151715,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261010151714,
+      "source_id": "auto_grown_20261010151714096_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261010151714096_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261010151714096_abf.png",
+      "shape": [
+        28,
+        2567,
+        2622
+      ],
+      "norm_id": 20261010151714,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261010151716,
+      "source_id": "auto_grown_20261010151714096_b_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261010151714096_b_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261010151714096_b_abf.png",
+      "shape": [
+        28,
+        4228,
+        5261
+      ],
+      "norm_id": 20261010151716,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261011181325,
+      "source_id": "auto_grown_20261011181325360_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261011181325360_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261011181325360_abf.png",
+      "shape": [
+        28,
+        4191,
+        6461
+      ],
+      "norm_id": 20261011181325,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261011181539,
+      "source_id": "auto_grown_20261011181539646_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261011181539646_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261011181539646_abf.png",
+      "shape": [
+        28,
+        3489,
+        4136
+      ],
+      "norm_id": 20261011181539,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261011181750,
+      "source_id": "auto_grown_20261011181750653_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261011181750653_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261011181750653_abf.png",
+      "shape": [
+        28,
+        4117,
+        5594
+      ],
+      "norm_id": 20261011181750,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261011182004,
+      "source_id": "auto_grown_20261011182004203_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261011182004203_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261011182004203_abf.png",
+      "shape": [
+        28,
+        6129,
+        3988
+      ],
+      "norm_id": 20261011182004,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261011182153,
+      "source_id": "auto_grown_20261011182153771_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261011182153771_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261011182153771_abf.png",
+      "shape": [
+        28,
+        2234,
+        1976
+      ],
+      "norm_id": 20261011182153,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261011182353,
+      "source_id": "auto_grown_20261011182353308_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261011182353308_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261011182353308_abf.png",
+      "shape": [
+        28,
+        4099,
+        7790
+      ],
+      "norm_id": 20261011182353,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261011182600,
+      "source_id": "auto_grown_20261011182600295_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261011182600295_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261011182600295_abf.png",
+      "shape": [
+        28,
+        4136,
+        2954
+      ],
+      "norm_id": 20261011182600,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261013131905,
+      "source_id": "auto_grown_20261013131905188_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261013131905188_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261013131905188_abf.png",
+      "shape": [
+        28,
+        4394,
+        5760
+      ],
+      "norm_id": 20261013131905,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261013132114,
+      "source_id": "auto_grown_20261013132114460_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261013132114460_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261013132114460_abf.png",
+      "shape": [
+        28,
+        6166,
+        4080
+      ],
+      "norm_id": 20261013132114,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261013153918,
+      "source_id": "auto_grown_20261013153918042_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20261013153918042_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20261013153918042_abf.png",
+      "shape": [
+        28,
+        4542,
+        3453
+      ],
+      "norm_id": 20261013153918,
+      "flat_depth": 13
+    }
+  ],
+  "command": [
+    "/usr/bin/python",
+    "-u",
+    "/vesuvius/old/mae_pretrain_nnunet.py",
+    "--name",
+    "mae_0175a_asf_2k",
+    "--init-weights",
+    "/vesuvius/models/mae_0175a_plus_0846a_rot_4k.pth",
+    "--early-2d-unet",
+    "--gated-stems",
+    "--norm-mode",
+    "ibn_full",
+    "--fiber-coordinate-branch",
+    "--data-norm-mode",
+    "surface_anchor",
+    "--ctx",
+    "96",
+    "--ds",
+    "1",
+    "--depth",
+    "8",
+    "--d-start",
+    "9",
+    "--d-end",
+    "17",
+    "--scroll-ids",
+    "20260927134931",
+    "20261012065811",
+    "20261012073246",
+    "20261012081238",
+    "20260927143929",
+    "20260927154033",
+    "20261009055810",
+    "20261009074508",
+    "20261009123716",
+    "20261009171909",
+    "20261010071653",
+    "20261010071654",
+    "20261010071655",
+    "20261010144621",
+    "20261010151014",
+    "20261010151234",
+    "20261010151349",
+    "20261010151517",
+    "20261010151715",
+    "20261010151714",
+    "20261010151716",
+    "20261011181325",
+    "20261011181539",
+    "20261011181750",
+    "20261011182004",
+    "20261011182153",
+    "20261011182353",
+    "20261011182600",
+    "20261013131905",
+    "20261013132114",
+    "20261013153918",
+    "--require-all-scrolls",
+    "--physical-round-robin",
+    "--physical-groups",
+    "{\"pherc0846a\": [20260927134931, 20260927143929, 20260927154033, 20261012065811, 20261012073246, 20261012081238], \"pherc0175a\": [20261009055810, 20261009074508, 20261009123716, 20261009171909, 20261010071653, 20261010071654, 20261010071655, 20261010144621, 20261010151014, 20261010151234, 20261010151349, 20261010151517, 20261010151715, 20261010151714, 20261010151716, 20261011181325, 20261011181539, 20261011181750, 20261011182004, 20261011182153, 20261011182353, 20261011182600, 20261013131905, 20261013132114, 20261013153918]}",
+    "--rotate-prob",
+    "0.75",
+    "--input-prefilter",
+    "asf",
+    "--input-prefilter-mix",
+    "1.0",
+    "--steps",
+    "2000",
+    "--batch-size",
+    "24",
+    "--lr",
+    "1e-4",
+    "--seed",
+    "41",
+    "--log-dir",
+    "/vesuvius/runs_mae_0175a",
+    "--log-int",
+    "50",
+    "--save-int",
+    "500",
+    "--no-figures"
+  ],
+  "cwd": "/vesuvius/_ves_tmp/mae_0175a/mae_0175a_asf_2k",
+  "steps": 2000,
+  "rotate_prob": 0.75,
+  "supervised_labels_used": false,
+  "surface_normalization_depth": 13,
+  "window": [
+    9,
+    17
+  ],
+  "sampling": "half 0846A / half 0175A, patches round-robin inside each",
+  "output": "/vesuvius/models/mae_0175a_asf_2k.pth",
+  "complete": true,
+  "output_sha256": "0a3cf16b2903991fba6af3338ce614f8974f33d7f90a1eb84486b47ba33e8106"
+}

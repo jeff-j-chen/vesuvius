@@ -225,7 +225,7 @@ def _configured_surface_window_offset(config, scroll_id):
     return int(offsets.get(int(scroll_id), offsets.get(str(scroll_id), fallback)))
 
 
-def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False, also_tta=False, surface_depth_map=None, surface_confidence_map=None, surface_depth_offset=0):
+def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False, also_tta=False, surface_depth_map=None, surface_confidence_map=None, surface_depth_offset=0, cue_map=None):
     """run batched prediction over given coords returning downsampled map.
 
     reads tiles as y-row strips: one zarr call per row of tiles instead of one
@@ -259,6 +259,10 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
     )
     if use_surface_teacher and (surface_depth_map is None or surface_confidence_map is None):
         raise RuntimeError(f"literal surface maps are required for {volume_name} evaluation")
+    pre_cue = str(getattr(config.model, "input_cue", "") or "") == "pre_clahe"
+    if pre_cue and cue_map is None:
+        raise RuntimeError(f"{volume_name}: this model needs its precomputed cue map (cue_map=load_cue(config, scroll_id))")
+    block_depth = depth + (1 if pre_cue else 0)
 
     # context-window toggle: when context_size>tile (single mode only) each tile is read as a
     # larger crop centered on it; the model center-pools MIL over the tile region. shrink the
@@ -305,7 +309,12 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
             out[:, ys - y0:ye - y0, xs - x0:xe - x0] = np.array(
                 vol[z_start:z_start + n_depth, ys:ye, xs:xe], dtype=np.float32)
         out = (out - g_mean) / g_std
-        return scale_to_unit(out, g_min, g_max, norm_mode)
+        out = scale_to_unit(out, g_min, g_max, norm_mode)
+        if pre_cue:
+            from .precomputed_cue import crop_cue
+
+            out = np.concatenate([out, crop_cue(cue_map, y0, x0, hgt, wid)], axis=0)
+        return out
 
     valid = []
     n_rows = len(by_y)
@@ -343,6 +352,8 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
         )
     elif _mode in ("light", "hflip", "2"):
         _tf = _flips[:2]                          # id + h-flip only -> 2 forwards (~half the cost)
+    elif _mode == "none":
+        _tf = _flips[:1]                          # identity only
     else:
         _tf = _flips                             # id + h + v + 180 -> 4 forwards (default)
 
@@ -365,6 +376,8 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
         )
     elif _mode in ("light", "hflip", "2"):
         _tf_inv = _inv_flips[:2]
+    elif _mode == "none":
+        _tf_inv = _inv_flips[:1]
     else:
         _tf_inv = _inv_flips
     pm_sum = np.zeros((h_small, w_small), dtype=np.float32)
@@ -420,7 +433,7 @@ def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_star
                     block = _read_ctx_strip(selected_start, depth, sy0, sx0, sp, sp)
                 else:
                     block = _read_strip(selected_start, depth, y_abs, x_abs, tile)
-                if block is None or block.shape != (depth, sp, sp):
+                if block is None or block.shape != (block_depth, sp, sp):
                     continue
                 teacher_depth = np.full((sp, sp), -1.0, dtype=np.float32)
                 teacher_confidence = np.zeros((sp, sp), dtype=np.float32)
@@ -882,6 +895,9 @@ class TensorboardVisualizer:
         self.full_x_range = getattr(dm, "full_x_range", (0, self.mask.shape[1]))
         self.full_y_range = getattr(dm, "full_y_range", (0, self.mask.shape[0]))
         self.global_mean, self.global_std, self.global_min, self.global_max = dm.norm_stats
+        from .precomputed_cue import load_cue
+
+        self.cue_map = load_cue(self.c, self.scroll1_id)
 
         # load test data region with stats
         self.test_volume, self.test_mask, self.test_y_range, self.test_x_range = self._load_test_region()
@@ -1964,6 +1980,7 @@ class TensorboardVisualizer:
                 surface_depth_map=self.surface_depth_map,
                 surface_confidence_map=self.surface_confidence_map,
                 surface_depth_offset=_configured_surface_window_offset(self.c, self.scroll1_id),
+                cue_map=self.cue_map,
             )
             full_tta = full_pred
 

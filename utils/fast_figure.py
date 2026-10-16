@@ -68,6 +68,35 @@ def gray_rgb(image):
     return np.repeat(image[..., None], 3, axis=2)
 
 
+def red_overlay(rgb, label, alpha=0.4):
+    """uint8 RGB with the boolean/uint8 `label` (any resolution) blended in red; edge pixels blend by label coverage."""
+    height, width = rgb.shape[:2]
+    coverage = (np.asarray(label) > 0).astype(np.float32)
+    if coverage.shape != (height, width):
+        coverage = cv2.resize(coverage, (width, height), interpolation=cv2.INTER_AREA)
+    weight = (alpha * coverage)[..., None]
+    out = rgb.astype(np.float32) * (1 - weight) + np.asarray(RED, dtype=np.float32) * weight
+    return out.round().astype(np.uint8)
+
+
+def crop_panel_pair(path, cell_hw, gap_px=24):
+    """(left, right) RGB panels of a one-row, two-column save_panel_grid figure, found from its cell size."""
+    cell_height, cell_width = cell_hw
+    gap = max(gap_px, cell_width // 40)
+    title_h = max(60, cell_height // 14)
+    fig_w = 2 * cell_width + 3 * gap
+    fig_h = title_h + cell_height + 2 * gap
+    scale = min(1.0, MAX_FIGURE_PX / fig_w, MAX_FIGURE_PX / fig_h)
+    panel_w, panel_h = max(1, int(cell_width * scale)), max(1, int(cell_height * scale))
+    top = int((gap + title_h) * scale)
+    with Image.open(path) as figure:
+        if figure.size != (max(1, int(fig_w * scale)), max(1, int(fig_h * scale))):
+            raise ValueError(f"{path} is {figure.size}, not the layout expected for cells {cell_hw}")
+        image = np.asarray(figure.convert("RGB"))
+    return tuple(image[top:top + panel_h, int((gap + c * (cell_width + gap)) * scale):][:, :panel_w].copy()
+                 for c in range(2))
+
+
 def _text(canvas, xy, text, size_px, fill, anchor):
     """draw text in place, touching only the patch it covers (the canvas can be ~500 MB)"""
     font = _font(size_px)

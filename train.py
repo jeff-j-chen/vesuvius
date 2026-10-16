@@ -1,9 +1,10 @@
 """Vesuvius ink-detection training.
 
-`python3 train.py` trains the default run in utils/config.py (nop29): AND-mask over patch groups, strong character
-bag ranking and strict nnPU from the six-patch PHerc0846A MAE. Two labeled PHerc0846A patches train; the +29 offset
-sheet (p29) is vis-only. Checkpoints go to models/runs/<run>/ and TensorBoard to runs/<run>/; an existing run is never
-overwritten (a _2, _3 ... suffix is used).
+`python3 train.py` trains the best run so far (utils/config.py apply_best_run = iter2_asf_cue): a 192 px field with the
+precomputed asf_morph map as a fourth input head, dual scale, strong nnPU and the text-region gate, on the new PHerc0846A set
+(ABF, 073246, m28, straightened2 in_1 / out_1 / out_2 / out_3) plus PHerc0009B. straightened2, out_4 and out_5 are rendered at
+the end and never trained on. Checkpoints go to models/runs/<run>/ and TensorBoard to runs/<run>/; an existing run is never
+overwritten (a _2, _3 ... suffix is used). Experiment runners pass `configure` to edit the default Config instead.
 """
 import functools
 import gc
@@ -27,7 +28,7 @@ from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 from tqdm import tqdm
 
-from utils.config import Config, startup_output
+from utils.config import Config, apply_best_run, startup_output
 from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray, get_tile_pos_weight, needs_domain_ids, needs_patch_ids
 from utils.dataloader import CHARACTER_NAMESPACE_STRIDE, EXTRA_CHARACTER_OFFSET, get_divdis_loader, is_extra_character
 from utils.hard_mining import HardMiningInjector, HardMiningManager
@@ -325,6 +326,34 @@ def character_bag_ranking_loss(
     positive_score = _topk_bag_means(flat_logits, positive_bags, fraction)
     negative_score = _topk_bag_means(flat_logits, negative_bags, fraction)
     return F.softplus(float(margin) + negative_score - positive_score).mean(), len(positive_bags)
+
+
+def character_floor_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    mask: torch.Tensor,
+    character_ids: torch.Tensor,
+    sample_keep: torch.Tensor,
+    fraction: float,
+    margin: float,
+) -> torch.Tensor | None:
+    """push the weakest `fraction` of every stroke's positive cells up to a mean logit of `margin`.
+
+    strokes are the characters of the kept samples; like the bag ranking loss, bag membership comes from host copies."""
+    cells = labels.shape[1]
+    flat_labels = labels.detach().reshape(-1).cpu()
+    flat_mask = mask.detach().reshape(-1).cpu() > 0
+    flat_ids = character_ids.detach().reshape(-1).cpu().long()
+    keep = sample_keep.detach().cpu().bool().repeat_interleave(cells)
+    selected = flat_mask & keep & (flat_labels > 0.5) & (flat_ids > 0)
+    bags = [
+        torch.nonzero(selected & (flat_ids == value)).view(-1)
+        for value in torch.unique(flat_ids[selected]).tolist()
+    ]
+    if not bags:
+        return None
+    weakest = -_topk_bag_means(-logits.reshape(-1), bags, min(max(float(fraction), 1e-6), 1.0))
+    return F.softplus(float(margin) - weakest).mean()
 
 
 class _PendingGroup(NamedTuple):
@@ -794,6 +823,11 @@ class Trainer:
                         or float(getattr(self.c.tra, "sam_rho", 0.0)) > 0:
                     raise ValueError("DivDis cannot be combined with AND-mask, Fish, MLDG, PCGrad or SAM")
                 self._divdis_loader = get_divdis_loader(self.c)
+            self._target_loader = (
+                get_divdis_loader(self.c)
+                if float(getattr(self.c.tra, "target_consistency_lambda", 0.0)) > 0 else None
+            )
+            self._consistency_values: list[torch.Tensor] = []
 
             print("Initializing Tensorboard...")
             self._init_visualizers()
@@ -874,6 +908,12 @@ class Trainer:
             "pu_risk": 0.0,
             "pu_unlabeled_mean_prob": 0.0,
             "pu_rank_loss": 0.0,
+            "stroke_floor_loss": 0.0,
+            "text_region_loss": 0.0,
+            "line_pu_loss": 0.0,
+            "line_llp_loss": 0.0,
+            "line_cell_mean_prob": 0.0,
+            "depth_mil_pair_better": 0.0,
             "unsupported_pos_frac": 0.0,
             "unsupported_neg_frac": 0.0,
             "and_mask_kept_frac": 0.0,
@@ -1127,6 +1167,11 @@ class Trainer:
                 anchor_prefixes = (
                     "enc1.",
                     "enc2.",
+                    "early2d_enc2.",
+                    "early2d_enc3.",
+                    "early2d_bottleneck.",
+                    "early_depth_",
+                    "fiber_coordinate_input.",
                     "gated_cue_stem.",
                     "mid_depth_attn.",
                     "mid_depth_fuse.",
@@ -1495,12 +1540,22 @@ class Trainer:
         dg_totals = {key: 0.0 for key in self._last_dg_losses}
         patch_dro_total = 0.0
         self._defer_optimizer_step = True
+        # each group trains on its own share of the target crops, so the step costs one batch of them in total
+        target_batch = kwargs.get("target_batch")
+        target_chunks = (
+            list(zip(*(tensor.chunk(len(bounds)) for tensor in target_batch)))
+            if target_batch is not None else None
+        )
+        if target_chunks is not None and len(target_chunks) < len(bounds):
+            target_chunks += [None] * (len(bounds) - len(target_chunks))
         try:
             for start, end in bounds:
                 group_kwargs = {
                     key: (value[start:end] if key in self._GROUP_SLICED and value is not None else value)
                     for key, value in kwargs.items()
                 }
+                if target_chunks is not None:
+                    group_kwargs["target_batch"] = target_chunks.pop(0)
                 result = self._train_batch(images[start:end], labels[start:end], mask[start:end], **group_kwargs)
                 # deferred groups return a _PendingGroup whose host arrays are already known
                 cells = float(len(result.label_values)) if isinstance(result, _PendingGroup) else 0.0
@@ -1758,6 +1813,42 @@ class Trainer:
             sum(value < 0 for value in cosines.values()) / max(len(cosines), 1)
         )
         return weights
+
+    def _target_consistency_loss(self, target_batch) -> torch.Tensor:
+        """squared difference of cell probabilities between a label-free target crop and the same crop turned by
+        a random multiple of 90 degrees; the turned crop's cell grid, offset and surface maps turn with it."""
+        images, offsets, depth, confidence, cell_valid = (
+            tensor.to(self.c.device, non_blocking=True) for tensor in target_batch
+        )
+        surface_maps = any(
+            bool(getattr(self.c.model, name, False))
+            for name in ("new_learned_surface", "better_surface", "surface_teacher_input")
+        )
+        aware = bool(getattr(self.c.data, "target_aware_ctx_jitter", False))
+        grid = int(self.c.model.multitile_grid)
+        count = images.shape[0]
+        k = random.choice((1, 2, 3))
+        turned_offsets = offsets
+        for _ in range(k):
+            turned_offsets = torch.stack((-turned_offsets[:, 1], turned_offsets[:, 0]), dim=1)
+
+        def scores(x, o, d, c):
+            out = self.model(
+                x,
+                target_offsets=o if aware else None,
+                teacher_surface_depth=d.float() if surface_maps else None,
+                teacher_surface_confidence=c.float() if surface_maps else None,
+            )
+            return torch.sigmoid(out.float()).view(count, grid, grid)
+
+        plain = scores(images, offsets, depth, confidence)
+        turned = scores(
+            torch.rot90(images, k, dims=(3, 4)), turned_offsets,
+            torch.rot90(depth, k, dims=(2, 3)), torch.rot90(confidence, k, dims=(2, 3)),
+        )
+        valid = torch.rot90((cell_valid.view(count, grid, grid) > 0).float(), k, dims=(1, 2))
+        difference = (torch.rot90(plain, k, dims=(1, 2)) - turned).square()
+        return (difference * valid).sum() / valid.sum().clamp(min=1.0)
 
     def _divdis_loss(self, extra_scores, targets, loss_mask, denom, divdis_batch) -> torch.Tensor:
         """DivDis: supervised loss on the extra heads, then pairwise MI and a marginal prior on target crops."""
@@ -2249,7 +2340,7 @@ class Trainer:
     def _train_batch(self, images, labels, mask, domain_ids=None, patch_ids=None,
                      character_ids=None,
                      target_offsets=None, epoch: int = 0, unlabeled_images=None,
-                     divdis_batch=None,
+                     divdis_batch=None, target_batch=None,
                      surface_depth=None, surface_confidence=None,
                      depth_shift=None,
                      context_pair=None, context_pair_active=None,
@@ -2408,6 +2499,26 @@ class Trainer:
                 float(getattr(self.c.tra, "dann_lambda", 0.0)) * anneal
                 if bool(getattr(self.c.tra, "dann", False)) else 1.0
             )
+            mil_pair_outputs = None
+            mil_active = None
+            if (
+                bool(getattr(self.c.tra, "depth_view_mil", False))
+                and depth_pair is not None
+                and depth_pair_active is not None
+                and (depth_pair_active.view(-1) > 0).any()
+            ):
+                mil_active_cpu = depth_pair_active.view(-1) > 0
+                mil_active = mil_active_cpu.to(self.c.device, non_blocking=True)
+                # run before the primary view so the model's last_* side outputs describe the primary view
+                mil_pair_outputs = self.model(
+                    depth_pair[mil_active_cpu].to(self.c.device, non_blocking=True),
+                    target_offsets=target_offsets[mil_active] if target_offsets is not None else None,
+                    teacher_surface_depth=depth_pair_surface[mil_active_cpu].to(self.c.device, non_blocking=True).float(),
+                    teacher_surface_confidence=depth_pair_confidence[mil_active_cpu].to(
+                        self.c.device, non_blocking=True).float(),
+                )
+                if mil_pair_outputs.dim() == 4:
+                    mil_pair_outputs = mil_pair_outputs.flatten(1).max(dim=1, keepdim=True).values
             if use_extras:
                 outputs, _, domain_logits, supcon_z = self.model.forward_with_extras(
                     images,
@@ -2462,6 +2573,19 @@ class Trainer:
                 targets = torch.where(labels > 0.5, targets * positive_level, targets)
 
             per_target_loss = self.criterion(outputs, targets)
+            if mil_pair_outputs is not None and mil_pair_outputs.shape == outputs[mil_active].shape:
+                # depth-offset MIL: the better-fitting depth view explains a positive cell, a negative must hold in both
+                pair_loss = self.criterion(mil_pair_outputs, targets[mil_active])
+                primary_loss_a = per_target_loss[mil_active]
+                positive_cells = labels[mil_active] > 0.5
+                merged = torch.where(positive_cells, torch.minimum(primary_loss_a, pair_loss), 0.5 * (primary_loss_a + pair_loss))
+                per_target_loss = per_target_loss.clone()
+                per_target_loss[mil_active] = merged
+                supervised_pairs = positive_cells & (mask[mil_active] > 0)
+                self._last_dg_losses["depth_mil_pair_better"] = (
+                    (pair_loss < primary_loss_a).float()[supervised_pairs].mean() if supervised_pairs.any()
+                    else primary_loss_a.new_zeros(())
+                ).detach()
             loss_mask = mask
             # host mirror of loss_mask; None once a data-dependent rule (top-k, support drop) edits it
             loss_mask_host = mask_host
@@ -2489,16 +2613,22 @@ class Trainer:
             pu_lambda = float(getattr(self.c.tra, "pu_lambda", 0.0))
             pu_unlabeled = None
             pu_unlabeled_host = None
+            line_cells_dev = None
+            line_cells_host = None
             labelled_mask = mask
             if pu_lambda > 0 and outputs.shape == mask.shape:
-                # far-background cells may hold unlabelled ink: they leave every negative-treating loss
-                pu_unlabeled = (labels < -1.5) & (mask > 0)
-                pu_unlabeled_host = (labels_host < -1.5) & (mask_host > 0)
-                labelled_mask = mask * (~pu_unlabeled).to(mask.dtype)
-                loss_mask = loss_mask * (~pu_unlabeled).to(loss_mask.dtype)
-                labelled_mask_host = mask_host * (~pu_unlabeled_host).float()
+                # far-background (-2) and in-line (-3) cells may hold unlabelled ink: they leave every negative-treating loss
+                pu_any = (labels < -1.5) & (mask > 0)
+                pu_any_host = (labels_host < -1.5) & (mask_host > 0)
+                pu_unlabeled = pu_any & (labels > -2.5)
+                pu_unlabeled_host = pu_any_host & (labels_host > -2.5)
+                line_cells_dev = pu_any & (labels < -2.5)
+                line_cells_host = pu_any_host & (labels_host < -2.5)
+                labelled_mask = mask * (~pu_any).to(mask.dtype)
+                loss_mask = loss_mask * (~pu_any).to(loss_mask.dtype)
+                labelled_mask_host = mask_host * (~pu_any_host).float()
                 if loss_mask_host is not None:
-                    loss_mask_host = loss_mask_host * (~pu_unlabeled_host).float()
+                    loss_mask_host = loss_mask_host * (~pu_any_host).float()
             support_drop = str(getattr(self.c.tra, "support_drop", "") or "")
             if support_drop:
                 loss_mask_host = None
@@ -2847,7 +2977,7 @@ class Trainer:
             region_lambda = float(getattr(self.c.tra, "text_region_lambda", 0.0))
             if region_logits is not None and region_lambda > 0 and region_logits.shape == mask.shape:
                 # far-background negatives (-2) are outside the text region; every other supervised cell is inside
-                region_targets = (labels > -1.5).float()
+                region_targets = ((labels > -1.5) | (labels < -2.5)).float()
                 region_loss = (
                     F.binary_cross_entropy_with_logits(
                         region_logits.float(), region_targets, reduction="none"
@@ -2924,6 +3054,20 @@ class Trainer:
                 )
                 loss = loss + float(getattr(self.c.tra, "character_bag_lambda", 0.2)) * bag_rank_loss_value
 
+            floor_lambda = float(getattr(self.c.tra, "stroke_floor_lambda", 0.0))
+            if (
+                floor_lambda > 0 and character_ids is not None and domain_ids_host is not None
+                and outputs.shape == labels_host.shape == labelled_mask_host.shape
+            ):
+                floor_domain = list(self.c.data.train_scroll_dict).index(str(self.c.tra.stroke_floor_domain))
+                floor_loss = character_floor_loss(
+                    outputs, labels_host, labelled_mask_host, character_ids, domain_ids_host == floor_domain,
+                    float(self.c.tra.stroke_floor_fraction), float(self.c.tra.stroke_floor_margin),
+                )
+                if floor_loss is not None:
+                    loss = loss + floor_lambda * floor_loss
+                    self._last_dg_losses["stroke_floor_loss"] = floor_loss.detach()
+
             if pu_unlabeled is not None:
                 pu_positive = (labels > 0.5) & (mask > 0)
                 pu_positive_host = (labels_host > 0.5) & (mask_host > 0)
@@ -2950,6 +3094,39 @@ class Trainer:
                     self._last_dg_losses["pu_unlabeled_mean_prob"] = (
                         (torch.sigmoid(logits) * unlabeled_weight).sum() / unlabeled_weight.sum()
                     ).detach()
+
+            if line_cells_dev is not None and line_cells_host.any():
+                line_logits = outputs.float()
+                line_weight = line_cells_dev.float()
+                line_pu_lambda = float(getattr(self.c.tra, "line_pu_lambda", 0.0))
+                line_positive_host = (labels_host > 0.5) & (mask_host > 0)
+                if line_pu_lambda > 0 and line_positive_host.any():
+                    line_positive = ((labels > 0.5) & (mask > 0)).float()
+                    # nnPU on the in-line unlabelled cells: a text line is expected to hold more ink than far background
+                    line_risk = (
+                        (F.softplus(line_logits) * line_weight).sum() / line_weight.sum()
+                        - float(getattr(self.c.tra, "line_pu_prior", 0.2))
+                        * (F.softplus(line_logits) * line_positive).sum() / line_positive.sum()
+                    )
+                    line_beta = float(getattr(self.c.tra, "pu_beta", 0.0))
+                    line_loss = torch.where(
+                        line_risk.detach() >= -line_beta,
+                        line_risk,
+                        -float(getattr(self.c.tra, "pu_gamma", 1.0)) * line_risk,
+                    )
+                    loss = loss + line_pu_lambda * line_loss
+                    self._last_dg_losses["line_pu_loss"] = line_loss.detach()
+                line_llp_lambda = float(getattr(self.c.tra, "line_llp_lambda", 0.0))
+                if line_llp_lambda > 0:
+                    # label proportions: the batch's in-line unlabelled cells carry the prior share of ink as a population
+                    line_mean = ((torch.sigmoid(line_logits) * line_weight).sum() / line_weight.sum()).clamp(1e-4, 1 - 1e-4)
+                    llp_target = line_mean.new_tensor(float(getattr(self.c.tra, "line_llp_prior", 0.2)))
+                    llp_loss = -(llp_target * line_mean.log() + (1.0 - llp_target) * (1.0 - line_mean).log())
+                    loss = loss + line_llp_lambda * llp_loss
+                    self._last_dg_losses["line_llp_loss"] = llp_loss.detach()
+                self._last_dg_losses["line_cell_mean_prob"] = (
+                    (torch.sigmoid(line_logits) * line_weight).sum() / line_weight.sum()
+                ).detach()
 
             tta_lambda = float(getattr(self.c.tra, "tta_consistency_lambda", 0.0))
             _tta_on = getattr(self.c.tra, "tta_consistency", False) and tta_lambda > 0
@@ -3332,6 +3509,10 @@ class Trainer:
                 loss = loss + self._divdis_loss(
                     labeled_divdis_scores[1:], targets, loss_mask, denom, divdis_batch,
                 )
+            if target_batch is not None:
+                consistency = self._target_consistency_loss(target_batch)
+                self._consistency_values.append(consistency.detach())
+                loss = loss + float(self.c.tra.target_consistency_lambda) * consistency
 
             # entropy maximization on unlabeled (validation) tiles: rewards uncertainty outside
             # the labeled region, attacking the "predict not-ink everywhere" fixed point
@@ -3387,6 +3568,7 @@ class Trainer:
             self.scaler.scale(weighted_context_loss).backward()
         if (
             bool(getattr(self.c.tra, "depth_view_consistency", False))
+            and float(getattr(self.c.tra, "depth_view_consistency_lambda", 0.2)) > 0
             and depth_pair is not None
             and depth_pair_active is not None
             and (depth_pair_active.view(-1) > 0).any()
@@ -3652,6 +3834,7 @@ class Trainer:
         entropy_lambda = float(getattr(self.c.tra, "entropy_min_lambda", 0.0))
         u_iter = iter(self.valid_loader) if entropy_lambda > 0 else None
         divdis_iter = iter(self._divdis_loader) if self._divdis_loader is not None else None
+        target_iter = iter(self._target_loader) if self._target_loader is not None else None
 
         for batch_index, batch in enumerate(
             tqdm(self.train_loader, desc="Training", mininterval=5, miniters=1, file=sys.stderr)
@@ -3798,6 +3981,7 @@ class Trainer:
                 epoch=epoch,
                 unlabeled_images=u_imgs,
                 divdis_batch=next(divdis_iter) if divdis_iter is not None else None,
+                target_batch=next(target_iter) if target_iter is not None else None,
                 surface_depth=batch_surface_depth,
                 surface_confidence=batch_surface_confidence,
                 depth_shift=batch_depth_shift,
@@ -4357,9 +4541,20 @@ class Trainer:
             ("pu_risk", "PU/Risk"),
             ("pu_unlabeled_mean_prob", "PU/UnlabeledMeanProb"),
             ("pu_rank_loss", "PU/RankLoss"),
+            ("stroke_floor_loss", "Aux/StrokeFloor"),
+            ("text_region_loss", "Aux/TextRegion"),
+            ("line_pu_loss", "Aux/LinePU"),
+            ("line_llp_loss", "Aux/LineLLP"),
+            ("line_cell_mean_prob", "Aux/LineCellMeanProb"),
+            ("depth_mil_pair_better", "Aux/DepthMilPairBetter"),
         ):
             if key in train_metrics:
                 self.vis.writer.add_scalar(tag, train_metrics[key], epoch)
+        if self._consistency_values:
+            self.vis.writer.add_scalar(
+                "Aux/TargetConsistency", float(torch.stack(self._consistency_values).mean()), epoch,
+            )
+            self._consistency_values.clear()
         for index, entry in enumerate(val_metrics.get("divdis_heads", [])):
             for name, value in entry.items():
                 self.vis.writer.add_scalar(f"DivDis/Head{index}/{name}_Select", value, epoch)
@@ -4671,8 +4866,11 @@ def main(configure=None) -> None:
     args = parser.parse_args()
 
     config = Config()
-    # experiment runners (k_folds.py) edit the default config here, before any path resolution
-    if configure is not None:
+    # experiment runners (k_folds.py) edit the default config here, before any path resolution; a plain
+    # `python3 train.py` trains the best run so far
+    if configure is None:
+        apply_best_run(config)
+    else:
         configure(config)
     repo_root = os.path.dirname(os.path.abspath(__file__))
     # data, label, and cache paths in the config are repo-relative

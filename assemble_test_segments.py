@@ -114,6 +114,9 @@ from utils.depth_flip import reversed_ids  # noqa: E402
 
 # renders whose mesh normal opposes the training orientation; rendered with reversed depth offsets
 DEPTH_REVERSED = reversed_ids()
+# renders whose mesh is upside down in the flattened frame: the coordinate grids are rotated 180 degrees in-plane before
+# sampling (letters stay unmirrored; the normal and depth order are unchanged), so every stored array is upright
+ROTATE_180 = {"20261014084610", "20261012065814", "20261012065816", "20261012065818", "20261012065820", "20261012065822", "20261012065824", "20261012065826"}
 
 # free-disk floor for downloads/renders (set from --min-free-gb); tripping it stops all further rendering
 _MIN_FREE_BYTES = 0
@@ -207,7 +210,7 @@ def compute_normals(Xu, Yu, Zu):
 def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, normal_step,
                           upsample_factor, workers, out_zarr, out_id, chunk_depth, chunk_y, chunk_x,
                           crop_valid=True, crop_margin=8, mask_dir=MASK_DIR, output_dtype="<u2",
-                          reverse_depth=False, source_um=TARGET_VOXEL_UM, trilinear=None):
+                          reverse_depth=False, source_um=TARGET_VOXEL_UM, trilinear=None, rotate180=False):
     """render a flattened surface volume from tifxyz mesh + raw volume on S3.
     
     the mesh gives, for each point on the FLATTENED sheet, its (x,y,z) voxel in the raw scan.
@@ -225,6 +228,8 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
     as fill_value 0."""
     os.makedirs(cache_dir, exist_ok=True)
     X, Y, Z, valid = load_mesh(mesh_dir)
+    if rotate180:
+        X, Y, Z, valid = (np.ascontiguousarray(grid[::-1, ::-1]) for grid in (X, Y, Z, valid))
     
     # crop to the valid bounding box (+margin) FIRST. some meshes store a small compact
     # sheet inside a huge mostly-empty padded grid (e.g. a 344x455 blob in a 6203x6203 grid);
@@ -425,6 +430,8 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
     store.attrs["voxel_um"] = TARGET_VOXEL_UM
     store.attrs["source_voxel_um"] = float(source_um)
     store.attrs["sampling"] = "trilinear" if interpolate else "nearest"
+    if rotate180:
+        store.attrs["rotated_180"] = True
 
     # the rendered zarr is the source of truth for its usable footprint
     # derive the mask from the center layer rather than mesh validity alone
@@ -528,6 +535,34 @@ FRAGMENTS = [
     ("20261012073249", "3_new_offset/auto_grown_20261012073244544_abf_p29",
      f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
      "14019,7726,7726"),
+    # a second straightened PHerc0846A sheet (2026-10-15); its mesh is upside down, so it is assembled rotated 180
+    # degrees (ROTATE_180) and every mask, label and train mask is written upright
+    ("20261014084610", "auto_grown_20261014084609861_straight_abf",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    # straightened2 re-trace of the 065803 sheet (2026-10-15), assembled alongside the earlier straight sheets
+    ("20261012065814", "auto_grown_20261012065803387_straightened2_abf",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    # neighbor sheets of straightened2 (2026-10-15): in_1 one sheet the other way, out_N N sheets away
+    ("20261012065816", "auto_grown_20261012065803387_straightened2_abf_in_1",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    ("20261012065818", "auto_grown_20261012065803387_straightened2_abf_out_1",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    ("20261012065820", "auto_grown_20261012065803387_straightened2_abf_out_2",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    ("20261012065822", "auto_grown_20261012065803387_straightened2_abf_out_3",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    ("20261012065824", "auto_grown_20261012065803387_straightened2_abf_out_4",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    ("20261012065826", "auto_grown_20261012065803387_straightened2_abf_out_5",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
 ]
 
 # source render -> flat depth-13 alias used by training and the 0846A notebook (see the docstring)
@@ -538,6 +573,14 @@ FLAT_ALIASES = {
     "20261012081237": "20261012081238",
     "20261012065810": "20261012065811",
     "20261012065812": "20261012065813",
+    "20261014084610": "20261014084611",
+    "20261012065814": "20261012065815",
+    "20261012065816": "20261012065817",
+    "20261012065818": "20261012065819",
+    "20261012065820": "20261012065821",
+    "20261012065822": "20261012065823",
+    "20261012065824": "20261012065825",
+    "20261012065826": "20261012065827",
 }
 FLAT_DEPTH = 13
 
@@ -599,7 +642,8 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
     if os.path.isdir(out_zarr) and os.path.exists(mask_path):
         import zarr
         attrs = zarr.open(out_zarr, mode="r").attrs
-        if attrs.get("sampling") == "trilinear" and attrs.get("voxel_um") == TARGET_VOXEL_UM:
+        if (attrs.get("sampling") == "trilinear" and attrs.get("voxel_um") == TARGET_VOXEL_UM
+                and bool(attrs.get("rotated_180", False)) == (zid in ROTATE_180)):
             print(f"  zarr + mask exist -> skip")
             return (zid, "OK (cached)")
         print(f"  zarr predates trilinear 9.362um rendering -> re-rendering")
@@ -641,6 +685,7 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
             mask_dir=mask_dir,
             output_dtype=output_dtype,
             reverse_depth=zid in DEPTH_REVERSED,
+            rotate180=zid in ROTATE_180,
             source_um=source_um)
         drop_stale_derived(zid, old_mask, mask_path)
         # composites show the raw render, so they are rebuilt from the new one

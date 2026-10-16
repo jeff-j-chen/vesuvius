@@ -1,7 +1,0 @@
-{
-  "stage": "combo_patch_bag_strict",
-  "complete": true,
-  "config_sha256": "396c02a840fb13c978d0d6fac4f23d2579ac26582f03abae382c0cb2c61b5fdb",
-  "init_sha256": "0badcf1e45d1905e9c6608b3fc9521cd55f269435e7b2ceeab45ec1fcd37885e",
-  "checkpoint_sha256": "5f294e78c20d6ebe97827d0aa8ae4b0d1052de97d1401db8b992803f371cdc13"
-}

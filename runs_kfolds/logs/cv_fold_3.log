@@ -1,0 +1,26 @@
+2026-10-16 21:21:16.305890: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1792185676.322289 2255847 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1792185676.327550 2255847 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1792185676.342221 2255847 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792185676.342248 2255847 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792185676.342251 2255847 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792185676.342253 2255847 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2026-10-16 21:21:16.345970: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[preflight] 11 scroll(s) and init weights present
+Creating datasets...
+[multi-scroll] physical groups={'pherc0009b': [20250919125754], 'pherc0846a': [20260927134931, 20261012073246, 20261012065813, 20261012065817, 20261012065819, 20261012065821, 20261012065823]} weights=[1, 3]
+[extra-labels] scroll 20260927134931: 396,909 half-brightness pixels -> 460,288 hard-negative pixels
+[split] scroll 20260927134931: manual mask=/vesuvius/runs_kfolds/splits/fold_3/train_masks/20260927134931.png train_pixels=71.6% explicit_negative_pixels=460,288 explicit_positive_pixels=0
+[split] scroll 20260927134931: axis=x train_frac=1.0
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=5289
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2699  ring_tiles=4190  ratio=1.55
+[character-components] 12 components at 16px target resolution
+[manual-split] scroll 20260927134931: unit=16px train_ring=1273344px valid_ring=490240px train_only=False
+[far-negatives] scroll 20260927134931: min_dist=96px far_units=17638 windows=14886
+[character-sampling] scroll 20260927134931: 8 characters with positive and ring-negative windows
+[context-replace] scroll 20260927134931: 16502 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20260927134931: manifest=2,262/2,784 spatial chunks (81.2%)
+[selective-cache] ready 20260927134931.zarr: chunks=2,262 ram=0.48 GiB (forked readers)
+[multi-scroll] scroll 20260927134931: train_tiles=6667 valid_tiles=2967

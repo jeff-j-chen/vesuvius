@@ -325,6 +325,24 @@ def _save_unified_cache(cache, cache_path=UNIFIED_CACHE_PATH):
     with open(cache_path, "w") as f:
         json.dump(payload, f, indent=4)
 
+class _RotatedFrame:
+    """a context block turned by `angle` about its prediction centre.
+
+    block pixel p reads source pixel R(p - dst) + src (pixel-centre coordinates), so the centre stays where the
+    unrotated block had it and target_offset is unchanged. `start` is the block index of the first centre pixel.
+    """
+
+    def __init__(self, angle, src, dst, start):
+        self.angle = float(angle)
+        self.cos, self.sin = math.cos(angle), math.sin(angle)
+        self.src, self.dst, self.start = src, dst, start
+
+    def source(self, yy, xx):
+        dy, dx = yy - self.dst[0], xx - self.dst[1]
+        return (self.src[0] + self.sin * dx + self.cos * dy,
+                self.src[1] + self.cos * dx - self.sin * dy)
+
+
 class Transform:
     """handles data augmentation transforms"""
     def __init__(self, config: Config, scroll_id=None):
@@ -335,6 +353,7 @@ class Transform:
         self.contrast_prob = float(getattr(config.dl, "contrast_prob", 0.50))
         # augmentation magnitudes (config-tracked; see DataloaderConfig)
         self.brightness_delta = float(getattr(config.dl, "brightness_delta", 0.15))
+        self.brightness_low = float(getattr(config.dl, "brightness_low", -1.0))
         self.contrast_delta   = float(getattr(config.dl, "contrast_delta", 0.15))
         self.noise_std_min    = float(getattr(config.dl, "noise_std_min", 0.001))
         self.noise_std_max    = float(getattr(config.dl, "noise_std_max", 0.005))
@@ -948,7 +967,8 @@ class Transform:
     def _apply_brightness_adjustment(self, block):
         """applies ONE brightness factor to the whole block (shared across depth).
         per-depth factors distort the through-depth intensity profile the model keys on."""
-        factor = random.uniform(1.0 - self.brightness_delta, 1.0 + self.brightness_delta)
+        low = self.brightness_low if self.brightness_low >= 0 else self.brightness_delta
+        factor = random.uniform(1.0 - low, 1.0 + self.brightness_delta)
         return np.clip(block * factor, 0, 1)
     
     def _apply_contrast_adjustment(self, block):
@@ -1293,6 +1313,20 @@ class InkVolumeDataset(IterableDataset):
         if self._depth_view_consistency_offset < 1:
             raise ValueError("depth_view_consistency_offset must be positive")
         self._context_donor_coords = []
+        # arbitrary-angle rotation about the prediction centre, labels re-derived on the rotated cell lattice
+        self._arbitrary_rotation_prob = float(getattr(config.dl, "arbitrary_rotation_prob", 0.0)) if shuffle else 0.0
+        self._arbitrary_rotation_max = math.radians(float(getattr(config.dl, "arbitrary_rotation_max_deg", 180.0)))
+        self._rot_frame = None
+        # precomputed whole-patch cue appended as one extra slice of every block (model.input_cue = "pre_clahe")
+        self._pre_cue = str(getattr(config.model, "input_cue", "") or "") == "pre_clahe"
+        _suffix = (getattr(config.data, "zarr_suffix", None) or {}).get(str(scroll_id), "")
+        self._cue_path = os.path.join(str(getattr(config.data, "cue_dir", "./cue_clahe")), f"{scroll_id}{_suffix}.npy")
+        self._cue_arr = None
+        if self._arbitrary_rotation_prob > 0:
+            if not self._mt or int(getattr(config.data, "context_size", 0) or 0) <= self.tile_size:
+                raise ValueError("arbitrary_rotation_prob needs multitile targets and a context window")
+            if self._context_consistency or self._depth_view_consistency:
+                raise ValueError("arbitrary_rotation_prob cannot be combined with paired-view consistency")
 
         self.z_start = getattr(self.c.data, "train_d_start", self.c.data.d_start)
         self.z_end   = getattr(self.c.data, "train_d_end",   self.c.data.d_end)
@@ -1338,6 +1372,9 @@ class InkVolumeDataset(IterableDataset):
             self.samples_per_epoch = len(self._far_neg_coords)
             if self._max_samples is not None:
                 self.samples_per_epoch = min(self.samples_per_epoch, int(self._max_samples))
+            blank_cap = getattr(config.data, "blank_scroll_samples_per_epoch", None)
+            if blank_cap is not None:
+                self.samples_per_epoch = min(self.samples_per_epoch, int(blank_cap))
         if prepared_state is None and (self._context_replace_prob > 0 or self._context_consistency) and self.shuffle:
             self._prepare_context_donors()
 
@@ -1778,6 +1815,7 @@ class InkVolumeDataset(IterableDataset):
         if state.get("_explicit_positive_path") is not None:
             state["_explicit_positive_arr"] = None
         state["_surface_depth_arr"] = None
+        state["_cue_arr"] = None
         state["_surface_confidence_arr"] = None
         # never pickle an open zarr handle to a spawned worker (unpicklable on Windows,
         # OSError [Errno 22]). the main process may now hold one (vol opens lazily in the
@@ -1861,6 +1899,11 @@ class InkVolumeDataset(IterableDataset):
                 add_windows(y - pad - jitter, x - pad - jitter, context + 2 * jitter)
             else:
                 add_windows(y, x, self.tile_size)
+        if has_context and coords and self._arbitrary_rotation_prob > 0:
+            # a rotated block reads a disc around the prediction centre that reaches past the square window
+            reach = int(math.ceil(math.sqrt(2.0) * (context / 2 + jitter))) + 4
+            centre = self.tile_size // 2
+            add_windows(y + centre - reach, x + centre - reach, 2 * reach)
         if has_context and self._context_donor_coords:
             donors = np.asarray(self._context_donor_coords, dtype=np.int64)
             add_windows(self.y_start + donors[:, 0] - pad, self.x_start + donors[:, 1] - pad, context)
@@ -1959,8 +2002,11 @@ class InkVolumeDataset(IterableDataset):
         x_off,
         allow_jitter=True,
         depth_shift_override=None,
+        rotation=None,
     ):
-        """fetches and normalizes a block from zarr volume"""
+        """fetches and normalizes a block from zarr volume; `rotation` (radians) turns it about the prediction centre
+        and leaves the frame in self._rot_frame"""
+        self._rot_frame = None
         z = self.z_start + z_off
         y = self.y_start + y_off
         x = self.x_start + x_off
@@ -1975,6 +2021,7 @@ class InkVolumeDataset(IterableDataset):
         target_offset = (0, 0)
         dj = 0
         augmentation_depth_shift = 0
+        cue_origin = (y, x)
 
         try:
             if use_ctx:
@@ -2024,7 +2071,12 @@ class InkVolumeDataset(IterableDataset):
                     max_valid_dj = min(max_dj, volume_depth - (z + self.depth))
                     dj = random.randint(min_dj, max_valid_dj)
                     augmentation_depth_shift = dj
-                block = self._read_ctx_block(z + dj, self.depth, y - pad - jy, x - pad - jx, ctx)
+                if rotation is None:
+                    block = self._read_ctx_block(z + dj, self.depth, y - pad - jy, x - pad - jx, ctx)
+                    cue_origin = (y - pad - jy, x - pad - jx)
+                else:
+                    self._rot_frame = self._rotated_frame(rotation, y, x, jy, jx, ctx)
+                    block = self._read_rotated_block(z + dj, self._rot_frame, ctx)
             else:
                 if self._surface_relative_depth_window:
                     selected_start = self._surface_centered_start(
@@ -2067,6 +2119,8 @@ class InkVolumeDataset(IterableDataset):
             block = self._native_noise.add(block)
         if self.transform.has_quality_transfer:
             block = self.transform.normalize_quality(block)
+        if self._pre_cue:
+            block = np.concatenate([block, self._cue_block(cue_origin, sp)], axis=0)
         return block, target_offset, dj, augmentation_depth_shift
 
     def _surface_centered_start(
@@ -2114,7 +2168,7 @@ class InkVolumeDataset(IterableDataset):
                 )
         return min(max(int(self.z_start), 0), max(int(volume_depth) - self.depth, 0))
 
-    def _fetch_surface_teacher(self, z_off, y_off, x_off, target_offset, depth_shift):
+    def _fetch_surface_teacher(self, z_off, y_off, x_off, target_offset, depth_shift, frame=None):
         """crop the offline teacher and convert absolute depths to input-local depths."""
         z = self.z_start + z_off + depth_shift
         y = self.y_start + y_off
@@ -2123,6 +2177,15 @@ class InkVolumeDataset(IterableDataset):
         ctx = int(getattr(self.c.data, "context_size", 0) or 0)
         use_ctx = ctx > tile
         size = ctx if use_ctx else tile
+        if frame is not None:
+            grid = np.arange(size, dtype=np.float64)
+            sy, sx = frame.source(*np.meshgrid(grid, grid, indexing="ij"))
+            absolute = self._gather(self.surface_depth, sy, sx, 255).astype(np.float32)
+            local = absolute - float(z)
+            local_confidence = self._gather(self.surface_confidence, sy, sx, 0).astype(np.float32) / 255.0
+            valid = (absolute != 255) & (local >= 0) & (local <= self.depth - 1)
+            return (np.where(valid, local, -1.0).astype(np.float32),
+                    np.where(valid, local_confidence, 0.0).astype(np.float32))
         if use_ctx:
             pad = (ctx - tile) // 2
             jy, jx = target_offset
@@ -2206,12 +2269,15 @@ class InkVolumeDataset(IterableDataset):
                 if self._has_explicit_negative_mask and np.any(
                     self.explicit_negative_mask[ysc:yec, xsc:xec] > 0
                 ):
-                    # -2 marks negatives far from every ink label (outside the text region)
-                    far = self._far_neg_units is not None and bool(self._far_neg_units[
-                        min(((ysc + yec) // 2) // sub, self._far_neg_units.shape[0] - 1),
-                        min(((xsc + xec) // 2) // sub, self._far_neg_units.shape[1] - 1),
-                    ])
-                    out[index] = -2.0 if far else -1.0
+                    # -2 marks negatives far from every ink label (outside the text region), -3 unlabelled cells
+                    # inside a text-line band
+                    code = 0
+                    if self._far_neg_units is not None:
+                        code = int(self._far_neg_units[
+                            min(((ysc + yec) // 2) // sub, self._far_neg_units.shape[0] - 1),
+                            min(((xsc + xec) // 2) // sub, self._far_neg_units.shape[1] - 1),
+                        ])
+                    out[index] = -3.0 if code == 2 else -2.0 if code == 1 else -1.0
                 elif self._has_explicit_positive_mask and np.any(
                     self.explicit_positive_mask[ysc:yec, xsc:xec] > 0
                 ):
@@ -2289,13 +2355,14 @@ class InkVolumeDataset(IterableDataset):
         if positive is not None:
             value[cells(positive, np.any)] = 1.0
         if negative is not None:
-            far = np.zeros((ny, nx), dtype=bool)
+            code = np.zeros((ny, nx), dtype=np.uint8)
             if self._far_neg_units is not None:
                 units = np.asarray(self._far_neg_units)
                 rows = np.minimum((oy + np.arange(ny) * sub + sub // 2) // sub, units.shape[0] - 1)
                 cols = np.minimum((ox + np.arange(nx) * sub + sub // 2) // sub, units.shape[1] - 1)
-                far = units[rows][:, cols].astype(bool)
-            value = np.where(cells(negative, np.any), np.where(far, -2.0, -1.0), value).astype(np.float32)
+                code = units[rows][:, cols].astype(np.uint8)
+            unlabelled = np.where(code == 2, -3.0, np.where(code == 1, -2.0, -1.0))
+            value = np.where(cells(negative, np.any), unlabelled, value).astype(np.float32)
         valid = cells(scroll, np.all)
         if split is not None:
             valid &= cells(split, np.all)
@@ -2422,6 +2489,185 @@ class InkVolumeDataset(IterableDataset):
         mask_tile = self.mask[y:y+self.tile_size, x:x+self.tile_size]
         return torch.from_numpy(np.asarray(mask_tile, dtype=np.float32))
 
+    def _draw_rotation(self):
+        """a random rotation angle for this sample, or None."""
+        if self._arbitrary_rotation_prob <= 0 or not self.apply_transforms or random.random() >= self._arbitrary_rotation_prob:
+            return None
+        return random.uniform(-self._arbitrary_rotation_max, self._arbitrary_rotation_max)
+
+    def _rotated_frame(self, angle, y, x, jy, jx, ctx):
+        """the rotation of the block whose prediction centre sits at (y, x) of the volume, jittered by (jy, jx)."""
+        tile, center = self.tile_size, self._mt_grid * self._mt_sub
+        first = (ctx - center) // 2
+        start = (first + jy, first + jx)
+        half = (center - 1) / 2
+        src_first = (tile - center) // 2
+        return _RotatedFrame(
+            angle,
+            src=(y + src_first + half, x + src_first + half),
+            dst=(start[0] + half, start[1] + half),
+            start=start,
+        )
+
+    def _rotation_geometry(self, frame, ctx):
+        """source window origin/side and the inverse affine map of a rotated ctx x ctx block."""
+        dy, dx = frame.dst
+        radius = int(math.ceil(math.hypot(max(dy + 0.5, ctx - dy - 0.5), max(dx + 0.5, ctx - dx - 0.5)))) + 2
+        oy, ox = int(round(frame.src[0])) - radius, int(round(frame.src[1])) - radius
+        sy, sx = frame.src[0] - oy, frame.src[1] - ox
+        cos, sin = frame.cos, frame.sin
+        matrix = np.array([
+            [cos, -sin, sx - cos * dx + sin * dy],
+            [sin, cos, sy - sin * dx - cos * dy],
+        ], dtype=np.float64)
+        return oy, ox, 2 * radius + 1, matrix
+
+    @property
+    def cue_map(self):
+        """precomputed whole-patch cue (uint8), opened lazily in each process."""
+        if self._cue_arr is None and self._pre_cue:
+            self._cue_arr = np.load(self._cue_path, mmap_mode="r")
+        return self._cue_arr
+
+    def _cue_block(self, origin, ctx):
+        """(1, ctx, ctx) precomputed cue under the unrotated block, or rotated with its frame."""
+        from .precomputed_cue import crop_cue
+
+        if self._rot_frame is None:
+            return crop_cue(self.cue_map, origin[0], origin[1], ctx, ctx)
+        oy, ox, side, matrix = self._rotation_geometry(self._rot_frame, ctx)
+        raw = crop_cue(self.cue_map, oy, ox, side, side)[0]
+        return cv2.warpAffine(
+            raw, matrix, (ctx, ctx), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=0,
+        )[None]
+
+    def _read_rotated_block(self, z, frame, ctx):
+        """(depth, ctx, ctx) block rotated by frame, bilinear, zero outside the volume."""
+        oy, ox, side, matrix = self._rotation_geometry(frame, ctx)
+        raw = self._read_ctx_block(z, self.depth, oy, ox, side)
+        warped = cv2.warpAffine(
+            np.ascontiguousarray(raw.transpose(1, 2, 0)), matrix, (ctx, ctx),
+            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_CONSTANT, borderValue=0,
+        )
+        return np.ascontiguousarray(warped.reshape(ctx, ctx, self.depth).transpose(2, 0, 1))
+
+    @staticmethod
+    def _gather(array, sy, sx, fill=0):
+        """nearest-pixel read of a 2-D array at float source coordinates; `fill` outside it."""
+        iy, ix = np.rint(sy).astype(np.int64), np.rint(sx).astype(np.int64)
+        height, width = int(array.shape[0]), int(array.shape[1])
+        inside = (iy >= 0) & (iy < height) & (ix >= 0) & (ix < width)
+        out = np.full(iy.shape, fill, dtype=array.dtype)
+        if inside.any():
+            y0, y1 = int(iy[inside].min()), int(iy[inside].max()) + 1
+            x0, x1 = int(ix[inside].min()), int(ix[inside].max()) + 1
+            crop = np.asarray(array[y0:y1, x0:x1])
+            out[inside] = crop[iy[inside] - y0, ix[inside] - x0]
+        return out
+
+    def _rotated_targets(self, frame):
+        """label, validity and character ids of the target cells of a rotated block.
+
+        replays _fetch_label_mt, _fetch_mask_mt, _soften_edge_positives and _fetch_character_ids on the rotated
+        pixel lattice: every dense array is read at the source pixel of each rotated pixel, then reduced per cell.
+        """
+        n, sub, tile = self._mt_grid, self._mt_sub, self.tile_size
+        size = n * sub
+        pad = int(math.ceil(3.0 * self._edge_soft_sigma)) if self._edge_soft_sigma > 0 else 0
+        axis = np.arange(-pad, size + pad, dtype=np.float64)
+        full_sy, full_sx = frame.source(*np.meshgrid(frame.start[0] + axis, frame.start[1] + axis, indexing="ij"))
+        sy, sx = full_sy[pad:pad + size, pad:pad + size], full_sx[pad:pad + size, pad:pad + size]
+
+        def cells(array, reduce):
+            return reduce(array.reshape(n, sub, n, sub), axis=(1, 3))
+
+        negative, positive = self.explicit_negative_mask, self.explicit_positive_mask
+        ink = self._gather(self.labels, sy, sx) > 0.5
+        value = cells(ink, np.any).astype(np.float32)
+        centre_y, centre_x = cells(sy, np.mean), cells(sx, np.mean)
+        neg_any = neg_all = pos_any = None
+        if positive is not None:
+            pos_any = cells(self._gather(positive, sy, sx) > 0, np.any)
+            value[pos_any] = 1.0
+        if negative is not None:
+            hit = self._gather(negative, sy, sx) > 0
+            neg_any, neg_all = cells(hit, np.any), cells(hit, np.all)
+            code = np.zeros((n, n), dtype=np.uint8)
+            if self._far_neg_units is not None:
+                units = np.asarray(self._far_neg_units)
+                rows = np.clip(np.floor((centre_y + 0.5) / sub).astype(np.int64), 0, units.shape[0] - 1)
+                cols = np.clip(np.floor((centre_x + 0.5) / sub).astype(np.int64), 0, units.shape[1] - 1)
+                code = units[rows, cols].astype(np.uint8)
+            unlabelled = np.where(code == 2, -3.0, np.where(code == 1, -2.0, -1.0))
+            value = np.where(neg_any, unlabelled, value).astype(np.float32)
+
+        valid = cells(self._gather(self.scroll_mask, sy, sx) > 0, np.all)
+        if self._has_split_mask:
+            valid &= cells(self._gather(self.split_mask, sy, sx) > 0, np.all)
+        if self._mt_ring_gate:
+            gate = cells(self._gather(self.mask, sy, sx) > 0, np.all)
+            if neg_all is not None:
+                gate |= neg_all
+            if pos_any is not None:
+                gate |= pos_any
+            valid &= gate
+        if self._mt_pos_only:
+            labels = self.labels
+            for iy, ix in zip(*np.nonzero(valid & (value == 0))):
+                py = int(np.floor(centre_y[iy, ix])) // tile * tile
+                px = int(np.floor(centre_x[iy, ix])) // tile * tile
+                if py < 0 or px < 0:
+                    continue
+                if np.any(np.asarray(labels[py:py + tile, px:px + tile]) > 0.5):
+                    valid[iy, ix] = False
+            if np.any((value > 0) & valid):
+                valid &= value != 0
+        label = value.reshape(-1)
+
+        if self._edge_soft_sigma > 0 and (label > 0.5).any():
+            blurred = cv2.GaussianBlur(
+                (self._gather(self.labels, full_sy, full_sx) > 0.5).astype(np.float32),
+                (0, 0), self._edge_soft_sigma, borderType=cv2.BORDER_REPLICATE,
+            )
+            for index in np.flatnonzero(label > 0.5):
+                iy, ix = divmod(int(index), n)
+                if pos_any is not None and pos_any[iy, ix]:
+                    continue
+                peak = float(blurred[pad + iy * sub:pad + (iy + 1) * sub, pad + ix * sub:pad + (ix + 1) * sub].max())
+                if peak < 0.98:
+                    label[index] = max(self._edge_soft_floor, peak)
+
+        ids = np.zeros(n * n, dtype=np.int64)
+        if (self._character_metrics or self._character_balanced) and self._character_grid is not None \
+                and self._character_nearest is not None:
+            gh, gw = self._character_grid.shape
+            probe = (np.arange(4) + 0.5) * sub / 4
+            for iy in range(n):
+                for ix in range(n):
+                    index = iy * n + ix
+                    if not valid[iy, ix]:
+                        continue
+                    if value[iy, ix] > 0:
+                        # probe points spread over the rotated cell
+                        u, v = np.meshgrid(frame.start[0] + iy * sub + probe, frame.start[1] + ix * sub + probe,
+                                           indexing="ij")
+                        py, px = frame.source(u, v)
+                        gy, gx = np.floor(py / sub).astype(np.int64), np.floor(px / sub).astype(np.int64)
+                        ok = (gy >= 0) & (gy < gh) & (gx >= 0) & (gx < gw)
+                        found = self._character_grid[gy[ok], gx[ok]]
+                        found = found[found > 0]
+                        out = int(np.bincount(found).argmax()) if found.size else 0
+                    else:
+                        gy, gx = int(np.floor(centre_y[iy, ix] / sub)), int(np.floor(centre_x[iy, ix] / sub))
+                        if not (0 <= gy < gh and 0 <= gx < gw):
+                            continue
+                        out = int(self._character_nearest[gy, gx])
+                    if out > 0:
+                        ids[index] = out + int(self.character_namespace) * CHARACTER_NAMESPACE_STRIDE
+        mask = valid.reshape(-1).astype(np.float32)
+        return torch.from_numpy(label), torch.from_numpy(mask), torch.from_numpy(ids)
+
     def __iter__(self) -> Iterator:
         """sets up the iterator for an epoch"""
         if self._character_balanced:
@@ -2459,12 +2705,15 @@ class InkVolumeDataset(IterableDataset):
         z_off, y_off, x_off = self.worker_indices[self.current_idx]
         
         # fetch data components
-        mask = self._fetch_mask(y_off, x_off)
+        rotation = self._draw_rotation()
+        mask = None if rotation is not None else self._fetch_mask(y_off, x_off)
         block, target_offset, depth_shift, augmentation_depth_shift = self._fetch_block(
             z_off,
             y_off,
             x_off,
+            rotation=rotation,
         )
+        frame = self._rot_frame
         if self._use_surface_teacher:
             surface_depth, surface_confidence = self._fetch_surface_teacher(
                 z_off,
@@ -2472,18 +2721,24 @@ class InkVolumeDataset(IterableDataset):
                 x_off,
                 target_offset,
                 depth_shift,
+                frame=frame,
             )
-        label = self._fetch_label(y_off, x_off)
-        if self._edge_soft_sigma > 0 and self._mt:
-            label = self._soften_edge_positives(label, y_off, x_off)
         component_ids = None
-        if self._character_metrics or self._character_balanced:
-            component_ids = torch.from_numpy(self._fetch_character_ids(
-                y_off,
-                x_off,
-                label.numpy(),
-                mask.numpy() > 0,
-            ))
+        if frame is not None:
+            label, mask, rotated_ids = self._rotated_targets(frame)
+            if self._character_metrics or self._character_balanced:
+                component_ids = rotated_ids
+        else:
+            label = self._fetch_label(y_off, x_off)
+            if self._edge_soft_sigma > 0 and self._mt:
+                label = self._soften_edge_positives(label, y_off, x_off)
+            if self._character_metrics or self._character_balanced:
+                component_ids = torch.from_numpy(self._fetch_character_ids(
+                    y_off,
+                    x_off,
+                    label.numpy(),
+                    mask.numpy() > 0,
+                ))
         target_offset_tensor = (
             torch.tensor(target_offset, dtype=torch.long)
             if bool(getattr(self.c.data, "target_aware_ctx_jitter", False)) else None
@@ -2981,13 +3236,14 @@ class DataManager:
             "character_balanced_sampling",
             "character_min_pixels", "max_samples_per_epoch",
             "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
-            "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "norm_mode", "holdout_domains",
+            "line_prior_source", "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "norm_mode", "holdout_domains",
             "zarr_suffix", "extra_inklabels",
         )
         # preparation only tests this scroll's membership, so swapping another scroll keeps this entry valid
         membership_fields = (
             "vis_scroll_ids", "train_only_scroll_ids", "label_free_vis_scroll_ids", "whole_patch_valid_scroll_ids",
-            "ring_free_scroll_ids", "ring_pu_scroll_ids", "flipped_train_mask_ids",
+            "ring_free_scroll_ids", "ring_pu_scroll_ids", "flipped_train_mask_ids", "extra_hard_negative_scroll_ids",
+            "line_prior_scroll_ids", "line_gap_negative_scroll_ids",
         )
         membership = tuple(
             (name, self.scroll_id in {int(sid) for sid in (getattr(self.c.data, name, None) or ())})
@@ -3108,6 +3364,13 @@ class DataManager:
             raise FileNotFoundError(f"mask not found for scroll {self.scroll_id}")
 
         regular_ink, extra_ink = split_extra_labels(labels)
+        hard_extra = None
+        if int(self.scroll_id) in {
+            int(scroll_id) for scroll_id in (getattr(self.c.data, "extra_hard_negative_scroll_ids", ()) or ())
+        }:
+            if bool(getattr(self.c.data, "extra_inklabels", False)):
+                raise ValueError("extra_hard_negative_scroll_ids and extra_inklabels are mutually exclusive")
+            hard_extra = extra_ink.copy()
         if not bool(getattr(self.c.data, "extra_inklabels", False)):
             extra_ink[:] = False
         if extra_ink.any():
@@ -3203,7 +3466,11 @@ class DataManager:
             np.ascontiguousarray(extra_ink[:common_h, :common_w]).astype(np.uint8)
             if extra_ink.any() else None
         )
-        del extra_ink
+        self._extra_hard_negative = (
+            np.ascontiguousarray(hard_extra[:common_h, :common_w])
+            if hard_extra is not None and hard_extra.any() else None
+        )
+        del extra_ink, hard_extra
         if manual_mask is not None:
             manual_mask = np.ascontiguousarray(manual_mask[:common_h, :common_w])
 
@@ -3265,6 +3532,31 @@ class DataManager:
             ) > 0
             explicit_negative &= mask > 0
             explicit_positive &= mask > 0
+            hard_extra = getattr(self, "_extra_hard_negative", None)
+            if hard_extra is not None:
+                hard_cells = (
+                    (self._align_manual_mask(hard_extra, explicit_unit) > 0)
+                    & (mask > 0)
+                    & ~(self._align_manual_mask(labels > 0.5, explicit_unit) > 0)
+                )
+                print(
+                    f"[extra-labels] scroll {self.scroll_id}: {int(hard_extra.sum()):,} half-brightness pixels -> "
+                    f"{int(hard_cells.sum()):,} hard-negative pixels",
+                    flush=True,
+                )
+                explicit_negative |= hard_cells
+            if int(self.scroll_id) in {int(v) for v in (getattr(self.c.data, "line_gap_negative_scroll_ids", ()) or ())}:
+                from .line_grid import line_cells
+
+                _, gap = line_cells(self.scroll_id, mask.shape, explicit_unit, str(self.c.data.line_prior_source))
+                gap_px = np.zeros(mask.shape, dtype=bool)
+                expanded = np.kron(gap.astype(np.uint8), np.ones((explicit_unit, explicit_unit), np.uint8)) > 0
+                rows, cols = min(expanded.shape[0], mask.shape[0]), min(expanded.shape[1], mask.shape[1])
+                gap_px[:rows, :cols] = expanded[:rows, :cols]
+                gap_px &= (mask > 0) & ~(self._align_manual_mask(labels > 0.5, explicit_unit) > 0)
+                print(f"[line-gaps] scroll {self.scroll_id}: {int(gap_px.sum()):,} between-line pixels -> explicit negatives",
+                      flush=True)
+                explicit_negative |= gap_px
             overlap = explicit_negative & (labels > 0.5)
             if overlap.any():
                 print(
@@ -3625,10 +3917,16 @@ class DataManager:
             far_negative_units, far_negative_coords = self._far_background_negatives(
                 supervision_mask, assignment, explicit_positive, split_unit, train_x, train_y,
             )
+            far_negative_units = far_negative_units.astype(np.uint8)
+            if int(self.scroll_id) in {int(v) for v in (getattr(self.c.data, "line_prior_scroll_ids", ()) or ())}:
+                far_negative_units, far_negative_coords = self._add_line_units(
+                    far_negative_units, supervision_mask, assignment, explicit_positive, explicit_negative,
+                    split_unit, train_x, train_y,
+                )
             far_mask = np.zeros(np.asarray(explicit_negative).shape, dtype=np.uint8)
             h, w = (np.array(far_negative_units.shape) * split_unit).tolist()
             far_mask[:h, :w] = np.repeat(
-                np.repeat(far_negative_units, split_unit, axis=0), split_unit, axis=1
+                np.repeat((far_negative_units > 0).astype(np.uint8), split_unit, axis=0), split_unit, axis=1
             )
             explicit_negative_train = np.maximum(explicit_negative, far_mask)
         train_set = InkVolumeDataset(
@@ -3949,6 +4247,54 @@ class DataManager:
             f"seed={seed} valid_blocks={int(valid_blocks.sum())}/{valid_blocks.size}"
         )
         return assignment
+
+    def _add_line_units(self, far_units, supervision_mask, assignment, explicit_positive, explicit_negative, unit,
+                        x_range, y_range):
+        """mark text-line band units (code 2) that are not ink, ring, hard negative or far background, and widen the far
+        windows to every multitile centre made only of unlabelled units."""
+        from .line_grid import line_cells
+
+        grid = int(getattr(self.c.model, "multitile_grid", 4))
+        center = grid * int(getattr(self.c.model, "multitile_subtile", unit))
+        arrays = [np.asarray(self.labels), np.asarray(self.mask), np.asarray(assignment),
+                  np.asarray(supervision_mask), np.asarray(explicit_positive), np.asarray(explicit_negative)]
+        h = min(a.shape[0] for a in arrays) // unit * unit
+        w = min(a.shape[1] for a in arrays) // unit * unit
+
+        def units(array, reduce):
+            return reduce(array[:h, :w].reshape(h // unit, unit, w // unit, unit), axis=(1, 3))
+
+        band, _ = line_cells(self.scroll_id, np.asarray(self.mask).shape, unit, str(self.c.data.line_prior_source))
+        rows, cols = far_units.shape
+        padded = np.zeros((rows, cols), dtype=bool)
+        padded[:min(rows, band.shape[0]), :min(cols, band.shape[1])] = band[:rows, :cols]
+        ink = units(arrays[0] > 0.5, np.any) | units(arrays[4] > 0, np.any)
+        line = (padded & units(arrays[1] > 0.5, np.all) & units(arrays[2] > 0, np.all)
+                & ~units(arrays[3] > 0.5, np.any) & ~ink & ~units(arrays[5] > 0, np.any) & (far_units == 0))
+        combined = far_units.copy()
+        combined[line] = 2
+        span = center // unit
+        unlabelled = (combined > 0).astype(np.uint8)
+        integral = cv2.integral(unlabelled)
+        uy = np.arange(0, unlabelled.shape[0] - span + 1)
+        ux = np.arange(0, unlabelled.shape[1] - span + 1)
+        yy, xx = np.meshgrid(uy, ux, indexing="ij")
+        filled = (
+            integral[yy + span, xx + span] - integral[yy, xx + span]
+            - integral[yy + span, xx] + integral[yy, xx]
+        ) == span * span
+        tile = int(self.c.data.tile_size)
+        shift = (tile - center) // 2
+        coords = []
+        for wy, wx in zip(yy[filled], xx[filled]):
+            y_off = int(wy) * unit - shift - int(y_range[0])
+            x_off = int(wx) * unit - shift - int(x_range[0])
+            if (0 <= y_off <= int(y_range[1]) - int(y_range[0]) - tile
+                    and 0 <= x_off <= int(x_range[1]) - int(x_range[0]) - tile):
+                coords.append((0, y_off, x_off))
+        print(f"[line-prior] scroll {self.scroll_id}: source={self.c.data.line_prior_source} "
+              f"line_units={int(line.sum())} unlabelled_windows={len(coords)}", flush=True)
+        return combined, coords
 
     def _far_background_negatives(self, supervision_mask, assignment, explicit_positive, unit, x_range, y_range):
         """train-split papyrus units far from every ink label, and whole multitile windows on them."""

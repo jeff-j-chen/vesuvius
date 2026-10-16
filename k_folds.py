@@ -1,19 +1,21 @@
-"""four runs of the default train.py config that vary only the PHerc0846A patches; p29 appears nowhere.
+"""cross-validation arms of the best run (utils/config.py apply_best_run = iter2_asf_cue), 10 epochs each.
 
-the 0846A scrolls in every run are exactly four: the two labeled patches (20260927134931 ABF, 20261012073246) and
-the two label-free prize vis scrolls (20261012065811 straight, 20261012065813 m28).
+the seven trained PHerc0846A patches are ABF (20260927134931), 073246 (20261012073246), m28 (20261012065813) and the
+straightened2 neighbours in_1 / out_1 / out_2 / out_3 (20261012065817 / 19 / 21 / 23); PHerc0009B always trains.
 
-fold_1, fold_2: both labeled patches train, but in each fold half of every patch's letters (8-connected ink
-    components, as the trainer's character grid defines them) and the papyrus nearest to them become validation.
-    every letter is held out in exactly one fold.
-only_<id>: one labeled patch trains (train-only, as in the default run); the other becomes vis-only, scored on the
-    whole patch.
+k-fold (cv_fold_1 .. cv_fold_3; the old 2-fold fold_1 / fold_2 runs are untouched): every PHerc0846A patch still trains, but in each fold a third of its letters (8-connected ink
+    components, as the trainer's character grid defines them) and the papyrus nearest to them become validation. every
+    letter is held out in exactly one fold.
+leave-patches-out (loo_*): PHerc0009B plus the two named 0846A patches train; the other five 0846A patches are not
+    trained on and are scored on the whole patch.
+    loo_A_out2_out3: out_2 + out_3        loo_B_in1_out1: in_1 + out_1
+    loo_C_073246_abf: 073246 + ABF        loo_D_m28_out3: m28 + out_3
 
-every run renders the final eval figures for all four 0846A scrolls at n_epochs = eval_int = 8. TensorBoard, figures
-and config.json go to runs_kfolds/<arm>, console logs to runs_kfolds/logs/<arm>.log, checkpoints to
-models/runs_kfolds/<arm>, fold masks and previews to runs_kfolds/splits.
+every run renders the final eval figures for all seven 0846A patches, the winning sheet (straightened2), out_4, out_5 and
+PHerc0009B. TensorBoard, figures and config.json go to runs_kfolds/<arm>, console logs to runs_kfolds/logs/<arm>.log,
+checkpoints to models/runs_kfolds/<arm>, fold masks and previews to runs_kfolds/splits.
 
-usage: python3 k_folds.py [--only fold_1,only_20260927134931] [--dry-run]
+usage: python3 k_folds.py [--only cv_fold_1,loo_A_out2_out3] [--dry-run]
 """
 from __future__ import annotations
 
@@ -32,20 +34,28 @@ REPO = Path(__file__).resolve().parent
 LOG_ROOT = REPO / "runs_kfolds"
 MODEL_ROOT = REPO / "models" / "runs_kfolds"
 SPLIT_ROOT = LOG_ROOT / "splits"
-N_FOLDS = 2
-N_EPOCHS = 8
-EVAL_INT = 8
-FOLD_COLORS = ((230, 120, 60), (70, 170, 90))  # BGR per fold
+N_FOLDS = 3
+N_EPOCHS = 10
+FOLD_COLORS = ((230, 120, 60), (70, 170, 90), (60, 110, 230))  # BGR per fold
+
+ABF, P073246, M28, IN_1, OUT_1, OUT_2, OUT_3 = 20260927134931, 20261012073246, 20261012065813, 20261012065817, \
+    20261012065819, 20261012065821, 20261012065823
+LOO_ARMS = {
+    "loo_A_out2_out3": (OUT_2, OUT_3),
+    "loo_B_in1_out1": (IN_1, OUT_1),
+    "loo_C_073246_abf": (P073246, ABF),
+    "loo_D_m28_out3": (M28, OUT_3),
+}
 
 
 def labeled_ids() -> list[int]:
-    from utils.config import RUN_0846A_IDS
+    from utils.config import BEST_NEW_SET
 
-    return [int(sid) for sid in RUN_0846A_IDS]
+    return [int(sid) for sid in BEST_NEW_SET]
 
 
 def arm_names() -> list[str]:
-    return [f"fold_{k}" for k in range(1, N_FOLDS + 1)] + [f"only_{sid}" for sid in labeled_ids()]
+    return [f"cv_fold_{k}" for k in range(1, N_FOLDS + 1)] + list(LOO_ARMS)
 
 
 def fold_mask_dir(fold: int) -> Path:
@@ -104,10 +114,11 @@ def check_split(grid, fold_of, train_mask, fold, unit, scroll_id) -> None:
 
 def build_splits() -> dict:
     """write one train-mask dir per fold (0846A masks rewritten, all other scrolls linked) and fold previews."""
-    from utils.config import Config
+    from utils.config import Config, apply_best_run
     from utils.fast_figure import orient_display
 
     config = Config()
+    apply_best_run(config)
     unit = int(config.model.multitile_subtile)
     min_pixels = int(config.data.character_min_pixels)
     labeled = labeled_ids()
@@ -117,13 +128,13 @@ def build_splits() -> dict:
     for k in range(1, N_FOLDS + 1):
         folder = fold_mask_dir(k)
         folder.mkdir(parents=True, exist_ok=True)
-        for sid in config.scroll_ids():
-            if int(sid) in labeled:
+        for scroll in config.data.scrolls:
+            if int(scroll.scroll_id) in labeled:
                 continue
-            link = folder / f"{sid}.png"
+            link = folder / f"{scroll.scroll_id}.png"
             if link.is_symlink() or link.exists():
                 link.unlink()
-            link.symlink_to(REPO / "train_masks" / f"{sid}.png")
+            link.symlink_to(REPO / "train_masks" / f"{scroll.scroll_id}.png")
     for sid in labeled:
         grid, shape = character_grid(sid, unit, min_pixels)
         fold_of = assign_folds(grid)
@@ -152,38 +163,29 @@ def build_splits() -> dict:
         cv2.putText(preview, f"{sid}  held out per fold: {summary[sid]}", (12, 32), cv2.FONT_HERSHEY_SIMPLEX,
                     0.8, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.imwrite(str(SPLIT_ROOT / f"{sid}_folds.png"), preview)
-    print(f"[splits] letters held out per fold (fold 1/2): {summary} -> {SPLIT_ROOT}", flush=True)
+    print(f"[splits] letters held out per fold (fold 1/2/3): {summary} -> {SPLIT_ROOT}", flush=True)
     return summary
 
 
 def configure(config, arm: str) -> None:
-    """the only changes to the default run config."""
-    from utils.config import RUN_LABEL_FREE_VIS_IDS, RUN_P29_ID
+    """the best run with the arm's split; its vis scrolls (7 trained 0846A patches, winning sheet, out_4, out_5, 0009B)
+    are kept as they are."""
+    from utils.config import apply_best_run
 
+    apply_best_run(config)
     labeled = labeled_ids()
-    # p29 is not part of these runs at all, not even as a vis-only scroll
-    config.data.whole_patch_valid_scroll_ids = [
-        sid for sid in config.data.whole_patch_valid_scroll_ids if int(sid) != RUN_P29_ID
-    ]
-    config.data.surface_window_offset_by_scroll = {
-        sid: offset for sid, offset in config.data.surface_window_offset_by_scroll.items() if int(sid) != RUN_P29_ID
-    }
     config.run_name = config.exp_name = arm
     config.model_dir = os.path.join("models", "runs_kfolds", arm)
     config.tra.log_dir = "runs_kfolds"
-    config.tra.n_epochs = N_EPOCHS
-    config.tra.eval_int = EVAL_INT
-    config.data.vis_scroll_ids = [*labeled, *(int(sid) for sid in RUN_LABEL_FREE_VIS_IDS)]
-    config.tra.eval_int_scrolls = len(config.data.vis_scroll_ids)
-    if arm.startswith("fold_"):
-        config.data.train_mask_dir = str(fold_mask_dir(int(arm.split("_")[1])))
+    config.tra.n_epochs = config.tra.eval_int = config.tra.save_int = N_EPOCHS
+    if arm.startswith("cv_fold_"):
+        config.data.train_mask_dir = str(fold_mask_dir(int(arm.rsplit("_", 1)[1])))
         # out of train-only, so the fold masks' held-out letters become validation
         config.data.train_only_scroll_ids = [
             sid for sid in config.data.train_only_scroll_ids if int(sid) not in labeled
         ]
-    elif arm.startswith("only_"):
-        keep = int(arm.split("_")[1])
-        dropped = {sid for sid in labeled if sid != keep}
+    elif arm in LOO_ARMS:
+        dropped = {sid for sid in labeled if sid not in LOO_ARMS[arm]}
         config.data.scrolls = [scroll for scroll in config.data.scrolls if int(scroll.scroll_id) not in dropped]
         config.data.train_scroll_dict = {
             name: [sid for sid in ids if int(sid) not in dropped]
@@ -191,6 +193,9 @@ def configure(config, arm: str) -> None:
         }
         config.data.train_only_scroll_ids = [
             sid for sid in config.data.train_only_scroll_ids if int(sid) not in dropped
+        ]
+        config.data.extra_hard_negative_scroll_ids = [
+            sid for sid in config.data.extra_hard_negative_scroll_ids if int(sid) not in dropped
         ]
         config.data.whole_patch_valid_scroll_ids = [*config.data.whole_patch_valid_scroll_ids, *sorted(dropped)]
     else:
@@ -206,7 +211,7 @@ def run_worker(arm: str, dry_run: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--only", default="", help="comma-separated arms (default: all four)")
+    parser.add_argument("--only", default="", help="comma-separated arms (default: all seven)")
     parser.add_argument("--dry-run", action="store_true", help="build the splits and preflight every arm, no training")
     parser.add_argument("--worker", default="", help=argparse.SUPPRESS)
     args = parser.parse_args()

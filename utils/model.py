@@ -20,6 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .config import Config
+from .prefilter import apply_prefilter, peak_map
 
 SURFACE_RELIEF_CHANNELS = 7
 
@@ -556,8 +557,9 @@ def _planarize_depth_convs(module: nn.Module) -> None:
 class GatedCueStem3d(nn.Module):
     """independently refine raw, LCN, and dZ cues before content-adaptive fusion."""
 
-    def __init__(self, hidden: int = 8):
+    def __init__(self, hidden: int = 8, cues: int = 3):
         super().__init__()
+        self.cues = int(cues)
         self.branches = nn.ModuleList([
             nn.Sequential(
                 nn.Conv3d(1, hidden, kernel_size=3, padding=1, bias=False),
@@ -565,12 +567,12 @@ class GatedCueStem3d(nn.Module):
                 nn.GELU(),
                 nn.Conv3d(hidden, 1, kernel_size=1),
             )
-            for _ in range(3)
+            for _ in range(self.cues)
         ])
         self.gate = nn.Sequential(
-            nn.Linear(6, 16),
+            nn.Linear(2 * self.cues, 16),
             nn.GELU(),
-            nn.Linear(16, 3),
+            nn.Linear(16, self.cues),
         )
 
     def reset_identity(self) -> None:
@@ -585,7 +587,7 @@ class GatedCueStem3d(nn.Module):
             (cues.mean(dim=(2, 3, 4)), cues.std(dim=(2, 3, 4), unbiased=False)),
             dim=1,
         )
-        weights = 3.0 * torch.softmax(self.gate(statistics), dim=1)
+        weights = float(self.cues) * torch.softmax(self.gate(statistics), dim=1)
         outputs = []
         for index, branch in enumerate(self.branches):
             cue = cues[:, index:index + 1]
@@ -875,6 +877,9 @@ class NnUnet3dLcndz(nn.Module):
             self.input_denoiser = BlindSpotDenoiser()
         else:
             self.input_denoiser = None
+        # fixed per-slice filter (utils/prefilter.py) in front of the backbone
+        self._input_prefilter = str(getattr(config.model, "input_prefilter", "") or "")
+        self._input_prefilter_mix = float(getattr(config.model, "input_prefilter_mix", 1.0))
         self._tile_size = int(getattr(config.data, "tile_size", 16))
         self._context_size = int(getattr(config.data, "context_size", 0) or 0)
         self._attn_entropy_weight = float(getattr(config.model, "attn_entropy_weight", 0.0))
@@ -964,10 +969,14 @@ class NnUnet3dLcndz(nn.Module):
                 norm_mode=norm_mode,
             )
 
-        stem_channels = 1 if self._raw_only_stem else (5 if self._explicit_depth_channels else 3)
+        # optional fourth input head: asf_morph or CLAHE of the max over slices (utils/prefilter.py), same map on every slice
+        self._input_cue = str(getattr(config.model, "input_cue", "") or "")
+        self._pre_cue_map = None
+        self._n_cues = 4 if self._input_cue else 3
+        stem_channels = 1 if self._raw_only_stem else (self._n_cues + 2 if self._explicit_depth_channels else self._n_cues)
         self.enc1 = block3d(stem_channels, c1, shallow=True)
         self.gated_cue_stem = (
-            GatedCueStem3d()
+            GatedCueStem3d(cues=self._n_cues)
             if bool(getattr(config.model, "gated_stems", False)) else None
         )
         if bool(getattr(config.model, "planar_early_convs", False)):
@@ -1626,6 +1635,10 @@ class NnUnet3dLcndz(nn.Module):
     def _prepare_input(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 4:
             x = x.unsqueeze(1)
+        self._pre_cue_map = None
+        if self._input_cue == "pre_clahe":
+            # the last slice is the precomputed whole-patch cue; the backbone sees the usual depth
+            self._pre_cue_map, x = x[:, :, -1:], x[:, :, :-1]
         if self._input_tile_norm == "clip200":
             x = x.clamp(0.0, 200.0 / 255.0)
             mean = x.mean(dim=(1, 2, 3, 4), keepdim=True)
@@ -1634,6 +1647,9 @@ class NnUnet3dLcndz(nn.Module):
         if self.input_denoiser is not None:
             with torch.no_grad():
                 x = self.input_denoiser(x)
+        if self._input_prefilter:
+            with torch.no_grad():
+                x = apply_prefilter(x, self._input_prefilter, self._input_prefilter_mix)
         if self.input_upsampler is not None:
             # normalise, then upsample, as in the upsampled-crop MAE
             with torch.no_grad():
@@ -1708,11 +1724,18 @@ class NnUnet3dLcndz(nn.Module):
         if not self._no_dz:
             dz[:, :, 1:] = raw[:, :, 1:] - raw[:, :, :-1]
         cues = torch.cat([raw, _lcn2d(raw, 5), dz], dim=1)
+        if self._input_cue == "pre_clahe":
+            extra = self._pre_cue_map.to(raw.dtype).expand_as(raw)
+            cues = torch.cat([cues, extra], dim=1)
+        elif self._input_cue:
+            with torch.no_grad():
+                extra = peak_map(raw.detach(), self._input_cue).expand_as(raw)
+            cues = torch.cat([cues, extra.to(cues.dtype)], dim=1)
         if self.training and self._cue_dropout > 0:
             apply = torch.rand(cues.shape[0], device=cues.device) < self._cue_dropout
-            cue_index = torch.randint(0, 3, (cues.shape[0],), device=cues.device)
+            cue_index = torch.randint(0, self._n_cues, (cues.shape[0],), device=cues.device)
             keep = torch.ones(
-                cues.shape[0], 3, 1, 1, 1,
+                cues.shape[0], self._n_cues, 1, 1, 1,
                 device=cues.device,
                 dtype=cues.dtype,
             )
@@ -1738,8 +1761,8 @@ class NnUnet3dLcndz(nn.Module):
     def _apply_gated_cues(self, stem: torch.Tensor) -> torch.Tensor:
         if self.gated_cue_stem is None:
             return stem
-        gated = self.gated_cue_stem(stem[:, :3])
-        return torch.cat((gated, stem[:, 3:]), dim=1)
+        gated = self.gated_cue_stem(stem[:, :self._n_cues])
+        return torch.cat((gated, stem[:, self._n_cues:]), dim=1)
 
     @staticmethod
     def _fiber_coordinates(x: torch.Tensor) -> torch.Tensor:
@@ -2553,9 +2576,12 @@ class NnUnet3dLcndz(nn.Module):
         target_offsets: torch.Tensor | None,
     ) -> torch.Tensor:
         """multitile cell logits from (possibly edited) early-2D head input; used by RSC."""
-        if not self._early_2d_unet or self.text_region_head is not None or self._dual_scale_local_only:
+        if not self._early_2d_unet or self._dual_scale_local_only:
             raise ValueError("score_from_head_input supports the plain early-2D multitile head only")
-        score = self._multitile_aggregate_2d(self.early2d_head(head_input), target_offsets)
+        voxel = self.early2d_head(head_input)
+        if self.text_region_head is not None:
+            voxel = voxel + F.logsigmoid(self._last_region_map)
+        score = self._multitile_aggregate_2d(voxel, target_offsets)
         if self.last_dual_scale_delta is not None:
             score = score + self.last_dual_scale_delta
         return score
@@ -2657,7 +2683,12 @@ class NnUnet3dLcndz(nn.Module):
         if self._dual_scale:
             local_size = max(1, self._dual_scale_local_size // self._downsample)
             local_input = self._crop_center_feat(prepared, local_size, target_offsets)
-            local_stem = self._stem_in(local_input)
+            # the local expert's stem is the plain raw / lcn / dz one: the fourth (cue) input head belongs to the main branch
+            saved_cue, self._input_cue = self._input_cue, ""
+            try:
+                local_stem = self._stem_in(local_input)
+            finally:
+                self._input_cue = saved_cue
             if self.dual_scale_deep_local is not None:
                 local_voxels = self.dual_scale_deep_local(local_stem)
             elif self.dual_scale_local is not None and self.dual_scale_head is not None:
@@ -2742,6 +2773,7 @@ class NnUnet3dLcndz(nn.Module):
                     align_corners=False,
                 )
                 self.last_text_region_logits = self._multitile_mean_2d(region, target_offsets)
+                self._last_region_map = region
                 voxel2d = voxel2d + F.logsigmoid(region)
             self.last_private_score = None
             self.last_private_delta = None

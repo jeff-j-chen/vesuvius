@@ -1,0 +1,154 @@
+{
+  "purpose": "0175A + six 0846A patches MAE continuation with rotation augmentation; no ink labels",
+  "init_weights": "/vesuvius/models/mae_0846a_six_flat13_m1_2k.pth",
+  "init_sha256": "0badcf1e45d1905e9c6608b3fc9521cd55f269435e7b2ceeab45ec1fcd37885e",
+  "sources": [
+    {
+      "alias": 20260927134931,
+      "source_id": "20260927134928",
+      "zarr": "/vesuvius/ves_zarrs2/20260927134928.zarr",
+      "mask": "/vesuvius/masks/20260927134928.png",
+      "shape": [
+        28,
+        3041,
+        3661
+      ],
+      "norm_id": 20260927134931,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261012065811,
+      "source_id": "20261012065810",
+      "zarr": "/vesuvius/ves_zarrs2/20261012065810.zarr",
+      "mask": "/vesuvius/masks/20261012065810.png",
+      "shape": [
+        28,
+        2421,
+        3241
+      ],
+      "norm_id": 20261012065811,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261012073246,
+      "source_id": "20261012073244",
+      "zarr": "/vesuvius/ves_zarrs2/20261012073244.zarr",
+      "mask": "/vesuvius/masks/20261012073244.png",
+      "shape": [
+        28,
+        3941,
+        2861
+      ],
+      "norm_id": 20261012073246,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20261012081238,
+      "source_id": "20261012081237",
+      "zarr": "/vesuvius/ves_zarrs2/20261012081237.zarr",
+      "mask": "/vesuvius/masks/20261012081237.png",
+      "shape": [
+        28,
+        4181,
+        3141
+      ],
+      "norm_id": 20261012081238,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20260927143929,
+      "source_id": "auto_grown_20260927143929299_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20260927143929299_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20260927143929299_abf.png",
+      "shape": [
+        28,
+        2241,
+        3061
+      ],
+      "norm_id": null,
+      "flat_depth": 13
+    },
+    {
+      "alias": 20260927154033,
+      "source_id": "auto_grown_20260927154033403_abf",
+      "zarr": "/vesuvius/ves_zarrs2/auto_grown_20260927154033403_abf.zarr",
+      "mask": "/vesuvius/masks/extras/auto_grown_20260927154033403_abf.png",
+      "shape": [
+        28,
+        3761,
+        3641
+      ],
+      "norm_id": null,
+      "flat_depth": 13
+    }
+  ],
+  "command": [
+    "/usr/bin/python",
+    "-u",
+    "/vesuvius/old/mae_pretrain_nnunet.py",
+    "--name",
+    "mae_0846a_clahecue_2k",
+    "--init-weights",
+    "/vesuvius/models/mae_0846a_six_flat13_m1_2k.pth",
+    "--early-2d-unet",
+    "--gated-stems",
+    "--norm-mode",
+    "ibn_full",
+    "--fiber-coordinate-branch",
+    "--data-norm-mode",
+    "surface_anchor",
+    "--ctx",
+    "96",
+    "--ds",
+    "1",
+    "--depth",
+    "8",
+    "--d-start",
+    "9",
+    "--d-end",
+    "17",
+    "--scroll-ids",
+    "20260927134931",
+    "20261012065811",
+    "20261012073246",
+    "20261012081238",
+    "20260927143929",
+    "20260927154033",
+    "--require-all-scrolls",
+    "--physical-round-robin",
+    "--physical-groups",
+    "{\"pherc0846a\": [20260927134931, 20260927143929, 20260927154033, 20261012065811, 20261012073246, 20261012081238], \"pherc0175a\": []}",
+    "--rotate-prob",
+    "0.0",
+    "--input-cue",
+    "clahe",
+    "--steps",
+    "2000",
+    "--batch-size",
+    "24",
+    "--lr",
+    "1e-4",
+    "--seed",
+    "41",
+    "--log-dir",
+    "/vesuvius/runs_mae_0175a",
+    "--log-int",
+    "50",
+    "--save-int",
+    "500",
+    "--no-figures"
+  ],
+  "cwd": "/vesuvius/_ves_tmp/mae_0175a/mae_0846a_clahecue_2k",
+  "steps": 2000,
+  "rotate_prob": 0.0,
+  "supervised_labels_used": false,
+  "surface_normalization_depth": 13,
+  "window": [
+    9,
+    17
+  ],
+  "sampling": "half 0846A / half 0175A, patches round-robin inside each",
+  "output": "/vesuvius/models/mae_0846a_clahecue_2k.pth",
+  "complete": true,
+  "output_sha256": "1019833384e8f1d7676e51fa23cbe7991f7b49b250c6cc21bb91db8ff12659fe"
+}
