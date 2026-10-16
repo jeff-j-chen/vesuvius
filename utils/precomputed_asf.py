@@ -24,6 +24,41 @@ BAND = 256
 BLUR_NATIVE = 15
 
 
+LOCAL_SIGMA = 250  # native px, nonml_ink.local_z default
+COARSE = 2         # the 250 px local mean/std are smooth: estimate them on a COARSE-times smaller grid
+
+
+def _coarse_nblur(x, m, sigma_native, nm):
+    """nm.nblur on a COARSE-times area-downsampled grid, bilinearly upsampled back (same smoothing, ~COARSE^2 cheaper)."""
+    height, width = x.shape
+    size = (max(1, width // COARSE), max(1, height // COARSE))
+    mf = m.astype(np.float32)
+    num = cv2.resize(x * mf, size, interpolation=cv2.INTER_AREA)
+    den = cv2.resize(mf, size, interpolation=cv2.INTER_AREA)
+    sigma = nm.w(sigma_native) / COARSE
+    num = cv2.GaussianBlur(num, (0, 0), sigma, borderType=cv2.BORDER_REFLECT)
+    den = cv2.GaussianBlur(den, (0, 0), sigma, borderType=cv2.BORDER_REFLECT)
+    return cv2.resize(num / np.maximum(den, 1e-3), (width, height), interpolation=cv2.INTER_LINEAR)
+
+
+def _slice_prior(plane, m, nm):
+    """nm.priors' per-slice term: gblur(local_z(fill(plane)), 4 px), with the wide local statistics on a coarse grid."""
+    x = nm.fill(plane, m)
+    mu = _coarse_nblur(x, m, LOCAL_SIGMA, nm)
+    sd = np.sqrt(np.maximum(_coarse_nblur((x - mu) ** 2, m, LOCAL_SIGMA, nm), 1e-6))
+    return nm.gblur(nm.fill((x - mu) / sd, m), 4)
+
+
+def asf_morph_prior(v, m, nm):
+    """nm.priors(v, m)["asf_morph"] without the nine other priors nobody reads (MIP over every slice of `v`)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(len(v), os.cpu_count() or 1)) as pool:
+        planes = list(pool.map(lambda plane: _slice_prior(plane, m, nm), v))
+    base = nm.fill(np.max(planes, axis=0), m)
+    return nm.gblur(nm.asf(base), 10)
+
+
 def cue_from_window(stack, frame):
     """uint8 asf_morph cue map of an (WINDOW, H, W) raw slice stack over the papyrus `frame`."""
     import nonml_ink as nm
@@ -34,8 +69,7 @@ def cue_from_window(stack, frame):
     v = stack[:, :h2 * f, :w2 * f].reshape(WINDOW, h2, f, w2, f).mean((2, 4)).astype(np.float32)
     m = frame[:h2 * f, :w2 * f].reshape(h2, f, w2, f).mean((1, 3)) > 0.999
     m = cv2.erode(m.astype(np.uint8), nm.disk(24)).astype(bool)
-    nm.MIP_RANGE = list(range(WINDOW))
-    asf = nm.priors(v, m)["asf_morph"].astype(np.float32)
+    asf = asf_morph_prior(v, m, nm).astype(np.float32)
     z = nm.robust_z(nm.gblur(nm.robust_z(asf, m, nm.Z_CLIP), BLUR_NATIVE), m, nm.Z_CLIP)
     small = np.clip((z + nm.Z_CLIP) / (2.0 * nm.Z_CLIP), 0.0, 1.0)
     canvas = np.zeros((height, width), dtype=np.float32)
