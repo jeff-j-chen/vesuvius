@@ -20,3 +20,4 @@ surface_labels/
 output/
 crossres/
 # run outputs stay local to keep LFS under quota; already-tracked files are unaffected
+nader-fork/

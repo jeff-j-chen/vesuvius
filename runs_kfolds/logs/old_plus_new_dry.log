@@ -1,0 +1,12 @@
+2026-10-16 23:47:35.355798: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1792194455.374935 2277457 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1792194455.380031 2277457 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1792194455.394262 2277457 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792194455.394283 2277457 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792194455.394286 2277457 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792194455.394287 2277457 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2026-10-16 23:47:35.397935: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[preflight] 37 scroll(s) and init weights present
+[dry-run] run=iter2_old_plus_new_2 ctx=192 norm=surface_anchor domains={'pherc0139': 2, 'pherc0172': 2, 'pherc1667': 1, 'phercparis4': 1, 'pherc0500p2': 3, 'pherc0814': 5, 'phercparis2_fr143': 1, 'pherc51cr4_fr8': 1, 'phercparis1_fr34': 1, 'pherc0343p': 4, 'pherc0841': 1, 'pherc1447': 1, 'pherc0009b': 2, 'pherc0846a': 3} scrolls=34 vis=[20260927134931, 20261012073246, 20261012065813, 20261012065817, 20261012065819, 20261012065821, 20261012065823, 20261012065815, 20261012065825, 20261012065827, 20250919125754] epochs=10 batch=32 lr=0.0001 init=models/mae_nnunet_192_campaign34_early_gated_fiber_native96_surfacenorm_campaign40_2k.pth -> /vesuvius/models/runs_iter2/iter2_old_plus_new_2/final.pth (TensorBoard /vesuvius/runs_kfolds/iter2_old_plus_new_2)

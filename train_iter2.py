@@ -38,6 +38,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "old"))  # train_tests10 lives in old/
 import train_tests10 as t10  # noqa: E402  (recipe helpers; no heavy imports at module level)
 
 LOG_ROOT = REPO / "runs_iter2"
@@ -226,7 +227,7 @@ def configure(config, arm: str, smoke: bool = False, full_vis: bool = False) -> 
     name = f"iter2_{arm}"
     config.run_name = config.exp_name = name
     config.model_dir = os.path.join("models", "runs_iter2", name)
-    config.tra.log_dir = "runs_iter2"
+    config.tra.log_dir = LOG_ROOT.name
     config.tra.n_epochs = config.tra.eval_int = config.tra.save_int = EPOCHS
     ARMS[arm](config)
     if smoke:
@@ -292,14 +293,17 @@ def run_worker(arm: str, dry_run: bool, smoke: bool, full_vis: bool) -> None:
 
 
 def main() -> None:
+    global LOG_ROOT
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--arm", default=",".join(ARMS), help="comma-separated arms, run in the given order")
     parser.add_argument("--dry-run", action="store_true", help="check inputs and print each config, no training")
     parser.add_argument("--smoke", action="store_true", help="one tiny epoch + one figure per arm (own output dirs)")
     parser.add_argument("--full-vis-smoke", action="store_true", help="with --smoke: render every figure scroll, not just one")
+    parser.add_argument("--log-dir", default=LOG_ROOT.name, help="TensorBoard/figure/console-log folder under the repo")
     parser.add_argument("--worker", default="", help=argparse.SUPPRESS)
     args = parser.parse_args()
     os.chdir(REPO)
+    LOG_ROOT = REPO / args.log_dir
     if args.worker:
         run_worker(args.worker, args.dry_run, args.smoke, args.full_vis_smoke)
         return
@@ -319,7 +323,7 @@ def main() -> None:
             print(f"[iter2] {index}/{len(arms)} {arm}: done already, skipping", flush=True)
             continue
         log_path = LOG_ROOT / "logs" / f"{arm}{suffix}.log"
-        command = [sys.executable, "-u", __file__, "--worker", arm,
+        command = [sys.executable, "-u", __file__, "--worker", arm, "--log-dir", args.log_dir,
                    *(["--dry-run"] if args.dry_run else []), *(["--smoke"] if args.smoke else []),
                    *(["--full-vis-smoke"] if args.full_vis_smoke else [])]
         print(f"[iter2] {index}/{len(arms)} {arm} -> {log_path}", flush=True)
