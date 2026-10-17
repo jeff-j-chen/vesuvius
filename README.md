@@ -153,10 +153,6 @@ first patches, after the alias for the straightened2 sheets).
 | `20261012065814` | `20261012065815` | `auto_grown_20261012065803387_straightened2_abf` (straightened2, the winning sheet) | held out, whole-patch scored |
 | `20261012065824` | `20261012065825` | `auto_grown_20261012065803387_straightened2_abf_out_4` | held out, whole-patch scored |
 | `20261012065826` | `20261012065827` | `auto_grown_20261012065803387_straightened2_abf_out_5` | held out, whole-patch scored |
-| `20261012073249` | `20261012073250` | `3_new_offset/auto_grown_20261012073244544_abf_p29` (p29) | unused |
-| `20261012065810` | `20261012065811` | `auto_grown_20261012065803387_straight_abf` (first straightened re-trace) | unused |
-| `20261014084610` | `20261014084611` | `auto_grown_20261014084609861_straight_abf` (second straightened sheet) | unused |
-| `20261012081237` | `20261012081238` | `3_new/auto_grown_20261012081237255_abf` (retired) | unused |
 
 - the straightened2 sheets and `20261014084610` have upside-down meshes: their coordinate grids are rotated 180° in-plane before sampling (`ROTATE_180`, zarr attribute `rotated_180`), so every stored array is upright and letters are not mirrored
 - display only: the 073244 render/alias is shown rotated 90° CCW, p29 90° CW and the ABF patch 180° (`utils/fast_figure.display_rotation`); arrays and metrics stay in the native frame
