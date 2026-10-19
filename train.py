@@ -356,6 +356,12 @@ def character_floor_loss(
     return F.softplus(float(margin) - weakest).mean()
 
 
+class _DeferredStep(NamedTuple):
+    """a finished-on-the-device optimizer step whose host-side results are read one step later."""
+    pending: "_PendingGroup"
+    snapshot: dict
+
+
 class _PendingGroup(NamedTuple):
     """a deferred-step group's results still on the device, plus the host-known metric arrays."""
     scores: torch.Tensor
@@ -857,6 +863,8 @@ class Trainer:
         self._pcgrad_gram_log_norms: dict[int, float] = {}
         self._pcgrad_gram_step = 0
         self._defer_optimizer_step = False
+        # read each step's scores/diagnostics after the next step is queued, so the GPU never idles on a host copy
+        self._pipeline_steps = bool(getattr(config.tra, "pipeline_steps", True))
         self._character_learned: dict[int, bool] = {}
         self._character_forgets: dict[int, int] = {}
         forgetting_path = str(getattr(config.tra, "character_forgetting_path", "") or "")
@@ -2500,22 +2508,22 @@ class Trainer:
                 if bool(getattr(self.c.tra, "dann", False)) else 1.0
             )
             mil_pair_outputs = None
-            mil_active = None
+            mil_idx = None
             if (
                 bool(getattr(self.c.tra, "depth_view_mil", False))
                 and depth_pair is not None
                 and depth_pair_active is not None
                 and (depth_pair_active.view(-1) > 0).any()
             ):
-                mil_active_cpu = depth_pair_active.view(-1) > 0
-                mil_active = mil_active_cpu.to(self.c.device, non_blocking=True)
+                # host-computed row indices: boolean masks on device tensors would force a sync every step
+                mil_idx_cpu = torch.nonzero(depth_pair_active.view(-1) > 0).view(-1)
+                mil_idx = _pinned_to(mil_idx_cpu, self.c.device)
                 # run before the primary view so the model's last_* side outputs describe the primary view
                 mil_pair_outputs = self.model(
-                    depth_pair[mil_active_cpu].to(self.c.device, non_blocking=True),
-                    target_offsets=target_offsets[mil_active] if target_offsets is not None else None,
-                    teacher_surface_depth=depth_pair_surface[mil_active_cpu].to(self.c.device, non_blocking=True).float(),
-                    teacher_surface_confidence=depth_pair_confidence[mil_active_cpu].to(
-                        self.c.device, non_blocking=True).float(),
+                    _pinned_to(depth_pair[mil_idx_cpu], self.c.device),
+                    target_offsets=target_offsets[mil_idx] if target_offsets is not None else None,
+                    teacher_surface_depth=_pinned_to(depth_pair_surface[mil_idx_cpu], self.c.device).float(),
+                    teacher_surface_confidence=_pinned_to(depth_pair_confidence[mil_idx_cpu], self.c.device).float(),
                 )
                 if mil_pair_outputs.dim() == 4:
                     mil_pair_outputs = mil_pair_outputs.flatten(1).max(dim=1, keepdim=True).values
@@ -2547,7 +2555,7 @@ class Trainer:
             new_surface_logits = getattr(self.model, "last_new_surface_logits", None)
             dual_scale_gate = getattr(self.model, "last_dual_scale_gate", None)
             if dual_scale_gate is not None:
-                self._last_dual_scale_gate = float(dual_scale_gate.mean().detach())
+                self._last_dual_scale_gate = dual_scale_gate.mean().detach()
 
             if outputs.dim() == 4:
                 outputs = outputs.flatten(1).max(dim=1, keepdim=True).values
@@ -2573,18 +2581,17 @@ class Trainer:
                 targets = torch.where(labels > 0.5, targets * positive_level, targets)
 
             per_target_loss = self.criterion(outputs, targets)
-            if mil_pair_outputs is not None and mil_pair_outputs.shape == outputs[mil_active].shape:
+            if mil_pair_outputs is not None and mil_pair_outputs.shape == (mil_idx_cpu.numel(), *outputs.shape[1:]):
                 # depth-offset MIL: the better-fitting depth view explains a positive cell, a negative must hold in both
-                pair_loss = self.criterion(mil_pair_outputs, targets[mil_active])
-                primary_loss_a = per_target_loss[mil_active]
-                positive_cells = labels[mil_active] > 0.5
+                pair_loss = self.criterion(mil_pair_outputs, targets[mil_idx])
+                primary_loss_a = per_target_loss[mil_idx]
+                positive_cells = labels[mil_idx] > 0.5
                 merged = torch.where(positive_cells, torch.minimum(primary_loss_a, pair_loss), 0.5 * (primary_loss_a + pair_loss))
-                per_target_loss = per_target_loss.clone()
-                per_target_loss[mil_active] = merged
-                supervised_pairs = positive_cells & (mask[mil_active] > 0)
+                per_target_loss = per_target_loss.index_copy(0, mil_idx, merged)
+                supervised_pairs = (positive_cells & (mask[mil_idx] > 0)).float()
                 self._last_dg_losses["depth_mil_pair_better"] = (
-                    (pair_loss < primary_loss_a).float()[supervised_pairs].mean() if supervised_pairs.any()
-                    else primary_loss_a.new_zeros(())
+                    ((pair_loss < primary_loss_a).float() * supervised_pairs).sum()
+                    / supervised_pairs.sum().clamp(min=1.0)
                 ).detach()
             loss_mask = mask
             # host mirror of loss_mask; None once a data-dependent rule (top-k, support drop) edits it
@@ -2794,9 +2801,7 @@ class Trainer:
                 )
                 if robust_loss is not None:
                     primary_loss = _blend_extra_cells(robust_loss, per_target_loss, loss_mask, extra_cells)
-                    self._last_physical_domain_groupdro_loss = float(
-                        robust_loss.detach()
-                    )
+                    self._last_physical_domain_groupdro_loss = robust_loss.detach()
             if bool(getattr(self.c.tra, "physical_patch_groupdro", False)):
                 if patch_ids is None:
                     raise RuntimeError("physical-patch GroupDRO requires patch IDs")
@@ -3014,7 +3019,7 @@ class Trainer:
                         deep_target_loss * labelled_mask
                     ).sum() / denom
                 loss = loss + deep_loss
-                self._last_deep_supervision_loss = float(deep_loss.detach())
+                self._last_deep_supervision_loss = deep_loss.detach()
             if bool(getattr(self.c.tra, "clam_instance", False)):
                 instances = getattr(self.model, "last_clam_instance_logits", None)
                 if instances is None:
@@ -3575,18 +3580,12 @@ class Trainer:
         ):
             if depth_pair_surface is None or depth_pair_confidence is None:
                 raise RuntimeError("depth-view consistency requires paired surface maps")
-            active_cpu = depth_pair_active.view(-1) > 0
-            active_device = active_cpu.to(self.c.device, non_blocking=True)
-            pair_images = depth_pair[active_cpu].to(self.c.device, non_blocking=True)
+            active_cpu = torch.nonzero(depth_pair_active.view(-1) > 0).view(-1)
+            active_device = _pinned_to(active_cpu, self.c.device)
+            pair_images = _pinned_to(depth_pair[active_cpu], self.c.device)
             pair_offsets = target_offsets[active_device] if target_offsets is not None else None
-            pair_surface = depth_pair_surface[active_cpu].to(
-                self.c.device,
-                non_blocking=True,
-            ).float()
-            pair_confidence = depth_pair_confidence[active_cpu].to(
-                self.c.device,
-                non_blocking=True,
-            ).float()
+            pair_surface = _pinned_to(depth_pair_surface[active_cpu], self.c.device).float()
+            pair_confidence = _pinned_to(depth_pair_confidence[active_cpu], self.c.device).float()
             pair_target = torch.sigmoid(outputs[active_device]).detach()
             with autocast(self.c.device, enabled=self.c.device == "cuda"):
                 self.model.eval()
@@ -3709,7 +3708,34 @@ class Trainer:
         )
         if self._defer_optimizer_step:
             return pending
+        if self._pipeline_steps:
+            return _DeferredStep(pending, {
+                "dg": dict(self._last_dg_losses),
+                "patch_dro": self._last_physical_patch_groupdro_loss,
+                "domain_dro": self._last_physical_domain_groupdro_loss,
+                "deep": self._last_deep_supervision_loss,
+                "gate": self._last_dual_scale_gate,
+                "domains": self._last_metric_domains,
+                "cosines": self._last_domain_gradient_cosines,
+                "clusters": self._last_domain_gradient_clusters,
+            })
         result, _ = self._finish_pending(pending)
+        self._resolve_host_scalars()
+        return result
+
+    def _finalize_step(self, step: "_DeferredStep") -> tuple:
+        """restore the step's per-step state (the next step has overwritten it), then read its results on the host."""
+        snapshot = step.snapshot
+        self._last_dg_losses.clear()
+        self._last_dg_losses.update(snapshot["dg"])
+        self._last_physical_patch_groupdro_loss = snapshot["patch_dro"]
+        self._last_physical_domain_groupdro_loss = snapshot["domain_dro"]
+        self._last_deep_supervision_loss = snapshot["deep"]
+        self._last_dual_scale_gate = snapshot["gate"]
+        self._last_metric_domains = snapshot["domains"]
+        self._last_domain_gradient_cosines = snapshot["cosines"]
+        self._last_domain_gradient_clusters = snapshot["clusters"]
+        result, _ = self._finish_pending(step.pending)
         self._resolve_host_scalars()
         return result
 
@@ -3746,16 +3772,19 @@ class Trainer:
     def _resolve_host_scalars(self) -> None:
         """turn the detached device scalars left in the per-step loss logs into floats in one transfer."""
         keys = [key for key, value in self._last_dg_losses.items() if torch.is_tensor(value)]
-        patch_dro = torch.is_tensor(self._last_physical_patch_groupdro_loss)
-        values = [self._last_dg_losses[key] for key in keys]
-        if patch_dro:
-            values.append(self._last_physical_patch_groupdro_loss)
+        names = [
+            name for name in (
+                "_last_physical_patch_groupdro_loss", "_last_physical_domain_groupdro_loss",
+                "_last_deep_supervision_loss", "_last_dual_scale_gate",
+            ) if torch.is_tensor(getattr(self, name))
+        ]
+        values = [self._last_dg_losses[key] for key in keys] + [getattr(self, name) for name in names]
         if not values:
             return
         host = torch.stack([value.detach().double().reshape(()) for value in values]).cpu().tolist()
-        if patch_dro:
-            self._last_physical_patch_groupdro_loss = host.pop()
-        self._last_dg_losses.update(zip(keys, host))
+        for name, value in zip(names, host[len(keys):]):
+            setattr(self, name, value)
+        self._last_dg_losses.update(zip(keys, host[:len(keys)]))
 
     def _ins_hard_samples(
         self,
@@ -3830,6 +3859,83 @@ class Trainer:
         domain_gradient_cosine_counts: dict[tuple[int, int], int] = {}
         domain_gradient_cluster_total = 0
         domain_gradient_cluster_batches = 0
+
+        def consume(result, patch_metric_ids):
+            """fold one finished step into the epoch totals."""
+            nonlocal loss_total, raw_loss_total, dann_loss_total, dann_accuracy_total, grl_scale_total
+            nonlocal spill_loss_total, surface_loss_total, surface_alpha_total, surface_ce_total
+            nonlocal surface_smooth_total, surface_mae_total, supcon_loss_total, weighted_supcon_loss_total
+            nonlocal context_loss_total, depth_consistency_loss_total, bag_rank_loss_total, groupdro_loss_total
+            nonlocal physical_domain_groupdro_loss_total, physical_patch_groupdro_loss_total
+            nonlocal deep_supervision_loss_total, dual_scale_gate_total, dual_scale_gate_batches
+            nonlocal cvar_loss_total, clam_loss_total, elr_loss_total
+            nonlocal domain_gradient_cluster_total, domain_gradient_cluster_batches
+            (
+                batch_scores,
+                batch_labels_out,
+                batch_character_ids_out,
+                batch_loss,
+                batch_raw_loss,
+                batch_dann_loss,
+                batch_spill_loss,
+                batch_surface_loss,
+                batch_surface_alpha,
+                batch_surface_ce,
+                batch_surface_smooth,
+                batch_surface_mae,
+                batch_supcon_loss,
+                batch_weighted_supcon_loss,
+            ) = result
+            if batch_scores.size == 0:
+                return
+            loss_total += batch_loss
+            raw_loss_total += batch_raw_loss
+            dann_loss_total += batch_dann_loss
+            dann_accuracy_total += self._last_dann_accuracy
+            grl_scale_total += self._last_grl_scale
+            spill_loss_total += batch_spill_loss
+            surface_loss_total += batch_surface_loss
+            surface_alpha_total += batch_surface_alpha
+            surface_ce_total += batch_surface_ce
+            surface_smooth_total += batch_surface_smooth
+            surface_mae_total += batch_surface_mae
+            supcon_loss_total += batch_supcon_loss
+            weighted_supcon_loss_total += batch_weighted_supcon_loss
+            labels.extend(batch_labels_out)
+            preds.extend((batch_scores > 0.5).astype(int))
+            scores.extend(batch_scores)
+            character_ids_all.extend(batch_character_ids_out)
+            domain_ids_all.extend(self._last_metric_domains.tolist())
+            patch_ids_all.extend(patch_metric_ids)
+            context_value, bag_value, groupdro_value, cvar_value = self._last_character_objectives
+            context_loss_total += context_value
+            depth_consistency_loss_total += self._last_depth_consistency
+            bag_rank_loss_total += bag_value
+            groupdro_loss_total += groupdro_value
+            physical_domain_groupdro_loss_total += self._last_physical_domain_groupdro_loss
+            physical_patch_groupdro_loss_total += self._last_physical_patch_groupdro_loss
+            deep_supervision_loss_total += self._last_deep_supervision_loss
+            if self._last_dual_scale_gate > 0:
+                dual_scale_gate_total += self._last_dual_scale_gate
+                dual_scale_gate_batches += 1
+            cvar_loss_total += cvar_value
+            clam_loss_total += self._last_clam_loss
+            elr_loss_total += self._last_elr_loss
+            for key, value in self._last_dg_losses.items():
+                dg_loss_totals[key] += value
+            for pair, value in self._last_domain_gradient_cosines.items():
+                domain_gradient_cosine_totals[pair] = (
+                    domain_gradient_cosine_totals.get(pair, 0.0) + value
+                )
+                domain_gradient_cosine_counts[pair] = (
+                    domain_gradient_cosine_counts.get(pair, 0) + 1
+                )
+            if self._last_domain_gradient_clusters:
+                domain_gradient_cluster_total += len(self._last_domain_gradient_clusters)
+                domain_gradient_cluster_batches += 1
+
+        # the step queued last is read after the next one is launched (see _finalize_step)
+        awaiting = None
 
         entropy_lambda = float(getattr(self.c.tra, "entropy_min_lambda", 0.0))
         u_iter = iter(self.valid_loader) if entropy_lambda > 0 else None
@@ -3955,22 +4061,7 @@ class Trainer:
                 train_step = functools.partial(
                     self._fish_train_batch if use_fish else self._and_mask_train_batch, bounds,
                 )
-            (
-                batch_scores,
-                batch_labels_out,
-                batch_character_ids_out,
-                batch_loss,
-                batch_raw_loss,
-                batch_dann_loss,
-                batch_spill_loss,
-                batch_surface_loss,
-                batch_surface_alpha,
-                batch_surface_ce,
-                batch_surface_smooth,
-                batch_surface_mae,
-                batch_supcon_loss,
-                batch_weighted_supcon_loss,
-            ) = train_step(
+            step = train_step(
                 images,
                 batch_labels,
                 mask,
@@ -3992,55 +4083,17 @@ class Trainer:
                 depth_pair_confidence=batch_depth_pair_confidence,
                 depth_pair_active=batch_depth_pair_active,
             )
-            if batch_scores.size == 0:
-                continue
-            loss_total += batch_loss
-            raw_loss_total += batch_raw_loss
-            dann_loss_total += batch_dann_loss
-            dann_accuracy_total += self._last_dann_accuracy
-            grl_scale_total += self._last_grl_scale
-            spill_loss_total += batch_spill_loss
-            surface_loss_total += batch_surface_loss
-            surface_alpha_total += batch_surface_alpha
-            surface_ce_total += batch_surface_ce
-            surface_smooth_total += batch_surface_smooth
-            surface_mae_total += batch_surface_mae
-            supcon_loss_total += batch_supcon_loss
-            weighted_supcon_loss_total += batch_weighted_supcon_loss
-            labels.extend(batch_labels_out)
-            preds.extend((batch_scores > 0.5).astype(int))
-            scores.extend(batch_scores)
-            character_ids_all.extend(batch_character_ids_out)
-            domain_ids_all.extend(self._last_metric_domains.tolist())
-            patch_ids_all.extend(
-                _metric_patch_ids(batch_patch_ids, batch_labels, mask).tolist()
-            )
-            context_value, bag_value, groupdro_value, cvar_value = self._last_character_objectives
-            context_loss_total += context_value
-            depth_consistency_loss_total += self._last_depth_consistency
-            bag_rank_loss_total += bag_value
-            groupdro_loss_total += groupdro_value
-            physical_domain_groupdro_loss_total += self._last_physical_domain_groupdro_loss
-            physical_patch_groupdro_loss_total += self._last_physical_patch_groupdro_loss
-            deep_supervision_loss_total += self._last_deep_supervision_loss
-            if self._last_dual_scale_gate > 0:
-                dual_scale_gate_total += self._last_dual_scale_gate
-                dual_scale_gate_batches += 1
-            cvar_loss_total += cvar_value
-            clam_loss_total += self._last_clam_loss
-            elr_loss_total += self._last_elr_loss
-            for key, value in self._last_dg_losses.items():
-                dg_loss_totals[key] += value
-            for pair, value in self._last_domain_gradient_cosines.items():
-                domain_gradient_cosine_totals[pair] = (
-                    domain_gradient_cosine_totals.get(pair, 0.0) + value
-                )
-                domain_gradient_cosine_counts[pair] = (
-                    domain_gradient_cosine_counts.get(pair, 0) + 1
-                )
-            if self._last_domain_gradient_clusters:
-                domain_gradient_cluster_total += len(self._last_domain_gradient_clusters)
-                domain_gradient_cluster_batches += 1
+            patch_metric_ids = _metric_patch_ids(batch_patch_ids, batch_labels, mask).tolist()
+            if awaiting is not None:
+                consume(self._finalize_step(awaiting[0]), awaiting[1])
+                awaiting = None
+            if isinstance(step, _DeferredStep):
+                awaiting = (step, patch_metric_ids)
+            else:
+                consume(step, patch_metric_ids)
+
+        if awaiting is not None:
+            consume(self._finalize_step(awaiting[0]), awaiting[1])
 
         if bool(getattr(self.c.tra, "character_forgetting", False)) and not self._static_forgetting:
             self._update_character_forgetting(labels, scores, character_ids_all)

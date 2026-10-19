@@ -127,8 +127,7 @@ def _stroke_floor_strongneg(config):
     config.data.line_prior_source = "own"
 
 
-def _heavy_photometric(config):
-    _base(config)
+def _apply_heavy_photometric(config):
     dl = config.dl
     dl.brightness_prob, dl.brightness_low, dl.brightness_delta = 0.9, 0.30, 0.50
     dl.contrast_prob, dl.contrast_delta = 0.7, 0.35
@@ -136,6 +135,11 @@ def _heavy_photometric(config):
     dl.correlated_noise_prob, dl.correlated_noise_min, dl.correlated_noise_max, dl.correlated_noise_sigma = 0.5, 0.01, 0.05, 6.0
     dl.cutout_prob = 0.0
     dl.context_replace_prob = 0.0
+
+
+def _heavy_photometric(config):
+    _base(config)
+    _apply_heavy_photometric(config)
 
 
 def _idea1_visibility_weights(config):
@@ -146,14 +150,18 @@ def _idea1_visibility_weights(config):
     config.tra.character_forgetting_max_weight = 4.0
 
 
-def _idea2_depth_mil(config):
-    _base(config)
+def _apply_depth_mil(config):
     tra = config.tra
     tra.depth_view_consistency = True
     tra.depth_view_consistency_lambda = 0.0
     tra.depth_view_consistency_offset = 2
     tra.depth_view_consistency_prob = 0.5
     tra.depth_view_mil = True
+
+
+def _idea2_depth_mil(config):
+    _base(config)
+    _apply_depth_mil(config)
 
 
 def _line_prior(config, source: str):
