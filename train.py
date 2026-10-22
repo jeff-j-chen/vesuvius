@@ -931,6 +931,10 @@ class Trainer:
             "divdis_reg": 0.0,
             "divdis_target_ink_rate": 0.0,
             "divdis_target_agreement": 0.0,
+            "halo_penalty_loss": 0.0,
+            "depth_peak_loss": 0.0,
+            "negative_forget_frac": 0.0,
+            "positive_forget_frac": 0.0,
         }
         self._closed = False
 
@@ -1078,6 +1082,16 @@ class Trainer:
                         "data.extra_label_share > 0 but no training split holds a sampleable assumed letter "
                         "(half-brightness strokes in inklabel_dir with ring windows)"
                     )
+            epoch_length = None
+            anchor = str(getattr(self.c.data, "equalize_domain", "") or "")
+            if anchor:
+                if not scroll_dict or anchor not in scroll_dict or holdout or not balance_scrolls:
+                    raise ValueError("data.equalize_domain needs a train_scroll_dict domain, balanced sampling and no holdout_domains")
+                anchor_index = list(scroll_dict).index(anchor)
+                anchor_draws = sum(len(train_sets[i]) for i in sampling_groups[anchor_index])
+                epoch_length = int(math.ceil(anchor_draws * sum(sampling_weights) / sampling_weights[anchor_index]))
+                print(f"[equalize] {anchor}: {anchor_draws:,} draws per epoch kept; epoch = {epoch_length:,} draws "
+                      f"(weights {dict(zip(scroll_dict, sampling_weights))})", flush=True)
             merged_train = MultiScrollIterableDataset(
                 train_sets,
                 balance_scrolls=balance_scrolls,
@@ -1085,6 +1099,7 @@ class Trainer:
                 sampling_weights=sampling_weights,
                 extra_datasets=extra_sets,
                 extra_share=extra_share,
+                epoch_length=epoch_length,
             )
             validation_ids = getattr(self.c.data, "validation_scroll_ids", None)
             if validation_ids is not None:
@@ -1412,6 +1427,65 @@ class Trainer:
                 count = parameter.numel()
                 parameter.grad.add_(correction[offset:offset + count].view_as(parameter))
                 offset += count
+
+    def _mask_slices(self, images, probability):
+        """speech-style time masking: on a random share of samples, `slice_mask_width` consecutive depth slices become the
+        mean of the sample's other slices (the cue slice is left alone)."""
+        depth = int(self.c.data.depth)
+        width = max(1, min(int(getattr(self.c.tra, "slice_mask_width", 2)), depth - 1))
+        batch = images.shape[0]
+        device = images.device
+        volume, rest = images[:, :, :depth], images[:, :, depth:]
+        start = torch.randint(0, depth - width + 1, (batch, 1), device=device)
+        active = (torch.rand(batch, 1, device=device) < probability)
+        index = torch.arange(depth, device=device).unsqueeze(0)
+        masked = (active & (index >= start) & (index < start + width)).view(batch, 1, depth, 1, 1)
+        keep = (~masked).to(volume.dtype)
+        mean_other = (volume * keep).sum(dim=2, keepdim=True) / keep.sum(dim=2, keepdim=True).clamp(min=1.0)
+        return torch.cat([torch.where(masked, mean_other.expand_as(volume), volume), rest], dim=2)
+
+    def _halo_penalty(self, outputs, labels, mask, images, target_offsets):
+        """BCE toward 0 on unsupervised cells within halo_radius cells of a labelled ink cell, weighted by how ink-like the
+        cue calls them (cue 0.5 = no information, >= 0.75 = full weight)."""
+        if str(getattr(self.c.model, "input_cue", "") or "") != "pre_clahe":
+            raise RuntimeError("halo_penalty_lambda needs the cue input (model.input_cue = 'pre_clahe')")
+        grid = int(self.c.model.multitile_grid)
+        sub = int(self.c.model.multitile_subtile)
+        batch = outputs.shape[0]
+        radius = max(1, int(getattr(self.c.tra, "halo_radius", 4)))
+        positive = ((labels > 0.5) & (mask > 0)).float().view(batch, 1, grid, grid)
+        near = F.max_pool2d(positive, 2 * radius + 1, stride=1, padding=radius).view(batch, -1) > 0
+        halo = near & (mask <= 0)
+        cue = images.detach().float().reshape(batch, -1, *images.shape[-2:])[:, -1]
+        height, width = cue.shape[-2:]
+        size = grid * sub
+        top, left = (height - size) // 2, (width - size) // 2
+        if target_offsets is None:
+            center = cue[:, top:top + size, left:left + size]
+        else:
+            offsets = target_offsets.reshape(batch, 2).long().tolist()
+            center = torch.stack([
+                cue[b, top + jy:top + jy + size, left + jx:left + jx + size]
+                for b, (jy, jx) in enumerate(offsets)
+            ])
+        cell_cue = F.avg_pool2d(center.unsqueeze(1), sub).flatten(1)
+        weight = ((cell_cue - 0.5) * 4.0).clamp(0.0, 1.0) * halo.float()
+        per_cell = F.binary_cross_entropy_with_logits(
+            outputs.float(), torch.zeros_like(outputs, dtype=torch.float32), reduction="none",
+        )
+        return (per_cell * weight).sum() / weight.sum().clamp(min=1.0)
+
+    def _depth_peak_loss(self, primary_logits, pair_logits):
+        """neighbouring ink-like cells should prefer the same depth view: total variation of the soft view choice
+        (paired minus primary logit), weighted by the confidence of both cells."""
+        grid = int(self.c.model.multitile_grid)
+        a = primary_logits.float().reshape(-1, grid, grid)
+        b = pair_logits.float().reshape(-1, grid, grid)
+        choice = torch.sigmoid(b - a)
+        confidence = torch.maximum(torch.sigmoid(a), torch.sigmoid(b)).detach()
+        vertical = confidence[:, 1:, :] * confidence[:, :-1, :] * (choice[:, 1:, :] - choice[:, :-1, :]).abs()
+        horizontal = confidence[:, :, 1:] * confidence[:, :, :-1] * (choice[:, :, 1:] - choice[:, :, :-1]).abs()
+        return 0.5 * (vertical.mean() + horizontal.mean())
 
     def _unsupported_cells(self, images, surface_depth, surface_confidence, target_offsets):
         """(B, cells) True where under a quarter of the cell's pixels show papyrus at the fitted surface
@@ -2392,6 +2466,8 @@ class Trainer:
                 non_blocking=True,
             ).float()
         images = self._apply_fda(images)
+        if float(getattr(self.c.tra, "slice_mask_prob", 0.0)) > 0:
+            images = self._mask_slices(images, float(self.c.tra.slice_mask_prob))
         B = images.size(0)
         labels = labels.to(self.c.device, non_blocking=True).view(B, -1)  # (B,1) single or (B,K) multitile
         # edge-soft positives arrive as values in (0.5, 1); keep labels binary for every other consumer
@@ -2509,6 +2585,7 @@ class Trainer:
             )
             mil_pair_outputs = None
             mil_idx = None
+            depth_peak_value = None
             if (
                 bool(getattr(self.c.tra, "depth_view_mil", False))
                 and depth_pair is not None
@@ -2586,8 +2663,14 @@ class Trainer:
                 pair_loss = self.criterion(mil_pair_outputs, targets[mil_idx])
                 primary_loss_a = per_target_loss[mil_idx]
                 positive_cells = labels[mil_idx] > 0.5
-                merged = torch.where(positive_cells, torch.minimum(primary_loss_a, pair_loss), 0.5 * (primary_loss_a + pair_loss))
+                if str(getattr(self.c.tra, "depth_view_mil_negative", "mean")) == "max":
+                    negative_loss = torch.maximum(primary_loss_a, pair_loss)
+                else:
+                    negative_loss = 0.5 * (primary_loss_a + pair_loss)
+                merged = torch.where(positive_cells, torch.minimum(primary_loss_a, pair_loss), negative_loss)
                 per_target_loss = per_target_loss.index_copy(0, mil_idx, merged)
+                if float(getattr(self.c.tra, "depth_peak_lambda", 0.0)) > 0:
+                    depth_peak_value = self._depth_peak_loss(outputs[mil_idx], mil_pair_outputs)
                 supervised_pairs = (positive_cells & (mask[mil_idx] > 0)).float()
                 self._last_dg_losses["depth_mil_pair_better"] = (
                     ((pair_loss < primary_loss_a).float() * supervised_pairs).sum()
@@ -2617,6 +2700,25 @@ class Trainer:
                 self._last_dg_losses["topk_positive_kept_frac"] = float(
                     (((targets > 0.5) & (loss_mask > 0)).sum() / positives).item()
                 )
+            ramp = max(1, int(getattr(self.c.tra, "negative_forget_ramp_epochs", 2)))
+            for forget_key, forget_rate, is_positive in (
+                ("negative_forget_frac", float(getattr(self.c.tra, "negative_forget_rate", 0.0)), False),
+                ("positive_forget_frac", float(getattr(self.c.tra, "positive_forget_rate", 0.0)), True),
+            ):
+                if forget_rate <= 0 or outputs.shape != mask.shape:
+                    continue
+                # small-loss selection: the cells the model finds hardest are the likeliest label noise (hidden ink / guessed ink)
+                rate = forget_rate * min(1.0, (epoch + 1) / ramp)
+                candidates = ((labels > 0.5) if is_positive else (labels == 0)) & (loss_mask > 0)
+                candidate_count = int(candidates.sum().item())
+                if candidate_count > 1:
+                    keep_count = max(1, int(math.ceil(candidate_count * (1.0 - rate))))
+                    cell_loss = per_target_loss.detach().float()
+                    threshold = torch.kthvalue(cell_loss[candidates], keep_count).values
+                    dropped = candidates & (cell_loss > threshold)
+                    loss_mask = loss_mask * (~dropped).to(loss_mask.dtype)
+                    loss_mask_host = None
+                    self._last_dg_losses[forget_key] = dropped.sum().float() / candidate_count
             pu_lambda = float(getattr(self.c.tra, "pu_lambda", 0.0))
             pu_unlabeled = None
             pu_unlabeled_host = None
@@ -2894,6 +2996,14 @@ class Trainer:
                     primary_loss = _blend_extra_cells(robust_loss, per_target_loss, loss_mask, extra_cells)
                     cvar_loss_value = robust_loss
             loss = primary_loss
+            if depth_peak_value is not None:
+                loss = loss + float(self.c.tra.depth_peak_lambda) * depth_peak_value
+                self._last_dg_losses["depth_peak_loss"] = depth_peak_value.detach()
+            halo_lambda = float(getattr(self.c.tra, "halo_penalty_lambda", 0.0))
+            if halo_lambda > 0 and outputs.shape == mask.shape:
+                halo_value = self._halo_penalty(outputs, labels, mask, surface_source, target_offsets)
+                loss = loss + halo_lambda * halo_value
+                self._last_dg_losses["halo_penalty_loss"] = halo_value.detach()
             private_score = getattr(self.model, "last_private_score", None)
             if private_score is not None and private_score.shape == loss_mask.shape:
                 private_loss = (self.criterion(private_score, targets) * loss_mask).sum() / denom
@@ -3597,6 +3707,8 @@ class Trainer:
                 )
                 self.model.train()
                 pair_mask = mask[active_device]
+                if bool(getattr(self.c.tra, "depth_view_consistency_all_cells", False)):
+                    pair_mask = torch.ones_like(pair_mask)
                 depth_consistency_loss_value = (
                     (torch.sigmoid(pair_outputs) - pair_target).square() * pair_mask
                 ).sum() / pair_mask.sum().clamp(min=1.0)
@@ -4600,6 +4712,10 @@ class Trainer:
             ("line_llp_loss", "Aux/LineLLP"),
             ("line_cell_mean_prob", "Aux/LineCellMeanProb"),
             ("depth_mil_pair_better", "Aux/DepthMilPairBetter"),
+            ("halo_penalty_loss", "Aux/HaloPenalty"),
+            ("depth_peak_loss", "Aux/DepthPeakSmooth"),
+            ("negative_forget_frac", "Aux/NegativeForgetFraction"),
+            ("positive_forget_frac", "Aux/PositiveForgetFraction"),
         ):
             if key in train_metrics:
                 self.vis.writer.add_scalar(tag, train_metrics[key], epoch)

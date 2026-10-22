@@ -563,6 +563,23 @@ FRAGMENTS = [
     ("20261012065826", "auto_grown_20261012065803387_straightened2_abf_out_5",
      f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
      "14019,7726,7726"),
+    # REDO re-trace of the 065803 sheet (2026-10-19) and its +-28/56 voxel normal offsets (old/offset_mesh.py);
+    # flat aliases only, and not part of any training set
+    ("20261012065828", "auto_grown_20261012065803387_REDO_abf",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    ("20261012065830", "auto_grown_20261012065803387_REDO_abf_m28",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    ("20261012065832", "auto_grown_20261012065803387_REDO_abf_m56",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    ("20261012065834", "auto_grown_20261012065803387_REDO_abf_p28",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
+    ("20261012065836", "auto_grown_20261012065803387_REDO_abf_p56",
+     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
+     "14019,7726,7726"),
 ]
 
 # source render -> flat depth-13 alias used by training and the 0846A notebook (see the docstring)
@@ -581,8 +598,18 @@ FLAT_ALIASES = {
     "20261012065822": "20261012065823",
     "20261012065824": "20261012065825",
     "20261012065826": "20261012065827",
+    "20261012065828": "20261012065829",
+    "20261012065830": "20261012065831",
+    "20261012065832": "20261012065833",
+    "20261012065834": "20261012065835",
+    "20261012065836": "20261012065837",
 }
 FLAT_DEPTH = 13
+# aliases whose verified sheet middle is not FLAT_DEPTH
+# REDO set (old/depth_peaks.py): the per-block depth-profile peaks of all five zarrs spread over layers 3-24 with the same
+# 13-15 mode as the sheets already trained at 13, so no zarr is distinguishable from 13 by intensity
+FLAT_DEPTHS = {f"2026101206583{k}": 13 for k in ("1", "3", "5", "7")}
+FLAT_DEPTHS["20261012065829"] = 13
 
 
 def _link(link, target_name):
@@ -603,17 +630,23 @@ def make_flat_alias(src, dst, out_dir):
         if os.path.isfile(os.path.join(SCRIPT_DIR, folder, f"{src}.png")):
             _link(os.path.join(SCRIPT_DIR, folder, f"{dst}.png"), f"{src}.png")
     mask = cv2.imread(os.path.join(MASK_DIR, f"{src}.png"), cv2.IMREAD_GRAYSCALE) > 0
+    depth = FLAT_DEPTHS.get(dst, FLAT_DEPTH)
     surface = os.path.join(SURFACE_LABEL_ROOT, dst)
     depth_path = os.path.join(surface, "depth.npy")
-    if not os.path.isfile(depth_path) or np.load(depth_path, mmap_mode="r").shape != mask.shape:
-        # a new or resized source render invalidates the alias surface and its cached statistics
+    meta_path = os.path.join(surface, "metadata.json")
+    stale = not os.path.isfile(depth_path) or np.load(depth_path, mmap_mode="r").shape != mask.shape
+    if not stale and os.path.isfile(meta_path):
+        with open(meta_path, encoding="utf-8") as handle:
+            stale = json.load(handle).get("flat_depth", FLAT_DEPTH) != depth
+    if stale:
+        # a new or resized source render, or a changed depth, invalidates the alias surface and its cached statistics
         for name in ("norm_cache.json", "surface_anchor_cache.json"):
             _drop_json_key(os.path.join(SCRIPT_DIR, name), dst)
         os.makedirs(surface, exist_ok=True)
-        np.save(depth_path, np.where(mask, FLAT_DEPTH, 255).astype(np.uint8))
+        np.save(depth_path, np.where(mask, depth, 255).astype(np.uint8))
         np.save(os.path.join(surface, "confidence.npy"), np.where(mask, 255, 0).astype(np.uint8))
-        with open(os.path.join(surface, "metadata.json"), "w", encoding="utf-8") as handle:
-            json.dump({"scroll_id": int(dst), "flat_from": int(src), "flat_depth": FLAT_DEPTH,
+        with open(meta_path, "w", encoding="utf-8") as handle:
+            json.dump({"scroll_id": int(dst), "flat_from": int(src), "flat_depth": depth,
                        "invalid_depth_value": 255}, handle, indent=2)
     cache = os.path.join(SCRIPT_DIR, "norm_cache.json")
     for sid in (src, dst):

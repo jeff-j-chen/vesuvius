@@ -24,7 +24,25 @@ domain weight 3, native-noise bank off, 10 epochs.
   idea6_layout_prior         idea5 plus the stretches between a patch's own lines as certain negatives
   combo_asf_heavy_linepu_ring0  asf_cue + heavy_photometric + idea4 (own-band line nnPU) + ring0_posfalse, hard negatives on, new set only
 
-usage: python3 train_iter2.py [--arm a,b] [--dry-run] [--smoke] [--full-vis-smoke]
+  asf_cue_labelsv2           asf_cue rerun unchanged, for the revised inklabels
+  depth_mil_labelsv2         idea2_depth_mil with +-1 slice pair views instead of +-2, for the revised inklabels
+  no_nnpu                    asf_cue with nnPU off entirely (pu_lambda 0, no far-background unlabelled cells)
+  cue_pair_mil               asf_cue + depth-MIL from the MAE init; every view reads the cue of the window it actually shows
+                             (jitter +-1 and the pair view +-2: cue_asf_morph_dm2/_dm1/_dp1/_dp2)
+  cue_pair_mil_strict        cue_pair_mil + a negative is charged its worse depth view + view consistency (0.2) over every target cell
+  cue_dropout                asf_cue where 30% of training samples see a flat cue (128 over the papyrus): the raw slices must carry the ink
+  cue_dropout_agree          cue_dropout, rendered as the cellwise minimum of the real-cue and flat-cue prediction (eval only)
+  halo_penalty               asf_cue + unsupervised cells within 2 cells (32 px) of labelled ink are pushed to 0, weighted by how ink-like the cue is
+  depth_peak_smooth          idea2_depth_mil + neighbouring ink-like cells must prefer the same depth view (TV of the soft view choice)
+  cross_gap_negatives        idea6_layout_prior with the between-line negatives bounded by the pooled lines of every winding
+  small_loss_negatives       asf_cue + the 20% highest-loss ordinary negative cells leave the loss (noisy-label small-loss selection)
+  slice_masking              asf_cue + 2 consecutive depth slices replaced by the mean of the rest in half the samples (speech time masking)
+  cue_dropout_labelsv3       cue_dropout rerun unchanged, for the rebuilt inklabels (v3)
+  cue_dropout_labelsv3_seed17  cue_dropout_labelsv3 with every seed changed to 17 (training seed, coordinate-hash split seed, cue-head init)
+  depth_peak_smooth_labelsv3 depth_peak_smooth rerun unchanged, for the v3 inklabels
+  small_loss_negatives_labelsv3  asf_cue + the 20% highest-loss ordinary negative AND positive cells leave the loss, v3 inklabels
+
+usage: python3 train_iter2.py [--arm a,b | --after ARM] [--dry-run] [--smoke] [--full-vis-smoke]
 logs/figures: runs_iter2/iter2_<arm>, console log runs_iter2/logs/<arm>.log, checkpoints models/runs_iter2/iter2_<arm>.
 """
 from __future__ import annotations
@@ -59,6 +77,19 @@ CUE_HEAD = 3
 HEAD_INIT_SCALE = 0.5
 LINE_PU_LAMBDA = 1.0
 LINE_PRIOR = 0.2
+# cue maps for the windows depth jitter (+-1) and the depth-MIL pair view (+-2) read; shift 0 is CUE_ASF_DIR
+DEPTH_CUE_DIRS = {"-2": "./cue_asf_morph_dm2", "-1": "./cue_asf_morph_dm1",
+                  "1": "./cue_asf_morph_dp1", "2": "./cue_asf_morph_dp2"}
+PAIR_CONSISTENCY = 0.2
+CUE_DROPOUT = 0.3
+HALO_LAMBDA = 0.3
+HALO_RADIUS = 2
+DEPTH_PEAK_LAMBDA = 1.0
+NEGATIVE_FORGET_RATE = 0.2
+POSITIVE_FORGET_RATE = 0.2
+SLICE_MASK_PROB = 0.5
+RESEED = 17
+INIT_CUE4_RESEED = MODEL_ROOT / f"init_mae192_cue4_seed{RESEED}.pth"
 
 
 def _weights(config, **named) -> None:
@@ -150,11 +181,11 @@ def _idea1_visibility_weights(config):
     config.tra.character_forgetting_max_weight = 4.0
 
 
-def _apply_depth_mil(config):
+def _apply_depth_mil(config, offset: int = 2):
     tra = config.tra
     tra.depth_view_consistency = True
     tra.depth_view_consistency_lambda = 0.0
-    tra.depth_view_consistency_offset = 2
+    tra.depth_view_consistency_offset = offset
     tra.depth_view_consistency_prob = 0.5
     tra.depth_view_mil = True
 
@@ -162,6 +193,11 @@ def _apply_depth_mil(config):
 def _idea2_depth_mil(config):
     _base(config)
     _apply_depth_mil(config)
+
+
+def _depth_mil_labelsv2(config):
+    _base(config)
+    _apply_depth_mil(config, offset=1)
 
 
 def _line_prior(config, source: str):
@@ -200,20 +236,84 @@ def _combo_asf_heavy_linepu_ring0(config):
     config.init_weights = str(INIT_CUE4.relative_to(REPO))
     config.tra.cue_head_prefixes = (f"gated_cue_stem.branches.{CUE_HEAD}.",)
     config.tra.cue_head_lr_scale = t10.CUE_HEAD_LR_SCALE
-    dl = config.dl
-    dl.brightness_prob, dl.brightness_low, dl.brightness_delta = 0.9, 0.30, 0.50
-    dl.contrast_prob, dl.contrast_delta = 0.7, 0.35
-    dl.noise_prob, dl.noise_std_min, dl.noise_std_max = 0.7, 0.01, 0.04
-    dl.correlated_noise_prob, dl.correlated_noise_min, dl.correlated_noise_max, dl.correlated_noise_sigma = 0.5, 0.01, 0.05, 6.0
-    dl.cutout_prob = 0.0
-    dl.context_replace_prob = 0.0
+    _apply_heavy_photometric(config)
     config.data.line_prior_scroll_ids = list(NEW_SET)
     config.data.line_prior_source = "own"
     config.tra.line_pu_lambda = LINE_PU_LAMBDA
     config.tra.line_pu_prior = LINE_PRIOR
 
 
+def _cue_pair_mil(config):
+    _asf_cue(config)
+    _apply_depth_mil(config)
+    config.data.depth_cue_dirs = dict(DEPTH_CUE_DIRS)
+
+
+def _cue_pair_mil_strict(config):
+    _cue_pair_mil(config)
+    config.tra.depth_view_mil_negative = "max"
+    config.tra.depth_view_consistency_lambda = PAIR_CONSISTENCY
+    config.tra.depth_view_consistency_all_cells = True
+
+
+def _no_nnpu(config):
+    _asf_cue(config)
+    config.tra.pu_lambda = 0.0
+    config.data.far_negative_share = 0.0
+
+
+def _cue_dropout(config):
+    _asf_cue(config)
+    config.data.cue_dropout_prob = CUE_DROPOUT
+
+
+def _cue_dropout_agree(config):
+    _cue_dropout(config)
+    config.data.eval_cue_agree = True
+
+
+def _halo_penalty(config):
+    _asf_cue(config)
+    config.tra.halo_penalty_lambda = HALO_LAMBDA
+    config.tra.halo_radius = HALO_RADIUS
+
+
+def _depth_peak_smooth(config):
+    _idea2_depth_mil(config)
+    config.tra.depth_peak_lambda = DEPTH_PEAK_LAMBDA
+
+
+def _cross_gap_negatives(config):
+    _idea6_layout_prior(config)
+    config.data.line_gap_source = "cross"
+
+
+def _small_loss_negatives(config):
+    _asf_cue(config)
+    config.tra.negative_forget_rate = NEGATIVE_FORGET_RATE
+    config.tra.negative_forget_ramp_epochs = 2
+
+
+def _slice_masking(config):
+    _asf_cue(config)
+    config.tra.slice_mask_prob = SLICE_MASK_PROB
+    config.tra.slice_mask_width = 2
+
+
+def _small_loss_cells(config):
+    _small_loss_negatives(config)
+    config.tra.positive_forget_rate = POSITIVE_FORGET_RATE
+
+
+def _cue_dropout_reseeded(config):
+    _cue_dropout(config)
+    config.tra.seed = RESEED
+    config.data.coordinate_hash_seed = RESEED
+    config.init_weights = str(INIT_CUE4_RESEED.relative_to(REPO))
+
+
 # run order is the user's: runs 1-6 as listed, then the six ideas; never reorder (the whole-corpus arm is run 4)
+# the pair-cue arms were appended afterwards; asf_cue_labelsv2 sits just before them, depth_mil_labelsv2 and the rest follow
 ARMS = {
     "base": _base,
     "ring0_posfalse": _ring0_posfalse,
@@ -228,6 +328,22 @@ ARMS = {
     "idea5_line_nnpu_cross": _idea5_line_nnpu_cross,
     "idea6_layout_prior": _idea6_layout_prior,
     "combo_asf_heavy_linepu_ring0": _combo_asf_heavy_linepu_ring0,
+    "asf_cue_labelsv2": _asf_cue,
+    "cue_pair_mil": _cue_pair_mil,
+    "cue_pair_mil_strict": _cue_pair_mil_strict,
+    "depth_mil_labelsv2": _depth_mil_labelsv2,
+    "no_nnpu": _no_nnpu,
+    "cue_dropout": _cue_dropout,
+    "cue_dropout_agree": _cue_dropout_agree,
+    "halo_penalty": _halo_penalty,
+    "depth_peak_smooth": _depth_peak_smooth,
+    "cross_gap_negatives": _cross_gap_negatives,
+    "small_loss_negatives": _small_loss_negatives,
+    "slice_masking": _slice_masking,
+    "cue_dropout_labelsv3": _cue_dropout,
+    "cue_dropout_labelsv3_seed17": _cue_dropout_reseeded,
+    "depth_peak_smooth_labelsv3": _depth_peak_smooth,
+    "small_loss_negatives_labelsv3": _small_loss_cells,
 }
 
 
@@ -266,7 +382,7 @@ def _smoke(config, name: str, arm: str, full_vis: bool) -> None:
     config.tra.dann_n_domains = len(data.train_scroll_dict)
 
 
-def build_cue_init() -> None:
+def build_cue_init(seed: int = 41, path: Path = INIT_CUE4) -> None:
     """grow the 3-head 192 MAE to four heads for the asf_cue arm; the new head's enc1 weights start at HEAD_INIT_SCALE x the others' rms."""
     import torch
 
@@ -286,11 +402,11 @@ def build_cue_init() -> None:
         raise SystemExit(f"expanded checkpoint does not fit the 4-head model: {bad[:5]}")
     weight = state["enc1.net.0.weight"]
     rms = [float(weight[:, i].pow(2).mean().sqrt()) for i in range(CUE_HEAD)]
-    fresh = torch.randn(weight[:, CUE_HEAD].shape, generator=torch.Generator().manual_seed(41))
+    fresh = torch.randn(weight[:, CUE_HEAD].shape, generator=torch.Generator().manual_seed(seed))
     weight[:, CUE_HEAD] = fresh * (HEAD_INIT_SCALE * sum(rms) / CUE_HEAD) / fresh.pow(2).mean().sqrt()
     MODEL_ROOT.mkdir(parents=True, exist_ok=True)
-    torch.save(state, INIT_CUE4)
-    print(f"[iter2] 4-head init {INIT_CUE4}: head enc1 rms {HEAD_INIT_SCALE * sum(rms) / CUE_HEAD:.4f}", flush=True)
+    torch.save(state, path)
+    print(f"[iter2] 4-head init {path} (seed {seed}): head enc1 rms {HEAD_INIT_SCALE * sum(rms) / CUE_HEAD:.4f}", flush=True)
 
 
 def run_worker(arm: str, dry_run: bool, smoke: bool, full_vis: bool) -> None:
@@ -304,6 +420,7 @@ def main() -> None:
     global LOG_ROOT
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--arm", default=",".join(ARMS), help="comma-separated arms, run in the given order")
+    parser.add_argument("--after", default="", help="run every arm listed after this one, in order (overrides --arm)")
     parser.add_argument("--dry-run", action="store_true", help="check inputs and print each config, no training")
     parser.add_argument("--smoke", action="store_true", help="one tiny epoch + one figure per arm (own output dirs)")
     parser.add_argument("--full-vis-smoke", action="store_true", help="with --smoke: render every figure scroll, not just one")
@@ -316,11 +433,17 @@ def main() -> None:
         run_worker(args.worker, args.dry_run, args.smoke, args.full_vis_smoke)
         return
     arms = [name.strip() for name in args.arm.split(",") if name.strip()]
+    if args.after:
+        if args.after not in ARMS:
+            raise SystemExit(f"unknown arm {args.after!r}; choose from {list(ARMS)}")
+        arms = list(ARMS)[list(ARMS).index(args.after) + 1:]
     unknown = sorted(set(arms) - set(ARMS))
     if unknown:
         raise SystemExit(f"unknown arms {unknown}; choose from {list(ARMS)}")
     if "asf_cue" in arms and not INIT_CUE4.is_file():
         build_cue_init()
+    if "cue_dropout_labelsv3_seed17" in arms and not INIT_CUE4_RESEED.is_file():
+        build_cue_init(RESEED, INIT_CUE4_RESEED)
     if "idea1_visibility_weights" in arms and not (REPO / VIS_WEIGHTS).is_file():
         subprocess.run([sys.executable, "-m", "utils.visibility_weights", "--out", VIS_WEIGHTS], cwd=REPO, check=True)
     (LOG_ROOT / "logs").mkdir(parents=True, exist_ok=True)

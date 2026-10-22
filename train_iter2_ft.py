@@ -1,13 +1,14 @@
 """iteration-2 fine-tunes from the old_plus_new checkpoint, on the new set (ABF, 073246, m28, straightened2 in_1/out_1-3 + PHerc0009B).
 
-every arm starts from models/runs_iter2/iter2_old_plus_new_2/final.pth, trains 4 epochs (lr 5e-5, 1 warmup epoch), logs to
-./runs_iter2 like train_iter2.py, and renders only the held-out straightened2 sheet at the end.
+every arm starts from a finished iter2 checkpoint, logs to ./runs_iter2 like train_iter2.py, uses lr 5e-5 with 1 warmup epoch, and
+renders only the held-out straightened2 sheet at the end. ft_mil and ft_asf_mil train EPOCHS (4) epochs from old_plus_new;
+every later arm trains SHORT_EPOCHS (3).
 
   ft_mil               depth-MIL (idea2: positives explained by the better of two depth views, negatives hold in both)
   ft_asf_mil           old_plus_new + the asf_morph cue as a fourth input head (new head starts at non-zero weights) + depth-MIL
-  ft_stroke_strongmil  stroke floor + strong-negative sampling + strong depth-MIL (every window paired, plus a consistency term)
+  ft_stroke_strongmil  old_plus_new + stroke floor + strong-negative sampling + strong depth-MIL (every window paired, plus a consistency term)
 
-the next four start from new-set-only iter2 checkpoints and train SHORT_EPOCHS (3) epochs:
+the next four start from new-set-only iter2 checkpoints:
   ft_cue_mil           iter2_asf_cue (cue head already trained) + depth-MIL
   ft_cue_mil_heavy     ft_cue_mil + heavy photometric augmentation
   ft_mil_heavy         iter2_idea2_depth_mil + the iter2 heavy_photometric recipe
@@ -82,7 +83,7 @@ def _ft_asf_mil(config) -> None:
 def _ft_stroke_strongmil(config) -> None:
     base._stroke_floor_strongneg(config)
     base._apply_depth_mil(config)
-    _schedule(config, OLD_PLUS_NEW)
+    _schedule(config, OLD_PLUS_NEW, SHORT_EPOCHS)
     tra = config.tra
     tra.depth_view_consistency_prob = 1.0
     tra.depth_view_consistency_lambda = STRONG_MIL_CONSISTENCY
