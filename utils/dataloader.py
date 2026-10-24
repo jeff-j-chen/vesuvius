@@ -1319,9 +1319,18 @@ class InkVolumeDataset(IterableDataset):
         self._rot_frame = None
         # precomputed whole-patch cue appended as one extra slice of every block (model.input_cue = "pre_clahe")
         self._pre_cue = str(getattr(config.model, "input_cue", "") or "") == "pre_clahe"
+        self._cue_dropout_prob = float(getattr(config.data, "cue_dropout_prob", 0.0))
         _suffix = (getattr(config.data, "zarr_suffix", None) or {}).get(str(scroll_id), "")
         self._cue_path = os.path.join(str(getattr(config.data, "cue_dir", "./cue_clahe")), f"{scroll_id}{_suffix}.npy")
         self._cue_arr = None
+        self._pair_cue_paths = {
+            int(delta): os.path.join(str(directory), f"{scroll_id}{_suffix}.npy")
+            for delta, directory in (getattr(config.data, "depth_cue_dirs", None) or {}).items()
+        } if self._pre_cue else {}
+        for path in self._pair_cue_paths.values():
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"missing depth-pair cue map {path}")
+        self._pair_cue_arrs = {}
         if self._arbitrary_rotation_prob > 0:
             if not self._mt or int(getattr(config.data, "context_size", 0) or 0) <= self.tile_size:
                 raise ValueError("arbitrary_rotation_prob needs multitile targets and a context window")
@@ -1816,6 +1825,7 @@ class InkVolumeDataset(IterableDataset):
             state["_explicit_positive_arr"] = None
         state["_surface_depth_arr"] = None
         state["_cue_arr"] = None
+        state["_pair_cue_arrs"] = {}
         state["_surface_confidence_arr"] = None
         # never pickle an open zarr handle to a spawned worker (unpicklable on Windows,
         # OSError [Errno 22]). the main process may now hold one (vol opens lazily in the
@@ -2021,6 +2031,7 @@ class InkVolumeDataset(IterableDataset):
         target_offset = (0, 0)
         dj = 0
         augmentation_depth_shift = 0
+        cue_shift = 0  # slices the read window sits from the surface-relative one: picks the cue map built for that window
         cue_origin = (y, x)
 
         try:
@@ -2066,6 +2077,7 @@ class InkVolumeDataset(IterableDataset):
                         max(volume_depth - self.depth, 0),
                     )
                     dj = selected_start - z
+                    cue_shift = selected_start - surface_start
                 elif max_dj > 0 and self.shuffle and allow_jitter:
                     min_dj = max(-max_dj, -z)
                     max_valid_dj = min(max_dj, volume_depth - (z + self.depth))
@@ -2120,7 +2132,7 @@ class InkVolumeDataset(IterableDataset):
         if self.transform.has_quality_transfer:
             block = self.transform.normalize_quality(block)
         if self._pre_cue:
-            block = np.concatenate([block, self._cue_block(cue_origin, sp)], axis=0)
+            block = np.concatenate([block, self._cue_block(cue_origin, sp, cue_shift)], axis=0)
         return block, target_offset, dj, augmentation_depth_shift
 
     def _surface_centered_start(
@@ -2529,14 +2541,24 @@ class InkVolumeDataset(IterableDataset):
             self._cue_arr = np.load(self._cue_path, mmap_mode="r")
         return self._cue_arr
 
-    def _cue_block(self, origin, ctx):
+    def _cue_map_for(self, shift):
+        """cue map of the window `shift` slices from the primary one (the primary map when none was built for it)."""
+        if shift is None or int(shift) not in self._pair_cue_paths:
+            return self.cue_map
+        shift = int(shift)
+        if shift not in self._pair_cue_arrs:
+            self._pair_cue_arrs[shift] = np.load(self._pair_cue_paths[shift], mmap_mode="r")
+        return self._pair_cue_arrs[shift]
+
+    def _cue_block(self, origin, ctx, shift=None):
         """(1, ctx, ctx) precomputed cue under the unrotated block, or rotated with its frame."""
         from .precomputed_cue import crop_cue
 
+        cue_map = self._cue_map_for(shift)
         if self._rot_frame is None:
-            return crop_cue(self.cue_map, origin[0], origin[1], ctx, ctx)
+            return crop_cue(cue_map, origin[0], origin[1], ctx, ctx)
         oy, ox, side, matrix = self._rotation_geometry(self._rot_frame, ctx)
-        raw = crop_cue(self.cue_map, oy, ox, side, side)[0]
+        raw = crop_cue(cue_map, oy, ox, side, side)[0]
         return cv2.warpAffine(
             raw, matrix, (ctx, ctx), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
             borderMode=cv2.BORDER_CONSTANT, borderValue=0,
@@ -2876,6 +2898,10 @@ class InkVolumeDataset(IterableDataset):
         # enforce contiguity and dtype before converting to torch to avoid negative strides
         block = np.ascontiguousarray(block, dtype=np.float32)
         paired_block = np.ascontiguousarray(paired_block, dtype=np.float32)
+        if self._pre_cue and self.shuffle and self._cue_dropout_prob > 0 and random.random() < self._cue_dropout_prob:
+            # both depth views lose the cue together; the cue slice is the last one, 0 outside the papyrus
+            for view in (block, paired_block) if not np.shares_memory(paired_block, block) else (block,):
+                view[-1] = np.where(view[-1] > 0, 128.0 / 255.0, 0.0)
             
         # convert to tensor for the model
         block_tensor = torch.from_numpy(block).unsqueeze(0)
@@ -2931,9 +2957,11 @@ class MultiScrollIterableDataset(IterableDataset):
         sampling_weights=None,
         extra_datasets=None,
         extra_share=0.0,
+        epoch_length=None,
     ):
         super().__init__()
         self.datasets = list(datasets)
+        self.epoch_length = int(epoch_length) if epoch_length else None
         self.balance_scrolls = bool(balance_scrolls)
         # assumed-letter views drawn at a fixed share of every yield, outside the scroll schedule
         self.extra_datasets = list(extra_datasets or [])
@@ -2984,6 +3012,8 @@ class MultiScrollIterableDataset(IterableDataset):
             d.apply_transforms = value
 
     def __len__(self):
+        if self.epoch_length:
+            return self.epoch_length
         return sum(len(d) for d in self.datasets)
 
     def __iter__(self) -> Iterator:
@@ -3236,8 +3266,8 @@ class DataManager:
             "character_balanced_sampling",
             "character_min_pixels", "max_samples_per_epoch",
             "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
-            "line_prior_source", "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "norm_mode", "holdout_domains",
-            "zarr_suffix", "extra_inklabels",
+            "line_prior_source", "line_gap_source", "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "norm_mode", "holdout_domains",
+            "zarr_suffix", "extra_inklabels", "depth_cue_dirs",
         )
         # preparation only tests this scroll's membership, so swapping another scroll keeps this entry valid
         membership_fields = (
@@ -3548,7 +3578,8 @@ class DataManager:
             if int(self.scroll_id) in {int(v) for v in (getattr(self.c.data, "line_gap_negative_scroll_ids", ()) or ())}:
                 from .line_grid import line_cells
 
-                _, gap = line_cells(self.scroll_id, mask.shape, explicit_unit, str(self.c.data.line_prior_source))
+                _, gap = line_cells(self.scroll_id, mask.shape, explicit_unit, str(self.c.data.line_prior_source),
+                                    str(self.c.data.line_gap_source))
                 gap_px = np.zeros(mask.shape, dtype=bool)
                 expanded = np.kron(gap.astype(np.uint8), np.ones((explicit_unit, explicit_unit), np.uint8)) > 0
                 rows, cols = min(expanded.shape[0], mask.shape[0]), min(expanded.shape[1], mask.shape[1])

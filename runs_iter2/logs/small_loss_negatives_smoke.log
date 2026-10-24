@@ -1,0 +1,497 @@
+2026-10-20 00:54:24.859247: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-10-20 00:54:24.861292: I external/local_xla/xla/tsl/cuda/cudart_stub.cc:32] Could not find cuda drivers on your machine, GPU will not be used.
+2026-10-20 00:54:24.864471: I external/local_xla/xla/tsl/cuda/cudart_stub.cc:32] Could not find cuda drivers on your machine, GPU will not be used.
+2026-10-20 00:54:24.872332: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1792457664.885272  135342 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1792457664.889043  135342 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1792457664.900572  135342 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792457664.900591  135342 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792457664.900593  135342 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792457664.900595  135342 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2026-10-20 00:54:24.904025: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI AVX512_BF16 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[preflight] 9 scroll(s) and init weights present
+Creating datasets...
+[multi-scroll] physical groups={'pherc0009b': [20250919125754], 'pherc0846a': [20260927134931, 20261012073246, 20261012065813, 20261012065817, 20261012065819, 20261012065821, 20261012065823]} weights=[1, 3]
+[extra-labels] scroll 20260927134931: 292,820 half-brightness pixels -> 342,528 hard-negative pixels
+[split] scroll 20260927134931: manual mask=./train_masks/20260927134931.png train_pixels=100.0% explicit_negative_pixels=342,528 explicit_positive_pixels=0
+[split] scroll 20260927134931: axis=x train_frac=1.0
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=5313
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2614  ring_tiles=4941  ratio=1.89
+[character-components] 14 components at 16px target resolution
+[manual-split] scroll 20260927134931: unit=16px train_ring=1934080px valid_ring=0px train_only=True
+[far-negatives] scroll 20260927134931: min_dist=96px far_units=23711 windows=20920
+[character-sampling] scroll 20260927134931: 14 characters with positive and ring-negative windows
+[context-replace] scroll 20260927134931: 22317 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20260927134931: train_tiles=64 valid_tiles=0
+[extra-labels] scroll 20261012073246: 289,125 half-brightness pixels -> 327,168 hard-negative pixels
+[split] scroll 20261012073246: manual mask=./train_masks/20261012073246.png train_pixels=100.0% explicit_negative_pixels=327,168 explicit_positive_pixels=0
+[split] scroll 20261012073246: axis=x train_frac=1.0
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=4842
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2474  ring_tiles=3955  ratio=1.60
+[character-components] 13 components at 16px target resolution
+[manual-split] scroll 20261012073246: unit=16px train_ring=1645824px valid_ring=0px train_only=True
+[far-negatives] scroll 20261012073246: min_dist=96px far_units=26206 windows=23666
+[character-sampling] scroll 20261012073246: 13 characters with positive and ring-negative windows
+[context-replace] scroll 20261012073246: 24411 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20261012073246: train_tiles=64 valid_tiles=0
+[split] scroll 20261012065823: manual mask=./train_masks/20261012065823.png train_pixels=100.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[split] scroll 20261012065823: axis=x train_frac=1.0
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=2173
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=1151  ring_tiles=2073  ratio=1.80
+[character-components] 4 components at 16px target resolution
+[manual-split] scroll 20261012065823: unit=16px train_ring=825344px valid_ring=0px train_only=True
+[far-negatives] scroll 20261012065823: min_dist=96px far_units=20548 windows=18573
+[character-sampling] scroll 20261012065823: 4 characters with positive and ring-negative windows
+[context-replace] scroll 20261012065823: 18807 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20261012065823: train_tiles=64 valid_tiles=0
+[extra-labels] scroll 20261012065821: 270,024 half-brightness pixels -> 336,640 hard-negative pixels
+[split] scroll 20261012065821: manual mask=./train_masks/20261012065821.png train_pixels=100.0% explicit_negative_pixels=336,640 explicit_positive_pixels=0
+[split] scroll 20261012065821: axis=x train_frac=1.0
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=5291
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2718  ring_tiles=4719  ratio=1.74
+[character-components] 12 components at 16px target resolution
+[manual-split] scroll 20261012065821: unit=16px train_ring=1903872px valid_ring=0px train_only=True
+[far-negatives] scroll 20261012065821: min_dist=96px far_units=16110 windows=13647
+[character-sampling] scroll 20261012065821: 12 characters with positive and ring-negative windows
+[context-replace] scroll 20261012065821: 14770 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20261012065821: train_tiles=64 valid_tiles=0
+[extra-labels] scroll 20261012065819: 398,760 half-brightness pixels -> 492,655 hard-negative pixels
+[split] scroll 20261012065819: manual mask=./train_masks/20261012065819.png train_pixels=100.0% explicit_negative_pixels=492,655 explicit_positive_pixels=0
+[split] scroll 20261012065819: axis=x train_frac=1.0
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=5393
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2658  ring_tiles=4773  ratio=1.80
+[character-components] 17 components at 16px target resolution
+[manual-split] scroll 20261012065819: unit=16px train_ring=1902336px valid_ring=0px train_only=True
+[far-negatives] scroll 20261012065819: min_dist=96px far_units=17114 windows=14206
+[character-sampling] scroll 20261012065819: 17 characters with positive and ring-negative windows
+[context-replace] scroll 20261012065819: 15641 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20261012065819: train_tiles=64 valid_tiles=0
+[extra-labels] scroll 20261012065817: 804,310 half-brightness pixels -> 987,057 hard-negative pixels
+[split] scroll 20261012065817: manual mask=./train_masks/20261012065817.png train_pixels=100.0% explicit_negative_pixels=987,057 explicit_positive_pixels=0
+[split] scroll 20261012065817: axis=x train_frac=1.0
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=5859
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2881  ring_tiles=4955  ratio=1.72
+[character-components] 17 components at 16px target resolution
+[manual-split] scroll 20261012065817: unit=16px train_ring=2006016px valid_ring=0px train_only=True
+[far-negatives] scroll 20261012065817: min_dist=96px far_units=18619 windows=15862
+[character-sampling] scroll 20261012065817: 17 characters with positive and ring-negative windows
+[context-replace] scroll 20261012065817: 17180 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20261012065817: train_tiles=64 valid_tiles=0
+[extra-labels] scroll 20261012065813: 180,403 half-brightness pixels -> 230,912 hard-negative pixels
+[split] scroll 20261012065813: manual mask=./train_masks/20261012065813.png train_pixels=100.0% explicit_negative_pixels=230,912 explicit_positive_pixels=0
+[split] scroll 20261012065813: axis=x train_frac=1.0
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=5148
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2777  ring_tiles=3612  ratio=1.30
+[character-components] 12 components at 16px target resolution
+[manual-split] scroll 20261012065813: unit=16px train_ring=1635584px valid_ring=0px train_only=True
+[far-negatives] scroll 20261012065813: min_dist=96px far_units=12071 windows=10261
+[character-sampling] scroll 20261012065813: 12 characters with positive and ring-negative windows
+[context-replace] scroll 20261012065813: 10827 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20261012065813: train_tiles=64 valid_tiles=0
+[explicit-negative] scroll 20250919125754: overriding 30 ink-label pixels
+[split] scroll 20250919125754: manual mask=./train_masks/20250919125754.png train_pixels=26.8% explicit_negative_pixels=44,439 explicit_positive_pixels=408
+[split] scroll 20250919125754: axis=x train_frac=0.75
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=16083
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=8584  ring_tiles=11279  ratio=1.31
+[character-components] 45 components at 16px target resolution
+[character-split] majority rule: 1 crossing character(s) -> train, 1 -> valid
+[manual-split] scroll 20250919125754: unit=16px train_ring=3861248px valid_ring=1222656px train_only=False
+[far-negatives] scroll 20250919125754: min_dist=96px far_units=11958 windows=7780
+[character-sampling] scroll 20250919125754: 26 characters with positive and ring-negative windows
+[context-replace] scroll 20250919125754: 13903 fully ink-free donors with mask>=0.80
+[multi-scroll] scroll 20250919125754: train_tiles=64 valid_tiles=7295
+[multi-scroll] merged train_tiles=512 valid_tiles=7295
+Data setup done in 60.95s
+[seed] fast mode (seed=41) — cudnn benchmark on, tiny run-to-run fp noise
+[threads] cpu budget 13: main process 9 thread(s), 4 loader worker(s) x 1
+[seed] AND-mask/Fish domain groups use variable batch sizes -- cudnn benchmark off
+--- Configuration ---
+data: DataConfig(zarr_path='/vesuvius/ves_zarrs2', scrolls=[ScrollConfig(scroll_id=20260927134931, split_axis='x', train_split_frac=1.0, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20261012073246, split_axis='x', train_split_frac=1.0, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20261012065823, split_axis='x', train_split_frac=1.0, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20261012065821, split_axis='x', train_split_frac=1.0, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20261012065819, split_axis='x', train_split_frac=1.0, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20261012065817, split_axis='x', train_split_frac=1.0, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20261012065813, split_axis='x', train_split_frac=1.0, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0)), ScrollConfig(scroll_id=20250919125754, split_axis='x', train_split_frac=0.75, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0))], train_scroll_dict={'pherc0009b': [20250919125754], 'pherc0846a': [20260927134931, 20261012073246, 20261012065813, 20261012065817, 20261012065819, 20261012065821, 20261012065823]}, train_scroll_weights=[1, 3], test_scroll_ids=[20260814140748, 20260717193517, 20260720090842, 20250703034159, 20260723112922, 20260921094413, 20260918132724, 20260922073234, 20260922161631, 20260925085345, 20260928000001, 20260928000002, 20260928000003, 20260928000004], holdout_scroll_ids=[20251226000000], tile_size=16, depth=8, d_start=4, d_end=28, train_d_start=4, train_d_end=28, composite_method='maxproj', composite_d0=10, composite_d1=18, composite_display='raw', voxel_um=9.362, mask_memmap=False, mask_bitpack=True, preload_volumes=False, selective_chunk_preload=False, selective_chunk_workers=8, ram_safe_vis=True, ring_negatives=True, ring_label_source='closed', ring_close_r=2, ring_gap_r=2, ring_shell_r=4, ring_free_scroll_ids=[], ring_pu_scroll_ids=[], simple_split=False, flipped_train_mask_ids=[20231210121321, 20240304144031], coordinate_hash_split=False, coordinate_hash_block_size=512, coordinate_hash_valid_fraction=0.25, coordinate_hash_seed=29, train_mask_dir='./train_masks', whole_patch_valid_scroll_ids=[20261012065815, 20261012065825, 20261012065827], train_only_scroll_ids=[20260927134931, 20261012073246, 20261012065813, 20261012065817, 20261012065819, 20261012065821, 20261012065823], validation_scroll_ids=None, surface_label_dir='./surface_labels', context_size=192, context_downsample=1, eval_infer_bs=64, eval_prefetch=3, eval_chunk_gb=2.0, tta_mode='light', probe_rois={}, vis_scroll_ids=[20261012065815], vis_preload_persistent=False, label_free_vis_scroll_ids=[], eval_stride=32, inklabel_dir='./dilated_inklabels', label_dilate_r=0, dot_inklabel_dir='', dot_scroll_whitelist=[], ctx_jitter=20, target_aware_ctx_jitter=True, depth_jitter=1, surface_relative_depth_window=True, surface_window_offset=0, surface_window_offset_by_scroll={20260927134931: -1, 20261012073246: -1, 20261012073250: -1, 20261012065811: -1, 20261012065813: -1, 20261012065817: -1, 20261012065819: -1, 20261012065821: -1, 20261012065823: -1, 20261012065815: -1, 20261012065825: -1, 20261012065827: -1}, holdout_domains=[], explicit_negative_share=0.0, far_negative_share=0.5, far_negative_min_dist=96, far_negative_forced_positive_dist=200, line_prior_scroll_ids=[], line_prior_source='own', line_gap_negative_scroll_ids=[], line_gap_source='own', cue_dropout_prob=0.0, eval_cue_agree=False, extra_inklabels=False, extra_label_share=0.0, extra_hard_negative_scroll_ids=[20260927134931, 20261012073246, 20261012065813, 20261012065817, 20261012065819, 20261012065821, 20261012065823], divdis_target_scroll_ids=[], edge_soft_sigma=8.0, edge_soft_floor=0.55, norm_mode='surface_anchor', zarr_suffix={'20240304141531': '.matched', '20240304144031': '.matched', '20231210121321': '.matched', '20230301213755': '.matched', '20231205222200': '.matched', '20230301213423': '.matched', '20231201215900': '.matched', '20230205142449': '.matched'}, native_noise='', native_noise_scale=1.0, native_noise_ids=[20240304141531, 20240304144031, 20231210121321, 20230301213755, 20231205222200, 20230301213423, 20231201215900, 20230205142449], label_shift_frac=0.0, depth_cue_dirs={}, multitile_train_step=16, multitile_pos_only=True, multitile_ring_gate=True, ring_from_inklabel_dir=True, character_balanced_sampling=True, character_balance_scrolls=True, character_min_pixels=8, max_samples_per_epoch=64, cue_dir='./cue_asf_morph', blank_scroll_samples_per_epoch=None)
+dl: DataloaderConfig(batch_size=8, num_workers=4, prefetch_factor=2, data_aug=True, rotation_prob=0.6, arbitrary_rotation_prob=0.0, arbitrary_rotation_max_deg=180.0, flip_prob=0.6, noise_prob=0.0, brightness_prob=0.0, contrast_prob=0.0, brightness_delta=0.15, brightness_low=-1.0, contrast_delta=0.15, noise_std_min=0.001, noise_std_max=0.005, cutout_prob=0.2, cutout_max_frac=0.16, cutout_n_patches=3, depth_mask_prob=0.0, depth_mask_mode='zero', fda_prob=0.0, fda_beta=0.05, elastic_prob=0.0, elastic_alpha=15.0, elastic_sigma=5.0, depth_warp_prob=0.0, depth_warp_max=2.0, depth_warp_sigma=24.0, surface_atten_prob=0.0, surface_atten_min=0.1, surface_atten_max=0.35, surface_atten_sigma=2.0, acquisition_blur_prob=0.0, acquisition_blur_min=0.4, acquisition_blur_max=0.9, correlated_noise_prob=0.0, correlated_noise_min=0.003, correlated_noise_max=0.015, correlated_noise_sigma=6.0, phase_filter_prob=0.0, phase_filter_min=0.5, phase_filter_max=20.0, phase_filter_max_gain=4.0, tone_curve_prob=0.0, tone_curve_knots=6, tone_curve_concentration=0.5, resolution_degrade_prob=0.0, resolution_degrade_min=1.5, resolution_degrade_max=4.0, depth_scale_prob=0.0, depth_scale_min=0.6, depth_scale_max=1.6, fine_native_scroll_ids=None, scan_regime_prob=0.0, scan_regime_min=0.5, scan_regime_max=1.0, quality_transfer=None, randconv_prob=0.0, randconv_kernel_sizes=[1, 3, 5, 7], randconv_depth_kernel=1, randconv_layers_max=1, randconv_mix_min=0.0, cutout_protect_center=True, context_replace_prob=0.15, context_replace_keep_size=0, context_replace_margin=14, context_replace_feather=26, context_replace_min_mask_frac=0.8, context_replace_surface_align=True, context_replace_cross_prob=0.0, protected_rotation_prob=0.0, protected_elastic_prob=0.0, protected_elastic_alpha=16.0, protected_elastic_sigma=5.0, protected_warp_margin=4, protected_warp_feather=12)
+tra: TrainingConfig(n_epochs=1, start_epoch=0, aug_start_epoch=0, lr=0.0001, encoder_lr_scale=1.0, encoder_freeze_epochs=0, warmup_epochs=5, weight_decay=0.0, l1_lambda=0.0, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=1, log_dir='/vesuvius/runs_iter2_smoke', eval_int=1, eval_int_scrolls=1, test_int=999, probe_int=999, disable_figures=False, loss_type='bce', gce_q=0.9, dice_weight=0.0, label_smooth_pos=0.0, label_smooth_neg=0.0, tta_consistency=False, tta_consistency_lambda=0.3, tta_consistency_mode='flips', tta_consistency_prob=1.0, tile_pos_weight=1.0, tile_pos_weight_auto=False, dann=False, dann_lambda=0.0, dann_n_domains=2, dann_grl_anneal=False, spill_reduction=False, spill_lambda=0.0, spill_depth_threshold=0.35, spill_active_depth_tau=0.08, spill_max_active_depth_frac=0.35, spill_min_depth_var=0.8, spill_prob=False, spill_entropy=False, spill_entropy_lambda=0.3, spill_max_depth_entropy=2.1, new_surface_lambda=0.2, new_surface_smooth_lambda=0.02, surface_target_sigma=0.75, seed=41, deterministic=False, epoch_cooldown_secs=0, val_cooldown_secs=0, eval_cooldown_secs=0, fig_chunk_cooldown_ms=0, save_vis=False, fast_eval_figure=False, test_on_final=False, supcon=False, supcon_lambda=0.1, supcon_temp=0.07, supcon_proj_dim=128, supcon_hidden_dim=256, supcon_curriculum=True, supcon_lambda_start=0.05, supcon_lambda_end=0.5, supcon_curriculum_epochs=8, supcon_cross_frag=False, supcon_ignore_same_domain_same_class=False, per_scroll_metrics=True, prototype_align=False, prototype_align_lambda=0.1, prototype_margin=0.5, coral_align=False, coral_align_lambda=0.1, coral_mean_weight=1.0, cdan=False, cdan_lambda=0.1, mldg=False, mldg_holdout_domain=-1, mldg_random_holdout=False, mldg_inner_lr=0.0005, mldg_beta=1.0, sagnet_lambda=0.1, mae_reconstruction=False, mae_reconstruction_lambda=0.1, mae_reconstruction_start_epoch=4, mae_reconstruction_mask_frac=0.5, mae_reconstruction_patch=4, entropy_min_lambda=0.0, entropy_min_batch_size=8, divdis_mi_lambda=1.0, divdis_reg_lambda=1.0, divdis_target_prior=0.15, divdis_batch_size=32, divdis_num_workers=3, divdis_select_domains=[], character_macro_metrics=True, character_score_threshold=0.5, character_calibrate_threshold=True, character_threshold_min=0.1, character_threshold_max=0.9, character_threshold_steps=33, character_recall_target=0.5, character_max_ring_fpr=0.1, character_checkpoint_metric='character_ap_macro', sanity_guard_epoch=0, sanity_min_character_ap=0.0, sanity_min_specificity=0.0, context_consistency=False, context_consistency_prob=0.25, context_consistency_lambda=0.1, depth_view_consistency=False, depth_view_consistency_prob=0.5, depth_view_consistency_lambda=0.2, depth_view_consistency_offset=2, depth_view_mil=False, depth_view_mil_negative='mean', depth_view_consistency_all_cells=False, line_pu_lambda=0.0, line_pu_prior=0.2, line_llp_lambda=0.0, line_llp_prior=0.2, halo_penalty_lambda=0.0, halo_radius=4, depth_peak_lambda=0.0, negative_forget_rate=0.2, negative_forget_ramp_epochs=2, slice_mask_prob=0.0, slice_mask_width=2, character_bag_ranking=True, character_bag_margin=1.0, character_bag_topk_frac=0.25, character_bag_lambda=0.6, character_groupdro=False, character_groupdro_eta=0.05, character_groupdro_max_ratio=3.0, physical_domain_groupdro=False, physical_domain_groupdro_eta=0.05, physical_domain_groupdro_max_ratio=3.0, physical_patch_groupdro=True, physical_patch_groupdro_eta=0.05, physical_patch_groupdro_max_ratio=3.0, domain_vrex=False, domain_vrex_lambda=1.0, domain_vrex_warmup_epochs=2, domain_cvar=False, domain_cvar_alpha=0.25, pcgrad=False, pcgrad_lite=False, pcgrad_lite_max_domains=4, pcgrad_lite_scope='head', pcgrad_groups=0, pcgrad_gram=False, pcgrad_gram_interval=1, pcgrad_gram_ema=0.0, and_mask=True, and_mask_groups=4, and_mask_threshold=0.5, and_mask_unit='patch', fish=False, fish_meta_step=0.5, spectral_decoupling_lambda=0.0, rsc_prob=0.33, rsc_drop_frac=0.33, fishr_lambda=0.0, fishr_warmup_epochs=1, private_head_shared_weight=0.5, private_head_l2=0.01, cross_scroll_rank_lambda=0.0, cross_scroll_rank_pairs=4096, pu_lambda=3.0, pu_prior=0.05, pu_beta=0.0, pu_gamma=1.0, pu_rank_lambda=0.0, pu_rank_pairs=1024, target_consistency_lambda=0.0, support_drop='', support_min_fraction=0.25, mid_depth_entropy_lambda=0.0, topk_positive_fraction=0.0, stroke_floor_lambda=0.0, stroke_floor_fraction=0.3, stroke_floor_margin=2.0, stroke_floor_domain='pherc0846a', character_forgetting=False, character_forgetting_path='', character_forgetting_max_weight=4.0, character_forgetting_static=False, model_ema=False, model_ema_decay=0.995, model_ema_start_epoch=0, mae_anchor_lambda=0.0, domain_gradient_mode='', domain_gradient_threshold=0.0, domain_gradient_strength=4.0, domain_gradient_ema=0.9, domain_gradient_blend=1.0, character_cvar=False, character_cvar_alpha=0.25, clam_instance=False, clam_instance_k=4, clam_instance_lambda=0.1, sam_rho=0.0, elr=False, elr_start_epoch=5, elr_beta=0.7, elr_lambda=0.1, depth_shift_aux=False, depth_shift_aux_lambda=0.1, depth_shift_aux_classes=3, text_region_lambda=0.5, cue_head_prefixes=('gated_cue_stem.branches.3.',), cue_head_lr_scale=5.0)
+model: ModelConfig(arch='nnunet3d_lcndz', compile_model=False, require_architecture_init=True, conv1_drop=0.2, conv2_drop=0.2, head_drop=0.3, attn_mil=False, attn_entropy_weight=0.03, feature_attn_mil=False, feature_depth_fusion=False, minimum_support_k=0, minimum_support_kernel=3, weldon_k=0, weldon_top_k=0, weldon_bottom_k=0, weldon_top_weight=0.5, weldon_multi_k=False, weldon_top_k2=0, weldon_bottom_k2=0, weldon_multi_mix=0.5, weldon_depth_support_k=0, fiber_coordinate_branch=True, surface_relief_input=False, input_denoise_sigma=0.0, input_denoiser='', input_prefilter='', input_prefilter_mix=1.0, input_cue='pre_clahe', input_upsampler='', input_generator='', input_tile_norm='', private_domain_heads=False, private_head_detach_shared=False, divdis_heads=1, early_2d_unet=True, early_2d_channels_mult=1.0, mid_2d_unet=False, mid_2d_channels_mult=1.0, residual_2d_unet=False, two_d_block_depth=2, two_d_bottleneck_channels=0, two_d_extra_levels=0, two_d_extra_channels=(), factorized_2plus1d=False, residual_unet=False, gated_stems=True, raw_only_stem=False, cue_dropout=0.0, explicit_depth_channels=False, overlapping_depth_windows=False, overlapping_depth_window_size=4, overlapping_depth_window_stride=2, mid_depth_entropy_floor=0.0, mid_depth_max_mode='amax', mid_depth_topk_frac=0.5, mt_lse_r_max=10.0, planar_early_convs=False, text_region_gate=True, multi_depth_collapse=False, two_d_strided_down=False, depth_antialias=False, sparse_deep_supervision=False, sparse_deep_supervision_dec2_weight=0.3, sparse_deep_supervision_dec3_weight=0.1, depth_attention_2d_head=False, divided_attention=False, divided_attention_spatial=False, divided_attention_heads=4, divided_attention_window=8, mednext_adapters=False, mednext_kernel=5, mednext_expansion=2, mixstyle=False, mixstyle_prob=0.8, mixstyle_alpha=0.1, sagnet=False, dual_scale=True, dual_scale_local_size=64, dual_scale_mix=0.5, dual_scale_deep=False, dual_scale_local_only=False, dual_scale_outer_size=0, dual_scale_outer_mix=0.0, dual_scale_adaptive_gate=False, dual_scale_gate_max=1.0, scan_film=False, scan_film_bands=8, scan_film_hidden=32, depth_profile_expert=False, depth_profile_mix=0.5, depth_profile_hidden=16, depth_profile_pool=5, expert_dropout=0.0, style_film=False, style_film_hidden=64, mae_reconstruction_head=False, learned_surface=False, new_learned_surface=False, better_surface=False, surface_teacher_input=True, surface_canonicalize=False, surface_canonical_depth=24, surface_guided_mil=False, surface_guided_mix=0.5, surface_band_sigma=1.5, use_ibn=False, norm_mode='ibn_full', use_prototype=False, prototype_ema=0.99, skip_drop=0.2, use_depth_profile=False, no_dz=False, channels_mult=1.0, allow_depth4=False, multitile=True, multitile_subtile=16, multitile_grid=4)
+hm: HardMiningConfig(enabled=False, hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1, dir='./hard_negs')
+device: cuda
+model_dir: /vesuvius/models/runs_iter2_smoke/iter2_small_loss_negatives
+exp_name: iter2_small_loss_negatives
+run_name: iter2_small_loss_negatives
+init_weights: models/runs_iter2/init_mae192_cue4.pth
+save_final: /vesuvius/models/runs_iter2_smoke/iter2_small_loss_negatives/final.pth
+---------------------
+Creating datasets...
+[multi-scroll] physical groups={'pherc0009b': [20250919125754], 'pherc0846a': [20260927134931, 20261012073246, 20261012065813, 20261012065817, 20261012065819, 20261012065821, 20261012065823]} weights=[1, 3]
+[dataset-cache] scroll 20260927134931: reusing prepared RAM assets
+[multi-scroll] scroll 20260927134931: train_tiles=64 valid_tiles=0
+[dataset-cache] scroll 20261012073246: reusing prepared RAM assets
+[multi-scroll] scroll 20261012073246: train_tiles=64 valid_tiles=0
+[dataset-cache] scroll 20261012065823: reusing prepared RAM assets
+[multi-scroll] scroll 20261012065823: train_tiles=64 valid_tiles=0
+[dataset-cache] scroll 20261012065821: reusing prepared RAM assets
+[multi-scroll] scroll 20261012065821: train_tiles=64 valid_tiles=0
+[dataset-cache] scroll 20261012065819: reusing prepared RAM assets
+[multi-scroll] scroll 20261012065819: train_tiles=64 valid_tiles=0
+[dataset-cache] scroll 20261012065817: reusing prepared RAM assets
+[multi-scroll] scroll 20261012065817: train_tiles=64 valid_tiles=0
+[dataset-cache] scroll 20261012065813: reusing prepared RAM assets
+[multi-scroll] scroll 20261012065813: train_tiles=64 valid_tiles=0
+[dataset-cache] scroll 20250919125754: reusing prepared RAM assets
+[multi-scroll] scroll 20250919125754: train_tiles=64 valid_tiles=7295
+[multi-scroll] merged train_tiles=512 valid_tiles=7295
+Data setup done in 0.08s
+Creating model and loss... l1 lambda 0.0... Model parameters (nnunet3d_lcndz): 7,554,654
+/usr/local/lib/python3.10/dist-packages/torch/_utils.py:831: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+[init-weights] loaded 193/193 tensors from models/runs_iter2/init_mae192_cue4.pth (shape-skipped=0 missing=11 unexpected=0)
+[optimizer] task: 4,037,741 params lr=1.00e-04, encoder: 3,516,672 params lr=1.00e-04, cue_head: 241 params lr=5.00e-04, frozen: 0 params
+ done in 0.40s
+Initializing Tensorboard...
+[test] test_int=999 > n_epochs=1 and test_on_final=False -> skipping test-frag load
+TensorBoard logs will be saved to: /vesuvius/runs_iter2_smoke/iter2_small_loss_negatives
+To view, run: tensorboard --logdir=/vesuvius/runs_iter2_smoke
+[config] saved run config -> /vesuvius/runs_iter2_smoke/iter2_small_loss_negatives/config.json
+[config] saved run config -> /vesuvius/models/runs_iter2_smoke/iter2_small_loss_negatives/config.json
+
+--- Epoch 1/1 ---
+[mae-preserve] encoder enabled: lr=2.000e-05
+
+Training:   0%|          | 0/64 [00:00<?, ?it/s]
+Training:  27%|██▋       | 17/64 [00:05<00:14,  3.32it/s]
+Training:  64%|██████▍   | 41/64 [00:10<00:05,  4.16it/s]
+Training: 100%|██████████| 64/64 [00:14<00:00,  4.32it/s]
+
+Validating:   0%|          | 0/912 [00:00<?, ?it/s]
+Validating:   4%|▎         | 33/912 [00:05<02:24,  6.06it/s]
+Validating:   8%|▊         | 69/912 [00:10<02:08,  6.56it/s]
+Validating:  12%|█▏        | 105/912 [00:16<02:02,  6.61it/s]
+Validating:  15%|█▌        | 141/912 [00:21<01:56,  6.62it/s]
+Validating:  19%|█▉        | 177/912 [00:26<01:48,  6.75it/s]
+Validating:  23%|██▎       | 213/912 [00:31<01:42,  6.83it/s]
+Validating:  27%|██▋       | 249/912 [00:37<01:37,  6.82it/s]
+Validating:  31%|███▏      | 285/912 [00:42<01:31,  6.87it/s]
+Validating:  35%|███▌      | 321/912 [00:47<01:24,  6.95it/s]
+Validating:  39%|███▉      | 357/912 [00:52<01:20,  6.92it/s]
+Validating:  43%|████▎     | 393/912 [00:57<01:15,  6.88it/s]
+Validating:  47%|████▋     | 429/912 [01:02<01:09,  6.94it/s]
+Validating:  51%|█████     | 465/912 [01:08<01:04,  6.94it/s]
+Validating:  55%|█████▍    | 501/912 [01:13<00:59,  6.91it/s]
+Validating:  59%|█████▉    | 541/912 [01:18<00:52,  7.08it/s]
+Validating:  63%|██████▎   | 577/912 [01:23<00:47,  7.11it/s]
+Validating:  67%|██████▋   | 613/912 [01:29<00:42,  7.00it/s]
+Validating:  71%|███████   | 647/912 [01:34<00:38,  6.94it/s]
+Validating:  75%|███████▍  | 681/912 [01:39<00:33,  6.81it/s]
+Validating:  79%|███████▊  | 717/912 [01:44<00:28,  6.89it/s]
+Validating:  83%|████████▎ | 753/912 [01:49<00:23,  6.83it/s]
+Validating:  87%|████████▋ | 789/912 [01:54<00:17,  6.88it/s]
+Validating:  90%|█████████ | 825/912 [02:00<00:12,  6.90it/s]
+Validating:  94%|█████████▍| 861/912 [02:05<00:07,  6.94it/s]
+Validating:  98%|█████████▊| 897/912 [02:10<00:02,  6.98it/s]
+Validating: 100%|██████████| 912/912 [02:12<00:00,  6.90it/s]
+New best character model saved! Val character_ap_macro: 0.4968
+New best F1 model saved! Val F1: 0.3722
+New best loss model saved! Val Loss: 0.6813
+[METRICS] epoch=1 train_loss=2.6317 val_loss=0.6813 train_f1=0.4094 val_character_success=0.0000
+Logging metrics for epoch: 1
+Logging hyperparameters and model graph
+[split] scroll 20261012065815: manual mask=<whole-patch validation: no train region> train_pixels=0.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+Starting evaluation figure generation...
+[predict] reading 7523 tiles in 69 row-strips (eval)
+
+Read eval:   0%|          | 0/69 [00:00<?, ?it/s]
+Read eval:   1%|▏         | 1/69 [00:00<01:01,  1.11it/s]
+Read eval:   3%|▎         | 2/69 [00:02<01:37,  1.46s/it]
+Read eval:   4%|▍         | 3/69 [00:04<01:38,  1.50s/it]
+Read eval:   6%|▌         | 4/69 [00:06<02:05,  1.93s/it]
+Read eval:   7%|▋         | 5/69 [00:09<02:26,  2.28s/it]
+Read eval:   9%|▊         | 6/69 [00:12<02:31,  2.41s/it]
+Read eval:  10%|█         | 7/69 [00:15<02:45,  2.68s/it]
+Read eval:  12%|█▏        | 8/69 [00:18<02:53,  2.85s/it]
+Read eval:  13%|█▎        | 9/69 [00:21<02:49,  2.83s/it]
+Read eval:  14%|█▍        | 10/69 [00:24<02:55,  2.98s/it]
+Read eval:  16%|█▌        | 11/69 [00:28<02:57,  3.07s/it]
+Read eval:  17%|█▋        | 12/69 [00:31<02:50,  3.00s/it]
+Read eval:  19%|█▉        | 13/69 [00:34<02:53,  3.10s/it]
+Read eval:  20%|██        | 14/69 [00:37<02:55,  3.19s/it]
+Read eval:  22%|██▏       | 15/69 [00:40<02:49,  3.14s/it]
+Read eval:  23%|██▎       | 16/69 [00:44<02:52,  3.25s/it]
+Read eval:  25%|██▍       | 17/69 [00:47<02:55,  3.37s/it]
+Read eval:  26%|██▌       | 18/69 [00:50<02:45,  3.24s/it]
+Read eval:  28%|██▊       | 19/69 [00:54<02:44,  3.30s/it]
+
+Predict chunk:   0%|          | 0/27 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/27 [00:00<00:11,  2.20it/s][A
+
+Predict chunk:   7%|▋         | 2/27 [00:00<00:10,  2.37it/s][A
+
+Predict chunk:  11%|█         | 3/27 [00:01<00:09,  2.42it/s][A
+
+Predict chunk:  15%|█▍        | 4/27 [00:01<00:09,  2.41it/s][A
+
+Predict chunk:  19%|█▊        | 5/27 [00:02<00:09,  2.41it/s][A
+
+Predict chunk:  22%|██▏       | 6/27 [00:02<00:08,  2.40it/s][A
+
+Predict chunk:  26%|██▌       | 7/27 [00:02<00:08,  2.40it/s][A
+
+Predict chunk:  30%|██▉       | 8/27 [00:03<00:07,  2.40it/s][A
+
+Predict chunk:  33%|███▎      | 9/27 [00:03<00:07,  2.40it/s][A
+
+Predict chunk:  37%|███▋      | 10/27 [00:04<00:07,  2.40it/s][A
+
+Predict chunk:  41%|████      | 11/27 [00:04<00:06,  2.39it/s][A
+
+Predict chunk:  44%|████▍     | 12/27 [00:05<00:06,  2.39it/s][A
+
+Predict chunk:  48%|████▊     | 13/27 [00:05<00:05,  2.36it/s][A
+
+Predict chunk:  52%|█████▏    | 14/27 [00:05<00:05,  2.33it/s][A
+
+Predict chunk:  56%|█████▌    | 15/27 [00:06<00:05,  2.25it/s][A
+
+Predict chunk:  59%|█████▉    | 16/27 [00:06<00:05,  2.19it/s][A
+
+Predict chunk:  63%|██████▎   | 17/27 [00:07<00:04,  2.15it/s][A
+
+Predict chunk:  67%|██████▋   | 18/27 [00:07<00:04,  2.13it/s][A
+
+Predict chunk:  70%|███████   | 19/27 [00:08<00:03,  2.11it/s][A
+
+Predict chunk:  74%|███████▍  | 20/27 [00:08<00:03,  2.08it/s][A
+
+Predict chunk:  78%|███████▊  | 21/27 [00:09<00:02,  2.09it/s][A
+
+Predict chunk:  81%|████████▏ | 22/27 [00:09<00:02,  2.08it/s][A
+
+Predict chunk:  85%|████████▌ | 23/27 [00:10<00:01,  2.11it/s][A
+
+Predict chunk:  89%|████████▉ | 24/27 [00:10<00:01,  2.13it/s][A
+
+Predict chunk:  93%|█████████▎| 25/27 [00:11<00:00,  2.16it/s][A
+
+Predict chunk:  96%|█████████▋| 26/27 [00:11<00:00,  2.19it/s][A
+
+Predict chunk: 100%|██████████| 27/27 [00:11<00:00,  2.69it/s][A
+
+                                                              [A
+Read eval:  29%|██▉       | 20/69 [01:06<04:46,  5.85s/it]
+Read eval:  33%|███▎      | 23/69 [01:08<02:13,  2.91s/it]
+Read eval:  35%|███▍      | 24/69 [01:16<03:06,  4.14s/it]
+Read eval:  38%|███▊      | 26/69 [01:18<02:06,  2.95s/it]
+Read eval:  39%|███▉      | 27/69 [01:27<02:55,  4.18s/it]
+Read eval:  42%|████▏     | 29/69 [01:29<02:00,  3.00s/it]
+Read eval:  43%|████▎     | 30/69 [01:38<02:46,  4.26s/it]
+Read eval:  46%|████▋     | 32/69 [01:40<01:52,  3.05s/it]
+Read eval:  48%|████▊     | 33/69 [01:49<02:30,  4.18s/it]
+Read eval:  49%|████▉     | 34/69 [01:49<01:54,  3.28s/it]
+
+Predict chunk:   0%|          | 0/29 [00:00<?, ?it/s][A
+
+Predict chunk:   3%|▎         | 1/29 [00:00<00:15,  1.85it/s][A
+
+Predict chunk:   7%|▋         | 2/29 [00:01<00:14,  1.91it/s][A
+
+Predict chunk:  10%|█         | 3/29 [00:01<00:13,  1.92it/s][A
+
+Predict chunk:  14%|█▍        | 4/29 [00:02<00:13,  1.91it/s][A
+
+Predict chunk:  17%|█▋        | 5/29 [00:02<00:12,  1.92it/s][A
+
+Predict chunk:  21%|██        | 6/29 [00:03<00:11,  1.94it/s][A
+
+Predict chunk:  24%|██▍       | 7/29 [00:03<00:11,  1.95it/s][A
+
+Predict chunk:  28%|██▊       | 8/29 [00:04<00:10,  1.97it/s][A
+
+Predict chunk:  31%|███       | 9/29 [00:04<00:10,  1.94it/s][A
+
+Predict chunk:  34%|███▍      | 10/29 [00:05<00:09,  1.92it/s][A
+
+Predict chunk:  38%|███▊      | 11/29 [00:05<00:09,  1.89it/s][A
+
+Predict chunk:  41%|████▏     | 12/29 [00:06<00:08,  1.90it/s][A
+
+Predict chunk:  45%|████▍     | 13/29 [00:06<00:08,  1.86it/s][A
+
+Predict chunk:  48%|████▊     | 14/29 [00:07<00:07,  1.88it/s][A
+
+Predict chunk:  52%|█████▏    | 15/29 [00:07<00:07,  1.87it/s][A
+
+Predict chunk:  55%|█████▌    | 16/29 [00:08<00:06,  1.86it/s][A
+
+Predict chunk:  59%|█████▊    | 17/29 [00:08<00:06,  1.87it/s][A
+
+Predict chunk:  62%|██████▏   | 18/29 [00:09<00:05,  1.87it/s][A
+
+Predict chunk:  66%|██████▌   | 19/29 [00:10<00:05,  1.88it/s][A
+
+Predict chunk:  69%|██████▉   | 20/29 [00:10<00:04,  1.87it/s][A
+
+Predict chunk:  72%|███████▏  | 21/29 [00:11<00:04,  1.90it/s][A
+
+Predict chunk:  76%|███████▌  | 22/29 [00:11<00:03,  1.92it/s][A
+
+Predict chunk:  79%|███████▉  | 23/29 [00:12<00:03,  1.93it/s][A
+
+Predict chunk:  83%|████████▎ | 24/29 [00:12<00:02,  1.92it/s][A
+
+Predict chunk:  86%|████████▌ | 25/29 [00:13<00:02,  1.95it/s][A
+
+Predict chunk:  90%|████████▉ | 26/29 [00:13<00:01,  2.00it/s][A
+
+Predict chunk:  93%|█████████▎| 27/29 [00:14<00:00,  2.00it/s][A
+
+Predict chunk:  97%|█████████▋| 28/29 [00:14<00:00,  2.04it/s][A
+
+                                                              [A
+Read eval:  51%|█████     | 35/69 [02:03<03:27,  6.10s/it]
+Read eval:  57%|█████▋    | 39/69 [02:14<02:02,  4.07s/it]
+Read eval:  61%|██████    | 42/69 [02:25<01:44,  3.87s/it]
+Read eval:  65%|██████▌   | 45/69 [02:36<01:30,  3.79s/it]
+Read eval:  70%|██████▉   | 48/69 [02:46<01:17,  3.70s/it]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:12,  2.16it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:11,  2.32it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:01<00:10,  2.34it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:01<00:10,  2.40it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:02<00:09,  2.44it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:02<00:08,  2.49it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:02<00:08,  2.51it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:03<00:07,  2.52it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:03<00:07,  2.57it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:03<00:06,  2.63it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:04<00:06,  2.81it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:04<00:04,  3.23it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:04<00:04,  3.58it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:04<00:03,  3.84it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:05<00:03,  3.92it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:05<00:03,  3.15it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:06<00:04,  2.75it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:06<00:03,  2.51it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:07<00:03,  2.37it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:07<00:03,  2.29it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:08<00:03,  2.21it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:08<00:02,  2.20it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:08<00:02,  2.20it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:09<00:01,  2.19it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:09<00:01,  2.14it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:10<00:00,  2.13it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:10<00:00,  2.13it/s][A
+
+Predict chunk: 100%|██████████| 28/28 [00:10<00:00,  2.65it/s][A
+
+                                                              [A
+Read eval:  71%|███████   | 49/69 [02:57<01:34,  4.72s/it]
+Read eval:  77%|███████▋  | 53/69 [03:08<01:01,  3.86s/it]
+Read eval:  80%|███████▉  | 55/69 [03:08<00:41,  2.94s/it]
+Read eval:  81%|████████  | 56/69 [03:18<00:50,  3.91s/it]
+Read eval:  86%|████████▌ | 59/69 [03:28<00:37,  3.76s/it]
+Read eval:  90%|████████▉ | 62/69 [03:38<00:25,  3.60s/it]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:17,  1.58it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:01<00:15,  1.66it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:01<00:14,  1.72it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:02<00:13,  1.72it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:02<00:13,  1.74it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:03<00:12,  1.75it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:04<00:12,  1.74it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:04<00:11,  1.75it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:05<00:10,  1.75it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:05<00:10,  1.73it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:06<00:09,  1.72it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:06<00:09,  1.72it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:07<00:08,  1.72it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:08<00:08,  1.72it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:08<00:07,  1.72it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:09<00:06,  1.72it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:09<00:06,  1.72it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:10<00:05,  1.72it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:11<00:05,  1.72it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:11<00:04,  1.73it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:12<00:03,  1.75it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:12<00:03,  1.77it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:13<00:02,  1.77it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:13<00:02,  1.77it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:14<00:01,  1.78it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:14<00:01,  1.79it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:15<00:00,  1.80it/s][A
+
+                                                              [A
+Read eval:  91%|█████████▏| 63/69 [03:54<00:32,  5.33s/it]
+Read eval:  97%|█████████▋| 67/69 [03:59<00:07,  3.50s/it]
+                                                          
+
+Predict chunk:   0%|          | 0/9 [00:00<?, ?it/s]
+Predict chunk:  11%|█         | 1/9 [00:00<00:04,  1.78it/s]
+Predict chunk:  22%|██▏       | 2/9 [00:01<00:03,  1.82it/s]
+Predict chunk:  33%|███▎      | 3/9 [00:01<00:03,  1.81it/s]
+Predict chunk:  44%|████▍     | 4/9 [00:02<00:02,  1.82it/s]
+Predict chunk:  56%|█████▌    | 5/9 [00:02<00:02,  1.83it/s]
+Predict chunk:  67%|██████▋   | 6/9 [00:03<00:01,  1.83it/s]
+Predict chunk:  78%|███████▊  | 7/9 [00:03<00:01,  1.84it/s]
+Predict chunk:  89%|████████▉ | 8/9 [00:04<00:00,  1.85it/s]
+                                                            
+[predict] eval done in 243.8s  predict  57.2s (23.5%)  read/wait 186.6s (76.5%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_iter2_smoke/iter2_small_loss_negatives/eval_figs/eval_s20261012065815_ep01.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+[save-final] wrote final model to /vesuvius/models/runs_iter2_smoke/iter2_small_loss_negatives/final.pth
+TensorBoard logs saved to: /vesuvius/runs_iter2_smoke/iter2_small_loss_negatives
+Training completed.

@@ -18,6 +18,7 @@ per fragment, in order (each step skips if its output already exists):
        surface anchors. the PSF per fragment is pinned (MATCHED_SIGMAS) so every assembly is identical.
 
 usage:
+  python assemble_training_segments.py --mix6               # everything the mix6 runs need, in one command (see below)
   python assemble_training_segments.py --only w058          # one fragment (pilot)
   python assemble_training_segments.py                       # all fragments
   python assemble_training_segments.py --from w039           # resume from a fragment
@@ -27,6 +28,13 @@ usage:
   python assemble_training_segments.py --no-r2 --only paris1_fr34   # re-render an 88 keV fragment from dl.ash2txt
   python assemble_training_segments.py --spectral-match      # refit the step-5 PSFs against the native references
   python assemble_training_segments.py --degrader models/c39_degrader.pth   # learned-degrader .translated siblings
+
+--mix6 (off by default) downloads and sets up exactly the mix6 corpus (utils/mix6.py): PHerc0009B, PHerc1447 w058/w060, PHerc0841,
+PHerc0814, PHerc0172 w068/w087 and the PHerc0343 first letters here, then runs `assemble_test_segments.py --mix6` for the 7 trained
+PHerc0846A sheets + the straightened2 holdout. Per scroll that is the volume + mask, norm, surface detection (PHerc1447: the flat
+surface at its measured centre layer), the degraded <id>.matched volume where a scroll needs one (none in mix6), surface anchors
+and the 3 depths of asf cues (cue_asf_morph, _dm1, _dp1). Labels and train masks come from git. --check only reports what is
+missing (read-only). --only adds scrolls on top of the corpus (python assemble_training_segments.py --mix6 --only w058,w059).
 """
 from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys, time
@@ -164,11 +172,13 @@ FRAG_OPTS = {
     "ph1447_w058": {
         "hf_pherc1447": "w058",
         "required_label_dirs": ("inklabels", "dilated_inklabels"),
+        "flat_surface": True,
         "force_norm": True,
     },
     "ph1447_w060": {
         "hf_pherc1447": "w060",
         "required_label_dirs": ("inklabels", "dilated_inklabels"),
+        "flat_surface": True,
         "force_norm": True,
     },
     "ph1447_w062": {
@@ -1704,6 +1714,11 @@ def step4_surface(name, zid, skip, force=False):
     if skip:
         print(f"  [4/4] --skip-surface -> skip")
         return
+    if FRAG_OPTS.get(name, {}).get("flat_surface"):
+        # no usable detection: a flat surface at the measured centre layer of the depth-reversed stack (utils/mix6.py)
+        from utils import mix6
+        print(f"  [4/4] {mix6.write_flat_surface(zid, force=force)}")
+        return
     depth_path = os.path.join("surface_labels", str(zid), "depth.npy")
     mask = cv2.imread(os.path.join("masks", f"{zid}.png"), cv2.IMREAD_GRAYSCALE)
     if not force and os.path.isfile(depth_path) and mask is not None \
@@ -1856,7 +1871,22 @@ def main():
                          "default assembly already writes them with the pinned MATCHED_SIGMAS")
     ap.add_argument("--no-degrade", action="store_true",
                     help="skip the default <id>.matched.zarr degradation of the fine scans (MATCHED_SIGMAS)")
+    ap.add_argument("--mix6", action="store_true",
+                    help="download and set up exactly the mix6 corpus: the non-0846A scrolls here, then the 7 trained PHerc0846A "
+                         "sheets + the straightened2 holdout through assemble_test_segments.py --mix6 (see the docstring); "
+                         "--only adds scrolls on top")
+    ap.add_argument("--check", action="store_true", help="with --mix6: report what is missing or stale (read-only) and exit")
+    ap.add_argument("--cue-workers", type=int, default=4, help="parallel asf cue builds with --mix6 (default 4)")
+    ap.add_argument("--rebuild-cues", action="store_true", help="with --mix6: rebuild every asf cue, not only the missing ones")
     args = ap.parse_args()
+    if args.check and not args.mix6:
+        ap.error("--check needs --mix6")
+    if args.mix6 and (args.from_name or args.spectral_match or args.degrader):
+        ap.error("--mix6 selects the fragments itself (--only adds scrolls on top)")
+    if args.mix6:
+        from utils import mix6
+        if args.check:
+            sys.exit(1 if mix6.report() else 0)
 
     if args.spectral_match:
         from utils.spectral_match import reference_stats
@@ -1903,7 +1933,11 @@ def main():
         return
 
     segs = SEGMENTS
-    if args.only:
+    if args.mix6:
+        # the mix6 corpus plus any scrolls named with --only (those get the plain per-fragment pipeline)
+        want = set(mix6.TRAINING_NAMES) | {o.strip() for o in (args.only or "").split(",") if o.strip()}
+        segs = [s for s in SEGMENTS if s[0] in want]
+    elif args.only:
         # comma-separated list so several fragments can be forced in one run
         want = {o.strip() for o in args.only.split(",") if o.strip()}
         segs = [s for s in SEGMENTS if s[0] in want]
@@ -1947,9 +1981,10 @@ def main():
 
     # HARDENING: integrity-sweep EVERY scroll (not just the ones touched this run) so a
     # partial/interrupted zarr that 'exists -> skip' silently kept gets caught and reported.
-    print(f"\n{'='*70}\n[assemble] INTEGRITY SWEEP ({len(SEGMENTS)} scrolls)\n{'='*70}")
+    swept = segs if args.mix6 else SEGMENTS
+    print(f"\n{'='*70}\n[assemble] INTEGRITY SWEEP ({len(swept)} scrolls)\n{'='*70}")
     broken = []
-    for name, _seg, zid in SEGMENTS:
+    for name, _seg, zid in swept:
         ok, msg = _zarr_integrity(zid)
         if ok:
             print(f"  OK   {name:<12} {zid}  {msg}")
@@ -1961,7 +1996,24 @@ def main():
         print(f"\n\033[91m[assemble] {len(broken)} scroll(s) FAILED integrity: {broken}")
         print(f"  fix with: python assemble_training_segments.py --force --only {ids}\033[0m")
     else:
-        print(f"[assemble] integrity sweep: all {len(SEGMENTS)} scrolls OK")
+        print(f"[assemble] integrity sweep: all {len(swept)} scrolls OK")
+
+    if args.mix6:
+        failed = [nm for nm, status in results if not status.startswith("OK")] + broken
+        if failed:
+            sys.exit(f"[mix6] not finalized, fragments failed: {failed}")
+        # flat 1447 surfaces are written in step 4; anchors and the 3 depths of cues need every surface, so they come last
+        mix6.finalize([sid for sid in mix6.all_ids() if sid not in (*mix6.TRAIN_0846A, mix6.HOLDOUT)],
+                      workers=args.cue_workers, rebuild_cues=args.rebuild_cues)
+        import assemble_test_segments
+        code = assemble_test_segments.main([
+            "--mix6", "--workers", str(args.workers), "--chunk-depth", str(args.chunk_depth), "--chunk-y", str(args.chunk_y),
+            "--chunk-x", str(args.chunk_x), "--cue-workers", str(args.cue_workers),
+            *(["--force"] if args.force else []), *(["--rebuild-cues"] if args.rebuild_cues else [])])
+        problems = mix6.report()
+        print("[mix6] data ready for train.py, finetune_readerv3.py and finetune_v8in.py" if not problems and not code
+              else "[mix6] data NOT ready")
+        sys.exit(1 if problems or code else 0)
 
 
 if __name__ == "__main__":

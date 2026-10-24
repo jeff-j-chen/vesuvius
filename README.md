@@ -6,34 +6,45 @@ Experiment history and campaign-specific details are kept in `old/KNOWLEDGE.md`.
 
 ## Quick start
 
-The project normally runs in a Docker image with system Python. No project virtual environment is required.
+The project normally runs in a Docker image with system Python. No project virtual environment is required for the cue_dropout model
+(`train.py`); the reader-v3 and v8-in fine-tunes build their own environments (`reader-v3/.venv`, `nader-fork/.venv`) on first run.
 
 ```bash
-# training zarrs, the degraded <id>.matched fine-scan volumes, norms and surface labels
-python3 assemble_training_segments.py
+# everything the mix6 runs read, in one command: the mix6 scrolls' volumes, masks, norms, surface detections (PHerc1447: flat),
+# surface anchors and 3 depths of asf cues, plus the 7 trained PHerc0846A sheets and the straightened2 holdout
+# (assemble_test_segments.py --mix6); --check only reports what is missing
+python3 assemble_training_segments.py --mix6
 
-# test surfaces, plus the PHerc0846A patches and their flat aliases
-python3 assemble_test_segments.py
-
-# check every input, then train the best run so far (iter2_asf_cue, 10 epochs)
-python3 train.py --dry-run
-python3 train.py
+# the three mix6 models (each prints where its model is, see the table below)
+python3 train.py --dry-run && python3 train.py        # cue_dropout_labelsv6_mix6, 5 epochs (--download runs the data command first)
+python3 finetune_readerv3.py                          # reader-v3, 2000 steps
+python3 finetune_v8in.py                              # v8-in, 5 epochs
 tensorboard --logdir ./runs --bind-all
 ```
 
-`python3 train.py` trains the best run so far, `apply_best_run` in `utils/config.py` (`iter2_asf_cue`, see
-[Default run](#default-run-iter2_asf_cue)). Checkpoints go to `models/runs/<run>/` and TensorBoard logs to
-`runs/<run>/`; an existing run is never overwritten (`_2`, `_3`, ...). The reference model is
-`models/runs/iter2_asf_cue/final.pth`, the default checkpoint of every evaluation notebook. Experiment runners call
+| model | script | output |
+|---|---|---|
+| cue_dropout_labelsv6_mix6 | `python3 train.py` | `models/runs/cue_dropout_labelsv6_mix6/best_model_loss.pth` (+ `final.pth`, `model_epoch_5.pth`, ...) |
+| reader-v3 fine-tune | `python3 finetune_readerv3.py` (clones reader-v3 and the koine_machines training code, builds `reader-v3/.venv`, stages the corpus) | `reader-v3/runs/mix6/ckpt_002000.pth` |
+| v8-in fine-tune | `python3 finetune_v8in.py` (clones nader-fork, builds `nader-fork/.venv`, stages the corpus) | `nader-fork/runs/v8in_mix6_5ep/model/` |
+
+The mix6 corpus (`utils/mix6.py`) is the 7 trained PHerc0846A sheets + PHerc0343 first letters + PHerc0009B + PHerc1447 w058/w060 + PHerc0841 +
+PHerc0814 + PHerc0172 w068/w087; straightened2 is held out. `ensemble_eval.ipynb` ensembles the three models (2x2 figure) and `0846A_eval.ipynb`
+runs whichever of them it is given (the kind is detected from the checkpoint). `--smoke` on any of the three training scripts runs a tiny version into
+separate output folders.
+
+`python3 train.py` trains `cue_dropout_labelsv6_mix6`, `apply_mix6_run` in `utils/config.py` (the best run `iter2_asf_cue`, `apply_best_run`, see
+[Default run](#default-run-iter2_asf_cue), with a 30% flat-cue dropout on the mix6 corpus). Checkpoints go to `models/runs/<run>/` and TensorBoard logs to
+`runs/<run>/`; an existing run is never overwritten (`_2`, `_3`, ...). Experiment runners call
 `train.main(configure)` to edit the plain `Config()` instead (the older nop29 recipe, kept in `old/train_nop29.py`).
 Earlier campaign scripts live in `old/`.
 
 Other runners:
 
 - `python3 k_folds.py` — cross-validation and leave-patches-out arms of the default run (see [PHerc0846A](#pherc0846a))
-- `python3 train_iter2.py --arm <arm>` — iteration 2: the 192 px baseline on the new PHerc0846A set and its single-change arms (logs `runs_iter2/`); `asf_cue` became the default run
+- `python3 train_iter2.py --arm <arm>` — iteration 2: the 192 px baseline on the new PHerc0846A set and its single-change arms (logs `runs_iter2/`); `asf_cue` became the base of the mix6 run
 - `python3 train_0175A.py` — rotation-augmented arms that try to read the unlabeled PHerc0175A quick patches more cleanly, from the 0175A MAE (`mae_pretrain_0175a.py`)
-- `python3 finetune_v8in_0846a.py stage|train|visualize` — fine-tunes the external v8-in model (`nader-fork/`) on the same PHerc0846A corpus
+- `python3 assemble_training_segments.py` / `assemble_test_segments.py` without `--mix6` — every fragment / every test surface, as before
 
 ## Evaluation notebooks
 
@@ -376,12 +387,15 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 | `train_iter2.py` | Iteration-2 arms on the new PHerc0846A set; builds the 4-head init of the default run |
 | `train_0175A.py` | Rotation-augmented arms for the unlabeled PHerc0175A quick patches |
 | `mae_pretrain_0175a.py` | MAE continuation on the PHerc0175A and PHerc0846A quick patches |
-| `finetune_v8in_0846a.py` | Stages the PHerc0846A corpus for, trains and renders the external v8-in model |
+| `finetune_readerv3.py` | Clones reader-v3 + koine_machines, stages the mix6 corpus and fine-tunes reader-v3 for 2000 steps |
+| `finetune_v8in.py` | Clones nader-fork, stages the mix6 corpus and fine-tunes v8-in for 5 epochs |
 | `campaign_archs_*.py` | Complete experiment definitions and campaign runners |
 | `campaign_finetune.py` | Fine-tunes the archs40 native-96 nnPU checkpoint with PHerc1447; PHerc0211 and PHerc0813 are label-free, end-of-training visualizations only |
 | `campaign_finetune_96.py` | Fine-tunes the archs40 native-96 combined-surface checkpoint on PHerc1447 + selected scrolls |
 | `generate_scroll_visual_guide.py` | Contact sheet of the training corpus and test surfaces (`output/scroll_patch_guide.png`) |
-| `utils/config.py` | Shared configuration and registered train, holdout, and test IDs |
+| `utils/config.py` | Shared configuration and registered train, holdout, and test IDs; `apply_mix6_run` is what `train.py` trains |
+| `utils/mix6.py` | The mix6 corpus, its data checks (`python3 -m utils.mix6`), flat PHerc1447 surfaces, 3-depth asf cues and the model locations |
+| `utils/predict_models.py` | Inference of reader-v3 and v8-in in their own environments; detects which of the three models a checkpoint is |
 | `utils/model.py` | 3D nnU-Net model and experimental architecture branches |
 | `utils/dataloader.py` | Labels, rings, splits, sampling, augmentation, and zarr loading |
 | `utils/norm.py` | Chunk-aligned masked normalization and cache access |
@@ -389,6 +403,8 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 | `utils/training_utils.py` | Optimizers, schedulers, losses, metrics, and checkpoint helpers |
 | `utils/visualizer.py` | TensorBoard metrics and training-time figures |
 | `utils/precomputed_asf.py` | Builds the whole-patch asf_morph cue maps in `cue_asf_morph/` |
+| `build_domain_cues.py` | Builds the shift 0/-1/+1 cue maps for the add-one domain runs of `old/train_sequence.py` |
+| `build_pair_cues.py` | Builds the +-1/+-2 shifted cue maps (`cue_asf_morph_dm1/dp1/dm2/dp2`) read by the depth-MIL runs of `old/train_iter2.py` |
 | `utils/depth_ensemble.py` | Depth-ensemble combination methods shared by the evaluation notebooks |
 | `assemble_training_segments.py` | Builds training zarrs, masks, aligned labels, eroded labels, and norms |
 | `assemble_test_segments.py` | Renders the thirteen unlabeled test surfaces |
@@ -397,7 +413,8 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 | `precompute_norm.py` | Populates `norm_cache.json` without starting training |
 | `mae_pretrain_nnunet.py` | Architecture-matched masked-autoencoder pretraining |
 | `jepa_pretrain_nnunet.py` | Optional feature-predictive pretraining |
-| `0846A_eval.ipynb` | Runs a checkpoint on the PHerc0846A renders and quick patches |
+| `0846A_eval.ipynb` | Runs any of the three mix6 models on the PHerc0846A renders and quick patches |
+| `ensemble_eval.ipynb` | Ensembles cue_dropout, reader-v3 and v8-in on one sheet (2x2 figure) |
 | `eval_scrolls.ipynb` | Evaluates every labeled training fragment and the holdout |
 | `test_inference.ipynb` | Searches the thirteen prize-target test surfaces for readable letters |
 | `manual_split_visualization.ipynb` | Reviews explicit train/validation masks |
@@ -418,7 +435,7 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 | `eroded_inklabels/` | Conservative binary training labels |
 | `train_masks/` | Explicit train, validation, and guaranteed-negative assignments |
 | `surface_labels/` | Literal surface depth and confidence maps |
-| `cue_asf_morph/` | Precomputed asf_morph cue maps read by the default run's fourth input head |
+| `cue_asf_morph/` | Precomputed asf_morph cue maps read by the default run's fourth input head (git-ignored; rebuilt by `--mix6`) |
 | `models/` | Pretraining and supervised checkpoints |
 | `runs_*` | TensorBoard logs and saved experiment configurations |
 | `output/` | Evaluation figures and generated reviews |

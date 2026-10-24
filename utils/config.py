@@ -11,6 +11,8 @@ from typing import Dict, List, Optional
 
 import torch
 
+from .mix6 import CUE_DROPOUT_RUN as MIX6_RUN_NAME, DOMAINS as MIX6_DOMAINS, HOLDOUT as MIX6_HOLDOUT, OUT_VIS as MIX6_OUT_VIS, TRAIN_0846A as MIX6_0846A
+
 # "INFO": print the full config, dataset building, and cache progress at the start of a run.
 # "ERROR": start-of-run output is silenced except lines containing ERROR (exceptions still raise).
 LOG_LEVEL = "INFO"
@@ -253,6 +255,9 @@ class DataConfig:
     train_scroll_weights: Optional[List[int]] = field(
         default_factory=lambda: [RUN_DOMAIN_WEIGHTS.get(name, 1) for name in RUN_TRAIN_SCROLL_DICT]
     )
+    # train_scroll_dict domain whose per-epoch draws stay at the summed length of its own datasets however many domains are
+    # added: the epoch is lengthened so this domain's weighted share of it equals that sum ('' = epoch = sum of every dataset)
+    equalize_domain: str = ""
     test_scroll_ids: List[int] = field(
         default_factory=lambda: list(DEFAULT_TEST_SCROLL_IDS)
     )
@@ -339,6 +344,13 @@ class DataConfig:
     line_prior_scroll_ids: List[int] = field(default_factory=list)
     line_prior_source: str = "own"  # "own" bands from this patch's labels, "cross" pools the neighbouring windings
     line_gap_negative_scroll_ids: List[int] = field(default_factory=list)  # stretches between two lines become explicit negatives
+    # which bands bound those stretches: "own" = this patch's visible lines, "cross" = lines of any neighbouring winding (a stretch
+    # is then negative only when no winding has a line there)
+    line_gap_source: str = "own"
+    # training only: this share of samples sees the cue as a flat "no information" map (128 over the papyrus) instead of the real one
+    cue_dropout_prob: float = 0.0
+    # figures/inference: every prediction is the cellwise minimum of the real-cue and the flat-cue prediction
+    eval_cue_agree: bool = False
     # half-brightness strokes in inklabel_dir are assumed letters: True trains them as their own characters,
     # False erases them (the label file then reads exactly as it did before they were drawn)
     extra_inklabels: bool = False
@@ -362,6 +374,9 @@ class DataConfig:
     native_noise_ids: List[int] = field(default_factory=lambda: list(RUN_FINE_SCAN_IDS))
     # control: roll training-scroll labels by this fraction of the height (visualized scrolls keep theirs)
     label_shift_frac: float = 0.0
+    # slice shift of the read window from the surface-relative one ("-2", "-1", "1", "2") -> folder of cue maps built for that
+    # window, used by depth-jittered and paired views; a shift without a folder (0) reads the primary cue_dir map
+    depth_cue_dirs: dict = field(default_factory=dict)
     multitile_train_step: int = 16  # dataloader window stride (px) in multitile mode
     multitile_pos_only: bool = True  # in ink-containing windows, supervise ONLY ink sub-tiles (mask out non-ink ones to avoid labelling unlabelled-ink neighbours as negatives); ink-free ring windows still give negatives
     multitile_ring_gate: bool = True  # with pos_only=False, still emit only sub-tiles inside the ring/supervision mask (False = legacy all-in-window targets)
@@ -595,11 +610,28 @@ class TrainingConfig:
     # depth-offset MIL: a positive cell is explained by whichever of the two depth views fits it better (min BCE), a negative
     # cell must be negative in both; needs depth_view_consistency (the paired view) with depth_view_consistency_lambda 0
     depth_view_mil: bool = False
+    # "max": a negative cell is charged its worse depth view instead of the mean of both (positives keep the better view)
+    depth_view_mil_negative: str = "mean"
+    # consistency between the two depth views over every target cell of the window, not only the supervised ones
+    depth_view_consistency_all_cells: bool = False
     # line prior terms on label -3 cells: nnPU risk with its own prior, and label-proportion matching of the batch mean
     line_pu_lambda: float = 0.0
     line_pu_prior: float = 0.2
     line_llp_lambda: float = 0.0
     line_llp_prior: float = 0.2
+    # unsupervised cells within halo_radius cells of a labelled ink cell are pushed to 0, weighted by how ink-like the cue calls them
+    halo_penalty_lambda: float = 0.0
+    halo_radius: int = 4
+    # smoothness of the preferred depth view (primary vs paired) between neighbouring ink-like cells; needs depth_view_mil
+    depth_peak_lambda: float = 0.0
+    # small-loss selection (noisy-label learning): the highest-loss share of ordinary negative cells leaves the loss,
+    # ramped in over negative_forget_ramp_epochs
+    negative_forget_rate: float = 0.0
+    positive_forget_rate: float = 0.0  # the same for the highest-loss share of positive (ink) cells
+    negative_forget_ramp_epochs: int = 2
+    # speech-style time masking: this share of samples has slice_mask_width consecutive depth slices replaced by the mean of the others
+    slice_mask_prob: float = 0.0
+    slice_mask_width: int = 2
     character_bag_ranking: bool = True
     character_bag_margin: float = 1.0
     character_bag_topk_frac: float = 0.25
@@ -947,3 +979,91 @@ def apply_best_run(config) -> None:
     config.run_name = config.exp_name = "asf_cue"
     config.model_dir = "models/runs/asf_cue"
     config.save_final = "models/runs/asf_cue/final.pth"
+
+
+# ---- the mix6 run (cue_dropout_labelsv6_mix6): what `python3 train.py` trains ----
+# the best-run recipe (192 px field, dual scale, strong nnPU, text-region gate, asf_morph cue as a fourth input head) on the mix6 corpus
+# (utils/mix6.py: 7 trained 0846A sheets at domain weight 2 plus PHerc0009B, 1447, 0841, 0814, 0172 and the 343 first letters at 1),
+# with the cue replaced by a flat map in 30% of the samples, the v6 ring parameters, seed 17 and 5 epochs. straightened2 is rendered, never trained.
+MIX6_EPOCHS = 5
+MIX6_WARMUP_EPOCHS = 2
+MIX6_SEED = 17
+MIX6_MAE192 = "models/mae_nnunet_192_campaign34_early_gated_fiber_native96_surfacenorm_campaign40_2k.pth"
+# the 192 MAE grown to four input heads (utils/cue_expand.py build_mix6_init); train.py builds it when it is missing
+MIX6_INIT = "models/init_mae192_cue4_seed17.pth"
+MIX6_CUE_DROPOUT = 0.3
+
+
+def apply_mix6_run(config) -> None:
+    """turn a default Config into the cue_dropout_labelsv6_mix6 run."""
+    data, tra, dl, model = config.data, config.tra, config.dl, config.model
+    for scroll_id in MIX6_0846A[2:]:
+        add_0846a_train_patch(config, scroll_id)
+    for scroll_id in (*MIX6_0846A, MIX6_HOLDOUT, *MIX6_OUT_VIS):
+        data.surface_window_offset_by_scroll[scroll_id] = -1
+    # 192 px field
+    config.init_weights = MIX6_INIT
+    data.context_size = 192
+    dl.batch_size = 32
+    tra.lr = 1e-4
+    data.eval_infer_bs = 64
+    data.eval_chunk_gb = 2.0
+    data.ctx_jitter = 20
+    dl.context_replace_margin = 14
+    dl.context_replace_feather = 26
+    data.native_noise = "models/native_noise_bank_192.npy"
+    # dual scale + strong nnPU + text-region gate
+    model.dual_scale = True
+    model.dual_scale_mix = 0.5
+    tra.pu_lambda = 3.0
+    data.far_negative_share = 0.5
+    data.far_negative_min_dist = 96
+    model.text_region_gate = True
+    # corpus: 0846A first (weight 2, its draws per epoch fixed by equalize_domain), then one domain each
+    keep = [*MIX6_0846A, *(scroll_id for ids in MIX6_DOMAINS.values() for scroll_id in ids)]
+    scroll_by_id = {int(scroll.scroll_id): scroll for scroll in data.scrolls}
+    data.scrolls = [scroll_by_id[scroll_id] for scroll_id in keep]
+    data.train_scroll_dict = {"pherc0846a": list(MIX6_0846A), **{name: list(ids) for name, ids in MIX6_DOMAINS.items()}}
+    data.train_scroll_weights = [2, *([1] * len(MIX6_DOMAINS))]
+    data.train_only_scroll_ids = [scroll_id for scroll_id in data.train_only_scroll_ids if int(scroll_id) in keep]
+    data.equalize_domain = "pherc0846a"
+    # half-brightness strokes of the 0846A labels are hard negatives; straightened2 / out_4 / out_5 are whole-patch validation only
+    data.extra_hard_negative_scroll_ids = list(MIX6_0846A)
+    data.whole_patch_valid_scroll_ids = [MIX6_HOLDOUT, *MIX6_OUT_VIS]
+    data.label_free_vis_scroll_ids = []
+    data.vis_scroll_ids = [*MIX6_0846A, MIX6_HOLDOUT]
+    tra.eval_int_scrolls = len(data.vis_scroll_ids)
+    tra.dann_n_domains = len(data.train_scroll_dict)
+    # asf_morph cue as the fourth input head (5x learning rate), flat in 30% of the samples; depth jitter reads the cue maps of its own window
+    model.input_cue = "pre_clahe"
+    data.cue_dir = "./cue_asf_morph"
+    data.cue_dropout_prob = MIX6_CUE_DROPOUT
+    data.depth_cue_dirs = {"-1": "./cue_asf_morph_dm1", "1": "./cue_asf_morph_dp1"}
+    tra.cue_head_prefixes = ("gated_cue_stem.branches.3.",)
+    tra.cue_head_lr_scale = 5.0
+    # v6 ring parameters, seed 17 (training seed, coordinate-hash split seed), 5 epochs
+    data.ring_close_r, data.ring_gap_r, data.ring_shell_r = 2, 2, 4
+    tra.seed = data.coordinate_hash_seed = MIX6_SEED
+    tra.n_epochs = tra.eval_int = tra.save_int = MIX6_EPOCHS
+    tra.warmup_epochs = MIX6_WARMUP_EPOCHS
+    config.run_name = config.exp_name = MIX6_RUN_NAME
+    config.model_dir = f"models/runs/{MIX6_RUN_NAME}"
+    config.save_final = f"{config.model_dir}/final.pth"
+    tra.log_dir = "./runs"
+
+
+def apply_smoke(config) -> None:
+    """a few windows, one epoch and two figures into models/runs_smoke and runs_smoke (train.py --smoke)."""
+    data, tra, dl = config.data, config.tra, config.dl
+    config.model_dir = f"models/runs_smoke/{config.run_name}"
+    tra.log_dir = "./runs_smoke"
+    tra.n_epochs = tra.eval_int = tra.save_int = 1
+    data.max_samples_per_epoch = int(os.environ.get("SMOKE_SAMPLES", 64))
+    dl.batch_size = int(os.environ.get("SMOKE_BATCH", 8))
+    dl.num_workers = 4
+    data.selective_chunk_preload = False
+    data.vis_preload_persistent = False
+    data.ram_safe_vis = True
+    others = [sid for ids in data.train_scroll_dict.values() for sid in ids if int(sid) not in MIX6_0846A]
+    data.vis_scroll_ids = [MIX6_HOLDOUT, *others[:1]]
+    tra.eval_int_scrolls = len(data.vis_scroll_ids)

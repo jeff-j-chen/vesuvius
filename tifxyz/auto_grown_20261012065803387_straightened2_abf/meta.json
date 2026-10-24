@@ -1,1 +1,24 @@
-{"format":"tifxyz","scale":[0.05000000074505806,0.05000000074505806],"type":"seg","uuid":"auto_grown_20261012065803387_straightened2_abf"}
+{
+    "bbox": [
+        [
+            2662.193115234375,
+            2504.40185546875,
+            11564.7177734375
+        ],
+        [
+            6420.7412109375,
+            3562.172607421875,
+            13746.5
+        ]
+    ],
+    "format": "tifxyz",
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "type": "seg",
+    "uuid": "auto_grown_20261012065803387_straightened2_abf",
+    "vc3d_segment_display_id": "auto_grown_20261012065803387_straightened2_abf",
+    "vc3d_segment_folder": "paths",
+    "vc3d_segment_folder_default_palette": true
+}

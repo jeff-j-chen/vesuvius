@@ -1,0 +1,2394 @@
+2026-10-20 15:33:25.566597: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-10-20 15:33:25.571270: I external/local_xla/xla/tsl/cuda/cudart_stub.cc:32] Could not find cuda drivers on your machine, GPU will not be used.
+2026-10-20 15:33:25.577414: I external/local_xla/xla/tsl/cuda/cudart_stub.cc:32] Could not find cuda drivers on your machine, GPU will not be used.
+2026-10-20 15:33:25.585548: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1792510405.598674  309692 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1792510405.602533  309692 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1792510405.614053  309692 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792510405.614068  309692 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792510405.614070  309692 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792510405.614072  309692 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2026-10-20 15:33:25.617359: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI AVX512_BF16 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[preflight] 10 scroll(s) and init weights present
+Creating datasets...
+[multi-scroll] physical groups={'pherc0846a': [20261012073246]} weights=[1]
+[extra-labels] scroll 20261012073246: 289,125 half-brightness pixels -> 327,168 hard-negative pixels
+[split] scroll 20261012073246: manual mask=./train_masks/20261012073246.png train_pixels=100.0% explicit_negative_pixels=327,168 explicit_positive_pixels=0
+[split] scroll 20261012073246: axis=x train_frac=1.0
+[ring] closed(base=regular): CLOSE_R=2 GAP_R=2 exclusion_tiles=4842
+[ring_negatives] source='closed' tile_radius=4  ink_tiles=2474  ring_tiles=3955  ratio=1.60
+[character-components] 13 components at 16px target resolution
+[manual-split] scroll 20261012073246: unit=16px train_ring=1645824px valid_ring=0px train_only=True
+[far-negatives] scroll 20261012073246: min_dist=96px far_units=26206 windows=23666
+[character-sampling] scroll 20261012073246: 13 characters with positive and ring-negative windows
+[context-replace] scroll 20261012073246: 24411 fully ink-free donors with mask>=0.80
+[selective-cache] scroll 20261012073246: manifest=2,524/2,790 spatial chunks (90.5%)
+[selective-cache] ready 20261012073246.zarr: chunks=2,524 ram=0.53 GiB (forked readers)
+Data setup done in 4.83s
+[seed] fast mode (seed=41) — cudnn benchmark on, tiny run-to-run fp noise
+[threads] cpu budget 13: main process 5 thread(s), 8 loader worker(s) x 1
+[seed] AND-mask/Fish domain groups use variable batch sizes -- cudnn benchmark off
+--- Configuration ---
+data: DataConfig(zarr_path='/vesuvius/ves_zarrs2', scrolls=[ScrollConfig(scroll_id=20261012073246, split_axis='x', train_split_frac=1.0, crop_x_frac=(0.0, 1.0), crop_y_frac=(0.0, 1.0))], train_scroll_dict={'pherc0846a': [20261012073246]}, train_scroll_weights=[1], test_scroll_ids=[20260814140748, 20260717193517, 20260720090842, 20250703034159, 20260723112922, 20260921094413, 20260918132724, 20260922073234, 20260922161631, 20260925085345, 20260928000001, 20260928000002, 20260928000003, 20260928000004], holdout_scroll_ids=[20251226000000], tile_size=16, depth=8, d_start=4, d_end=28, train_d_start=4, train_d_end=28, composite_method='maxproj', composite_d0=10, composite_d1=18, composite_display='raw', voxel_um=9.362, mask_memmap=False, mask_bitpack=True, preload_volumes=False, selective_chunk_preload=True, selective_chunk_workers=8, ram_safe_vis=False, ring_negatives=True, ring_label_source='closed', ring_close_r=2, ring_gap_r=2, ring_shell_r=4, ring_free_scroll_ids=[], ring_pu_scroll_ids=[], simple_split=False, flipped_train_mask_ids=[20231210121321, 20240304144031], coordinate_hash_split=False, coordinate_hash_block_size=512, coordinate_hash_valid_fraction=0.25, coordinate_hash_seed=29, train_mask_dir='./train_masks', whole_patch_valid_scroll_ids=[20260927134931, 20261012065813, 20261012065817, 20261012065819, 20261012065821, 20261012065823, 20261012065815, 20261012065825, 20261012065827], train_only_scroll_ids=[20261012073246], validation_scroll_ids=None, surface_label_dir='./surface_labels', context_size=192, context_downsample=1, eval_infer_bs=64, eval_prefetch=3, eval_chunk_gb=2.0, tta_mode='light', probe_rois={}, vis_scroll_ids=[20260927134931, 20261012065813, 20261012065817, 20261012065819, 20261012065821, 20261012065823, 20261012065815, 20261012065825, 20261012065827], vis_preload_persistent=True, label_free_vis_scroll_ids=[], eval_stride=32, inklabel_dir='./dilated_inklabels', label_dilate_r=0, dot_inklabel_dir='', dot_scroll_whitelist=[], ctx_jitter=20, target_aware_ctx_jitter=True, depth_jitter=1, surface_relative_depth_window=True, surface_window_offset=0, surface_window_offset_by_scroll={20260927134931: -1, 20261012073246: -1, 20261012073250: -1, 20261012065811: -1, 20261012065813: -1, 20261012065817: -1, 20261012065819: -1, 20261012065821: -1, 20261012065823: -1, 20261012065815: -1, 20261012065825: -1, 20261012065827: -1}, holdout_domains=[], explicit_negative_share=0.0, far_negative_share=0.5, far_negative_min_dist=96, far_negative_forced_positive_dist=200, line_prior_scroll_ids=[], line_prior_source='own', line_gap_negative_scroll_ids=[], line_gap_source='own', cue_dropout_prob=0.0, eval_cue_agree=False, extra_inklabels=False, extra_label_share=0.0, extra_hard_negative_scroll_ids=[20261012073246], divdis_target_scroll_ids=[], edge_soft_sigma=8.0, edge_soft_floor=0.55, norm_mode='surface_anchor', zarr_suffix={'20240304141531': '.matched', '20240304144031': '.matched', '20231210121321': '.matched', '20230301213755': '.matched', '20231205222200': '.matched', '20230301213423': '.matched', '20231201215900': '.matched', '20230205142449': '.matched'}, native_noise='', native_noise_scale=1.0, native_noise_ids=[20240304141531, 20240304144031, 20231210121321, 20230301213755, 20231205222200, 20230301213423, 20231201215900, 20230205142449], label_shift_frac=0.0, depth_cue_dirs={}, multitile_train_step=16, multitile_pos_only=True, multitile_ring_gate=True, ring_from_inklabel_dir=True, character_balanced_sampling=True, character_balance_scrolls=True, character_min_pixels=8, max_samples_per_epoch=6667, cue_dir='./cue_asf_morph', blank_scroll_samples_per_epoch=None)
+dl: DataloaderConfig(batch_size=32, num_workers=8, prefetch_factor=2, data_aug=True, rotation_prob=0.6, arbitrary_rotation_prob=0.0, arbitrary_rotation_max_deg=180.0, flip_prob=0.6, noise_prob=0.0, brightness_prob=0.0, contrast_prob=0.0, brightness_delta=0.15, brightness_low=-1.0, contrast_delta=0.15, noise_std_min=0.001, noise_std_max=0.005, cutout_prob=0.2, cutout_max_frac=0.16, cutout_n_patches=3, depth_mask_prob=0.0, depth_mask_mode='zero', fda_prob=0.0, fda_beta=0.05, elastic_prob=0.0, elastic_alpha=15.0, elastic_sigma=5.0, depth_warp_prob=0.0, depth_warp_max=2.0, depth_warp_sigma=24.0, surface_atten_prob=0.0, surface_atten_min=0.1, surface_atten_max=0.35, surface_atten_sigma=2.0, acquisition_blur_prob=0.0, acquisition_blur_min=0.4, acquisition_blur_max=0.9, correlated_noise_prob=0.0, correlated_noise_min=0.003, correlated_noise_max=0.015, correlated_noise_sigma=6.0, phase_filter_prob=0.0, phase_filter_min=0.5, phase_filter_max=20.0, phase_filter_max_gain=4.0, tone_curve_prob=0.0, tone_curve_knots=6, tone_curve_concentration=0.5, resolution_degrade_prob=0.0, resolution_degrade_min=1.5, resolution_degrade_max=4.0, depth_scale_prob=0.0, depth_scale_min=0.6, depth_scale_max=1.6, fine_native_scroll_ids=None, scan_regime_prob=0.0, scan_regime_min=0.5, scan_regime_max=1.0, quality_transfer=None, randconv_prob=0.0, randconv_kernel_sizes=[1, 3, 5, 7], randconv_depth_kernel=1, randconv_layers_max=1, randconv_mix_min=0.0, cutout_protect_center=True, context_replace_prob=0.15, context_replace_keep_size=0, context_replace_margin=14, context_replace_feather=26, context_replace_min_mask_frac=0.8, context_replace_surface_align=True, context_replace_cross_prob=0.0, protected_rotation_prob=0.0, protected_elastic_prob=0.0, protected_elastic_alpha=16.0, protected_elastic_sigma=5.0, protected_warp_margin=4, protected_warp_feather=12)
+tra: TrainingConfig(n_epochs=6, start_epoch=0, aug_start_epoch=0, lr=0.0001, encoder_lr_scale=1.0, encoder_freeze_epochs=0, warmup_epochs=2, weight_decay=0.0, l1_lambda=0.0, grad_norm=0.5, patience=5, lr_decay=0.5, save_int=6, log_dir='/vesuvius/runs_sequence', eval_int=6, eval_int_scrolls=9, test_int=999, probe_int=999, disable_figures=False, loss_type='bce', gce_q=0.9, dice_weight=0.0, label_smooth_pos=0.0, label_smooth_neg=0.0, tta_consistency=False, tta_consistency_lambda=0.3, tta_consistency_mode='flips', tta_consistency_prob=1.0, tile_pos_weight=1.0, tile_pos_weight_auto=False, dann=False, dann_lambda=0.0, dann_n_domains=1, dann_grl_anneal=False, spill_reduction=False, spill_lambda=0.0, spill_depth_threshold=0.35, spill_active_depth_tau=0.08, spill_max_active_depth_frac=0.35, spill_min_depth_var=0.8, spill_prob=False, spill_entropy=False, spill_entropy_lambda=0.3, spill_max_depth_entropy=2.1, new_surface_lambda=0.2, new_surface_smooth_lambda=0.02, surface_target_sigma=0.75, seed=41, deterministic=False, epoch_cooldown_secs=0, val_cooldown_secs=0, eval_cooldown_secs=0, fig_chunk_cooldown_ms=0, save_vis=False, fast_eval_figure=False, test_on_final=False, supcon=False, supcon_lambda=0.1, supcon_temp=0.07, supcon_proj_dim=128, supcon_hidden_dim=256, supcon_curriculum=True, supcon_lambda_start=0.05, supcon_lambda_end=0.5, supcon_curriculum_epochs=8, supcon_cross_frag=False, supcon_ignore_same_domain_same_class=False, per_scroll_metrics=True, prototype_align=False, prototype_align_lambda=0.1, prototype_margin=0.5, coral_align=False, coral_align_lambda=0.1, coral_mean_weight=1.0, cdan=False, cdan_lambda=0.1, mldg=False, mldg_holdout_domain=-1, mldg_random_holdout=False, mldg_inner_lr=0.0005, mldg_beta=1.0, sagnet_lambda=0.1, mae_reconstruction=False, mae_reconstruction_lambda=0.1, mae_reconstruction_start_epoch=4, mae_reconstruction_mask_frac=0.5, mae_reconstruction_patch=4, entropy_min_lambda=0.0, entropy_min_batch_size=8, divdis_mi_lambda=1.0, divdis_reg_lambda=1.0, divdis_target_prior=0.15, divdis_batch_size=32, divdis_num_workers=3, divdis_select_domains=[], character_macro_metrics=True, character_score_threshold=0.5, character_calibrate_threshold=True, character_threshold_min=0.1, character_threshold_max=0.9, character_threshold_steps=33, character_recall_target=0.5, character_max_ring_fpr=0.1, character_checkpoint_metric='character_ap_macro', sanity_guard_epoch=0, sanity_min_character_ap=0.0, sanity_min_specificity=0.0, context_consistency=False, context_consistency_prob=0.25, context_consistency_lambda=0.1, depth_view_consistency=False, depth_view_consistency_prob=0.5, depth_view_consistency_lambda=0.2, depth_view_consistency_offset=2, depth_view_mil=False, depth_view_mil_negative='mean', depth_view_consistency_all_cells=False, line_pu_lambda=0.0, line_pu_prior=0.2, line_llp_lambda=0.0, line_llp_prior=0.2, halo_penalty_lambda=0.0, halo_radius=4, depth_peak_lambda=0.0, negative_forget_rate=0.0, negative_forget_ramp_epochs=2, slice_mask_prob=0.0, slice_mask_width=2, character_bag_ranking=True, character_bag_margin=1.0, character_bag_topk_frac=0.25, character_bag_lambda=0.6, character_groupdro=False, character_groupdro_eta=0.05, character_groupdro_max_ratio=3.0, physical_domain_groupdro=False, physical_domain_groupdro_eta=0.05, physical_domain_groupdro_max_ratio=3.0, physical_patch_groupdro=True, physical_patch_groupdro_eta=0.05, physical_patch_groupdro_max_ratio=3.0, domain_vrex=False, domain_vrex_lambda=1.0, domain_vrex_warmup_epochs=2, domain_cvar=False, domain_cvar_alpha=0.25, pcgrad=False, pcgrad_lite=False, pcgrad_lite_max_domains=4, pcgrad_lite_scope='head', pcgrad_groups=0, pcgrad_gram=False, pcgrad_gram_interval=1, pcgrad_gram_ema=0.0, and_mask=True, and_mask_groups=4, and_mask_threshold=0.5, and_mask_unit='patch', fish=False, fish_meta_step=0.5, spectral_decoupling_lambda=0.0, rsc_prob=0.33, rsc_drop_frac=0.33, fishr_lambda=0.0, fishr_warmup_epochs=1, private_head_shared_weight=0.5, private_head_l2=0.01, cross_scroll_rank_lambda=0.0, cross_scroll_rank_pairs=4096, pu_lambda=3.0, pu_prior=0.05, pu_beta=0.0, pu_gamma=1.0, pu_rank_lambda=0.0, pu_rank_pairs=1024, target_consistency_lambda=0.0, support_drop='', support_min_fraction=0.25, mid_depth_entropy_lambda=0.0, topk_positive_fraction=0.0, stroke_floor_lambda=0.0, stroke_floor_fraction=0.3, stroke_floor_margin=2.0, stroke_floor_domain='pherc0846a', character_forgetting=False, character_forgetting_path='', character_forgetting_max_weight=4.0, character_forgetting_static=False, model_ema=False, model_ema_decay=0.995, model_ema_start_epoch=0, mae_anchor_lambda=0.0, domain_gradient_mode='', domain_gradient_threshold=0.0, domain_gradient_strength=4.0, domain_gradient_ema=0.9, domain_gradient_blend=1.0, character_cvar=False, character_cvar_alpha=0.25, clam_instance=False, clam_instance_k=4, clam_instance_lambda=0.1, sam_rho=0.0, elr=False, elr_start_epoch=5, elr_beta=0.7, elr_lambda=0.1, depth_shift_aux=False, depth_shift_aux_lambda=0.1, depth_shift_aux_classes=3, text_region_lambda=0.5, cue_head_prefixes=('gated_cue_stem.branches.3.',), cue_head_lr_scale=5.0)
+model: ModelConfig(arch='nnunet3d_lcndz', compile_model=False, require_architecture_init=True, conv1_drop=0.2, conv2_drop=0.2, head_drop=0.3, attn_mil=False, attn_entropy_weight=0.03, feature_attn_mil=False, feature_depth_fusion=False, minimum_support_k=0, minimum_support_kernel=3, weldon_k=0, weldon_top_k=0, weldon_bottom_k=0, weldon_top_weight=0.5, weldon_multi_k=False, weldon_top_k2=0, weldon_bottom_k2=0, weldon_multi_mix=0.5, weldon_depth_support_k=0, fiber_coordinate_branch=True, surface_relief_input=False, input_denoise_sigma=0.0, input_denoiser='', input_prefilter='', input_prefilter_mix=1.0, input_cue='pre_clahe', input_upsampler='', input_generator='', input_tile_norm='', private_domain_heads=False, private_head_detach_shared=False, divdis_heads=1, early_2d_unet=True, early_2d_channels_mult=1.0, mid_2d_unet=False, mid_2d_channels_mult=1.0, residual_2d_unet=False, two_d_block_depth=2, two_d_bottleneck_channels=0, two_d_extra_levels=0, two_d_extra_channels=(), factorized_2plus1d=False, residual_unet=False, gated_stems=True, raw_only_stem=False, cue_dropout=0.0, explicit_depth_channels=False, overlapping_depth_windows=False, overlapping_depth_window_size=4, overlapping_depth_window_stride=2, mid_depth_entropy_floor=0.0, mid_depth_max_mode='amax', mid_depth_topk_frac=0.5, mt_lse_r_max=10.0, planar_early_convs=False, text_region_gate=True, multi_depth_collapse=False, two_d_strided_down=False, depth_antialias=False, sparse_deep_supervision=False, sparse_deep_supervision_dec2_weight=0.3, sparse_deep_supervision_dec3_weight=0.1, depth_attention_2d_head=False, divided_attention=False, divided_attention_spatial=False, divided_attention_heads=4, divided_attention_window=8, mednext_adapters=False, mednext_kernel=5, mednext_expansion=2, mixstyle=False, mixstyle_prob=0.8, mixstyle_alpha=0.1, sagnet=False, dual_scale=True, dual_scale_local_size=64, dual_scale_mix=0.5, dual_scale_deep=False, dual_scale_local_only=False, dual_scale_outer_size=0, dual_scale_outer_mix=0.0, dual_scale_adaptive_gate=False, dual_scale_gate_max=1.0, scan_film=False, scan_film_bands=8, scan_film_hidden=32, depth_profile_expert=False, depth_profile_mix=0.5, depth_profile_hidden=16, depth_profile_pool=5, expert_dropout=0.0, style_film=False, style_film_hidden=64, mae_reconstruction_head=False, learned_surface=False, new_learned_surface=False, better_surface=False, surface_teacher_input=True, surface_canonicalize=False, surface_canonical_depth=24, surface_guided_mil=False, surface_guided_mix=0.5, surface_band_sigma=1.5, use_ibn=False, norm_mode='ibn_full', use_prototype=False, prototype_ema=0.99, skip_drop=0.2, use_depth_profile=False, no_dz=False, channels_mult=1.0, allow_depth4=False, multitile=True, multitile_subtile=16, multitile_grid=4)
+hm: HardMiningConfig(enabled=False, hn_cutoff=0.8, hp_cutoff=0.45, hm_frac=0.1, dir='./hard_negs')
+device: cuda
+model_dir: /vesuvius/models/runs_sequence/seq_20261012073246
+exp_name: seq_20261012073246
+run_name: seq_20261012073246
+init_weights: models/runs_iter2/init_mae192_cue4.pth
+save_final: /vesuvius/models/runs_sequence/seq_20261012073246/final.pth
+---------------------
+Creating datasets...
+[multi-scroll] physical groups={'pherc0846a': [20261012073246]} weights=[1]
+[dataset-cache] scroll 20261012073246: reusing prepared RAM assets
+[selective-cache] scroll 20261012073246: prepared manifest already bound
+Data setup done in 0.10s
+Creating model and loss... l1 lambda 0.0... Model parameters (nnunet3d_lcndz): 7,554,654
+/usr/local/lib/python3.10/dist-packages/torch/_utils.py:831: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+[init-weights] loaded 193/193 tensors from models/runs_iter2/init_mae192_cue4.pth (shape-skipped=0 missing=11 unexpected=0)
+[optimizer] task: 4,037,741 params lr=1.00e-04, encoder: 3,516,672 params lr=1.00e-04, cue_head: 241 params lr=5.00e-04, frozen: 0 params
+ done in 0.51s
+Initializing Tensorboard...
+[test] test_int=999 > n_epochs=6 and test_on_final=False -> skipping test-frag load
+TensorBoard logs will be saved to: /vesuvius/runs_sequence/seq_20261012073246
+To view, run: tensorboard --logdir=/vesuvius/runs_sequence
+[split] scroll 20260927134931: manual mask=<whole-patch validation: no train region> train_pixels=0.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[vis-preload] scroll 20260927134931: loading full volume into RAM
+[vis-preload] scroll 20260927134931: ready 0.58 GiB
+[split] scroll 20261012065813: manual mask=<whole-patch validation: no train region> train_pixels=0.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[vis-preload] scroll 20261012065813: loading full volume into RAM
+[vis-preload] scroll 20261012065813: ready 0.41 GiB
+[split] scroll 20261012065817: manual mask=<whole-patch validation: no train region> train_pixels=0.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[vis-preload] scroll 20261012065817: loading full volume into RAM
+[vis-preload] scroll 20261012065817: ready 0.56 GiB
+[split] scroll 20261012065819: manual mask=<whole-patch validation: no train region> train_pixels=0.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[vis-preload] scroll 20261012065819: loading full volume into RAM
+[vis-preload] scroll 20261012065819: ready 0.52 GiB
+[split] scroll 20261012065821: manual mask=<whole-patch validation: no train region> train_pixels=0.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[vis-preload] scroll 20261012065821: loading full volume into RAM
+[vis-preload] scroll 20261012065821: ready 0.50 GiB
+[split] scroll 20261012065823: manual mask=<whole-patch validation: no train region> train_pixels=0.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[vis-preload] scroll 20261012065823: loading full volume into RAM
+[vis-preload] scroll 20261012065823: ready 0.49 GiB
+[split] scroll 20261012065815: manual mask=<whole-patch validation: no train region> train_pixels=0.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[vis-preload] scroll 20261012065815: loading full volume into RAM
+[vis-preload] scroll 20261012065815: ready 0.55 GiB
+[split] scroll 20261012065825: manual mask=<whole-patch validation: no train region> train_pixels=0.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[vis-preload] scroll 20261012065825: loading full volume into RAM
+[vis-preload] scroll 20261012065825: ready 0.47 GiB
+[split] scroll 20261012065827: manual mask=<whole-patch validation: no train region> train_pixels=0.0% explicit_negative_pixels=0 explicit_positive_pixels=0
+[vis-preload] scroll 20261012065827: loading full volume into RAM
+[vis-preload] scroll 20261012065827: ready 0.45 GiB
+[config] saved run config -> /vesuvius/runs_sequence/seq_20261012073246/config.json
+[config] saved run config -> /vesuvius/models/runs_sequence/seq_20261012073246/config.json
+
+--- Epoch 1/6 ---
+[mae-preserve] encoder enabled: lr=5.000e-05
+
+Training:   0%|          | 0/208 [00:00<?, ?it/s]
+Training:   4%|▍         | 9/208 [00:05<01:54,  1.74it/s]
+Training:  15%|█▍        | 31/208 [00:10<00:54,  3.25it/s]
+Training:  25%|██▌       | 53/208 [00:15<00:41,  3.74it/s]
+Training:  36%|███▌      | 75/208 [00:20<00:33,  3.97it/s]
+Training:  47%|████▋     | 97/208 [00:25<00:27,  4.10it/s]
+Training:  57%|█████▋    | 119/208 [00:30<00:21,  4.17it/s]
+Training:  68%|██████▊   | 141/208 [00:35<00:15,  4.22it/s]
+Training:  78%|███████▊  | 163/208 [00:40<00:10,  4.25it/s]
+Training:  89%|████████▉ | 185/208 [00:45<00:05,  4.26it/s]
+Training: 100%|█████████▉| 207/208 [00:51<00:00,  4.28it/s]
+Training: 100%|█████████▉| 207/208 [00:51<00:00,  4.06it/s]
+
+Validating: 0it [00:00, ?it/s]
+Validating: 0it [00:00, ?it/s]
+New best character model saved! Val character_ap_macro: 0.0000
+New best loss model saved! Val Loss: 0.0000
+[METRICS] epoch=1 train_loss=4.3203 val_loss=0.0000 train_f1=0.3889 val_character_success=0.0000
+Logging metrics for epoch: 1
+/usr/local/lib/python3.10/dist-packages/numpy/lib/histograms.py:885: RuntimeWarning: invalid value encountered in divide
+  return n/db/n.sum(), bin_edges
+Logging hyperparameters and model graph
+
+--- Epoch 2/6 ---
+
+Training:   0%|          | 0/208 [00:00<?, ?it/s]
+Training:  10%|▉         | 20/208 [00:05<00:47,  3.98it/s]
+Training:  20%|██        | 42/208 [00:10<00:39,  4.17it/s]
+Training:  31%|███       | 64/208 [00:15<00:34,  4.23it/s]
+Training:  41%|████▏     | 86/208 [00:20<00:28,  4.26it/s]
+Training:  52%|█████▏    | 108/208 [00:25<00:23,  4.27it/s]
+Training:  62%|██████▎   | 130/208 [00:30<00:18,  4.28it/s]
+Training:  73%|███████▎  | 152/208 [00:35<00:13,  4.28it/s]
+Training:  84%|████████▎ | 174/208 [00:40<00:07,  4.28it/s]
+Training:  94%|█████████▍| 196/208 [00:46<00:02,  4.28it/s]
+Training: 100%|█████████▉| 207/208 [00:48<00:00,  4.26it/s]
+
+Validating: 0it [00:00, ?it/s]
+Validating: 0it [00:00, ?it/s]
+[METRICS] epoch=2 train_loss=3.0365 val_loss=0.0000 train_f1=0.3821 val_character_success=0.0000
+Logging metrics for epoch: 2
+/usr/local/lib/python3.10/dist-packages/numpy/lib/histograms.py:885: RuntimeWarning: invalid value encountered in divide
+  return n/db/n.sum(), bin_edges
+
+--- Epoch 3/6 ---
+
+Training:   0%|          | 0/208 [00:00<?, ?it/s]
+Training:  10%|█         | 21/208 [00:05<00:46,  4.03it/s]
+Training:  21%|██        | 43/208 [00:10<00:39,  4.18it/s]
+Training:  31%|███▏      | 65/208 [00:15<00:33,  4.22it/s]
+Training:  42%|████▏     | 87/208 [00:20<00:28,  4.24it/s]
+Training:  52%|█████▏    | 109/208 [00:25<00:23,  4.26it/s]
+Training:  63%|██████▎   | 131/208 [00:30<00:18,  4.27it/s]
+Training:  74%|███████▎  | 153/208 [00:36<00:12,  4.27it/s]
+Training:  84%|████████▍ | 175/208 [00:41<00:07,  4.27it/s]
+Training:  95%|█████████▍| 197/208 [00:46<00:02,  4.28it/s]
+Training: 100%|█████████▉| 207/208 [00:48<00:00,  4.25it/s]
+
+Validating: 0it [00:00, ?it/s]
+Validating: 0it [00:00, ?it/s]
+[METRICS] epoch=3 train_loss=2.4163 val_loss=0.0000 train_f1=0.4436 val_character_success=0.0000
+Logging metrics for epoch: 3
+/usr/local/lib/python3.10/dist-packages/numpy/lib/histograms.py:885: RuntimeWarning: invalid value encountered in divide
+  return n/db/n.sum(), bin_edges
+
+--- Epoch 4/6 ---
+
+Training:   0%|          | 0/208 [00:00<?, ?it/s]
+Training:  10%|▉         | 20/208 [00:05<00:47,  3.94it/s]
+Training:  20%|██        | 42/208 [00:10<00:40,  4.15it/s]
+Training:  31%|███       | 64/208 [00:15<00:34,  4.21it/s]
+Training:  41%|████▏     | 86/208 [00:20<00:28,  4.24it/s]
+Training:  52%|█████▏    | 108/208 [00:25<00:23,  4.26it/s]
+Training:  62%|██████▎   | 130/208 [00:30<00:18,  4.26it/s]
+Training:  73%|███████▎  | 152/208 [00:35<00:13,  4.27it/s]
+Training:  84%|████████▎ | 174/208 [00:41<00:07,  4.27it/s]
+Training:  94%|█████████▍| 196/208 [00:46<00:02,  4.27it/s]
+Training: 100%|█████████▉| 207/208 [00:48<00:00,  4.24it/s]
+
+Validating: 0it [00:00, ?it/s]
+Validating: 0it [00:00, ?it/s]
+[METRICS] epoch=4 train_loss=2.1558 val_loss=0.0000 train_f1=0.5316 val_character_success=0.0000
+Logging metrics for epoch: 4
+/usr/local/lib/python3.10/dist-packages/numpy/lib/histograms.py:885: RuntimeWarning: invalid value encountered in divide
+  return n/db/n.sum(), bin_edges
+
+--- Epoch 5/6 ---
+
+Training:   0%|          | 0/208 [00:00<?, ?it/s]
+Training:  10%|█         | 21/208 [00:05<00:45,  4.07it/s]
+Training:  21%|██        | 43/208 [00:10<00:39,  4.18it/s]
+Training:  31%|███▏      | 65/208 [00:15<00:33,  4.22it/s]
+Training:  42%|████▏     | 87/208 [00:20<00:28,  4.23it/s]
+Training:  52%|█████▏    | 109/208 [00:25<00:23,  4.24it/s]
+Training:  63%|██████▎   | 131/208 [00:30<00:18,  4.25it/s]
+Training:  74%|███████▎  | 153/208 [00:36<00:12,  4.25it/s]
+Training:  84%|████████▍ | 175/208 [00:41<00:07,  4.25it/s]
+Training:  95%|█████████▍| 197/208 [00:46<00:02,  4.25it/s]
+Training: 100%|█████████▉| 207/208 [00:48<00:00,  4.24it/s]
+
+Validating: 0it [00:00, ?it/s]
+Validating: 0it [00:00, ?it/s]
+[METRICS] epoch=5 train_loss=1.9364 val_loss=0.0000 train_f1=0.6088 val_character_success=0.0000
+Logging metrics for epoch: 5
+/usr/local/lib/python3.10/dist-packages/numpy/lib/histograms.py:885: RuntimeWarning: invalid value encountered in divide
+  return n/db/n.sum(), bin_edges
+
+--- Epoch 6/6 ---
+
+Training:   0%|          | 0/208 [00:00<?, ?it/s]
+Training:  10%|▉         | 20/208 [00:05<00:47,  4.00it/s]
+Training:  20%|██        | 42/208 [00:10<00:39,  4.16it/s]
+Training:  31%|███       | 64/208 [00:15<00:34,  4.20it/s]
+Training:  41%|████▏     | 86/208 [00:20<00:28,  4.22it/s]
+Training:  52%|█████▏    | 108/208 [00:25<00:23,  4.24it/s]
+Training:  62%|██████▎   | 130/208 [00:30<00:18,  4.24it/s]
+Training:  73%|███████▎  | 152/208 [00:35<00:13,  4.25it/s]
+Training:  84%|████████▎ | 174/208 [00:41<00:07,  4.27it/s]
+Training:  94%|█████████▍| 196/208 [00:46<00:02,  4.27it/s]
+Training: 100%|█████████▉| 207/208 [00:48<00:00,  4.24it/s]
+
+Validating: 0it [00:00, ?it/s]
+Validating: 0it [00:00, ?it/s]
+[METRICS] epoch=6 train_loss=1.8282 val_loss=0.0000 train_f1=0.6390 val_character_success=0.0000
+Logging metrics for epoch: 6
+/usr/local/lib/python3.10/dist-packages/numpy/lib/histograms.py:885: RuntimeWarning: invalid value encountered in divide
+  return n/db/n.sum(), bin_edges
+Starting evaluation figure generation...
+[predict] reading 8675 tiles in 93 row-strips (eval)
+
+Read eval:   0%|          | 0/93 [00:00<?, ?it/s]
+Read eval:   4%|▍         | 4/93 [00:00<00:03, 26.40it/s]
+Read eval:   9%|▊         | 8/93 [00:00<00:03, 27.14it/s]
+Read eval:  12%|█▏        | 11/93 [00:00<00:03, 25.32it/s]
+Read eval:  15%|█▌        | 14/93 [00:00<00:03, 23.47it/s]
+Read eval:  18%|█▊        | 17/93 [00:00<00:03, 22.58it/s]
+Read eval:  22%|██▏       | 20/93 [00:00<00:03, 21.96it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:05,  4.61it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.35it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  5.69it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:04,  5.87it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  5.98it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:01<00:03,  6.07it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.12it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.16it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.19it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.20it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.21it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.22it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.22it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.21it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.19it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.16it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.15it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.15it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.16it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.18it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.20it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.19it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.18it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.17it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.14it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.11it/s][A
+
+Predict chunk: 100%|██████████| 28/28 [00:04<00:00,  6.44it/s][A
+
+                                                              [A
+Read eval:  25%|██▍       | 23/93 [00:05<00:36,  1.89it/s]
+Read eval:  29%|██▉       | 27/93 [00:05<00:22,  2.91it/s]
+Read eval:  35%|███▌      | 33/93 [00:05<00:12,  4.97it/s]
+Read eval:  40%|███▉      | 37/93 [00:06<00:08,  6.59it/s]
+
+Predict chunk:   0%|          | 0/27 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/27 [00:00<00:04,  5.37it/s][A
+
+Predict chunk:   7%|▋         | 2/27 [00:00<00:04,  5.81it/s][A
+
+Predict chunk:  11%|█         | 3/27 [00:00<00:04,  5.95it/s][A
+
+Predict chunk:  15%|█▍        | 4/27 [00:00<00:03,  6.04it/s][A
+
+Predict chunk:  19%|█▊        | 5/27 [00:00<00:03,  6.10it/s][A
+
+Predict chunk:  22%|██▏       | 6/27 [00:00<00:03,  6.14it/s][A
+
+Predict chunk:  26%|██▌       | 7/27 [00:01<00:03,  6.18it/s][A
+
+Predict chunk:  30%|██▉       | 8/27 [00:01<00:03,  6.19it/s][A
+
+Predict chunk:  33%|███▎      | 9/27 [00:01<00:02,  6.20it/s][A
+
+Predict chunk:  37%|███▋      | 10/27 [00:01<00:02,  6.19it/s][A
+
+Predict chunk:  41%|████      | 11/27 [00:01<00:02,  6.18it/s][A
+
+Predict chunk:  44%|████▍     | 12/27 [00:01<00:02,  6.15it/s][A
+
+Predict chunk:  48%|████▊     | 13/27 [00:02<00:02,  6.15it/s][A
+
+Predict chunk:  52%|█████▏    | 14/27 [00:02<00:02,  6.15it/s][A
+
+Predict chunk:  56%|█████▌    | 15/27 [00:02<00:01,  6.16it/s][A
+
+Predict chunk:  59%|█████▉    | 16/27 [00:02<00:01,  6.17it/s][A
+
+Predict chunk:  63%|██████▎   | 17/27 [00:02<00:01,  6.19it/s][A
+
+Predict chunk:  67%|██████▋   | 18/27 [00:02<00:01,  6.20it/s][A
+
+Predict chunk:  70%|███████   | 19/27 [00:03<00:01,  6.21it/s][A
+
+Predict chunk:  74%|███████▍  | 20/27 [00:03<00:01,  6.20it/s][A
+
+Predict chunk:  78%|███████▊  | 21/27 [00:03<00:00,  6.19it/s][A
+
+Predict chunk:  81%|████████▏ | 22/27 [00:03<00:00,  6.18it/s][A
+
+Predict chunk:  85%|████████▌ | 23/27 [00:03<00:00,  6.16it/s][A
+
+Predict chunk:  89%|████████▉ | 24/27 [00:03<00:00,  6.15it/s][A
+
+Predict chunk:  93%|█████████▎| 25/27 [00:04<00:00,  6.16it/s][A
+
+Predict chunk:  96%|█████████▋| 26/27 [00:04<00:00,  6.16it/s][A
+
+Predict chunk: 100%|██████████| 27/27 [00:04<00:00,  6.35it/s][A
+
+                                                              [A
+Read eval:  43%|████▎     | 40/93 [00:10<00:25,  2.12it/s]
+Read eval:  46%|████▌     | 43/93 [00:10<00:18,  2.76it/s]
+Read eval:  51%|█████     | 47/93 [00:10<00:11,  3.97it/s]
+Read eval:  55%|█████▍    | 51/93 [00:10<00:07,  5.55it/s]
+Read eval:  58%|█████▊    | 54/93 [00:10<00:05,  6.99it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.67it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.89it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  6.01it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:03,  6.06it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.11it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:03,  6.15it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.18it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.20it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.21it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.21it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.19it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.13it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.13it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.14it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.15it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.17it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.18it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.18it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.18it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.15it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.11it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.11it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.14it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.16it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.16it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.15it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.14it/s][A
+
+                                                              [A
+Read eval:  61%|██████▏   | 57/93 [00:15<00:18,  1.98it/s]
+Read eval:  65%|██████▍   | 60/93 [00:15<00:12,  2.66it/s]
+Read eval:  68%|██████▊   | 63/93 [00:15<00:08,  3.58it/s]
+Read eval:  72%|███████▏  | 67/93 [00:15<00:05,  5.18it/s]
+Read eval:  75%|███████▌  | 70/93 [00:15<00:03,  6.66it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.52it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.87it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  6.00it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:03,  6.07it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.11it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:03,  6.15it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.18it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.19it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.20it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.20it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.20it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.18it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.17it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.15it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.15it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.16it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.17it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.19it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.20it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.21it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.19it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.17it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.16it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.15it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.15it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.16it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.17it/s][A
+
+Predict chunk: 100%|██████████| 28/28 [00:04<00:00,  6.33it/s][A
+
+                                                              [A
+Read eval:  78%|███████▊  | 73/93 [00:20<00:10,  1.87it/s]
+Read eval:  81%|████████  | 75/93 [00:20<00:07,  2.31it/s]
+Read eval:  85%|████████▍ | 79/93 [00:20<00:03,  3.54it/s]
+Read eval:  91%|█████████▏| 85/93 [00:20<00:01,  6.02it/s]
+                                                          
+
+Predict chunk:   0%|          | 0/26 [00:00<?, ?it/s]
+Predict chunk:   4%|▍         | 1/26 [00:00<00:04,  5.80it/s]
+Predict chunk:   8%|▊         | 2/26 [00:00<00:03,  6.05it/s]
+Predict chunk:  12%|█▏        | 3/26 [00:00<00:03,  6.14it/s]
+Predict chunk:  15%|█▌        | 4/26 [00:00<00:03,  6.18it/s]
+Predict chunk:  19%|█▉        | 5/26 [00:00<00:03,  6.19it/s]
+Predict chunk:  23%|██▎       | 6/26 [00:00<00:03,  6.20it/s]
+Predict chunk:  27%|██▋       | 7/26 [00:01<00:03,  6.20it/s]
+Predict chunk:  31%|███       | 8/26 [00:01<00:02,  6.16it/s]
+Predict chunk:  35%|███▍      | 9/26 [00:01<00:02,  6.14it/s]
+Predict chunk:  38%|███▊      | 10/26 [00:01<00:02,  6.14it/s]
+Predict chunk:  42%|████▏     | 11/26 [00:01<00:02,  6.15it/s]
+Predict chunk:  46%|████▌     | 12/26 [00:01<00:02,  6.16it/s]
+Predict chunk:  50%|█████     | 13/26 [00:02<00:02,  6.18it/s]
+Predict chunk:  54%|█████▍    | 14/26 [00:02<00:01,  6.20it/s]
+Predict chunk:  58%|█████▊    | 15/26 [00:02<00:01,  6.20it/s]
+Predict chunk:  62%|██████▏   | 16/26 [00:02<00:01,  6.22it/s]
+Predict chunk:  65%|██████▌   | 17/26 [00:02<00:01,  6.23it/s]
+Predict chunk:  69%|██████▉   | 18/26 [00:02<00:01,  6.23it/s]
+Predict chunk:  73%|███████▎  | 19/26 [00:03<00:01,  6.13it/s]
+Predict chunk:  77%|███████▋  | 20/26 [00:03<00:00,  6.13it/s]
+Predict chunk:  81%|████████  | 21/26 [00:03<00:00,  6.13it/s]
+Predict chunk:  85%|████████▍ | 22/26 [00:03<00:00,  5.99it/s]
+Predict chunk:  88%|████████▊ | 23/26 [00:03<00:00,  5.99it/s]
+Predict chunk:  92%|█████████▏| 24/26 [00:03<00:00,  5.87it/s]
+Predict chunk:  96%|█████████▌| 25/26 [00:04<00:00,  5.87it/s]
+                                                              
+[predict] eval done in  24.8s  predict  22.1s (89.2%)  read/wait   2.7s (10.8%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_sequence/seq_20261012073246/eval_figs/eval_s20260927134931_ep06.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+Starting evaluation figure generation...
+[predict] reading 5335 tiles in 66 row-strips (eval)
+
+Read eval:   0%|          | 0/66 [00:00<?, ?it/s]
+Read eval:  12%|█▏        | 8/66 [00:00<00:00, 76.48it/s]
+Read eval:  24%|██▍       | 16/66 [00:00<00:01, 49.77it/s]
+Read eval:  33%|███▎      | 22/66 [00:00<00:01, 43.62it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.46it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.86it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  6.01it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:04,  5.95it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.03it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:03,  6.10it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.05it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.10it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.13it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.16it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.18it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.11it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.07it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.10it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.13it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:02,  5.98it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  5.91it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  5.84it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  5.88it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  5.73it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  5.77it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:01,  5.85it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  5.71it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:04<00:00,  5.72it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  5.79it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  5.87it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  5.92it/s][A
+
+                                                              [A
+Read eval:  41%|████      | 27/66 [00:05<00:12,  3.15it/s]
+Read eval:  48%|████▊     | 32/66 [00:05<00:07,  4.43it/s]
+Read eval:  55%|█████▍    | 36/66 [00:05<00:05,  5.71it/s]
+Read eval:  64%|██████▎   | 42/66 [00:05<00:02,  8.19it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.66it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.98it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  6.10it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:03,  6.15it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.18it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:03,  6.20it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.05it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.09it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.11it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.15it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.18it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.20it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.12it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.11it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.13it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.04it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.00it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.04it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  5.96it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  5.96it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  5.89it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:01,  5.93it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.01it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.07it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.09it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.00it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  5.98it/s][A
+
+Predict chunk: 100%|██████████| 28/28 [00:04<00:00,  6.47it/s][A
+
+                                                              [A
+Read eval:  71%|███████   | 47/66 [00:10<00:06,  2.73it/s]
+Read eval:  77%|███████▋  | 51/66 [00:10<00:04,  3.57it/s]
+Read eval:  85%|████████▍ | 56/66 [00:10<00:01,  5.03it/s]
+Read eval:  91%|█████████ | 60/66 [00:10<00:00,  6.42it/s]
+
+Predict chunk:   0%|          | 0/27 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/27 [00:00<00:05,  4.89it/s][A
+
+Predict chunk:   7%|▋         | 2/27 [00:00<00:04,  5.40it/s][A
+
+Predict chunk:  11%|█         | 3/27 [00:00<00:04,  5.69it/s][A
+
+Predict chunk:  15%|█▍        | 4/27 [00:00<00:03,  5.85it/s][A
+
+Predict chunk:  19%|█▊        | 5/27 [00:00<00:03,  5.93it/s][A
+
+Predict chunk:  22%|██▏       | 6/27 [00:01<00:03,  6.01it/s][A
+
+Predict chunk:  26%|██▌       | 7/27 [00:01<00:03,  6.06it/s][A
+
+Predict chunk:  30%|██▉       | 8/27 [00:01<00:03,  6.10it/s][A
+
+Predict chunk:  33%|███▎      | 9/27 [00:01<00:02,  6.00it/s][A
+
+Predict chunk:  37%|███▋      | 10/27 [00:01<00:02,  5.98it/s][A
+
+Predict chunk:  41%|████      | 11/27 [00:01<00:02,  5.96it/s][A
+
+Predict chunk:  44%|████▍     | 12/27 [00:02<00:02,  6.01it/s][A
+
+Predict chunk:  48%|████▊     | 13/27 [00:02<00:02,  6.05it/s][A
+
+Predict chunk:  52%|█████▏    | 14/27 [00:02<00:02,  6.09it/s][A
+
+Predict chunk:  56%|█████▌    | 15/27 [00:02<00:01,  6.12it/s][A
+
+Predict chunk:  59%|█████▉    | 16/27 [00:02<00:01,  6.14it/s][A
+
+Predict chunk:  63%|██████▎   | 17/27 [00:02<00:01,  6.17it/s][A
+
+Predict chunk:  67%|██████▋   | 18/27 [00:02<00:01,  6.19it/s][A
+
+Predict chunk:  70%|███████   | 19/27 [00:03<00:01,  6.19it/s][A
+
+Predict chunk:  74%|███████▍  | 20/27 [00:03<00:01,  6.21it/s][A
+
+Predict chunk:  78%|███████▊  | 21/27 [00:03<00:00,  6.22it/s][A
+
+Predict chunk:  81%|████████▏ | 22/27 [00:03<00:00,  6.23it/s][A
+
+Predict chunk:  85%|████████▌ | 23/27 [00:03<00:00,  6.23it/s][A
+
+Predict chunk:  89%|████████▉ | 24/27 [00:03<00:00,  6.23it/s][A
+
+Predict chunk:  93%|█████████▎| 25/27 [00:04<00:00,  6.24it/s][A
+
+Predict chunk:  96%|█████████▋| 26/27 [00:04<00:00,  6.24it/s][A
+
+Predict chunk: 100%|██████████| 27/27 [00:04<00:00,  6.63it/s][A
+
+                                                              [A
+Read eval: 100%|██████████| 66/66 [00:15<00:00,  2.68it/s]
+                                                          
+
+Predict chunk:   0%|          | 0/2 [00:00<?, ?it/s]
+Predict chunk:  50%|█████     | 1/2 [00:00<00:00,  3.85it/s]
+                                                            
+[predict] eval done in  15.5s  predict  14.0s (90.3%)  read/wait   1.5s ( 9.7%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_sequence/seq_20261012073246/eval_figs/eval_s20261012065813_ep06.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+Starting evaluation figure generation...
+[predict] reading 7538 tiles in 70 row-strips (eval)
+
+Read eval:   0%|          | 0/70 [00:00<?, ?it/s]
+Read eval:   9%|▊         | 6/70 [00:00<00:01, 43.48it/s]
+Read eval:  16%|█▌        | 11/70 [00:00<00:01, 39.35it/s]
+Read eval:  21%|██▏       | 15/70 [00:00<00:01, 34.26it/s]
+Read eval:  27%|██▋       | 19/70 [00:00<00:01, 32.07it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.65it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.95it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  6.05it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:03,  6.11it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.14it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:03,  6.16it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.17it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.19it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.20it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.18it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.17it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.16it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.16it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.17it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.17it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.18it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.20it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.21it/s][A
+
+Predict chunk: 100%|██████████| 28/28 [00:04<00:00,  6.65it/s][A
+
+                                                              [A
+Read eval:  33%|███▎      | 23/70 [00:05<00:19,  2.45it/s]
+Read eval:  37%|███▋      | 26/70 [00:05<00:13,  3.19it/s]
+Read eval:  41%|████▏     | 29/70 [00:05<00:09,  4.22it/s]
+Read eval:  46%|████▌     | 32/70 [00:05<00:06,  5.55it/s]
+Read eval:  50%|█████     | 35/70 [00:05<00:04,  7.19it/s]
+
+Predict chunk:   0%|          | 0/29 [00:00<?, ?it/s][A
+
+Predict chunk:   3%|▎         | 1/29 [00:00<00:05,  5.55it/s][A
+
+Predict chunk:   7%|▋         | 2/29 [00:00<00:04,  5.94it/s][A
+
+Predict chunk:  10%|█         | 3/29 [00:00<00:04,  6.08it/s][A
+
+Predict chunk:  14%|█▍        | 4/29 [00:00<00:04,  6.14it/s][A
+
+Predict chunk:  17%|█▋        | 5/29 [00:00<00:03,  6.18it/s][A
+
+Predict chunk:  21%|██        | 6/29 [00:00<00:03,  6.20it/s][A
+
+Predict chunk:  24%|██▍       | 7/29 [00:01<00:03,  6.22it/s][A
+
+Predict chunk:  28%|██▊       | 8/29 [00:01<00:03,  6.22it/s][A
+
+Predict chunk:  31%|███       | 9/29 [00:01<00:03,  6.24it/s][A
+
+Predict chunk:  34%|███▍      | 10/29 [00:01<00:03,  6.24it/s][A
+
+Predict chunk:  38%|███▊      | 11/29 [00:01<00:02,  6.24it/s][A
+
+Predict chunk:  41%|████▏     | 12/29 [00:01<00:02,  6.25it/s][A
+
+Predict chunk:  45%|████▍     | 13/29 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  48%|████▊     | 14/29 [00:02<00:02,  6.26it/s][A
+
+Predict chunk:  52%|█████▏    | 15/29 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  55%|█████▌    | 16/29 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  59%|█████▊    | 17/29 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  62%|██████▏   | 18/29 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  66%|██████▌   | 19/29 [00:03<00:01,  6.22it/s][A
+
+Predict chunk:  69%|██████▉   | 20/29 [00:03<00:01,  6.18it/s][A
+
+Predict chunk:  72%|███████▏  | 21/29 [00:03<00:01,  6.17it/s][A
+
+Predict chunk:  76%|███████▌  | 22/29 [00:03<00:01,  6.15it/s][A
+
+Predict chunk:  79%|███████▉  | 23/29 [00:03<00:00,  6.16it/s][A
+
+Predict chunk:  83%|████████▎ | 24/29 [00:03<00:00,  6.17it/s][A
+
+Predict chunk:  86%|████████▌ | 25/29 [00:04<00:00,  6.18it/s][A
+
+Predict chunk:  90%|████████▉ | 26/29 [00:04<00:00,  6.19it/s][A
+
+Predict chunk:  93%|█████████▎| 27/29 [00:04<00:00,  6.20it/s][A
+
+Predict chunk:  97%|█████████▋| 28/29 [00:04<00:00,  6.22it/s][A
+
+                                                              [A
+Read eval:  54%|█████▍    | 38/70 [00:10<00:17,  1.82it/s]
+Read eval:  57%|█████▋    | 40/70 [00:10<00:13,  2.25it/s]
+Read eval:  63%|██████▎   | 44/70 [00:10<00:07,  3.48it/s]
+Read eval:  69%|██████▊   | 48/70 [00:10<00:04,  5.12it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:05,  5.40it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.81it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  5.86it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:04,  6.00it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  5.84it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:01<00:03,  5.97it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.05it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.12it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.16it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.18it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.20it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.23it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.13it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.07it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.11it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.01it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.03it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:01,  5.92it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  5.75it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  5.79it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  5.89it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  5.94it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.00it/s][A
+
+Predict chunk: 100%|██████████| 28/28 [00:04<00:00,  6.74it/s][A
+
+                                                              [A
+Read eval:  73%|███████▎  | 51/70 [00:15<00:10,  1.75it/s]
+Read eval:  77%|███████▋  | 54/70 [00:15<00:06,  2.37it/s]
+Read eval:  81%|████████▏ | 57/70 [00:15<00:04,  3.22it/s]
+Read eval:  86%|████████▌ | 60/70 [00:15<00:02,  4.31it/s]
+Read eval:  90%|█████████ | 63/70 [00:15<00:01,  5.75it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.90it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.86it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  5.64it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:04,  5.70it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  5.83it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:01<00:03,  5.93it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.00it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.07it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  5.96it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.02it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.07it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:02<00:02,  6.12it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.16it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.18it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.12it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.02it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.09it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.14it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.17it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.20it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.19it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.18it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.19it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.00it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  5.91it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  5.82it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  5.92it/s][A
+
+                                                              [A
+Read eval:  94%|█████████▍| 66/70 [00:20<00:02,  1.74it/s]
+                                                          
+
+Predict chunk:   0%|          | 0/7 [00:00<?, ?it/s]
+Predict chunk:  14%|█▍        | 1/7 [00:00<00:01,  4.93it/s]
+Predict chunk:  29%|██▊       | 2/7 [00:00<00:00,  5.57it/s]
+Predict chunk:  43%|████▎     | 3/7 [00:00<00:00,  5.79it/s]
+Predict chunk:  57%|█████▋    | 4/7 [00:00<00:00,  5.90it/s]
+Predict chunk:  71%|███████▏  | 5/7 [00:00<00:00,  5.81it/s]
+Predict chunk:  86%|████████▌ | 6/7 [00:01<00:00,  5.94it/s]
+Predict chunk: 100%|██████████| 7/7 [00:01<00:00,  6.16it/s]
+                                                            
+[predict] eval done in  21.5s  predict  19.4s (90.4%)  read/wait   2.1s ( 9.6%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_sequence/seq_20261012073246/eval_figs/eval_s20261012065817_ep06.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+Starting evaluation figure generation...
+[predict] reading 6988 tiles in 66 row-strips (eval)
+
+Read eval:   0%|          | 0/66 [00:00<?, ?it/s]
+Read eval:   5%|▍         | 3/66 [00:00<00:02, 29.57it/s]
+Read eval:  11%|█         | 7/66 [00:00<00:01, 32.32it/s]
+Read eval:  17%|█▋        | 11/66 [00:00<00:01, 34.09it/s]
+Read eval:  23%|██▎       | 15/66 [00:00<00:01, 29.56it/s]
+Read eval:  29%|██▉       | 19/66 [00:00<00:01, 30.04it/s]
+
+Predict chunk:   0%|          | 0/27 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/27 [00:00<00:04,  5.65it/s][A
+
+Predict chunk:   7%|▋         | 2/27 [00:00<00:04,  5.95it/s][A
+
+Predict chunk:  11%|█         | 3/27 [00:00<00:03,  6.07it/s][A
+
+Predict chunk:  15%|█▍        | 4/27 [00:00<00:03,  6.12it/s][A
+
+Predict chunk:  19%|█▊        | 5/27 [00:00<00:03,  6.15it/s][A
+
+Predict chunk:  22%|██▏       | 6/27 [00:00<00:03,  6.17it/s][A
+
+Predict chunk:  26%|██▌       | 7/27 [00:01<00:03,  6.19it/s][A
+
+Predict chunk:  30%|██▉       | 8/27 [00:01<00:03,  6.21it/s][A
+
+Predict chunk:  33%|███▎      | 9/27 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  37%|███▋      | 10/27 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  41%|████      | 11/27 [00:01<00:02,  6.24it/s][A
+
+Predict chunk:  44%|████▍     | 12/27 [00:01<00:02,  6.25it/s][A
+
+Predict chunk:  48%|████▊     | 13/27 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  52%|█████▏    | 14/27 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  56%|█████▌    | 15/27 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  59%|█████▉    | 16/27 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  63%|██████▎   | 17/27 [00:02<00:01,  6.26it/s][A
+
+Predict chunk:  67%|██████▋   | 18/27 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  70%|███████   | 19/27 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  74%|███████▍  | 20/27 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  78%|███████▊  | 21/27 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  81%|████████▏ | 22/27 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  85%|████████▌ | 23/27 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  89%|████████▉ | 24/27 [00:03<00:00,  6.26it/s][A
+
+Predict chunk:  93%|█████████▎| 25/27 [00:04<00:00,  6.25it/s][A
+
+Predict chunk:  96%|█████████▋| 26/27 [00:04<00:00,  6.25it/s][A
+
+Predict chunk: 100%|██████████| 27/27 [00:04<00:00,  6.25it/s][A
+
+                                                              [A
+Read eval:  35%|███▍      | 23/66 [00:05<00:17,  2.50it/s]
+Read eval:  39%|███▉      | 26/66 [00:05<00:12,  3.27it/s]
+Read eval:  44%|████▍     | 29/66 [00:05<00:08,  4.34it/s]
+Read eval:  48%|████▊     | 32/66 [00:05<00:05,  5.72it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.66it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.97it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  6.07it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:03,  6.11it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.11it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:03,  6.14it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.14it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.16it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.18it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.19it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.20it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.22it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.23it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.26it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.24it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.24it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.25it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.25it/s][A
+
+                                                              [A
+Read eval:  53%|█████▎    | 35/66 [00:09<00:17,  1.78it/s]
+Read eval:  59%|█████▉    | 39/66 [00:10<00:10,  2.69it/s]
+Read eval:  64%|██████▎   | 42/66 [00:10<00:06,  3.58it/s]
+Read eval:  68%|██████▊   | 45/66 [00:10<00:04,  4.73it/s]
+
+Predict chunk:   0%|          | 0/27 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/27 [00:00<00:04,  5.61it/s][A
+
+Predict chunk:   7%|▋         | 2/27 [00:00<00:04,  5.84it/s][A
+
+Predict chunk:  11%|█         | 3/27 [00:00<00:03,  6.03it/s][A
+
+Predict chunk:  15%|█▍        | 4/27 [00:00<00:03,  6.09it/s][A
+
+Predict chunk:  19%|█▊        | 5/27 [00:00<00:03,  6.09it/s][A
+
+Predict chunk:  22%|██▏       | 6/27 [00:00<00:03,  6.06it/s][A
+
+Predict chunk:  26%|██▌       | 7/27 [00:01<00:03,  6.05it/s][A
+
+Predict chunk:  30%|██▉       | 8/27 [00:01<00:03,  6.08it/s][A
+
+Predict chunk:  33%|███▎      | 9/27 [00:01<00:02,  6.09it/s][A
+
+Predict chunk:  37%|███▋      | 10/27 [00:01<00:02,  6.11it/s][A
+
+Predict chunk:  41%|████      | 11/27 [00:01<00:02,  6.13it/s][A
+
+Predict chunk:  44%|████▍     | 12/27 [00:01<00:02,  6.14it/s][A
+
+Predict chunk:  48%|████▊     | 13/27 [00:02<00:02,  6.02it/s][A
+
+Predict chunk:  52%|█████▏    | 14/27 [00:02<00:02,  6.06it/s][A
+
+Predict chunk:  56%|█████▌    | 15/27 [00:02<00:01,  6.09it/s][A
+
+Predict chunk:  59%|█████▉    | 16/27 [00:02<00:01,  5.94it/s][A
+
+Predict chunk:  63%|██████▎   | 17/27 [00:02<00:01,  6.00it/s][A
+
+Predict chunk:  67%|██████▋   | 18/27 [00:02<00:01,  6.05it/s][A
+
+Predict chunk:  70%|███████   | 19/27 [00:03<00:01,  6.01it/s][A
+
+Predict chunk:  74%|███████▍  | 20/27 [00:03<00:01,  6.04it/s][A
+
+Predict chunk:  78%|███████▊  | 21/27 [00:03<00:00,  6.07it/s][A
+
+Predict chunk:  81%|████████▏ | 22/27 [00:03<00:00,  6.05it/s][A
+
+Predict chunk:  85%|████████▌ | 23/27 [00:03<00:00,  5.97it/s][A
+
+Predict chunk:  89%|████████▉ | 24/27 [00:03<00:00,  5.90it/s][A
+
+Predict chunk:  93%|█████████▎| 25/27 [00:04<00:00,  5.94it/s][A
+
+Predict chunk:  96%|█████████▋| 26/27 [00:04<00:00,  5.85it/s][A
+
+Predict chunk: 100%|██████████| 27/27 [00:04<00:00,  6.41it/s][A
+
+                                                              [A
+Read eval:  74%|███████▍  | 49/66 [00:14<00:09,  1.86it/s]
+Read eval:  80%|████████  | 53/66 [00:14<00:04,  2.69it/s]
+Read eval:  86%|████████▋ | 57/66 [00:15<00:02,  3.85it/s]
+Read eval:  92%|█████████▏| 61/66 [00:15<00:00,  5.37it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:05,  4.88it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.56it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  5.83it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:04,  5.97it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.05it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:01<00:03,  6.11it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.15it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.17it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.17it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.05it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.07it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.12it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.16it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.16it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.01it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:02,  5.89it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  5.85it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:03<00:01,  5.90it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  5.98it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.05it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.10it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.03it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.05it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:04<00:00,  5.92it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  5.85it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  5.90it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  5.98it/s][A
+
+                                                              [A
+Read eval:  98%|█████████▊| 65/66 [00:19<00:00,  2.03it/s]
+                                                          
+
+Predict chunk:   0%|          | 0/1 [00:00<?, ?it/s]
+Predict chunk: 100%|██████████| 1/1 [00:00<00:00,  4.65it/s]
+                                                            
+[predict] eval done in  19.9s  predict  18.0s (90.5%)  read/wait   1.9s ( 9.5%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_sequence/seq_20261012073246/eval_figs/eval_s20261012065819_ep06.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+Starting evaluation figure generation...
+[predict] reading 6693 tiles in 65 row-strips (eval)
+
+Read eval:   0%|          | 0/65 [00:00<?, ?it/s]
+Read eval:   6%|▌         | 4/65 [00:00<00:01, 35.93it/s]
+Read eval:  12%|█▏        | 8/65 [00:00<00:01, 33.44it/s]
+Read eval:  18%|█▊        | 12/65 [00:00<00:01, 35.85it/s]
+Read eval:  25%|██▍       | 16/65 [00:00<00:01, 35.25it/s]
+Read eval:  31%|███       | 20/65 [00:00<00:01, 27.10it/s]
+
+Predict chunk:   0%|          | 0/29 [00:00<?, ?it/s][A
+
+Predict chunk:   3%|▎         | 1/29 [00:00<00:04,  5.73it/s][A
+
+Predict chunk:   7%|▋         | 2/29 [00:00<00:04,  6.05it/s][A
+
+Predict chunk:  10%|█         | 3/29 [00:00<00:04,  6.14it/s][A
+
+Predict chunk:  14%|█▍        | 4/29 [00:00<00:04,  6.17it/s][A
+
+Predict chunk:  17%|█▋        | 5/29 [00:00<00:03,  6.20it/s][A
+
+Predict chunk:  21%|██        | 6/29 [00:00<00:03,  6.21it/s][A
+
+Predict chunk:  24%|██▍       | 7/29 [00:01<00:03,  6.22it/s][A
+
+Predict chunk:  28%|██▊       | 8/29 [00:01<00:03,  6.23it/s][A
+
+Predict chunk:  31%|███       | 9/29 [00:01<00:03,  6.24it/s][A
+
+Predict chunk:  34%|███▍      | 10/29 [00:01<00:03,  6.24it/s][A
+
+Predict chunk:  38%|███▊      | 11/29 [00:01<00:02,  6.24it/s][A
+
+Predict chunk:  41%|████▏     | 12/29 [00:01<00:02,  6.25it/s][A
+
+Predict chunk:  45%|████▍     | 13/29 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  48%|████▊     | 14/29 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  52%|█████▏    | 15/29 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  55%|█████▌    | 16/29 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  59%|█████▊    | 17/29 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  62%|██████▏   | 18/29 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  66%|██████▌   | 19/29 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  69%|██████▉   | 20/29 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  72%|███████▏  | 21/29 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  76%|███████▌  | 22/29 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  79%|███████▉  | 23/29 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  83%|████████▎ | 24/29 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  86%|████████▌ | 25/29 [00:04<00:00,  6.25it/s][A
+
+Predict chunk:  90%|████████▉ | 26/29 [00:04<00:00,  6.25it/s][A
+
+Predict chunk:  93%|█████████▎| 27/29 [00:04<00:00,  6.25it/s][A
+
+Predict chunk:  97%|█████████▋| 28/29 [00:04<00:00,  6.25it/s][A
+
+                                                              [A
+Read eval:  35%|███▌      | 23/65 [00:05<00:18,  2.22it/s]
+Read eval:  38%|███▊      | 25/65 [00:05<00:14,  2.72it/s]
+Read eval:  43%|████▎     | 28/65 [00:05<00:09,  3.79it/s]
+Read eval:  48%|████▊     | 31/65 [00:05<00:06,  5.16it/s]
+Read eval:  52%|█████▏    | 34/65 [00:05<00:04,  6.88it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.47it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.86it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  5.99it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:03,  6.07it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.11it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:03,  6.15it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.18it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.20it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.22it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.24it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.24it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.23it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.21it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.20it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.19it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.16it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.16it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.16it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.17it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.19it/s][A
+
+                                                              [A
+Read eval:  57%|█████▋    | 37/65 [00:10<00:15,  1.80it/s]
+Read eval:  62%|██████▏   | 40/65 [00:10<00:09,  2.51it/s]
+Read eval:  66%|██████▌   | 43/65 [00:10<00:06,  3.47it/s]
+Read eval:  71%|███████   | 46/65 [00:10<00:04,  4.73it/s]
+Read eval:  77%|███████▋  | 50/65 [00:10<00:02,  6.90it/s]
+
+Predict chunk:   0%|          | 0/29 [00:00<?, ?it/s][A
+
+Predict chunk:   3%|▎         | 1/29 [00:00<00:04,  5.73it/s][A
+
+Predict chunk:   7%|▋         | 2/29 [00:00<00:04,  6.03it/s][A
+
+Predict chunk:  10%|█         | 3/29 [00:00<00:04,  6.12it/s][A
+
+Predict chunk:  14%|█▍        | 4/29 [00:00<00:04,  6.17it/s][A
+
+Predict chunk:  17%|█▋        | 5/29 [00:00<00:03,  6.20it/s][A
+
+Predict chunk:  21%|██        | 6/29 [00:00<00:03,  6.21it/s][A
+
+Predict chunk:  24%|██▍       | 7/29 [00:01<00:03,  6.23it/s][A
+
+Predict chunk:  28%|██▊       | 8/29 [00:01<00:03,  6.23it/s][A
+
+Predict chunk:  31%|███       | 9/29 [00:01<00:03,  6.24it/s][A
+
+Predict chunk:  34%|███▍      | 10/29 [00:01<00:03,  6.24it/s][A
+
+Predict chunk:  38%|███▊      | 11/29 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  41%|████▏     | 12/29 [00:01<00:02,  6.21it/s][A
+
+Predict chunk:  45%|████▍     | 13/29 [00:02<00:02,  6.19it/s][A
+
+Predict chunk:  48%|████▊     | 14/29 [00:02<00:02,  6.16it/s][A
+
+Predict chunk:  52%|█████▏    | 15/29 [00:02<00:02,  6.15it/s][A
+
+Predict chunk:  55%|█████▌    | 16/29 [00:02<00:02,  6.13it/s][A
+
+Predict chunk:  59%|█████▊    | 17/29 [00:02<00:01,  6.15it/s][A
+
+Predict chunk:  62%|██████▏   | 18/29 [00:02<00:01,  6.17it/s][A
+
+Predict chunk:  66%|██████▌   | 19/29 [00:03<00:01,  6.18it/s][A
+
+Predict chunk:  69%|██████▉   | 20/29 [00:03<00:01,  6.19it/s][A
+
+Predict chunk:  72%|███████▏  | 21/29 [00:03<00:01,  6.19it/s][A
+
+Predict chunk:  76%|███████▌  | 22/29 [00:03<00:01,  6.17it/s][A
+
+Predict chunk:  79%|███████▉  | 23/29 [00:03<00:00,  6.15it/s][A
+
+Predict chunk:  83%|████████▎ | 24/29 [00:03<00:00,  6.15it/s][A
+
+Predict chunk:  86%|████████▌ | 25/29 [00:04<00:00,  6.00it/s][A
+
+Predict chunk:  90%|████████▉ | 26/29 [00:04<00:00,  6.03it/s][A
+
+Predict chunk:  93%|█████████▎| 27/29 [00:04<00:00,  6.07it/s][A
+
+Predict chunk:  97%|█████████▋| 28/29 [00:04<00:00,  6.10it/s][A
+
+                                                              [A
+Read eval:  82%|████████▏ | 53/65 [00:15<00:06,  1.86it/s]
+Read eval:  86%|████████▌ | 56/65 [00:15<00:03,  2.53it/s]
+Read eval:  94%|█████████▍| 61/65 [00:15<00:00,  4.06it/s]
+                                                          
+
+Predict chunk:   0%|          | 0/22 [00:00<?, ?it/s]
+Predict chunk:   5%|▍         | 1/22 [00:00<00:03,  5.70it/s]
+Predict chunk:   9%|▉         | 2/22 [00:00<00:03,  5.99it/s]
+Predict chunk:  14%|█▎        | 3/22 [00:00<00:03,  6.09it/s]
+Predict chunk:  18%|█▊        | 4/22 [00:00<00:02,  6.12it/s]
+Predict chunk:  23%|██▎       | 5/22 [00:00<00:02,  6.12it/s]
+Predict chunk:  27%|██▋       | 6/22 [00:00<00:02,  6.12it/s]
+Predict chunk:  32%|███▏      | 7/22 [00:01<00:02,  6.13it/s]
+Predict chunk:  36%|███▋      | 8/22 [00:01<00:02,  6.15it/s]
+Predict chunk:  41%|████      | 9/22 [00:01<00:02,  6.16it/s]
+Predict chunk:  45%|████▌     | 10/22 [00:01<00:01,  6.17it/s]
+Predict chunk:  50%|█████     | 11/22 [00:01<00:01,  6.19it/s]
+Predict chunk:  55%|█████▍    | 12/22 [00:01<00:01,  6.17it/s]
+Predict chunk:  59%|█████▉    | 13/22 [00:02<00:01,  6.17it/s]
+Predict chunk:  64%|██████▎   | 14/22 [00:02<00:01,  6.15it/s]
+Predict chunk:  68%|██████▊   | 15/22 [00:02<00:01,  6.08it/s]
+Predict chunk:  73%|███████▎  | 16/22 [00:02<00:00,  6.04it/s]
+Predict chunk:  77%|███████▋  | 17/22 [00:02<00:00,  6.06it/s]
+Predict chunk:  82%|████████▏ | 18/22 [00:02<00:00,  6.09it/s]
+Predict chunk:  86%|████████▋ | 19/22 [00:03<00:00,  6.12it/s]
+Predict chunk:  91%|█████████ | 20/22 [00:03<00:00,  6.12it/s]
+Predict chunk:  95%|█████████▌| 21/22 [00:03<00:00,  6.14it/s]
+                                                              
+[predict] eval done in  18.8s  predict  17.0s (90.3%)  read/wait   1.8s ( 9.7%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_sequence/seq_20261012073246/eval_figs/eval_s20261012065821_ep06.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+Starting evaluation figure generation...
+[predict] reading 6358 tiles in 63 row-strips (eval)
+
+Read eval:   0%|          | 0/63 [00:00<?, ?it/s]
+Read eval:   6%|▋         | 4/63 [00:00<00:01, 31.40it/s]
+Read eval:  13%|█▎        | 8/63 [00:00<00:01, 34.44it/s]
+Read eval:  19%|█▉        | 12/63 [00:00<00:01, 32.40it/s]
+Read eval:  25%|██▌       | 16/63 [00:00<00:01, 29.71it/s]
+Read eval:  32%|███▏      | 20/63 [00:00<00:01, 30.76it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.57it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.92it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  6.04it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:03,  6.09it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.11it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:03,  6.13it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.14it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  5.96it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.02it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.08it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.11it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  5.98it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.04it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  5.98it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  5.96it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.02it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.03it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.01it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.01it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  5.91it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  5.98it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.01it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.07it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  5.99it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.04it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.09it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.04it/s][A
+
+Predict chunk: 100%|██████████| 28/28 [00:04<00:00,  6.74it/s][A
+
+                                                              [A
+Read eval:  38%|███▊      | 24/63 [00:05<00:16,  2.41it/s]
+Read eval:  43%|████▎     | 27/63 [00:05<00:11,  3.14it/s]
+Read eval:  46%|████▌     | 29/63 [00:05<00:09,  3.76it/s]
+Read eval:  52%|█████▏    | 33/63 [00:05<00:05,  5.57it/s]
+
+Predict chunk:   0%|          | 0/27 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/27 [00:00<00:04,  5.38it/s][A
+
+Predict chunk:   7%|▋         | 2/27 [00:00<00:04,  5.69it/s][A
+
+Predict chunk:  11%|█         | 3/27 [00:00<00:04,  5.74it/s][A
+
+Predict chunk:  15%|█▍        | 4/27 [00:00<00:03,  5.90it/s][A
+
+Predict chunk:  19%|█▊        | 5/27 [00:00<00:03,  6.00it/s][A
+
+Predict chunk:  22%|██▏       | 6/27 [00:01<00:03,  6.07it/s][A
+
+Predict chunk:  26%|██▌       | 7/27 [00:01<00:03,  6.12it/s][A
+
+Predict chunk:  30%|██▉       | 8/27 [00:01<00:03,  6.16it/s][A
+
+Predict chunk:  33%|███▎      | 9/27 [00:01<00:02,  6.19it/s][A
+
+Predict chunk:  37%|███▋      | 10/27 [00:01<00:02,  6.21it/s][A
+
+Predict chunk:  41%|████      | 11/27 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  44%|████▍     | 12/27 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  48%|████▊     | 13/27 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  52%|█████▏    | 14/27 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  56%|█████▌    | 15/27 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  59%|█████▉    | 16/27 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  63%|██████▎   | 17/27 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  67%|██████▋   | 18/27 [00:02<00:01,  6.23it/s][A
+
+Predict chunk:  70%|███████   | 19/27 [00:03<00:01,  6.22it/s][A
+
+Predict chunk:  74%|███████▍  | 20/27 [00:03<00:01,  6.20it/s][A
+
+Predict chunk:  78%|███████▊  | 21/27 [00:03<00:00,  6.18it/s][A
+
+Predict chunk:  81%|████████▏ | 22/27 [00:03<00:00,  6.16it/s][A
+
+Predict chunk:  85%|████████▌ | 23/27 [00:03<00:00,  6.16it/s][A
+
+Predict chunk:  89%|████████▉ | 24/27 [00:03<00:00,  6.16it/s][A
+
+Predict chunk:  93%|█████████▎| 25/27 [00:04<00:00,  6.17it/s][A
+
+Predict chunk:  96%|█████████▋| 26/27 [00:04<00:00,  6.19it/s][A
+
+Predict chunk: 100%|██████████| 27/27 [00:04<00:00,  6.93it/s][A
+
+                                                              [A
+Read eval:  57%|█████▋    | 36/63 [00:10<00:14,  1.83it/s]
+Read eval:  63%|██████▎   | 40/63 [00:10<00:08,  2.74it/s]
+Read eval:  68%|██████▊   | 43/63 [00:10<00:05,  3.65it/s]
+Read eval:  73%|███████▎  | 46/63 [00:10<00:03,  4.83it/s]
+Read eval:  78%|███████▊  | 49/63 [00:10<00:02,  6.35it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.58it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.93it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  6.06it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:03,  6.12it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.17it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:03,  6.19it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.21it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.22it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.22it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.21it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.20it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.18it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.16it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.16it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.17it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.17it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.18it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.20it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.21it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.22it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.23it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.23it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.23it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.22it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.21it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.19it/s][A
+
+Predict chunk: 100%|██████████| 28/28 [00:04<00:00,  6.94it/s][A
+
+                                                              [A
+Read eval:  83%|████████▎ | 52/63 [00:15<00:06,  1.82it/s]
+Read eval:  87%|████████▋ | 55/63 [00:15<00:03,  2.49it/s]
+                                                          
+
+Predict chunk:   0%|          | 0/18 [00:00<?, ?it/s]
+Predict chunk:   6%|▌         | 1/18 [00:00<00:03,  5.65it/s]
+Predict chunk:  11%|█         | 2/18 [00:00<00:02,  5.99it/s]
+Predict chunk:  17%|█▋        | 3/18 [00:00<00:02,  6.05it/s]
+Predict chunk:  22%|██▏       | 4/18 [00:00<00:02,  6.09it/s]
+Predict chunk:  28%|██▊       | 5/18 [00:00<00:02,  6.12it/s]
+Predict chunk:  33%|███▎      | 6/18 [00:00<00:01,  6.15it/s]
+Predict chunk:  39%|███▉      | 7/18 [00:01<00:01,  6.17it/s]
+Predict chunk:  44%|████▍     | 8/18 [00:01<00:01,  6.20it/s]
+Predict chunk:  50%|█████     | 9/18 [00:01<00:01,  6.21it/s]
+Predict chunk:  56%|█████▌    | 10/18 [00:01<00:01,  6.22it/s]
+Predict chunk:  61%|██████    | 11/18 [00:01<00:01,  6.23it/s]
+Predict chunk:  67%|██████▋   | 12/18 [00:01<00:00,  6.23it/s]
+Predict chunk:  72%|███████▏  | 13/18 [00:02<00:00,  6.24it/s]
+Predict chunk:  78%|███████▊  | 14/18 [00:02<00:00,  6.24it/s]
+Predict chunk:  83%|████████▎ | 15/18 [00:02<00:00,  6.26it/s]
+Predict chunk:  89%|████████▉ | 16/18 [00:02<00:00,  6.26it/s]
+Predict chunk:  94%|█████████▍| 17/18 [00:02<00:00,  6.26it/s]
+                                                              
+[predict] eval done in  18.0s  predict  16.2s (90.1%)  read/wait   1.8s ( 9.9%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_sequence/seq_20261012073246/eval_figs/eval_s20261012065823_ep06.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+Starting evaluation figure generation...
+[predict] reading 7523 tiles in 69 row-strips (eval)
+
+Read eval:   0%|          | 0/69 [00:00<?, ?it/s]
+Read eval:   7%|▋         | 5/69 [00:00<00:01, 40.87it/s]
+Read eval:  14%|█▍        | 10/69 [00:00<00:01, 36.74it/s]
+Read eval:  20%|██        | 14/69 [00:00<00:01, 33.68it/s]
+Read eval:  26%|██▌       | 18/69 [00:00<00:01, 33.42it/s]
+
+Predict chunk:   0%|          | 0/27 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/27 [00:00<00:05,  4.80it/s][A
+
+Predict chunk:   7%|▋         | 2/27 [00:00<00:04,  5.52it/s][A
+
+Predict chunk:  11%|█         | 3/27 [00:00<00:04,  5.80it/s][A
+
+Predict chunk:  15%|█▍        | 4/27 [00:00<00:03,  5.94it/s][A
+
+Predict chunk:  19%|█▊        | 5/27 [00:00<00:03,  6.03it/s][A
+
+Predict chunk:  22%|██▏       | 6/27 [00:01<00:03,  6.08it/s][A
+
+Predict chunk:  26%|██▌       | 7/27 [00:01<00:03,  6.12it/s][A
+
+Predict chunk:  30%|██▉       | 8/27 [00:01<00:03,  6.15it/s][A
+
+Predict chunk:  33%|███▎      | 9/27 [00:01<00:02,  6.17it/s][A
+
+Predict chunk:  37%|███▋      | 10/27 [00:01<00:02,  6.19it/s][A
+
+Predict chunk:  41%|████      | 11/27 [00:01<00:02,  6.21it/s][A
+
+Predict chunk:  44%|████▍     | 12/27 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  48%|████▊     | 13/27 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  52%|█████▏    | 14/27 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  56%|█████▌    | 15/27 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  59%|█████▉    | 16/27 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  63%|██████▎   | 17/27 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  67%|██████▋   | 18/27 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  70%|███████   | 19/27 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  74%|███████▍  | 20/27 [00:03<00:01,  6.23it/s][A
+
+Predict chunk:  78%|███████▊  | 21/27 [00:03<00:00,  6.23it/s][A
+
+Predict chunk:  81%|████████▏ | 22/27 [00:03<00:00,  6.20it/s][A
+
+Predict chunk:  85%|████████▌ | 23/27 [00:03<00:00,  6.18it/s][A
+
+Predict chunk:  89%|████████▉ | 24/27 [00:03<00:00,  6.14it/s][A
+
+Predict chunk:  93%|█████████▎| 25/27 [00:04<00:00,  6.14it/s][A
+
+Predict chunk:  96%|█████████▋| 26/27 [00:04<00:00,  6.15it/s][A
+
+                                                              [A
+Read eval:  32%|███▏      | 22/69 [00:04<00:18,  2.52it/s]
+Read eval:  36%|███▌      | 25/69 [00:05<00:13,  3.29it/s]
+Read eval:  41%|████      | 28/69 [00:05<00:09,  4.36it/s]
+Read eval:  45%|████▍     | 31/69 [00:05<00:06,  5.74it/s]
+Read eval:  49%|████▉     | 34/69 [00:05<00:04,  7.44it/s]
+
+Predict chunk:   0%|          | 0/29 [00:00<?, ?it/s][A
+
+Predict chunk:   3%|▎         | 1/29 [00:00<00:05,  5.54it/s][A
+
+Predict chunk:   7%|▋         | 2/29 [00:00<00:04,  5.92it/s][A
+
+Predict chunk:  10%|█         | 3/29 [00:00<00:04,  6.05it/s][A
+
+Predict chunk:  14%|█▍        | 4/29 [00:00<00:04,  6.12it/s][A
+
+Predict chunk:  17%|█▋        | 5/29 [00:00<00:03,  6.16it/s][A
+
+Predict chunk:  21%|██        | 6/29 [00:00<00:03,  6.19it/s][A
+
+Predict chunk:  24%|██▍       | 7/29 [00:01<00:03,  6.20it/s][A
+
+Predict chunk:  28%|██▊       | 8/29 [00:01<00:03,  6.22it/s][A
+
+Predict chunk:  31%|███       | 9/29 [00:01<00:03,  6.23it/s][A
+
+Predict chunk:  34%|███▍      | 10/29 [00:01<00:03,  6.23it/s][A
+
+Predict chunk:  38%|███▊      | 11/29 [00:01<00:02,  6.24it/s][A
+
+Predict chunk:  41%|████▏     | 12/29 [00:01<00:02,  6.24it/s][A
+
+Predict chunk:  45%|████▍     | 13/29 [00:02<00:02,  6.23it/s][A
+
+Predict chunk:  48%|████▊     | 14/29 [00:02<00:02,  6.22it/s][A
+
+Predict chunk:  52%|█████▏    | 15/29 [00:02<00:02,  6.20it/s][A
+
+Predict chunk:  55%|█████▌    | 16/29 [00:02<00:02,  6.17it/s][A
+
+Predict chunk:  59%|█████▊    | 17/29 [00:02<00:01,  6.16it/s][A
+
+Predict chunk:  62%|██████▏   | 18/29 [00:02<00:01,  6.16it/s][A
+
+Predict chunk:  66%|██████▌   | 19/29 [00:03<00:01,  6.16it/s][A
+
+Predict chunk:  69%|██████▉   | 20/29 [00:03<00:01,  6.17it/s][A
+
+Predict chunk:  72%|███████▏  | 21/29 [00:03<00:01,  6.19it/s][A
+
+Predict chunk:  76%|███████▌  | 22/29 [00:03<00:01,  6.13it/s][A
+
+Predict chunk:  79%|███████▉  | 23/29 [00:03<00:00,  6.14it/s][A
+
+Predict chunk:  83%|████████▎ | 24/29 [00:03<00:00,  6.12it/s][A
+
+Predict chunk:  86%|████████▌ | 25/29 [00:04<00:00,  6.13it/s][A
+
+Predict chunk:  90%|████████▉ | 26/29 [00:04<00:00,  6.14it/s][A
+
+Predict chunk:  93%|█████████▎| 27/29 [00:04<00:00,  6.16it/s][A
+
+Predict chunk:  97%|█████████▋| 28/29 [00:04<00:00,  6.19it/s][A
+
+                                                              [A
+Read eval:  54%|█████▎    | 37/69 [00:10<00:17,  1.82it/s]
+Read eval:  57%|█████▋    | 39/69 [00:10<00:13,  2.27it/s]
+Read eval:  61%|██████    | 42/69 [00:10<00:08,  3.20it/s]
+Read eval:  65%|██████▌   | 45/69 [00:10<00:05,  4.42it/s]
+Read eval:  70%|██████▉   | 48/69 [00:10<00:03,  5.96it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:05,  5.17it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.71it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  5.92it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:03,  6.03it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.09it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:01<00:03,  6.14it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.17it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.19it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.21it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.24it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.24it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.24it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.24it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.24it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.23it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.23it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.22it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.20it/s][A
+
+                                                              [A
+Read eval:  74%|███████▍  | 51/69 [00:14<00:10,  1.74it/s]
+Read eval:  77%|███████▋  | 53/69 [00:15<00:07,  2.17it/s]
+Read eval:  81%|████████  | 56/69 [00:15<00:04,  3.10it/s]
+Read eval:  86%|████████▌ | 59/69 [00:15<00:02,  4.33it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.50it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.86it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  5.98it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:03,  6.05it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.10it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:03,  6.13it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.15it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.18it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.20it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.21it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.23it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.26it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.26it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.26it/s][A
+
+                                                              [A
+Read eval:  91%|█████████▏| 63/69 [00:19<00:03,  1.74it/s]
+                                                          
+
+Predict chunk:   0%|          | 0/9 [00:00<?, ?it/s]
+Predict chunk:  11%|█         | 1/9 [00:00<00:01,  4.37it/s]
+Predict chunk:  22%|██▏       | 2/9 [00:00<00:01,  5.27it/s]
+Predict chunk:  33%|███▎      | 3/9 [00:00<00:01,  5.65it/s]
+Predict chunk:  44%|████▍     | 4/9 [00:00<00:00,  5.85it/s]
+Predict chunk:  56%|█████▌    | 5/9 [00:00<00:00,  5.97it/s]
+Predict chunk:  67%|██████▋   | 6/9 [00:01<00:00,  6.06it/s]
+Predict chunk:  78%|███████▊  | 7/9 [00:01<00:00,  6.12it/s]
+Predict chunk:  89%|████████▉ | 8/9 [00:01<00:00,  6.17it/s]
+                                                            
+[predict] eval done in  21.2s  predict  19.2s (90.8%)  read/wait   2.0s ( 9.2%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_sequence/seq_20261012073246/eval_figs/eval_s20261012065815_ep06.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+Starting evaluation figure generation...
+[predict] reading 6008 tiles in 60 row-strips (eval)
+
+Read eval:   0%|          | 0/60 [00:00<?, ?it/s]
+Read eval:   7%|▋         | 4/60 [00:00<00:01, 38.14it/s]
+Read eval:  13%|█▎        | 8/60 [00:00<00:01, 37.97it/s]
+Read eval:  20%|██        | 12/60 [00:00<00:01, 35.07it/s]
+Read eval:  27%|██▋       | 16/60 [00:00<00:01, 35.63it/s]
+Read eval:  33%|███▎      | 20/60 [00:00<00:01, 34.12it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.44it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.85it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  6.00it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:03,  6.07it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.11it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:03,  6.14it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.16it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.18it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.20it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.22it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.23it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.24it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.24it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.24it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.24it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.23it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.22it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.20it/s][A
+
+                                                              [A
+Read eval:  40%|████      | 24/60 [00:05<00:14,  2.50it/s]
+Read eval:  45%|████▌     | 27/60 [00:05<00:10,  3.25it/s]
+Read eval:  52%|█████▏    | 31/60 [00:05<00:06,  4.66it/s]
+Read eval:  58%|█████▊    | 35/60 [00:05<00:03,  6.36it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:05,  4.99it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.62it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  5.84it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:04,  5.96it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.03it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:01<00:03,  6.09it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.12it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.15it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.18it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.20it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.23it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.23it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.25it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.25it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.25it/s][A
+
+Predict chunk: 100%|██████████| 28/28 [00:04<00:00,  6.25it/s][A
+
+                                                              [A
+Read eval:  63%|██████▎   | 38/60 [00:10<00:11,  1.95it/s]
+Read eval:  68%|██████▊   | 41/60 [00:10<00:07,  2.60it/s]
+Read eval:  73%|███████▎  | 44/60 [00:10<00:04,  3.49it/s]
+Read eval:  78%|███████▊  | 47/60 [00:10<00:02,  4.65it/s]
+Read eval:  83%|████████▎ | 50/60 [00:10<00:01,  6.15it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:04,  5.52it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.90it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  6.03it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:03,  6.10it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.15it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:00<00:03,  6.18it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.20it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.22it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.23it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.24it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.24it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.25it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.22it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.20it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.18it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.14it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.12it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.14it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.17it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.20it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.22it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.22it/s][A
+
+                                                              [A
+Read eval:  88%|████████▊ | 53/60 [00:15<00:03,  1.80it/s]
+Read eval: 100%|██████████| 60/60 [00:15<00:00,  3.46it/s]
+                                                          
+
+Predict chunk:   0%|          | 0/12 [00:00<?, ?it/s]
+Predict chunk:   8%|▊         | 1/12 [00:00<00:01,  5.92it/s]
+Predict chunk:  17%|█▋        | 2/12 [00:00<00:01,  6.06it/s]
+Predict chunk:  25%|██▌       | 3/12 [00:00<00:01,  6.08it/s]
+Predict chunk:  33%|███▎      | 4/12 [00:00<00:01,  6.11it/s]
+Predict chunk:  42%|████▏     | 5/12 [00:00<00:01,  6.14it/s]
+Predict chunk:  50%|█████     | 6/12 [00:00<00:00,  6.16it/s]
+Predict chunk:  58%|█████▊    | 7/12 [00:01<00:00,  6.18it/s]
+Predict chunk:  67%|██████▋   | 8/12 [00:01<00:00,  6.21it/s]
+Predict chunk:  75%|███████▌  | 9/12 [00:01<00:00,  6.22it/s]
+Predict chunk:  83%|████████▎ | 10/12 [00:01<00:00,  6.23it/s]
+Predict chunk:  92%|█████████▏| 11/12 [00:01<00:00,  6.24it/s]
+                                                              
+[predict] eval done in  16.8s  predict  15.3s (90.8%)  read/wait   1.6s ( 9.2%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_sequence/seq_20261012073246/eval_figs/eval_s20261012065825_ep06.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+Starting evaluation figure generation...
+[predict] reading 5679 tiles in 58 row-strips (eval)
+
+Read eval:   0%|          | 0/58 [00:00<?, ?it/s]
+Read eval:   7%|▋         | 4/58 [00:00<00:01, 39.06it/s]
+Read eval:  14%|█▍        | 8/58 [00:00<00:01, 39.24it/s]
+Read eval:  21%|██        | 12/58 [00:00<00:01, 35.83it/s]
+Read eval:  28%|██▊       | 16/58 [00:00<00:01, 35.68it/s]
+Read eval:  34%|███▍      | 20/58 [00:00<00:01, 34.97it/s]
+
+Predict chunk:   0%|          | 0/27 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/27 [00:00<00:04,  5.55it/s][A
+
+Predict chunk:   7%|▋         | 2/27 [00:00<00:04,  5.92it/s][A
+
+Predict chunk:  11%|█         | 3/27 [00:00<00:03,  6.05it/s][A
+
+Predict chunk:  15%|█▍        | 4/27 [00:00<00:03,  6.12it/s][A
+
+Predict chunk:  19%|█▊        | 5/27 [00:00<00:03,  6.15it/s][A
+
+Predict chunk:  22%|██▏       | 6/27 [00:00<00:03,  6.17it/s][A
+
+Predict chunk:  26%|██▌       | 7/27 [00:01<00:03,  6.20it/s][A
+
+Predict chunk:  30%|██▉       | 8/27 [00:01<00:03,  6.21it/s][A
+
+Predict chunk:  33%|███▎      | 9/27 [00:01<00:02,  6.21it/s][A
+
+Predict chunk:  37%|███▋      | 10/27 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  41%|████      | 11/27 [00:01<00:02,  6.24it/s][A
+
+Predict chunk:  44%|████▍     | 12/27 [00:01<00:02,  6.24it/s][A
+
+Predict chunk:  48%|████▊     | 13/27 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  52%|█████▏    | 14/27 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  56%|█████▌    | 15/27 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  59%|█████▉    | 16/27 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  63%|██████▎   | 17/27 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  67%|██████▋   | 18/27 [00:02<00:01,  6.24it/s][A
+
+Predict chunk:  70%|███████   | 19/27 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  74%|███████▍  | 20/27 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  78%|███████▊  | 21/27 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  81%|████████▏ | 22/27 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  85%|████████▌ | 23/27 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  89%|████████▉ | 24/27 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  93%|█████████▎| 25/27 [00:04<00:00,  6.25it/s][A
+
+Predict chunk:  96%|█████████▋| 26/27 [00:04<00:00,  6.25it/s][A
+
+                                                              [A
+Read eval:  41%|████▏     | 24/58 [00:04<00:13,  2.60it/s]
+Read eval:  47%|████▋     | 27/58 [00:04<00:09,  3.41it/s]
+Read eval:  53%|█████▎    | 31/58 [00:05<00:05,  4.80it/s]
+Read eval:  59%|█████▊    | 34/58 [00:05<00:03,  6.16it/s]
+
+Predict chunk:   0%|          | 0/28 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/28 [00:00<00:05,  5.10it/s][A
+
+Predict chunk:   7%|▋         | 2/28 [00:00<00:04,  5.66it/s][A
+
+Predict chunk:  11%|█         | 3/28 [00:00<00:04,  5.87it/s][A
+
+Predict chunk:  14%|█▍        | 4/28 [00:00<00:04,  5.99it/s][A
+
+Predict chunk:  18%|█▊        | 5/28 [00:00<00:03,  6.06it/s][A
+
+Predict chunk:  21%|██▏       | 6/28 [00:01<00:03,  6.11it/s][A
+
+Predict chunk:  25%|██▌       | 7/28 [00:01<00:03,  6.13it/s][A
+
+Predict chunk:  29%|██▊       | 8/28 [00:01<00:03,  6.16it/s][A
+
+Predict chunk:  32%|███▏      | 9/28 [00:01<00:03,  6.19it/s][A
+
+Predict chunk:  36%|███▌      | 10/28 [00:01<00:02,  6.20it/s][A
+
+Predict chunk:  39%|███▉      | 11/28 [00:01<00:02,  6.22it/s][A
+
+Predict chunk:  43%|████▎     | 12/28 [00:01<00:02,  6.23it/s][A
+
+Predict chunk:  46%|████▋     | 13/28 [00:02<00:02,  6.23it/s][A
+
+Predict chunk:  50%|█████     | 14/28 [00:02<00:02,  6.23it/s][A
+
+Predict chunk:  54%|█████▎    | 15/28 [00:02<00:02,  6.24it/s][A
+
+Predict chunk:  57%|█████▋    | 16/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  61%|██████    | 17/28 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  64%|██████▍   | 18/28 [00:02<00:01,  6.26it/s][A
+
+Predict chunk:  68%|██████▊   | 19/28 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  71%|███████▏  | 20/28 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  75%|███████▌  | 21/28 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  79%|███████▊  | 22/28 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  82%|████████▏ | 23/28 [00:03<00:00,  6.26it/s][A
+
+Predict chunk:  86%|████████▌ | 24/28 [00:03<00:00,  6.25it/s][A
+
+Predict chunk:  89%|████████▉ | 25/28 [00:04<00:00,  6.25it/s][A
+
+Predict chunk:  93%|█████████▎| 26/28 [00:04<00:00,  6.25it/s][A
+
+Predict chunk:  96%|█████████▋| 27/28 [00:04<00:00,  6.25it/s][A
+
+                                                              [A
+Read eval:  64%|██████▍   | 37/58 [00:09<00:11,  1.88it/s]
+Read eval:  71%|███████   | 41/58 [00:09<00:06,  2.77it/s]
+Read eval:  76%|███████▌  | 44/58 [00:10<00:03,  3.67it/s]
+Read eval:  81%|████████  | 47/58 [00:10<00:02,  4.84it/s]
+Read eval:  86%|████████▌ | 50/58 [00:10<00:01,  6.35it/s]
+
+Predict chunk:   0%|          | 0/27 [00:00<?, ?it/s][A
+
+Predict chunk:   4%|▎         | 1/27 [00:00<00:04,  5.57it/s][A
+
+Predict chunk:   7%|▋         | 2/27 [00:00<00:04,  5.92it/s][A
+
+Predict chunk:  11%|█         | 3/27 [00:00<00:03,  6.05it/s][A
+
+Predict chunk:  15%|█▍        | 4/27 [00:00<00:03,  6.12it/s][A
+
+Predict chunk:  19%|█▊        | 5/27 [00:00<00:03,  6.18it/s][A
+
+Predict chunk:  22%|██▏       | 6/27 [00:00<00:03,  6.20it/s][A
+
+Predict chunk:  26%|██▌       | 7/27 [00:01<00:03,  6.21it/s][A
+
+Predict chunk:  30%|██▉       | 8/27 [00:01<00:03,  6.23it/s][A
+
+Predict chunk:  33%|███▎      | 9/27 [00:01<00:02,  6.24it/s][A
+
+Predict chunk:  37%|███▋      | 10/27 [00:01<00:02,  6.25it/s][A
+
+Predict chunk:  41%|████      | 11/27 [00:01<00:02,  6.25it/s][A
+
+Predict chunk:  44%|████▍     | 12/27 [00:01<00:02,  6.25it/s][A
+
+Predict chunk:  48%|████▊     | 13/27 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  52%|█████▏    | 14/27 [00:02<00:02,  6.25it/s][A
+
+Predict chunk:  56%|█████▌    | 15/27 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  59%|█████▉    | 16/27 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  63%|██████▎   | 17/27 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  67%|██████▋   | 18/27 [00:02<00:01,  6.25it/s][A
+
+Predict chunk:  70%|███████   | 19/27 [00:03<00:01,  6.25it/s][A
+
+Predict chunk:  74%|███████▍  | 20/27 [00:03<00:01,  6.24it/s][A
+
+Predict chunk:  78%|███████▊  | 21/27 [00:03<00:00,  6.24it/s][A
+
+Predict chunk:  81%|████████▏ | 22/27 [00:03<00:00,  6.24it/s][A
+
+Predict chunk:  85%|████████▌ | 23/27 [00:03<00:00,  6.18it/s][A
+
+Predict chunk:  89%|████████▉ | 24/27 [00:03<00:00,  6.16it/s][A
+
+Predict chunk:  93%|█████████▎| 25/27 [00:04<00:00,  6.16it/s][A
+
+Predict chunk:  96%|█████████▋| 26/27 [00:04<00:00,  6.17it/s][A
+
+                                                              [A
+Read eval:  91%|█████████▏| 53/58 [00:14<00:02,  1.88it/s]
+                                                          
+
+Predict chunk:   0%|          | 0/9 [00:00<?, ?it/s]
+Predict chunk:  11%|█         | 1/9 [00:00<00:01,  5.78it/s]
+Predict chunk:  22%|██▏       | 2/9 [00:00<00:01,  6.02it/s]
+Predict chunk:  33%|███▎      | 3/9 [00:00<00:00,  6.09it/s]
+Predict chunk:  44%|████▍     | 4/9 [00:00<00:00,  6.14it/s]
+Predict chunk:  56%|█████▌    | 5/9 [00:00<00:00,  6.15it/s]
+Predict chunk:  67%|██████▋   | 6/9 [00:00<00:00,  6.19it/s]
+Predict chunk:  78%|███████▊  | 7/9 [00:01<00:00,  6.22it/s]
+Predict chunk:  89%|████████▉ | 8/9 [00:01<00:00,  6.24it/s]
+                                                            
+[predict] eval done in  15.8s  predict  14.3s (90.5%)  read/wait   1.5s ( 9.5%)  [prefetch x3]
+[eval-fig] full-size -> /vesuvius/runs_sequence/seq_20261012073246/eval_figs/eval_s20261012065827_ep06.png
+[voxel map logging] skipped: surface_teacher_input requires depth and confidence maps
+[save-final] wrote final model to /vesuvius/models/runs_sequence/seq_20261012073246/final.pth
+TensorBoard logs saved to: /vesuvius/runs_sequence/seq_20261012073246
+Training completed.

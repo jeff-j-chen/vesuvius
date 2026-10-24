@@ -38,6 +38,73 @@ def _fork_read(task):
     return stop - start
 
 
+def _fork_read_full(task):
+    """child: copy the raw chunk files of the given (cz, cy, cx) keys straight into the shared full-volume buffer."""
+    job = _FORK_JOB
+    shape, chunks = job["shape"], job["chunks"]
+    out = np.ndarray(shape, dtype=job["dtype"], buffer=job["buffer"])
+    for cz, cy, cx in task:
+        z0, y0, x0 = cz * chunks[0], cy * chunks[1], cx * chunks[2]
+        z1, y1, x1 = min(z0 + chunks[0], shape[0]), min(y0 + chunks[1], shape[1]), min(x0 + chunks[2], shape[2])
+        try:
+            with open(os.path.join(job["root"], f"{cz}{job['sep']}{cy}{job['sep']}{cx}"), "rb") as handle:
+                raw = handle.read()
+        except FileNotFoundError:
+            out[z0:z1, y0:y1, x0:x1] = job["fill"]
+            continue
+        chunk = np.frombuffer(raw, dtype=job["dtype"]).reshape(chunks)
+        out[z0:z1, y0:y1, x0:x1] = chunk[:z1 - z0, :y1 - y0, :x1 - x0]
+    return len(task)
+
+
+def read_full_zarr_forked(path: str):
+    """whole uncompressed zarr v2 volume as one read-only array, read by forked processes; None when the store doesn't qualify.
+
+    zarr's own slicing decodes the many small chunks one at a time in this process (tens of MB/s)."""
+    global _FORK_JOB
+    import multiprocessing
+
+    try:
+        with open(os.path.join(path, ".zarray"), encoding="utf-8") as handle:
+            meta = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if (meta.get("zarr_format") != 2 or meta.get("compressor") is not None or meta.get("filters")
+            or meta.get("order", "C") != "C" or meta.get("fill_value") is None
+            or "fork" not in multiprocessing.get_all_start_methods()):
+        return None
+    shape, chunks, dtype = tuple(meta["shape"]), tuple(meta["chunks"]), np.dtype(meta["dtype"])
+    keys = [
+        (cz, cy, cx)
+        for cz in range(-(-shape[0] // chunks[0]))
+        for cy in range(-(-shape[1] // chunks[1]))
+        for cx in range(-(-shape[2] // chunks[2]))
+    ]
+    if len(keys) < _PROCESS_PRELOAD_MIN_CHUNKS:
+        return None
+    buffer = mmap.mmap(-1, max(int(np.prod(shape)) * dtype.itemsize, 1))
+    workers = max(1, min(_PROCESS_PRELOAD_WORKERS, os.cpu_count() or 1))
+    bounds = np.linspace(0, len(keys), workers * 8 + 1).astype(int)
+    tasks = [keys[a:b] for a, b in zip(bounds[:-1], bounds[1:]) if b > a]
+    _FORK_JOB = {
+        "shape": shape, "chunks": chunks, "dtype": dtype, "buffer": buffer, "root": path,
+        "sep": meta.get("dimension_separator") or ".", "fill": meta["fill_value"],
+    }
+    try:
+        with multiprocessing.get_context("fork").Pool(workers) as pool:
+            done = sum(pool.imap_unordered(_fork_read_full, tasks))
+    except Exception as exc:
+        print(f"[vis-preload] forked read failed ({exc}); using zarr", flush=True)
+        return None
+    finally:
+        _FORK_JOB = None
+    if done != len(keys):
+        return None
+    array = np.ndarray(shape, dtype=dtype, buffer=buffer)
+    array.setflags(write=False)
+    return array
+
+
 class SelectiveChunkVolume:
     """Read-only zarr-like volume backed by selected full-depth spatial chunks."""
 

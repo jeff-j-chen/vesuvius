@@ -1,0 +1,15 @@
+2026-10-21 20:41:52.591146: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-10-21 20:41:52.593338: I external/local_xla/xla/tsl/cuda/cudart_stub.cc:32] Could not find cuda drivers on your machine, GPU will not be used.
+2026-10-21 20:41:52.597099: I external/local_xla/xla/tsl/cuda/cudart_stub.cc:32] Could not find cuda drivers on your machine, GPU will not be used.
+2026-10-21 20:41:52.607438: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1792615312.623348  856521 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+E0000 00:00:1792615312.629145  856521 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+W0000 00:00:1792615312.640609  856521 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792615312.640625  856521 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792615312.640627  856521 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+W0000 00:00:1792615312.640628  856521 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
+2026-10-21 20:41:52.644338: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI AVX512_BF16 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+[preflight] 18 scroll(s) and init weights present
+[dry-run] run=cue_dropout_labelsv4_mix6_shell5 ctx=192 norm=surface_anchor domains={'pherc0846a': 2, 'pherc0009b': 1, 'pherc1447': 1, 'pherc0841': 1, 'pherc0814': 1, 'pherc0172': 1, 'pherc0343': 1} scrolls=15 vis=[20260927134931, 20261012073246, 20261012065813, 20261012065817, 20261012065819, 20261012065821, 20261012065823, 20261012065815, 20261012065825, 20261012065827] epochs=10 batch=32 lr=0.0001 init=models/runs_iter2/init_mae192_cue4.pth -> /vesuvius/models/runs_sequence/cue_dropout_labelsv4_mix6_shell5/final.pth (TensorBoard /vesuvius/runs_sequence/cue_dropout_labelsv4_mix6_shell5)

@@ -1,0 +1,35 @@
+Traceback (most recent call last):
+  File "/vesuvius/train_iter2_ft.py", line 200, in _run_logged
+    run_worker(arm, dry_run)
+  File "/vesuvius/train_iter2_ft.py", line 171, in run_worker
+    train.main(configure=lambda config: configure(config, arm))
+  File "/vesuvius/train.py", line 4940, in main
+    preflight_inputs(config)
+  File "/vesuvius/train.py", line 4894, in preflight_inputs
+    raise FileNotFoundError("input preflight failed\n" + "\n".join(problems))
+FileNotFoundError: input preflight failed
+8 zarr(s) missing under /vesuvius/ves_zarrs2: [20260927134931, 20261012073246, 20261012065823, 20261012065821, 20261012065819, 20261012065817, 20261012065813, 20250919125754]
+  download/render them with:
+    python3 assemble_training_segments.py --only p9b_487
+    python3 assemble_test_segments.py --only 20260927134928 --only 20261012073244 --only 20261012065822 --only 20261012065820 --only 20261012065818 --only 20261012065816 --only 20261012065812
+  (set VESUVIUS_ZARR_PATH if your zarrs live elsewhere)
+18 repo file(s) missing:
+    masks/20260927134931.png
+    ./surface_labels/20260927134931/depth.npy
+    ./surface_labels/20260927134931/confidence.npy
+    ./surface_labels/20261012073246/depth.npy
+    ./surface_labels/20261012073246/confidence.npy
+    ./surface_labels/20261012065823/depth.npy
+    ./surface_labels/20261012065823/confidence.npy
+    ./surface_labels/20261012065821/depth.npy
+    ./surface_labels/20261012065821/confidence.npy
+    ./surface_labels/20261012065819/depth.npy
+    ./surface_labels/20261012065819/confidence.npy
+    ./surface_labels/20261012065817/depth.npy
+    ./surface_labels/20261012065817/confidence.npy
+    masks/20261012065813.png
+    ./surface_labels/20261012065813/depth.npy
+    ./surface_labels/20261012065813/confidence.npy
+    ./surface_labels/20250919125754/depth.npy
+    ./surface_labels/20250919125754/confidence.npy
+  surface_labels/ and the flat-alias PNGs are written by assemble_training_segments.py / assemble_test_segments.py; labels and train masks are tracked in git (`git checkout -- <path>`); models/ ships with the docker image

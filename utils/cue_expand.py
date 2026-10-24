@@ -25,3 +25,35 @@ def expand_cue_state(state: dict, model_state: dict) -> dict:
             if name in model_state:
                 out[name] = model_state[name].detach().clone().to(old.device)
     return out
+
+
+def build_mix6_init(path: str | None = None, seed: int | None = None) -> str:
+    """the mix6 run's init weights: the 192 MAE grown to four input heads; the new head's enc1 weights start at
+    0.5x the other heads' rms. the fresh gated-stem branch and the head's enc1 weights are drawn from `seed`."""
+    import os
+
+    from .config import MIX6_INIT, MIX6_MAE192, MIX6_SEED, Config, apply_mix6_run
+    from .model import create_model
+
+    path = path or MIX6_INIT
+    seed = MIX6_SEED if seed is None else seed
+    config = Config()
+    config.device = "cpu"
+    apply_mix6_run(config)
+    config.model.compile_model = False
+    with torch.random.fork_rng():
+        torch.manual_seed(seed)
+        model, _ = create_model(config)
+    model_state = model.state_dict()
+    state = expand_cue_state(torch.load(MIX6_MAE192, map_location="cpu", weights_only=True), model_state)
+    bad = [k for k, v in state.items() if k in model_state and v.shape != model_state[k].shape]
+    if bad:
+        raise RuntimeError(f"expanded checkpoint does not fit the 4-head model: {bad[:5]}")
+    weight, head = state["enc1.net.0.weight"], 3
+    rms = [float(weight[:, i].pow(2).mean().sqrt()) for i in range(head)]
+    fresh = torch.randn(weight[:, head].shape, generator=torch.Generator().manual_seed(seed))
+    weight[:, head] = fresh * (0.5 * sum(rms) / head) / fresh.pow(2).mean().sqrt()
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    torch.save(state, path)
+    print(f"[init] 4-head init {path} (seed {seed}): head enc1 rms {0.5 * sum(rms) / head:.4f}", flush=True)
+    return path

@@ -30,6 +30,12 @@ EXTRAS (--include-extras, off by default)
 usage:
   python assemble_test_segments.py [--workers N] [--out-dir DIR] [--include-extras]
 
+MIX6 (--mix6, off by default)
+  exactly the PHerc0846A part of the mix6 corpus (utils/mix6.py): the 7 trained sheets + the straightened2 holdout, their flat
+  depth-13 aliases, and the 3 depths of asf cues (cue_asf_morph, _dm1, _dp1; the holdout only the first) the mix6 trainings read.
+  `python assemble_training_segments.py --mix6` runs this for you and adds the other mix6 scrolls; --check only reports what is
+  missing (read-only).
+
 FLAT ALIASES (always)
   the PHerc0846A patches train and evaluate under flat depth-13 aliases (FLAT_ALIASES): <alias>.zarr and the
   mask/label/train-mask PNGs are symlinks to the source render, surface_labels/<alias>/ is a flat depth-13
@@ -540,7 +546,8 @@ FRAGMENTS = [
     ("20261014084610", "auto_grown_20261014084609861_straight_abf",
      f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
      "14019,7726,7726"),
-    # straightened2 re-trace of the 065803 sheet (2026-10-15), assembled alongside the earlier straight sheets
+    # straightened2 re-trace of the 065803 sheet (2026-10-15), assembled alongside the earlier straight sheets;
+    # re-traced again on 2026-10-23 (same folder, shifted ~10 px grid) and re-rendered under the same ids
     ("20261012065814", "auto_grown_20261012065803387_straightened2_abf",
      f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
      "14019,7726,7726"),
@@ -1057,7 +1064,7 @@ def _render_job(job, workers, out_dir, script_dir, chunk_depth, chunk_y, chunk_x
     return result, made
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description="assemble test segment zarrs from tifxyz meshes")
     ap.add_argument(
         "--only",
@@ -1065,6 +1072,13 @@ def main():
         default=[],
         help="assemble one output ID; repeat to select multiple fragments",
     )
+    ap.add_argument("--mix6", action="store_true",
+                    help="assemble exactly the PHerc0846A sheets of the mix6 corpus (7 trained + the straightened2 holdout) with their flat "
+                         "aliases, anchors and 3 depths of asf cues")
+    ap.add_argument("--check", action="store_true",
+                    help="with --mix6: report what is missing or stale (read-only) and exit")
+    ap.add_argument("--cue-workers", type=int, default=4, help="parallel asf cue builds with --mix6 (default 4)")
+    ap.add_argument("--rebuild-cues", action="store_true", help="with --mix6: rebuild every asf cue, not only the missing ones")
     ap.add_argument("--workers", type=int, default=32,
                     help="parallel S3 chunk-download workers PER fragment (default 32 for EPYC 7702)")
     ap.add_argument("--out-dir", type=str, default=ZARR_DIR,
@@ -1097,7 +1111,16 @@ def main():
     ap.add_argument("--paris4-137kev", action="store_true",
                     help="only render paris4 20231210121321 from the 137 keV scan (id 20260323153942)")
     ap.add_argument("--paris4-sign", type=float, default=None, help="normal sign from --paris4-validate-78")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    os.chdir(SCRIPT_DIR)
+    if args.check and not args.mix6:
+        ap.error("--check needs --mix6")
+    if args.mix6:
+        from utils import mix6
+        aliases_0846a = [*mix6.TRAIN_0846A, mix6.HOLDOUT]
+        if args.check:
+            return 1 if mix6.report(aliases_0846a) else 0
+        args.only = [*args.only, *mix6.render_ids_0846a()]
     if args.rescan_overlap or args.paris4_validate_78 or args.paris4_137kev:
         os.chdir(SCRIPT_DIR)
         if args.rescan_overlap:
@@ -1199,6 +1222,14 @@ def main():
     for src, dst in FLAT_ALIASES.items():
         if src in rendered:
             results.append((f"{dst} (flat alias of {src})", make_flat_alias(src, dst, args.out_dir)))
+    if args.mix6:
+        wanted = set(mix6.render_ids_0846a())
+        if wanted <= rendered:
+            mix6.finalize(aliases_0846a, workers=args.cue_workers, rebuild_cues=args.rebuild_cues)
+            problems = mix6.status(aliases_0846a)
+            results.append(("mix6 PHerc0846A data (anchors, asf cues x3 depths)", "OK" if not problems else f"FAIL: {problems[:3]}"))
+        else:
+            results.append(("mix6 PHerc0846A data (anchors, asf cues x3 depths)", f"SKIP (not rendered: {sorted(wanted - rendered)})"))
     if extras:
         sync_extras_artifacts(ats, r2_root, extras, args.out_dir, already_generated=generated_in_loop)
     if args.upload_extras and extras:

@@ -1,10 +1,14 @@
 """Vesuvius ink-detection training.
 
-`python3 train.py` trains the best run so far (utils/config.py apply_best_run = iter2_asf_cue): a 192 px field with the
-precomputed asf_morph map as a fourth input head, dual scale, strong nnPU and the text-region gate, on the new PHerc0846A set
-(ABF, 073246, m28, straightened2 in_1 / out_1 / out_2 / out_3) plus PHerc0009B. straightened2, out_4 and out_5 are rendered at
-the end and never trained on. Checkpoints go to models/runs/<run>/ and TensorBoard to runs/<run>/; an existing run is never
-overwritten (a _2, _3 ... suffix is used). Experiment runners pass `configure` to edit the default Config instead.
+`python3 train.py` trains the mix6 model, cue_dropout_labelsv6_mix6 (utils/config.py apply_mix6_run): a 192 px field with the
+precomputed asf_morph map as a fourth input head (flat in 30% of the samples), dual scale, strong nnPU and the text-region gate,
+on the mix6 corpus (7 PHerc0846A sheets + PHerc0009B, 1447, 0841, 0814, 0172, 343 first letters; utils/mix6.py), 5 epochs, seed 17.
+straightened2 is rendered at the end and never trained on. Checkpoints go to models/runs/<run>/ (best_model_loss.pth is the one
+ensemble_eval.ipynb reads) and TensorBoard to runs/<run>/; an existing run is never overwritten (a _2, _3 ... suffix is used).
+The data comes from `python3 assemble_training_segments.py --mix6` (`--download` runs it first); the init weights are built here when missing.
+Experiment runners pass `configure` to edit the default Config instead.
+
+  python3 train.py [--smoke] [--dry-run] [--download] [-n RUN_NAME]
 """
 import functools
 import gc
@@ -28,7 +32,7 @@ from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 from tqdm import tqdm
 
-from utils.config import Config, apply_best_run, startup_output
+from utils.config import MIX6_INIT, MIX6_MAE192, Config, apply_mix6_run, apply_smoke, startup_output
 from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray, get_tile_pos_weight, needs_domain_ids, needs_patch_ids
 from utils.dataloader import CHARACTER_NAMESPACE_STRIDE, EXTRA_CHARACTER_OFFSET, get_divdis_loader, is_extra_character
 from utils.hard_mining import HardMiningInjector, HardMiningManager
@@ -4929,7 +4933,11 @@ def _is_lfs_pointer(path: str) -> bool:
 def _zarr_download_commands(scroll_ids) -> list[str]:
     import assemble_test_segments
     import assemble_training_segments
+    from utils import mix6
 
+    commands = []
+    if {int(sid) for sid in scroll_ids} & set(mix6.all_ids()):
+        commands.append("python3 assemble_training_segments.py --mix6   # everything the mix6 run reads, in one command")
     training_names = {str(zid): name for name, _segment, zid in assemble_training_segments.SEGMENTS}
     test_ids = {str(fragment[0]) for fragment in assemble_test_segments.FRAGMENTS}
     # flat aliases are written when their source render is assembled
@@ -4938,7 +4946,6 @@ def _zarr_download_commands(scroll_ids) -> list[str]:
     names = [training_names[str(sid)] for sid in scroll_ids if str(sid) in training_names]
     tests = [str(sid) for sid in scroll_ids if str(sid) in test_ids]
     unknown = [str(sid) for sid in scroll_ids if str(sid) not in training_names and str(sid) not in test_ids]
-    commands = []
     if names:
         command = f"python3 assemble_training_segments.py --only {','.join(names)}"
         if any(name in assemble_training_segments.RESCAN_88KEV for name in names):
@@ -4951,8 +4958,13 @@ def _zarr_download_commands(scroll_ids) -> list[str]:
     return commands
 
 
-def preflight_inputs(config) -> None:
-    """raise before any data loading if a zarr, label, or checkpoint is missing, with the command that fetches it."""
+def preflight_inputs(config, build_init: bool = False) -> None:
+    """raise before any data loading if a zarr, label, or checkpoint is missing, with the command that fetches it.
+    build_init: grow the missing mix6 init weights from the MAE first (they are derived, not downloaded)."""
+    if build_init and config.init_weights == MIX6_INIT and not os.path.isfile(MIX6_INIT):
+        from utils.cue_expand import build_mix6_init
+
+        build_mix6_init(MIX6_INIT)
     suffixes = {str(key): value for key, value in (config.data.zarr_suffix or {}).items()}
     train_ids = [int(sid) for sid in config.scroll_ids()]
     scroll_ids = list(dict.fromkeys([*train_ids, *(int(sid) for sid in config.data.vis_scroll_ids or [])]))
@@ -4981,9 +4993,22 @@ def preflight_inputs(config) -> None:
                 missing_files.append(path)
             elif _is_lfs_pointer(path):
                 lfs_pointers.append(path)
+    if str(config.model.input_cue or "") == "pre_clahe":
+        trained = {int(sid) for sid in train_ids}
+        for sid in scroll_ids:
+            directories = [config.data.cue_dir, *(config.data.depth_cue_dirs.values() if sid in trained else [])]
+            missing_files += [
+                path for path in (os.path.join(directory, f"{sid}{suffixes.get(str(sid), '')}.npy") for directory in directories)
+                if not os.path.exists(path)
+            ]
     if config.init_weights:
         if not os.path.isfile(config.init_weights):
-            missing_files.append(config.init_weights)
+            if config.init_weights == MIX6_INIT:
+                print(f"[preflight] {MIX6_INIT} is built from the MAE when training starts", flush=True)
+                if not os.path.isfile(MIX6_MAE192):
+                    missing_files.append(MIX6_MAE192)
+            else:
+                missing_files.append(config.init_weights)
         elif _is_lfs_pointer(config.init_weights):
             lfs_pointers.append(config.init_weights)
 
@@ -4997,8 +5022,9 @@ def preflight_inputs(config) -> None:
     if missing_files:
         problems.append(
             f"{len(missing_files)} repo file(s) missing:\n    " + "\n    ".join(missing_files)
-            + "\n  surface_labels/ and the flat-alias PNGs are written by assemble_training_segments.py / "
-            "assemble_test_segments.py; labels and train masks are tracked in git (`git checkout -- <path>`); "
+            + "\n  surface_labels/, the flat-alias PNGs and the asf cue maps are written by "
+            "`python3 assemble_training_segments.py --mix6` (`python3 -m utils.mix6 --build` makes the cues alone); "
+            "labels and train masks are tracked in git (`git checkout -- <path>`); "
             "models/ ships with the docker image"
         )
     if lfs_pointers:
@@ -5032,20 +5058,34 @@ def main(configure=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-n", "--run-name", default="", help="run name (default: utils/config.py run_name)")
     parser.add_argument("--dry-run", action="store_true", help="check inputs and print the config, then exit")
+    parser.add_argument("--smoke", action="store_true", help="one tiny epoch and two figures into models/runs_smoke and runs_smoke")
+    parser.add_argument("--download", action="store_true",
+                        help="first run `assemble_training_segments.py --mix6` (downloads and sets up the mix6 data; skips what exists)")
     args = parser.parse_args()
 
     config = Config()
-    # experiment runners (k_folds.py) edit the default config here, before any path resolution; a plain
-    # `python3 train.py` trains the best run so far
+    # experiment runners (k_folds.py, train_sequence.py) edit the default config here, before any path resolution; a plain
+    # `python3 train.py` trains the mix6 model
     if configure is None:
-        apply_best_run(config)
+        apply_mix6_run(config)
     else:
         configure(config)
+    if args.smoke:
+        apply_smoke(config)
     repo_root = os.path.dirname(os.path.abspath(__file__))
     # data, label, and cache paths in the config are repo-relative
     os.chdir(repo_root)
+    if args.download and configure is None:
+        import subprocess
+
+        subprocess.run([sys.executable, os.path.join(repo_root, "assemble_training_segments.py"), "--mix6"], check=True)
     if args.run_name:
         config.run_name = args.run_name
+    if args.smoke:
+        import shutil
+
+        for stale in (config.model_dir, os.path.join(config.tra.log_dir, config.run_name)):
+            shutil.rmtree(os.path.join(repo_root, stale), ignore_errors=True)
     name = _free_run_name(config, repo_root)
     models_root = os.path.dirname(os.path.normpath(os.path.join(repo_root, config.model_dir)))
     config.exp_name = config.run_name = name
@@ -5053,7 +5093,13 @@ def main(configure=None) -> None:
     config.save_final = os.path.join(config.model_dir, "final.pth")
     config.tra.log_dir = os.path.normpath(os.path.join(repo_root, config.tra.log_dir))
 
-    preflight_inputs(config)
+    if configure is None:
+        from utils import mix6
+
+        problems = mix6.flat_surface_problems()
+        if problems:
+            raise FileNotFoundError("input preflight failed\n" + "\n".join(problems))
+    preflight_inputs(config, build_init=not args.dry_run)
     if args.dry_run:
         print(
             f"[dry-run] run={name} ctx={config.data.context_size} norm={config.data.norm_mode} "
@@ -5093,6 +5139,10 @@ def main(configure=None) -> None:
         from utils.dataloader import cleanup_mmap_files
 
         cleanup_mmap_files()
+    checkpoints = sorted(file for file in os.listdir(config.model_dir) if file.endswith(".pth"))
+    print(f"[done] {name}: {len(checkpoints)} checkpoint(s) in {config.model_dir}/ -> {', '.join(checkpoints)}\n"
+          f"       best_model_loss.pth is the checkpoint ensemble_eval.ipynb / 0846A_eval.ipynb read; TensorBoard: {os.path.join(config.tra.log_dir, name)}",
+          flush=True)
 
 
 if __name__ == "__main__":

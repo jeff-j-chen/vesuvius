@@ -174,7 +174,10 @@ def save_panel_grid(rows, cell_hw, out_path, gap_px=24, quality=92):
                 _scale_bar(panel, 10000.0 / um_per_px * panel_w / cell_width, font_px)
             canvas[top:top + panel_h, left:left + panel_w] = panel
             title_pad = int(round(font_px * 0.4))
-            _text(canvas, (left + panel_w // 2, top - title_pad), str(title), font_px, (0, 0, 0), "mb")
+            title_rgb = (0, 0, 0)
+            if isinstance(title, tuple):  # (text, rgb)
+                title, title_rgb = title
+            _text(canvas, (left + panel_w // 2, top - title_pad), str(title), font_px, title_rgb, "mb")
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     if str(out_path).lower().endswith((".jpg", ".jpeg")):
         Image.fromarray(canvas).save(out_path, quality=quality)

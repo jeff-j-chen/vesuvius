@@ -149,8 +149,10 @@ def _unit_axis_mask(intervals, length_px: int, unit: int) -> np.ndarray:
     return flag
 
 
-def line_cells(scroll_id: int, shape_hw: tuple[int, int], unit: int, source: str):
-    """(band cells, gap cells) on the unit grid of a (h, w) patch; True where a cell sits in a text line / between two lines."""
+def line_cells(scroll_id: int, shape_hw: tuple[int, int], unit: int, source: str, gap_source: str = "own"):
+    """(band cells, gap cells) on the unit grid of a (h, w) patch; True where a cell sits in a text line / between two lines.
+
+    gap_source "own": gaps lie between this patch's own visible lines; "cross": between the pooled lines of every winding."""
     scroll_id = int(scroll_id)
     h, w = shape_hw
     ink = ink_map(scroll_id)
@@ -161,8 +163,8 @@ def line_cells(scroll_id: int, shape_hw: tuple[int, int], unit: int, source: str
     along_len, normal_len = (w, h) if axis == 0 else (h, w)
     band_flag = _unit_axis_mask(bands, normal_len, unit)
     extent_flag = _unit_axis_mask(extent, along_len, unit)
-    # gaps are always the stretches between this patch's own visible lines; pooled neighbour bands never erase them
-    own = bands_px(scroll_id, "own")
+    # gaps are the stretches between visible lines; with gap_source "own" pooled neighbour bands never erase them
+    own = bands_px(scroll_id, gap_source)
     gaps = []
     for (_, end), (start, _) in zip(own[:-1], own[1:]):
         if start - end >= MIN_GAP_PX + 2 * GAP_SHRINK_PX:

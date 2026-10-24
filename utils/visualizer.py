@@ -226,6 +226,22 @@ def _configured_surface_window_offset(config, scroll_id):
 
 
 def predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False, also_tta=False, surface_depth_map=None, surface_confidence_map=None, surface_depth_offset=0, cue_map=None):
+    """prediction map of `_predict_tiles`; with data.eval_cue_agree it is the cellwise minimum of the real-cue and the flat-cue
+    (128 over the papyrus) prediction, so a cell survives only when the raw slices support it without the cue."""
+    arguments = (config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max)
+    keywords = dict(tta=tta, also_tta=also_tta, surface_depth_map=surface_depth_map,
+                    surface_confidence_map=surface_confidence_map, surface_depth_offset=surface_depth_offset)
+    real = _predict_tiles(*arguments, cue_map=cue_map, **keywords)
+    if cue_map is None or not bool(getattr(config.data, "eval_cue_agree", False)):
+        return real
+    flat_cue = np.where(np.asarray(cue_map) > 0, 128, 0).astype(np.uint8)
+    flat = _predict_tiles(*arguments, cue_map=flat_cue, **keywords)
+    if isinstance(real, tuple):
+        return tuple(np.fmin(a, b) for a, b in zip(real, flat))
+    return np.fmin(real, flat)
+
+
+def _predict_tiles(config, model, vol, mask, coords, y_range, x_range, depth_start, volume_name, g_mean, g_std, g_min, g_max, tta=False, also_tta=False, surface_depth_map=None, surface_confidence_map=None, surface_depth_offset=0, cue_map=None):
     """run batched prediction over given coords returning downsampled map.
 
     reads tiles as y-row strips: one zarr call per row of tiles instead of one
@@ -978,12 +994,18 @@ class TensorboardVisualizer:
         )
         streamed = self.volume
         source = streamed
+        loaded = None
         if bool(getattr(streamed, "normalized", False)) and hasattr(streamed, "path"):
             import zarr
+            from .chunk_cache import read_full_zarr_forked
 
             source = zarr.open(streamed.path, mode="r")
-        loaded = np.ascontiguousarray(source[:, :, :])
-        loaded.setflags(write=False)
+            loaded = read_full_zarr_forked(streamed.path)
+            if loaded is not None and (loaded.shape != source.shape or loaded.dtype != source.dtype):
+                loaded = None
+        if loaded is None:
+            loaded = np.ascontiguousarray(source[:, :, :])
+            loaded.setflags(write=False)
         self._streamed_volume = streamed
         self.volume = loaded
         print(

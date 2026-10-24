@@ -21,3 +21,13 @@ output/
 crossres/
 # run outputs stay local to keep LFS under quota; already-tracked files are unaffected
 nader-fork/
+reader-v2/
+reader-v3/
+villa-ink/
+hecate/
+runs_smoke/
+models/runs_smoke/
+# cue maps are LFS-sized and rebuilt by assemble_*_segments.py --mix6 (build_domain_cues.py / build_pair_cues.py)
+cue_*/
+# per-run evaluation figures
+eval_figs/
