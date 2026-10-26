@@ -4,15 +4,42 @@ nnunet3d architecture baseline with some changes. Notably, it receives a 192x192
 
 Experiment history and campaign-specific details are kept in `old/KNOWLEDGE.md`.
 
+## Current setup: mix6 + PHerc0846A, straightened2 held out
+
+Everything we train today uses the **mix6 corpus** (`utils/mix6.py`): 7 hand-labeled PHerc0846A sheets plus 8 fragments from six other
+scrolls. The PHerc0846A sheet **straightened2** (`auto_grown_20261012065803387_straightened2_abf`, render `20261012065814`, alias `20261012065815`)
+is our **prize sheet**. It is rendered and scored over the whole patch, but no model is ever trained or validated on it.
+
+| Alias (label / cue / norm id) | Render (zarr / mask id) | Fragment | Physical scroll | Role |
+|---|---|---|---|---|
+| `20260927134931` | `20260927134928` | ABF patch (`auto_grown_20260927134928530_abf`) | PHerc0846A | trained |
+| `20261012073246` | `20261012073244` | 073244 patch (`auto_grown_20261012073244544_abf`) | PHerc0846A | trained |
+| `20261012065813` | `20261012065812` | straight sheet -28 voxels (`..._straight_abf_m28`) | PHerc0846A | trained |
+| `20261012065817` | `20261012065816` | straightened2 in_1 | PHerc0846A | trained |
+| `20261012065819` | `20261012065818` | straightened2 out_1 | PHerc0846A | trained |
+| `20261012065821` | `20261012065820` | straightened2 out_2 | PHerc0846A | trained |
+| `20261012065823` | `20261012065822` | straightened2 out_3 | PHerc0846A | trained |
+| `20261007000000` | same | w047-w048 first letters (NOT 343P) | PHerc0343 | trained |
+| `20250919125754` | same | patch 487 | PHerc0009B | trained |
+| `20260930144758` | same | w058 (flat surface, layer 14) | PHerc1447 | trained |
+| `20260930144760` | same | w060 (flat surface, layer 15) | PHerc1447 | trained |
+| `20260221022814` | same | auto-grown 405 | PHerc0841 | trained |
+| `20260226000000` | same | seg46527 | PHerc0814 | trained |
+| `20251111010954` | same | w068 | PHerc0172 | trained |
+| `20251112000002` | same | w087 | PHerc0172 | trained |
+| `20261012065815` | `20261012065814` | **straightened2** | PHerc0846A | **held out (prize sheet)** |
+
+The PHerc0846A sheets are read through flat depth-13 aliases (see [PHerc0846A](#pherc0846a)). The other scrolls use their stored surface labels with window offset 0.
+
 ## Quick start
 
 The project normally runs in a Docker image with system Python. No project virtual environment is required for the cue_dropout model
 (`train.py`); the reader-v3 and v8-in fine-tunes build their own environments (`reader-v3/.venv`, `nader-fork/.venv`) on first run.
 
 ```bash
-# everything the mix6 runs read, in one command: the mix6 scrolls' volumes, masks, norms, surface detections (PHerc1447: flat),
-# surface anchors and 3 depths of asf cues, plus the 7 trained PHerc0846A sheets and the straightened2 holdout
-# (assemble_test_segments.py --mix6); --check only reports what is missing
+# everything the mix6 runs read, in one command. It fetches the mix6 scrolls (7 trained PHerc0846A sheets + 343 first letters + 0009B
+# + 1447 + 0841 + 0814 + 0172) and the straightened2 holdout, and builds the auxiliary data: masks, norms, surface detections
+# (PHerc1447: flat; PHerc0846A: flat depth-13 aliases), surface anchors and 3 depths of asf cues. --check only reports what is missing
 python3 assemble_training_segments.py --mix6
 
 # the three mix6 models (each prints where its model is, see the table below)
@@ -28,53 +55,47 @@ tensorboard --logdir ./runs --bind-all
 | reader-v3 fine-tune | `python3 finetune_readerv3.py` (clones reader-v3 and the koine_machines training code, builds `reader-v3/.venv`, stages the corpus) | `reader-v3/runs/mix6/ckpt_002000.pth` |
 | v8-in fine-tune | `python3 finetune_v8in.py` (clones nader-fork, builds `nader-fork/.venv`, stages the corpus) | `nader-fork/runs/v8in_mix6_5ep/model/` |
 
-The mix6 corpus (`utils/mix6.py`) is the 7 trained PHerc0846A sheets + PHerc0343 first letters + PHerc0009B + PHerc1447 w058/w060 + PHerc0841 +
-PHerc0814 + PHerc0172 w068/w087; straightened2 is held out. `ensemble_eval.ipynb` ensembles the three models (2x2 figure) and `0846A_eval.ipynb`
-runs whichever of them it is given (the kind is detected from the checkpoint). `--smoke` on any of the three training scripts runs a tiny version into
+All three models train on the same corpus and none of them sees straightened2. `--smoke` on any of the three training scripts runs a tiny version into
 separate output folders.
 
-`python3 train.py` trains `cue_dropout_labelsv6_mix6`, `apply_mix6_run` in `utils/config.py` (the best run `iter2_asf_cue`, `apply_best_run`, see
-[Default run](#default-run-iter2_asf_cue), with a 30% flat-cue dropout on the mix6 corpus). Checkpoints go to `models/runs/<run>/` and TensorBoard logs to
-`runs/<run>/`; an existing run is never overwritten (`_2`, `_3`, ...). Experiment runners call
-`train.main(configure)` to edit the plain `Config()` instead (the older nop29 recipe, kept in `old/train_nop29.py`).
-Earlier campaign scripts live in `old/`.
+`python3 train.py` trains `cue_dropout_labelsv6_mix6` (`apply_mix6_run` in `utils/config.py`, see [The mix6 run](#the-mix6-run-cue_dropout_labelsv6_mix6)).
+Checkpoints go to `models/runs/<run>/` and TensorBoard logs to `runs/<run>/`. An existing run is never overwritten (`_2`, `_3`, ...).
+Experiment runners call `train.main(configure)` to edit the plain `Config()` instead. Earlier campaign scripts live in `old/`.
 
 Other runners:
 
-- `python3 k_folds.py` — cross-validation and leave-patches-out arms of the default run (see [PHerc0846A](#pherc0846a))
-- `python3 train_iter2.py --arm <arm>` — iteration 2: the 192 px baseline on the new PHerc0846A set and its single-change arms (logs `runs_iter2/`); `asf_cue` became the base of the mix6 run
-- `python3 train_0175A.py` — rotation-augmented arms that try to read the unlabeled PHerc0175A quick patches more cleanly, from the 0175A MAE (`mae_pretrain_0175a.py`)
-- `python3 assemble_training_segments.py` / `assemble_test_segments.py` without `--mix6` — every fragment / every test surface, as before
+- `python3 k_folds.py`: cross-validation and leave-patches-out arms of the earlier best run `iter2_asf_cue` (see [Cross-validation](#cross-validation))
+- `python3 train_iter2.py --arm <arm>`: iteration 2, the 192 px baseline on the PHerc0846A set and its single-change arms (logs in `runs_iter2/`). Its `asf_cue` arm became the base of the mix6 run
+- `python3 train_0175A.py`: rotation-augmented arms that try to read the unlabeled PHerc0175A quick patches more cleanly, starting from the 0175A MAE (`mae_pretrain_0175a.py`)
+- `python3 assemble_training_segments.py` without `--mix6`: every training fragment, including the 8 mix6 PHerc0846A sheets (7 trained + straightened2)
+- `python3 assemble_test_segments.py`: the test surfaces and the PHerc0846A renders outside mix6 (REDO set, out_4/out_5, p29, ...)
 
 ## Evaluation notebooks
 
-The three evaluation notebooks have different roles. All default to `models/runs/iter2_asf_cue/final.pth`
-(`VESUVIUS_CHECKPOINT` overrides it in `eval_scrolls` and `test_inference`) and replay the checkpoint's saved run config.
+| Notebook | Role |
+|---|---|
+| `ensemble_eval.ipynb` | Ensembles the three mix6 models on straightened2 (and other sheets in `SHEETS`). Saves a 3x2 grid: released reader-v3 (comparison only) / reader-v3 fine-tune / cue_dropout / v8-in / z-score composite / mid-boost composite. Output goes to `output/ensemble/mix6/<sheet>/` |
+| `0846A_eval.ipynb` | Runs one of the three mix6 models (the kind is detected from `CHECKPOINT`) on straightened2, the 7 trained sheets, the 8 other mix6 scrolls, the held-out out_4/out_5 and the PHerc0846A quick patches. See [0846A notebook](#0846a-notebook) |
+| `eval_scrolls.ipynb` | Runs a cue_dropout checkpoint on every labeled training fragment. Useful for iterative relabeling and sanity checks |
+| `test_inference.ipynb` | Runs a cue_dropout checkpoint on the test surfaces |
 
-Each starts with two depth-ensemble options:
+`eval_scrolls` and `test_inference` read `CHECKPOINT` (`VESUVIUS_CHECKPOINT` overrides it) and replay the checkpoint's saved run config.
+The mix6 model files are listed in `utils/mix6.py` `MODEL_PATHS`.
+
+The cue_dropout notebooks start with two depth-ensemble options:
 
 - `depth_ensemble = []` predicts at one depth; `[low, high]` predicts at every offset `low..high` around the notebook's usual depth (`[-3, 3]` = 7 depths)
 - `ensemble_method` combines them: `'z-score'` (top-2, scaled to 0..1 by its p99.5), `'max'`, `'mid-boost'` (corroborated, k=3) or `'mean'` (top-2); empty means `'mid-boost'`
 
 The combined map replaces the single-depth prediction in the usual figure (no extra panels or files) and the figure
 title names the method. The methods live in `utils/depth_ensemble.py`. Cells that already sweep or combine depths
-(the 0846A z-score and depth-sweep cells, the ±2 shift panels of `test_inference`) ignore these options.
+(the ±2 shift panels of `test_inference`) ignore these options.
 
-### `0846A_eval.ipynb`
-
-Runs a checkpoint on the PHerc0846A patches, see [0846A notebook](#0846a-notebook).
-
-### `eval_scrolls.ipynb`
-
-Run a model on every single training scroll. Useful for iterative relabeling and sanity checks of perofrmance.
-
-### `test_inference.ipynb`
-
-Run a model on every single test scroll. 13 test patches correspond to 10 test scrolls (PHerc1447, PHerc0800 and PHerc0211 have two surfaces each); each was generated by me. Renders `raw inference | inference | fiber composite | composite with 1 cm scale bar` per fragment into `output/test_visualizations/<run_id>/`. Missing zarrs, masks, norms, and surface labels are generated on demand. Generates a figure that will require some slight edits before being able to be submitted for a prize.
+`test_inference.ipynb` covers 13 test patches from 10 test scrolls (PHerc1447, PHerc0800 and PHerc0211 have two surfaces each), all generated by me. For each fragment it renders `raw inference | inference | fiber composite | composite with 1 cm scale bar` into `output/test_visualizations/<run_id>/`. Missing zarrs, masks, norms and surface labels are generated on demand. The figure needs some small edits before it can be submitted for a prize.
 
 ## Fragments
 
-`assemble_training_segments.py` brings every fragment onto the same training grid: 28 layers at 9.362µm. **Scan** is the CT volume the surface is sampled from (voxel size / beam energy). **Rendering** says how it got onto the grid. The tables below list the full corpus of the plain `Config()`: the 24 fragments used by Campaign 40, the PHerc1447 fine-tune windings and the first PHerc0846A patches. The default run (`python3 train.py`) trains only the PHerc0846A set and PHerc0009B; see [PHerc0846A](#pherc0846a) for all PHerc0846A renders. The same fragments, in the same groups, appear in the scroll visual guide (`python3 generate_scroll_visual_guide.py` → `output/scroll_patch_guide.png`). Splits come from `train_masks/` (see [Splits and character sampling](#splits-and-character-sampling)).
+`assemble_training_segments.py` brings every fragment onto the same training grid: 28 layers at 9.362µm. **Scan** is the CT volume the surface is sampled from (voxel size / beam energy). **Rendering** says how it got onto the grid. The tables below list the full corpus of the plain `Config()`: the 24 fragments used by Campaign 40, the PHerc1447 fine-tune windings and the first PHerc0846A patches. The mix6 run trains only the subset in [Current setup](#current-setup-mix6--pherc0846a-straightened2-held-out); see [PHerc0846A](#pherc0846a) for all PHerc0846A renders. The same fragments, in the same groups, appear in the scroll visual guide (`python3 generate_scroll_visual_guide.py` → `output/scroll_patch_guide.png`). Splits come from `train_masks/` (see [Splits and character sampling](#splits-and-character-sampling)).
 
 | ID | Fragment | Physical scroll | Scan | Rendering | Notes |
 |---|---|---|---|---|---|
@@ -108,7 +129,7 @@ Run a model on every single test scroll. 13 test patches correspond to 10 test s
 | `20260930144762` | w062 | PHerc1447 | 8.64µm / 116keV | Hugging Face 24-layer render; depth reversed, resampled in XYZ to 28 layers | Pseudo-label from held-out `loo_w062.png`; no train mask |
 | `20260927134931` | ABF patch | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20260927134928`), flat depth-13 alias | Hand-drawn labels; train-only |
 | `20261012073246` | 073244 patch | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20261012073244`), flat depth-13 alias | Hand-drawn labels; train-only |
-| `20261012073250` | 073244 +29 offset (p29) | PHerc0846A | 9.362µm / 113keV | 073244 mesh moved +29 voxels along its normal (`20261012073249`), flat depth-13 alias | Own hand-drawn labels; vis-only in the plain `Config()`, unused by the default run |
+| `20261012073250` | 073244 +29 offset (p29) | PHerc0846A | 9.362µm / 113keV | 073244 mesh moved +29 voxels along its normal (`20261012073249`), flat depth-13 alias | Own hand-drawn labels; vis-only in the plain `Config()`, unused by the mix6 run |
 
 ### Special rendering
 
@@ -142,65 +163,66 @@ These are still assembled (9.362µm / 113keV, native surface volumes). They have
 
 ## PHerc0846A
 
-PHerc0846A is the submission scroll. Every patch is rendered by `assemble_test_segments.py` from the
-9.362µm / 113keV volume `20250728152254` and is read through a **flat depth-13 alias** (`FLAT_ALIASES`):
+PHerc0846A is the submission scroll, and its sheet straightened2 is the prize sheet. Every patch is rendered from its tifxyz mesh and the
+9.362µm / 113keV volume `20250728152254`. It is read through a **flat depth-13 alias**:
 `<alias>.zarr` and the mask / label / train-mask PNGs are symlinks to the source render, and
 `surface_labels/<alias>/` is a constant depth 13 over the mask (no detected surface). With
 `surface_window_offset = -1` the model reads slices 9-16. Aliases get their own norm and surface-anchor entries.
-Every render in the table below is a default `FRAGMENTS` entry, so a plain `python3 assemble_test_segments.py`
-(no `--include-extras`) always assembles it and builds its alias; the script refuses to start if a `FLAT_ALIASES`
-source is missing from `FRAGMENTS`. Hand-drawn labels are in `dilated_inklabels/` (named after the render for the
-first patches, after the alias for the straightened2 sheets).
+Hand-drawn labels are in `dilated_inklabels/`, named after the alias.
 
-| Render | Alias | Mesh (`tifxyz/`) | Default run |
-|---|---|---|---|
-| `20260927134928` | `20260927134931` | `quick_patches_from_D/PHerc0846A/auto_grown_20260927134928530_abf` (ABF) | trained |
-| `20261012073244` | `20261012073246` | `3_new/auto_grown_20261012073244544_abf` | trained |
-| `20261012065812` | `20261012065813` | `auto_grown_20261012065803387_straight_abf_m28` (the straight mesh -28 voxels along its normal, `old/offset_mesh.py`) | trained |
-| `20261012065816` | `20261012065817` | `auto_grown_20261012065803387_straightened2_abf_in_1` (one sheet inward of straightened2) | trained |
-| `20261012065818` | `20261012065819` | `auto_grown_20261012065803387_straightened2_abf_out_1` | trained |
-| `20261012065820` | `20261012065821` | `auto_grown_20261012065803387_straightened2_abf_out_2` | trained |
-| `20261012065822` | `20261012065823` | `auto_grown_20261012065803387_straightened2_abf_out_3` | trained |
-| `20261012065814` | `20261012065815` | `auto_grown_20261012065803387_straightened2_abf` (straightened2, the winning sheet) | held out, whole-patch scored |
-| `20261012065824` | `20261012065825` | `auto_grown_20261012065803387_straightened2_abf_out_4` | held out, whole-patch scored |
-| `20261012065826` | `20261012065827` | `auto_grown_20261012065803387_straightened2_abf_out_5` | held out, whole-patch scored |
+Two scripts assemble these renders:
+
+- **the 8 mix6 sheets** (7 trained + straightened2): `assemble_training_segments.py` (`MESHES_0846A`). A plain run includes them and so does `--mix6`. The script renders each one with `assemble_test_segments.render_fragment` and builds its alias with `make_flat_alias`. These sheets skip label checks, surface detection and degradation
+- **every other PHerc0846A render** (out_4/out_5, p29, 081237, the straight sheets 065810 / 084610, the REDO set): `assemble_test_segments.py` (`FRAGMENTS` + `FLAT_ALIASES`). The script refuses to start if a `FLAT_ALIASES` source is missing from `FRAGMENTS`
+
+| Render | Alias | Mesh (`tifxyz/`) | Assembler | mix6 |
+|---|---|---|---|---|
+| `20260927134928` | `20260927134931` | `quick_patches_from_D/PHerc0846A/auto_grown_20260927134928530_abf` (ABF) | training | trained |
+| `20261012073244` | `20261012073246` | `3_new/auto_grown_20261012073244544_abf` | training | trained |
+| `20261012065812` | `20261012065813` | `auto_grown_20261012065803387_straight_abf_m28` (the straight mesh -28 voxels along its normal, `old/offset_mesh.py`) | training | trained |
+| `20261012065816` | `20261012065817` | `auto_grown_20261012065803387_straightened2_abf_in_1` (one sheet inward of straightened2) | training | trained |
+| `20261012065818` | `20261012065819` | `auto_grown_20261012065803387_straightened2_abf_out_1` | training | trained |
+| `20261012065820` | `20261012065821` | `auto_grown_20261012065803387_straightened2_abf_out_2` | training | trained |
+| `20261012065822` | `20261012065823` | `auto_grown_20261012065803387_straightened2_abf_out_3` | training | trained |
+| `20261012065814` | `20261012065815` | `auto_grown_20261012065803387_straightened2_abf` (**straightened2, the prize sheet**) | training | **held out**, rendered and scored over the whole patch |
+| `20261012065824` | `20261012065825` | `auto_grown_20261012065803387_straightened2_abf_out_4` | test | not used (whole-patch validation entry only) |
+| `20261012065826` | `20261012065827` | `auto_grown_20261012065803387_straightened2_abf_out_5` | test | not used (whole-patch validation entry only) |
 
 - the straightened2 sheets and `20261014084610` have upside-down meshes: their coordinate grids are rotated 180° in-plane before sampling (`ROTATE_180`, zarr attribute `rotated_180`), so every stored array is upright and letters are not mirrored
 - display only: the 073244 render/alias is shown rotated 90° CCW, p29 90° CW and the ABF patch 180° (`utils/fast_figure.display_rotation`); arrays and metrics stay in the native frame
 
-### Default run (`iter2_asf_cue`)
+### The mix6 run (`cue_dropout_labelsv6_mix6`)
 
-`apply_best_run` (`utils/config.py`) turns the plain `Config()` into the best iteration-2 arm:
+`apply_mix6_run` (`utils/config.py`) turns the plain `Config()` into what `python3 train.py` trains:
 
-- corpus: the seven trained PHerc0846A patches above (domain `pherc0846a`, weight 3) plus PHerc0009B patch 487 (weight 1); every other fragment is dropped. The 0846A patches are train-only (no validation split; a train mask only adds its painted explicit labels) and read at flat depth 13 with window offset -1; PHerc0009B keeps its stored surface labels
+- corpus: the mix6 corpus ([Current setup](#current-setup-mix6--pherc0846a-straightened2-held-out)). The seven PHerc0846A sheets form domain `pherc0846a` (weight 2, draws per epoch fixed by `equalize_domain`). PHerc0009B, PHerc1447, PHerc0841, PHerc0814, PHerc0172 and PHerc0343 are one domain each (weight 1). The 0846A sheets are train-only (no validation split; a train mask only adds its painted explicit labels) and read at flat depth 13 with window offset -1. The other scrolls train on their `train_masks/` region with their stored surface labels
+- straightened2 is rendered in the end-of-training figures (with the seven trained sheets) and scored over its whole patch. It is never trained or validated on
 - half-brightness strokes in the PHerc0846A labels become hard negatives (`extra_hard_negative_scroll_ids`)
-- 192 px field (batch 32, lr 1e-4), dual scale (mix 0.5), strong nnPU (`pu_lambda` 3, far negatives in 50% of the negative draws from 96 px off any label), text-region gate, ring close 2 / gap 2 / shell 4, native-noise bank off, 10 epochs
-- a fourth gated input head next to raw / lcn / dz reads the precomputed asf_morph map (`model.input_cue = "pre_clahe"`, `data.cue_dir = ./cue_asf_morph`); its branch trains at 5× the learning rate. The maps are committed in `cue_asf_morph/<volume id>.npy`; a missing one is built on the spot (`python3 -m utils.precomputed_asf`, minutes per patch)
-- starts from `models/runs_iter2/init_mae192_cue4.pth`: the 192 px campaign-40 MAE grown to four input heads (`train_iter2.py`, `utils/cue_expand.py`)
-- the end-of-training eval figures cover the seven trained patches, the three held-out sheets and PHerc0009B; the held-out sheets are never trained or validated on and are scored over their whole patch
+- 192 px field (batch 32, lr 1e-4), dual scale (mix 0.5), strong nnPU (`pu_lambda` 3, with 50% of the negative draws taken at least 96 px from any label), text-region gate, ring close 2 / gap 2 / shell 4, the 192 px native-noise bank, seed 17, 5 epochs (2 warmup)
+- a fourth gated input head, next to raw / lcn / dz, reads the precomputed asf_morph map (`model.input_cue = "pre_clahe"`, `data.cue_dir = ./cue_asf_morph`) and trains at 5× the learning rate. In 30% of the samples the cue is replaced by a flat map (cue dropout). Depth jitter reads the shifted maps `cue_asf_morph_dm1` / `_dp1`. `assemble_training_segments.py --mix6` builds all three depths (the holdout only gets depth 0)
+- starts from `models/init_mae192_cue4_seed17.pth`, which is the 192 px campaign-40 MAE grown to four input heads (`utils/cue_expand.py`). `train.py` builds it when it is missing
+
+The recipe is the earlier best run `iter2_asf_cue` (`apply_best_run`: the 0846A set plus PHerc0009B, 10 epochs) with the cue dropout added, on the larger corpus.
 
 ### Cross-validation
 
-`k_folds.py` runs arms of the default run, 10 epochs each; PHerc0009B always trains.
+`k_folds.py` runs arms of `iter2_asf_cue` (`apply_best_run`), 10 epochs each. PHerc0009B always trains.
 
 - `cv_fold_1` .. `cv_fold_3`: every PHerc0846A patch trains, but in each fold a third of its letters (8-connected ink components) and the papyrus nearest to them become validation; every letter is held out exactly once
 - `loo_*`: PHerc0009B plus two named 0846A patches train, and the other five are scored over the whole patch: `loo_A_out2_out3`, `loo_B_in1_out1`, `loo_C_073246_abf`, `loo_D_m28_out3`
 
-Every arm renders the same figures as the default run. TensorBoard, figures and `config.json` go to
+Every arm renders the same figures as `iter2_asf_cue`. TensorBoard, figures and `config.json` go to
 `runs_kfolds/<arm>/`, console logs to `runs_kfolds/logs/`, checkpoints to `models/runs_kfolds/<arm>/`, fold masks and
 previews to `runs_kfolds/splits/`. `--only cv_fold_1,...` selects arms; `--dry-run` checks inputs.
 
 ### 0846A notebook
 
-`0846A_eval.ipynb` runs a checkpoint on the PHerc0846A renders above and the 37 quick patches (`--include-extras`):
+`0846A_eval.ipynb` runs one of the three mix6 models on straightened2, the mix6 scrolls and the PHerc0846A quick patches (`assemble_test_segments.py --include-extras`):
 
-- settings cell: the depth-ensemble options, `CHECKPOINT`, `DEPTH_OFFSET = -1` (slices 9-16 of the flat depth-13 surface) and `DEVICE`. The checkpoint's run config is replayed, including its input heads (a 3-head checkpoint has no cue); a long-lived kernel must be restarted if the 4-head check fails
-- each volume is preloaded into RAM; the cue comes from `cue_asf_morph/` or is computed for the flat window
-- one cell per patch, in order: the winning sheet, the eight trained patches (PHerc0009B with its own surface and offset 0), then the held-out out_4, out_5 and three quick patches. Trained patches get a 2×2 figure (prediction, composite, prediction with the inklabel in red, asf_morph cue); all others prediction | composite. Figures go to `output/0846A/<model>/offset_<offset>/`
-- z-score + CT: combines the per-depth predictions of the winning sheet (`OFFSET_RANGE`) with the four methods of `utils/depth_ensemble.py` (per-depth predictions are cached per checkpoint)
-- surface predictions: detects the real papyrus surface of straightened2 (`generate_surface_supervision.py`), recomputes the cue on it and predicts there instead of on the flat surface
-- the remaining quick patches go to one `quick_patches/` subfolder
-- depth sweep: one figure per offset -4..+4 on the winning sheet, in `output/0846A/44depths/`
+- settings cell: `CHECKPOINT` (any of the three; the kind is detected from the file by `utils/predict_models.detect_kind`), the depth-ensemble options and `DEPTH_OFFSET = -1` (cue_dropout only: slices 9-16 of the flat depth-13 surface). For cue_dropout the run config is replayed, including its input heads; a long-lived kernel must be restarted if the 4-head check fails
+- each model reads a scroll its native way: cue_dropout reads 8 slices and predicts one value per 16 px cell, reader-v3 reads the 17 central layers and v8-in the 24 central layers, both predicting per pixel. The two per-pixel models run in their own virtualenvs (`utils/predict_models.py`)
+- one cell per patch, in order: straightened2 (held out), the seven trained 0846A sheets, the eight other mix6 scrolls (stored surface labels, window offset 0), then the held-out out_4, out_5 and three quick patches. Trained patches get a 2×2 figure (prediction, composite, prediction with the inklabel in red, asf_morph cue); all others get prediction | composite. Figures go to `output/0846A/<model>/`
+- the last cell renders the remaining quick patches into one `quick_patches/` subfolder
 
 ## Test surfaces
 
@@ -383,8 +405,8 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 | Path | Purpose |
 |---|---|
 | `train.py` | Training loop, losses, metrics, checkpoints, and logging |
-| `k_folds.py` | Letter k-folds and leave-patches-out arms of the default run on the PHerc0846A patches |
-| `train_iter2.py` | Iteration-2 arms on the new PHerc0846A set; builds the 4-head init of the default run |
+| `k_folds.py` | Letter k-folds and leave-patches-out arms of `iter2_asf_cue` on the PHerc0846A patches |
+| `train_iter2.py` | Iteration-2 arms on the PHerc0846A set (`asf_cue` is the base of the mix6 run) |
 | `train_0175A.py` | Rotation-augmented arms for the unlabeled PHerc0175A quick patches |
 | `mae_pretrain_0175a.py` | MAE continuation on the PHerc0175A and PHerc0846A quick patches |
 | `finetune_readerv3.py` | Clones reader-v3 + koine_machines, stages the mix6 corpus and fine-tunes reader-v3 for 2000 steps |
@@ -406,8 +428,8 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 | `build_domain_cues.py` | Builds the shift 0/-1/+1 cue maps for the add-one domain runs of `old/train_sequence.py` |
 | `build_pair_cues.py` | Builds the +-1/+-2 shifted cue maps (`cue_asf_morph_dm1/dp1/dm2/dp2`) read by the depth-MIL runs of `old/train_iter2.py` |
 | `utils/depth_ensemble.py` | Depth-ensemble combination methods shared by the evaluation notebooks |
-| `assemble_training_segments.py` | Builds training zarrs, masks, aligned labels, eroded labels, and norms |
-| `assemble_test_segments.py` | Renders the thirteen unlabeled test surfaces |
+| `assemble_training_segments.py` | Builds the training zarrs, masks and norms, including the 8 mix6 PHerc0846A sheets and their flat aliases; `--mix6` sets up exactly the mix6 corpus + straightened2 |
+| `assemble_test_segments.py` | Renders the unlabeled test surfaces, the PHerc0846A renders outside mix6 and the extra sets |
 | `generate_surface_supervision.py` | Builds literal depth and confidence maps |
 | `extract_ink3d_patch.py` | Samples whole-scroll 3D ink predictions onto one patch's 28-layer grid |
 | `precompute_norm.py` | Populates `norm_cache.json` without starting training |
@@ -435,7 +457,7 @@ The results are stored in `norm_cache.json`, keyed by fragment ID. Chunk-aligned
 | `eroded_inklabels/` | Conservative binary training labels |
 | `train_masks/` | Explicit train, validation, and guaranteed-negative assignments |
 | `surface_labels/` | Literal surface depth and confidence maps |
-| `cue_asf_morph/` | Precomputed asf_morph cue maps read by the default run's fourth input head (git-ignored; rebuilt by `--mix6`) |
+| `cue_asf_morph/` | Precomputed asf_morph cue maps read by the mix6 run's fourth input head (git-ignored; rebuilt by `--mix6`) |
 | `models/` | Pretraining and supervised checkpoints |
 | `runs_*` | TensorBoard logs and saved experiment configurations |
 | `output/` | Evaluation figures and generated reviews |

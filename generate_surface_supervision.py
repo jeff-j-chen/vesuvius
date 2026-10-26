@@ -13,7 +13,6 @@ import argparse
 import json
 import os
 import time
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -22,20 +21,42 @@ import numpy as np
 import zarr
 
 
+def _extreme_values(x: np.ndarray, k: int, largest: bool) -> list[np.ndarray]:
+    """k most extreme values along axis 0, most extreme first; exact and much faster than np.partition."""
+    keep, spill = (np.maximum, np.minimum) if largest else (np.minimum, np.maximum)
+    best = [np.full(x.shape[1:], -np.inf if largest else np.inf, dtype=x.dtype) for _ in range(k)]
+    a = np.empty(x.shape[1:], dtype=x.dtype)
+    b = np.empty_like(a)
+    for layer in x:
+        # insertion into the sorted running list; the displaced value carries down
+        carry = layer
+        for value in best:
+            spill(value, carry, out=a)
+            keep(value, carry, out=value)
+            carry, a, b = a, b, a
+    return best
+
+
 def _depth_quantiles_linear(x: np.ndarray, quantiles: tuple[float, ...]) -> list[np.ndarray]:
-    """exact NumPy-linear quantiles along a short depth axis using one partial partition."""
+    """exact NumPy-linear quantiles along a short depth axis."""
     depth = x.shape[0]
     positions = [float(q) * (depth - 1) for q in quantiles]
     lower = [int(np.floor(position)) for position in positions]
     upper = [int(np.ceil(position)) for position in positions]
-    partitioned = np.partition(x, sorted(set(lower + upper)), axis=0)
+    needed = set(lower + upper)
+    smallest = _extreme_values(x, max([i + 1 for i in needed if 2 * i < depth], default=0), largest=False)
+    biggest = _extreme_values(x, max([depth - i for i in needed if 2 * i >= depth], default=0), largest=True)
+
+    def order_stat(i):
+        return smallest[i] if 2 * i < depth else biggest[depth - 1 - i]
+
     out = []
     for position, lo, hi in zip(positions, lower, upper):
         if lo == hi:
-            out.append(partitioned[lo])
+            out.append(order_stat(lo))
         else:
             weight = np.float32(position - lo)
-            out.append(partitioned[lo] * (1.0 - weight) + partitioned[hi] * weight)
+            out.append(order_stat(lo) * (1.0 - weight) + order_stat(hi) * weight)
     return out
 
 
@@ -47,6 +68,24 @@ def _unit_intensity(raw: np.ndarray, scale: float | None = None) -> np.ndarray:
         scale = float(np.iinfo(raw.dtype).max)
         return raw.astype(np.float32) / max(scale, 1.0)
     return np.clip(raw.astype(np.float32), 0.0, 1.0)
+
+
+def _load_volume(volume, workers: int) -> np.ndarray:
+    """read every chunk exactly once with parallel chunk-aligned tiles; network stores are latency bound."""
+    height, width = map(int, volume.shape[1:])
+    chunk_h, chunk_w = map(int, volume.chunks[1:])
+    tile_h = chunk_h * max(1, 256 // chunk_h)
+    tile_w = chunk_w * max(1, 256 // chunk_w)
+    out = np.empty(volume.shape, dtype=volume.dtype)
+
+    def read(origin):
+        y, x = origin
+        out[:, y:y + tile_h, x:x + tile_w] = volume[:, y:y + tile_h, x:x + tile_w]
+
+    origins = [(y, x) for y in range(0, height, tile_h) for x in range(0, width, tile_w)]
+    with ThreadPoolExecutor(max_workers=max(1, int(workers))) as pool:
+        list(pool.map(read, origins))
+    return out
 
 
 def _volume_intensity_scale(volume) -> float:
@@ -96,16 +135,16 @@ def _detect_strip(
         sigmaX=coarse_sigma,
         sigmaY=coarse_sigma,
     )
-    transition = np.moveaxis(
+    transition = np.ascontiguousarray(np.moveaxis(
         (1.0 - coarse_weight) * fine + coarse_weight * coarse,
         -1,
         0,
-    )
+    ))
 
     depth_index = transition.argmax(axis=0).astype(np.uint8)
-    partitioned = np.partition(transition, -2, axis=0)
-    peak = partitioned[-1]
-    margin = partitioned[-1] - partitioned[-2]
+    top1, top2 = _extreme_values(transition, 2, largest=True)
+    peak = top1
+    margin = top1 - top2
     valid = (contrast >= min_contrast) & (peak >= min_peak) & (margin >= min_margin)
 
     # rescue isolated weak detections without bridging broad low-evidence regions
@@ -669,8 +708,10 @@ def main() -> None:
     parser.add_argument("--elastic-max-update", type=float, default=0.25)
     parser.add_argument("--elastic-max-gradient", type=float, default=0.55)
     parser.add_argument("--elastic-fill-radius", type=int, default=8)
-    parser.add_argument("--prefetch-blocks", type=int, default=2,
-                        help="bounded background zarr reads to overlap I/O with detection")
+    parser.add_argument("--read-workers", type=int, default=64,
+                        help="parallel zarr tile reads used to load the volume into memory once")
+    parser.add_argument("--detect-workers", type=int, default=8,
+                        help="row blocks detected concurrently (results are identical for any value)")
     parser.add_argument("--view-all-layers", action="store_true",
                         help="also write per-depth layer jpgs (default: only the depth overview)")
     parser.add_argument("--review", action="store_true",
@@ -700,9 +741,12 @@ def main() -> None:
     depth, height, width = map(int, volume.shape)
     if not (0 <= args.z_start < args.z_end <= depth):
         raise ValueError(f"invalid depth window [{args.z_start}, {args.z_end}) for depth {depth}")
+    load_started = time.perf_counter()
+    data = _load_volume(volume, args.read_workers)
+    print(f"[surface] loaded {data.shape} {data.dtype} in {time.perf_counter() - load_started:.1f}s", flush=True)
     # resampled volumes (e.g. 24->28 layers) carry all-zero padding layers; a nonzero->zero step
     # there is not a papyrus-air transition, so keep the window inside the populated layers
-    populated = [d for d in range(depth) if np.asarray(volume[d, ::16, ::16]).any()]
+    populated = np.flatnonzero(data[:, ::16, ::16].reshape(depth, -1).any(axis=1)).tolist()
     args.z_start = max(args.z_start, populated[0])
     args.z_end = min(args.z_end, populated[-1] + 1)
     print(f"[surface] detection window [{args.z_start}, {args.z_end}) of {depth} layers", flush=True)
@@ -730,7 +774,7 @@ def main() -> None:
         overlay_paths = []
         if args.view_all_layers:
             overlay_paths = _write_overlays(
-                volume, depth_map, confidence, args.z_start, args.z_end, review_dir,
+                data, depth_map, confidence, args.z_start, args.z_end, review_dir,
                 output_height=args.review_height, overlay_alpha=args.overlay_alpha,
                 ink_volume=ink_volume, ink_alpha=args.ink_alpha,
             )
@@ -757,53 +801,19 @@ def main() -> None:
         stale_overlay.unlink()
     depth_path = output_dir / "depth.npy"
     confidence_path = output_dir / "confidence.npy"
-    depth_map = np.lib.format.open_memmap(depth_path, mode="w+", dtype=np.uint8, shape=(height, width))
-    confidence = np.lib.format.open_memmap(
-        confidence_path,
-        mode="w+",
-        dtype=np.uint8,
-        shape=(height, width),
-    )
-    depth_map[:] = 255
-    confidence[:] = 0
+    # built in RAM and saved at the end so an interrupted run never leaves a shape-valid partial depth.npy
+    depth_map = np.full((height, width), 255, dtype=np.uint8)
+    confidence = np.zeros((height, width), dtype=np.uint8)
 
-    block_specs = []
-    for y0 in range(0, height, args.row_block):
+    detection_started = time.perf_counter()
+    intensity_scale = _volume_intensity_scale(data)
+    print(f"[surface] intensity scale {intensity_scale:g} ({volume.dtype})", flush=True)
+
+    def detect_block(y0):
         y1 = min(height, y0 + args.row_block)
         ys = max(0, y0 - args.halo)
         ye = min(height, y1 + args.halo)
-        block_specs.append((y0, y1, ys, ye))
-
-    def read_block(spec):
-        _y0, _y1, ys, ye = spec
-        return np.asarray(volume[args.z_start:args.z_end, ys:ye, :])
-
-    def prefetched_blocks():
-        prefetch = max(0, int(args.prefetch_blocks))
-        if prefetch == 0:
-            for spec in block_specs:
-                yield spec, read_block(spec)
-            return
-        with ThreadPoolExecutor(max_workers=prefetch) as pool:
-            pending = deque()
-            next_index = 0
-            while next_index < min(prefetch, len(block_specs)):
-                spec = block_specs[next_index]
-                pending.append((spec, pool.submit(read_block, spec)))
-                next_index += 1
-            while pending:
-                spec, future = pending.popleft()
-                raw = future.result()
-                if next_index < len(block_specs):
-                    next_spec = block_specs[next_index]
-                    pending.append((next_spec, pool.submit(read_block, next_spec)))
-                    next_index += 1
-                yield spec, raw
-
-    detection_started = time.perf_counter()
-    intensity_scale = _volume_intensity_scale(volume)
-    print(f"[surface] intensity scale {intensity_scale:g} ({volume.dtype})", flush=True)
-    for (y0, y1, ys, ye), raw in prefetched_blocks():
+        raw = data[args.z_start:args.z_end, ys:ye, :]
         rel_depth, conf, valid = _detect_strip(
             raw,
             threshold_frac=args.threshold_frac,
@@ -820,11 +830,14 @@ def main() -> None:
         absolute_depth = rel_depth[keep].astype(np.uint16) + args.z_start
         depth_map[y0:y1] = np.where(valid, absolute_depth, 255).astype(np.uint8)
         confidence[y0:y1] = np.where(valid, np.clip(conf[keep] * 255.0, 1, 255), 0).astype(np.uint8)
-        print(f"[surface] rows {y0}:{y1}/{height}", flush=True)
+        return y1
+
+    # blocks write disjoint rows and numpy/OpenCV release the GIL, so threads scale
+    with ThreadPoolExecutor(max_workers=max(1, int(args.detect_workers))) as pool:
+        for y1 in pool.map(detect_block, range(0, height, args.row_block)):
+            print(f"[surface] rows {y1}/{height}", flush=True)
     print(f"[surface] detection: {time.perf_counter() - detection_started:.1f}s", flush=True)
 
-    depth_map.flush()
-    confidence.flush()
     regularization_started = time.perf_counter()
     regularization = _regularize_surface_map(depth_map, confidence, mask)
     print(
@@ -849,8 +862,8 @@ def main() -> None:
         fill_radius=args.elastic_fill_radius,
     )
     print(f"[surface] elastic fit: {time.perf_counter() - elastic_started:.1f}s", flush=True)
-    depth_map.flush()
-    confidence.flush()
+    np.save(depth_path, depth_map)
+    np.save(confidence_path, confidence)
     valid_count = int((confidence > 0).sum())
     mask_count = int(mask.sum())
     histogram = {
@@ -887,7 +900,7 @@ def main() -> None:
     overlay_paths = []
     if args.view_all_layers:
         overlay_paths = _write_overlays(
-            volume,
+            data,
             depth_map,
             confidence,
             args.z_start,

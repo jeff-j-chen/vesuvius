@@ -4941,7 +4941,8 @@ def _zarr_download_commands(scroll_ids) -> list[str]:
     training_names = {str(zid): name for name, _segment, zid in assemble_training_segments.SEGMENTS}
     test_ids = {str(fragment[0]) for fragment in assemble_test_segments.FRAGMENTS}
     # flat aliases are written when their source render is assembled
-    sources = {alias: source for source, alias in assemble_test_segments.FLAT_ALIASES.items()}
+    sources = {alias: source for source, alias in {**assemble_test_segments.FLAT_ALIASES,
+                                                   **assemble_training_segments.FLAT_ALIASES_0846A}.items()}
     scroll_ids = list(dict.fromkeys(sources.get(str(sid), str(sid)) for sid in scroll_ids))
     names = [training_names[str(sid)] for sid in scroll_ids if str(sid) in training_names]
     tests = [str(sid) for sid in scroll_ids if str(sid) in test_ids]

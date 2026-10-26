@@ -8,6 +8,10 @@ PHerc1447 windings are assembled from the released 24-layer Hugging Face renders
 depth_reversed.json are written directly in the reversed (canonical) depth order and carry
 attrs depth_flipped=true; there is no post-hoc flip.
 
+The 8 PHerc0846A sheets of the mix6 corpus (MESHES_0846A: the 7 trained sheets + the straightened2 holdout) are
+rendered from their tifxyz meshes with assemble_test_segments.render_fragment and get their flat depth-13 alias
+(symlinked zarr/mask/label/train mask, flat surface, norm, surface anchors) instead of steps 2-5.
+
 per fragment, in order (each step skips if its output already exists):
     1. download or assemble the surface volume -> ves_zarrs2/<id>.zarr + masks/<id>.png
     2. verify the required labels exist and match the zarr/mask XY dimensions
@@ -29,15 +33,15 @@ usage:
   python assemble_training_segments.py --spectral-match      # refit the step-5 PSFs against the native references
   python assemble_training_segments.py --degrader models/c39_degrader.pth   # learned-degrader .translated siblings
 
---mix6 (off by default) downloads and sets up exactly the mix6 corpus (utils/mix6.py): PHerc0009B, PHerc1447 w058/w060, PHerc0841,
-PHerc0814, PHerc0172 w068/w087 and the PHerc0343 first letters here, then runs `assemble_test_segments.py --mix6` for the 7 trained
-PHerc0846A sheets + the straightened2 holdout. Per scroll that is the volume + mask, norm, surface detection (PHerc1447: the flat
-surface at its measured centre layer), the degraded <id>.matched volume where a scroll needs one (none in mix6), surface anchors
-and the 3 depths of asf cues (cue_asf_morph, _dm1, _dp1). Labels and train masks come from git. --check only reports what is
-missing (read-only). --only adds scrolls on top of the corpus (python assemble_training_segments.py --mix6 --only w058,w059).
+--mix6 (off by default) downloads and sets up exactly the mix6 corpus (utils/mix6.py): the 7 trained PHerc0846A sheets + the
+straightened2 holdout, PHerc0009B, PHerc1447 w058/w060, PHerc0841, PHerc0814, PHerc0172 w068/w087 and the PHerc0343 first letters.
+Per scroll that is the volume + mask, norm, surface detection (PHerc1447: the flat surface at its measured centre layer; PHerc0846A:
+the flat depth-13 alias), surface anchors and the 3 depths of asf cues (cue_asf_morph, _dm1, _dp1; the holdout only the first).
+Labels and train masks come from git. --check only reports what is missing (read-only). --only adds scrolls on top of the corpus
+(python assemble_training_segments.py --mix6 --only w058,w059).
 """
 from __future__ import annotations
-import argparse, json, os, shutil, subprocess, sys, time
+import argparse, json, os, shutil, subprocess, sys, threading, time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import cv2
 import numpy as np
@@ -59,6 +63,30 @@ TMP = "_ves_tmp"
 
 # constant across all PHerc0139 segments
 VOL9_NAME = "9.362um-1.2m-113keV-volume-20250728140407.zarr"
+
+# PHerc0846A (the submission scroll): the 7 trained mix6 sheets + the straightened2 holdout, rendered from their tifxyz meshes
+# (assemble_test_segments.render_fragment) and read through flat depth-13 aliases (assemble_test_segments.make_flat_alias).
+# name (utils/mix6.py SHEETS_0846A / HOLDOUT_NAME) -> (render zarr id, flat alias, mesh under tifxyz/)
+VOL_0846A = (f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0", "14019,7726,7726")
+MESHES_0846A = {
+    "auto_grown_20260927134928530_abf": (
+        "20260927134928", "20260927134931", "quick_patches_from_D/PHerc0846A/auto_grown_20260927134928530_abf"),
+    "auto_grown_20261012073244544_abf": ("20261012073244", "20261012073246", "3_new/auto_grown_20261012073244544_abf"),
+    # the straight mesh moved -28 voxels along the render normal (old/offset_mesh.py)
+    "auto_grown_20261012065803387_straight_abf_m28": (
+        "20261012065812", "20261012065813", "auto_grown_20261012065803387_straight_abf_m28"),
+    # neighbor sheets of straightened2: in_1 one sheet the other way, out_N N sheets away
+    **{f"auto_grown_20261012065803387_straightened2_abf_{suffix}": (
+        render, alias, f"auto_grown_20261012065803387_straightened2_abf_{suffix}")
+       for suffix, render, alias in (
+           ("in_1", "20261012065816", "20261012065817"), ("out_1", "20261012065818", "20261012065819"),
+           ("out_2", "20261012065820", "20261012065821"), ("out_3", "20261012065822", "20261012065823"))},
+    # HOLDOUT prize sheet (straightened2), never trained or validated on
+    "auto_grown_20261012065803387_straightened2_abf": (
+        "20261012065814", "20261012065815", "auto_grown_20261012065803387_straightened2_abf"),
+}
+FRAGMENTS_0846A = [(render, mesh, *VOL_0846A) for render, _alias, mesh in MESHES_0846A.values()]
+FLAT_ALIASES_0846A = {render: alias for render, alias, _mesh in MESHES_0846A.values()}
 
 # (name, segment_prefix, zarr_id)
 SEGMENTS = [
@@ -125,6 +153,7 @@ SEGMENTS = [
     ("p841", "PHerc0841/segments/20260221022814-auto_grown_20260220174252405", "20260221022814"),
     # PHerc0343 First Letters segment (Nieuwlaar/pherc343-first-letters): tifxyz mesh rendered from the raw volume
     ("p343_letters", "", "20261007000000"),
+    *((name, "", render) for name, (render, _alias, _mesh) in MESHES_0846A.items()),
 ]
 
 # per-fragment behaviour overrides. skip_labels=True skips the dilated label check
@@ -1563,8 +1592,31 @@ def _assemble_pherc1447_surface(name, zid, opts, chunk_depth, chunk_y, chunk_x, 
     print(f"  [ph1447] wrote {out_zarr} shape={output_shape}")
 
 
+_ALIAS_LOCK = threading.Lock()  # make_flat_alias rewrites norm_cache.json / surface_anchor_cache.json
+
+
+def _assemble_0846a(name, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
+    """render a PHerc0846A sheet from its tifxyz mesh, then build its flat depth-13 alias (symlinks, surface, norms, anchors)."""
+    import assemble_test_segments as test_assembler
+
+    _render, alias, mesh = MESHES_0846A[name]
+    os.makedirs(ZARR_DIR, exist_ok=True)
+    _zid, status = test_assembler.render_fragment(
+        zid, mesh, *VOL_0846A, workers, ZARR_DIR, test_assembler.SCRIPT_DIR, chunk_depth, chunk_y, chunk_x, force=force)
+    if not status.startswith("OK"):
+        raise RuntimeError(f"render {zid}: {status}")
+    with _ALIAS_LOCK:
+        status = test_assembler.make_flat_alias(zid, alias, ZARR_DIR)
+    if status != "OK":
+        raise RuntimeError(f"flat alias {alias}: {status}")
+    print(f"  [alias] {alias} -> {zid}: flat depth-13 surface, norm and anchors ready")
+
+
 def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
     opts = FRAG_OPTS.get(name, {})
+    if name in MESHES_0846A:
+        _assemble_0846a(name, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
+        return
     if opts.get("hf_pherc1447"):
         _assemble_pherc1447_surface(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=force)
         return
@@ -1808,6 +1860,11 @@ def process_fragment(name, seg, zid, workers, skip_norm, skip_surface, chunk_dep
     tag = f"{prefix}{name} ({zid})"
     try:
         print(f"\n{'='*70}\n{tag}  id={zid}\n{'='*70}", flush=True)
+        if name in MESHES_0846A:
+            # the flat alias carries the label, surface, norm and anchors; nothing below applies to the render
+            step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
+            print(f"[done] {tag}")
+            return (name, "OK")
         if opts.get("hf_pherc1447"):
             _prepare_pherc1447_labels(name, zid, opts, force=force)
         step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
@@ -1872,9 +1929,8 @@ def main():
     ap.add_argument("--no-degrade", action="store_true",
                     help="skip the default <id>.matched.zarr degradation of the fine scans (MATCHED_SIGMAS)")
     ap.add_argument("--mix6", action="store_true",
-                    help="download and set up exactly the mix6 corpus: the non-0846A scrolls here, then the 7 trained PHerc0846A "
-                         "sheets + the straightened2 holdout through assemble_test_segments.py --mix6 (see the docstring); "
-                         "--only adds scrolls on top")
+                    help="download and set up exactly the mix6 corpus: the 7 trained PHerc0846A sheets + the straightened2 holdout "
+                         "and the other mix6 scrolls, with anchors and asf cues (see the docstring); --only adds scrolls on top")
     ap.add_argument("--check", action="store_true", help="with --mix6: report what is missing or stale (read-only) and exit")
     ap.add_argument("--cue-workers", type=int, default=4, help="parallel asf cue builds with --mix6 (default 4)")
     ap.add_argument("--rebuild-cues", action="store_true", help="with --mix6: rebuild every asf cue, not only the missing ones")
@@ -1935,7 +1991,7 @@ def main():
     segs = SEGMENTS
     if args.mix6:
         # the mix6 corpus plus any scrolls named with --only (those get the plain per-fragment pipeline)
-        want = set(mix6.TRAINING_NAMES) | {o.strip() for o in (args.only or "").split(",") if o.strip()}
+        want = set(mix6.ASSEMBLER_NAMES) | {o.strip() for o in (args.only or "").split(",") if o.strip()}
         segs = [s for s in SEGMENTS if s[0] in want]
     elif args.only:
         # comma-separated list so several fragments can be forced in one run
@@ -2003,17 +2059,11 @@ def main():
         if failed:
             sys.exit(f"[mix6] not finalized, fragments failed: {failed}")
         # flat 1447 surfaces are written in step 4; anchors and the 3 depths of cues need every surface, so they come last
-        mix6.finalize([sid for sid in mix6.all_ids() if sid not in (*mix6.TRAIN_0846A, mix6.HOLDOUT)],
-                      workers=args.cue_workers, rebuild_cues=args.rebuild_cues)
-        import assemble_test_segments
-        code = assemble_test_segments.main([
-            "--mix6", "--workers", str(args.workers), "--chunk-depth", str(args.chunk_depth), "--chunk-y", str(args.chunk_y),
-            "--chunk-x", str(args.chunk_x), "--cue-workers", str(args.cue_workers),
-            *(["--force"] if args.force else []), *(["--rebuild-cues"] if args.rebuild_cues else [])])
+        mix6.finalize(workers=args.cue_workers, rebuild_cues=args.rebuild_cues)
         problems = mix6.report()
-        print("[mix6] data ready for train.py, finetune_readerv3.py and finetune_v8in.py" if not problems and not code
+        print("[mix6] data ready for train.py, finetune_readerv3.py and finetune_v8in.py" if not problems
               else "[mix6] data NOT ready")
-        sys.exit(1 if problems or code else 0)
+        sys.exit(1 if problems else 0)
 
 
 if __name__ == "__main__":

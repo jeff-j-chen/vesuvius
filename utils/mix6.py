@@ -18,8 +18,9 @@ from typing import NamedTuple
 
 REPO = Path(__file__).resolve().parent.parent
 
-# 0846A sheets: flat alias (the label / cue / norm / train-mask name) -> render zarr id and display name; the aliases are
-# symlinks to the render (assemble_test_segments.py FLAT_ALIASES) and read a flat depth-13 surface
+# 0846A sheets: flat alias (the label / cue / norm / train-mask name) -> render zarr id and display name (= the name in
+# assemble_training_segments.SEGMENTS); the aliases are symlinks to the render (assemble_training_segments.MESHES_0846A) and read a
+# flat depth-13 surface
 SHEETS_0846A = {
     20260927134931: (20260927134928, "auto_grown_20260927134928530_abf"),
     20261012073246: (20261012073244, "auto_grown_20261012073244544_abf"),
@@ -54,12 +55,12 @@ class Segment(NamedTuple):  # keyed by the alias: the label / cue / norm name
     scroll: str         # sampling group of the fine-tunes
     layer: int          # centre layer of the 28-layer render (median of the detected depth; flat for 0846A and 1447)
     split_masked: bool  # trains on its train_masks region only (255 trains, 119 = hard negative, black = unused)
-    assembler: str      # name in assemble_training_segments.SEGMENTS ("" = assemble_test_segments.FRAGMENTS)
+    assembler: str      # name in assemble_training_segments.SEGMENTS
 
 
 # fine-tune corpus order of reader-v3 and v8-in
 SEGMENTS = {
-    **{str(alias): Segment(str(render), "0846A", FLAT_DEPTH_0846A, False, "") for alias, (render, _) in SHEETS_0846A.items()},
+    **{str(alias): Segment(str(render), "0846A", FLAT_DEPTH_0846A, False, name) for alias, (render, name) in SHEETS_0846A.items()},
     "20261007000000": Segment("20261007000000", "0343", 15, True, "p343_letters"),
     "20250919125754": Segment("20250919125754", "0009B", 15, True, "p9b_487"),
     "20260930144758": Segment("20260930144758", "1447", 14, True, "ph1447_w058"),
@@ -72,6 +73,8 @@ SEGMENTS = {
 # PHerc1447 has no usable surface detection: its surface is flat at the layer with the highest mean intensity
 FLAT_SURFACE = {20260930144758: 14, 20260930144760: 15}
 TRAINING_NAMES = tuple(seg.assembler for seg in SEGMENTS.values() if seg.assembler)
+# everything `assemble_training_segments.py --mix6` assembles: the trained scrolls and the holdout
+ASSEMBLER_NAMES = (*TRAINING_NAMES, HOLDOUT_NAME)
 
 
 # where the three trainings leave their model (the keys are utils/predict_models.KINDS); ensemble_eval.ipynb and 0846A_eval.ipynb read them here
@@ -104,7 +107,7 @@ def render_id(alias) -> str:
 
 
 def render_ids_0846a() -> list[str]:
-    """render zarr ids assemble_test_segments.py has to produce for mix6 (7 trained sheets + the holdout)."""
+    """render zarr ids of the 0846A part of mix6 (7 trained sheets + the holdout)."""
     return [render_id(alias) for alias in (*TRAIN_0846A, HOLDOUT)]
 
 

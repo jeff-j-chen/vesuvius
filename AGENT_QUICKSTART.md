@@ -12,10 +12,11 @@ python3 -m utils.mix6                                 # the same read-only repor
 ```
 
 Per scroll: volume + mask (`ves_zarrs2/<id>.zarr`, `masks/<id>.png`), norm, surface detection (`surface_labels/<id>/`; PHerc1447 is a flat surface at its
-measured centre layer), surface anchors, and 3 depths of asf cues (`cue_asf_morph`, `_dm1`, `_dp1`; the holdout only the first). The 0846A part is
-`assemble_test_segments.py --mix6`, run by the command above. Labels (`dilated_inklabels/`, `train_masks/`) and meshes (`tifxyz/`) are tracked in git.
+measured centre layer), surface anchors, and 3 depths of asf cues (`cue_asf_morph`, `_dm1`, `_dp1`; the holdout only the first). The 8 PHerc0846A sheets
+(`MESHES_0846A` in `assemble_training_segments.py`) are rendered from their tifxyz meshes; a plain `python3 assemble_training_segments.py` assembles them too.
+Labels (`dilated_inklabels/`, `train_masks/`) and meshes (`tifxyz/`) are tracked in git.
 Aliases like `20261012065815` are symlinks to the render `20261012065814`: the label/cue name is the alias, the zarr/mask name is the render id.
-Downloads stop when free disk falls below `--min-free-gb` (default 10). `--rebuild-cues` rebuilds existing cue maps (they are kept otherwise).
+`--rebuild-cues` rebuilds existing cue maps (they are kept otherwise).
 
 ## 1. cue_dropout_labelsv6_mix6: `train.py`
 

@@ -67,8 +67,9 @@ def native_um(scroll_id):
     if REPO not in sys.path:
         sys.path.insert(0, REPO)
     from assemble_test_segments import FRAGMENTS, extra_fragments
+    from assemble_training_segments import FRAGMENTS_0846A
 
-    for zid, _mesh, vol_base, _shape, *_ in FRAGMENTS + extra_fragments():
+    for zid, _mesh, vol_base, _shape, *_ in FRAGMENTS + FRAGMENTS_0846A + extra_fragments():
         if zid == sid:
             return float(re.search(r"-(\d+\.\d+)um-", vol_base).group(1))
     raise KeyError(f"no native voxel size known for {sid}")
