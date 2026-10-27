@@ -32,7 +32,7 @@ from torch.amp.autocast_mode import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
 from tqdm import tqdm
 
-from utils.config import MIX6_INIT, MIX6_MAE192, Config, apply_mix6_run, apply_smoke, startup_output
+from utils.config import MIX6_0846A, MIX6_INIT, MIX6_MAE192, Config, apply_mix6_run, apply_smoke, startup_output
 from utils.dataloader import DataManager, MultiScrollIterableDataset, get_dataloaders, DotPositiveDataset, imread_gray, get_tile_pos_weight, needs_domain_ids, needs_patch_ids
 from utils.dataloader import CHARACTER_NAMESPACE_STRIDE, EXTRA_CHARACTER_OFFSET, get_divdis_loader, is_extra_character
 from utils.hard_mining import HardMiningInjector, HardMiningManager
@@ -5002,6 +5002,13 @@ def preflight_inputs(config, build_init: bool = False) -> None:
                 path for path in (os.path.join(directory, f"{sid}{suffixes.get(str(sid), '')}.npy") for directory in directories)
                 if not os.path.exists(path)
             ]
+    if config.data.holdout_exclusion_dir:
+        # every trained 0846A sheet must carry its discard mask, or it would train on the prize sheet's papyrus
+        missing_files += [
+            path for path in (os.path.join(config.data.holdout_exclusion_dir, f"{sid}.png")
+                              for sid in train_ids if sid in MIX6_0846A)
+            if not os.path.isfile(path)
+        ]
     if config.init_weights:
         if not os.path.isfile(config.init_weights):
             if config.init_weights == MIX6_INIT:
@@ -5026,6 +5033,7 @@ def preflight_inputs(config, build_init: bool = False) -> None:
             + "\n  surface_labels/, the flat-alias PNGs and the asf cue maps are written by "
             "`python3 assemble_training_segments.py --mix6` (`python3 -m utils.mix6 --build` makes the cues alone); "
             "labels and train masks are tracked in git (`git checkout -- <path>`); "
+            "holdout_exclusion/ is written by `python3 -m utils.holdout_exclusion`; "
             "models/ ships with the docker image"
         )
     if lfs_pointers:

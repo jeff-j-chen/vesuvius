@@ -34,7 +34,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO))
-from utils import mix6  # noqa: E402
+from utils import holdout_exclusion, mix6  # noqa: E402
 
 FORK = Path(os.environ.get("NADER_FORK_DIR", REPO / "nader-fork"))
 FORK_URL, FORK_COMMIT = "https://github.com/jeff-j-chen/nader-fork.git", "8a811a86b751734223b3febff9adba24ecc549ad"
@@ -44,6 +44,8 @@ DATA = FORK / "runs" / "v8in_mix6_data" / "data"
 EPOCHS = 5
 DEPTH = 24
 NEG_WEIGHT = "25"
+# the recipe's batch 4 x accumulation 8 needs more than 20 GB; same effective batch of 32 in micro-batches of this size
+MICRO_BATCH = int(os.environ.get("V8IN_MICRO_BATCH", 2))
 # the stitched validation sheets (trained segments, as in the author's recipe): two 0846A sheets and the 343 first letters
 VAL = ("20261012065813", "20261012065823", "20261007000000")
 # the container's home disk is small: keep uv's cache next to the repo
@@ -138,6 +140,12 @@ def stage() -> None:
         if segment.split_masked:
             split = cv2.imread(str(REPO / "train_masks" / f"{alias}.png"), cv2.IMREAD_GRAYSCALE)[:mask.shape[0], :mask.shape[1]]
             mask = mask & ((split >= 240) | ((split >= 100) & (split <= 143))) & ~extra
+        discard = holdout_exclusion.load(alias)
+        if discard is not None:
+            discard = discard[:mask.shape[0], :mask.shape[1]]
+            mask &= ~discard
+            ink &= ~discard
+            print(f"[stage] {alias}: {int(discard.sum())} px within {holdout_exclusion.RADIUS_VOX:.0f} vox of the prize sheet discarded")
         folder.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(folder / f"{alias}_inklabels.png"), ink.astype(np.uint8) * 255)
         cv2.imwrite(str(folder / f"{alias}_mask.png"), mask.astype(np.uint8) * 255)
@@ -168,6 +176,13 @@ def recipe(smoke: bool) -> dict:
         "stitching_schedule": {"train_every_n_epochs": 1, "eval_every_n_epochs": epochs, "eval_every_n_epochs_plus_one": False},
     })
     config["training_hyperparameters"]["training"]["epochs"] = epochs
+    training = config["training_hyperparameters"]["training"]
+    effective = int(training["train_batch_size"]) * int(training.get("accumulate_grad_batches", 1))
+    if effective % MICRO_BATCH:
+        raise ValueError(f"micro-batch {MICRO_BATCH} does not divide the effective batch {effective}")
+    training["train_batch_size"] = MICRO_BATCH
+    training["accumulate_grad_batches"] = effective // MICRO_BATCH
+    training["valid_batch_size"] = min(int(training["valid_batch_size"]), 4)
     return config
 
 
@@ -226,7 +241,7 @@ def main() -> None:
     if args.command in ("all", "setup"):
         setup()
     if args.command in ("all", "stage"):
-        problems = mix6.status([int(alias) for alias in mix6.SEGMENTS], derived=False)
+        problems = mix6.status([int(alias) for alias in mix6.SEGMENTS], derived=False) + holdout_exclusion.missing()
         if problems:
             raise SystemExit("mix6 data is incomplete (python3 assemble_training_segments.py --mix6):\n  " + "\n  ".join(problems[:10]))
         stage()

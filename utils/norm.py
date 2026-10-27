@@ -10,6 +10,7 @@ also callable standalone via precompute_norm.py at the repo root.
 from __future__ import annotations
 import json
 import os
+import time
 import numpy as np
 import zarr
 
@@ -91,20 +92,27 @@ def compute_norm(
 
     cache: dict = {}
     if os.path.exists(cache_path):
-        try:
-            with open(cache_path) as f:
-                cache = json.load(f)
-            if not isinstance(cache, dict):
-                cache = {}
-        except Exception:
-            cache = {}
+        # an unreadable cache is retried, never replaced: rewriting it from {} would drop every other scroll
+        for attempt in range(10):
+            try:
+                with open(cache_path) as f:
+                    cache = json.load(f)
+                break
+            except ValueError:
+                if attempt == 9:
+                    raise
+                time.sleep(1.0)
+        if not isinstance(cache, dict):
+            raise RuntimeError(f"{cache_path} is not a JSON object; refusing to overwrite it")
     entry = cache.get(sid, {})
     if not isinstance(entry, dict):
         entry = {}
     entry.update(stats)
     cache[sid] = entry
-    with open(cache_path, "w") as f:
+    temporary = f"{cache_path}.tmp{os.getpid()}"
+    with open(temporary, "w") as f:
         json.dump(cache, f, indent=4)
+    os.replace(temporary, cache_path)
 
     print(
         f"[norm] {sid} mean={mean:.4f} std={std:.4f} "
@@ -244,8 +252,11 @@ def ensure_surface_anchors(scroll_ids, zarr_path: str, surface_dir: str = "./sur
             continue
         cache[sid] = compute_surface_anchors(sid, zarr_path, surface_dir=surface_dir)
         print(f"[anchor] {sid} {cache[sid]}", flush=True)
-        temporary = f"{SURFACE_ANCHOR_CACHE_PATH}.tmp"
+        # merge into the current file: another process may have added scrolls meanwhile
+        merged = _read_json(SURFACE_ANCHOR_CACHE_PATH)
+        merged[sid] = cache[sid]
+        temporary = f"{SURFACE_ANCHOR_CACHE_PATH}.tmp{os.getpid()}"
         with open(temporary, "w") as f:
-            json.dump(cache, f, indent=2)
+            json.dump(merged, f, indent=2)
         os.replace(temporary, SURFACE_ANCHOR_CACHE_PATH)
     return cache

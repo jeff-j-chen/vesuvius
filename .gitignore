@@ -31,3 +31,5 @@ models/runs_smoke/
 cue_*/
 # per-run evaluation figures
 eval_figs/
+# local run outputs, too large for GitHub
+runs_corr/

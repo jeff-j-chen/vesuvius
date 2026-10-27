@@ -335,6 +335,8 @@ class DataConfig:
         }
     )
     holdout_domains: List[str] = field(default_factory=list)  # train_scroll_dict names excluded from training only
+    # folder of <id>.png discard masks (utils/holdout_exclusion.py): supervision is dropped where they are set
+    holdout_exclusion_dir: str = ""
     explicit_negative_share: float = 0.0  # fraction of character negative draws taken from hand-drawn explicit negatives
     far_negative_share: float = 0.30  # fraction of character negative draws taken from far-background papyrus windows
     far_negative_min_dist: int = 160  # px from any ink label before unlabeled papyrus counts as far background
@@ -1030,7 +1032,9 @@ def apply_mix6_run(config) -> None:
     # half-brightness strokes of the 0846A labels are hard negatives; straightened2 / out_4 / out_5 are whole-patch validation only
     data.extra_hard_negative_scroll_ids = list(MIX6_0846A)
     data.whole_patch_valid_scroll_ids = [MIX6_HOLDOUT, *MIX6_OUT_VIS]
-    data.label_free_vis_scroll_ids = []
+    # the prize sheet has no label; the 0846A sheets lose their papyrus within 14 voxels of it
+    data.label_free_vis_scroll_ids = [MIX6_HOLDOUT]
+    data.holdout_exclusion_dir = "./holdout_exclusion"
     data.vis_scroll_ids = [*MIX6_0846A, MIX6_HOLDOUT]
     tra.eval_int_scrolls = len(data.vis_scroll_ids)
     tra.dann_n_domains = len(data.train_scroll_dict)

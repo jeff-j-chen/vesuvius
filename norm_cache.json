@@ -152,10 +152,10 @@
         "std": 30.102567672729492
     },
     "20250223000000": {
-        "mean": 83.03886304666533,
-        "std": 41.051985968718014,
-        "min": -2.022773346700978,
-        "max": 4.1888628015309815,
+        "mean": 85.94448669432778,
+        "std": 40.62528133715182,
+        "min": -2.1155419449546446,
+        "max": 4.161337663182432,
         "class_weight_multitile_s8_g4_pos1": {
             "pos_weight": 3.7481698389458273,
             "counts": {
@@ -1293,87 +1293,7 @@
         "mean": 69.95426058056434,
         "std": 39.39110149690319,
         "min": -1.7758899325540296,
-        "max": 4.697653337619498,
-        "class_weight": {
-            "pos_weight": 1.6408450704225352,
-            "counts": {
-                "0": 1864,
-                "1": 1136
-            },
-            "sig": "single_eroded_inklabels"
-        },
-        "class_weight_multitile_s8_g4_pos0": {
-            "pos_weight": 5.348404255319149,
-            "counts": {
-                "0": 40220,
-                "1": 7520
-            },
-            "sig": "mt_s8_g4_pos0_eroded_inklabels"
-        },
-        "class_weight_multitile_s8_g4_pos1": {
-            "pos_weight": 2.1448825276802594,
-            "counts": {
-                "0": 15885,
-                "1": 7406
-            },
-            "sig": "mt_ringtargets_v2_s8_g4_pos1_eroded_inklabels_manual_split"
-        },
-        "class_weight_multitile_s8_g2_pos1": {
-            "pos_weight": 1.9715206878022569,
-            "counts": {
-                "0": 7338,
-                "1": 3722
-            },
-            "sig": "mt_ringtargets_v2_s8_g2_pos1_eroded_inklabels_manual_split"
-        },
-        "class_weight_multitile_s4_g4_pos1": {
-            "pos_weight": 2.2094081942336876,
-            "counts": {
-                "0": 29120,
-                "1": 13180
-            },
-            "sig": "mt_ringtargets_v2_s4_g4_pos1_eroded_inklabels_manual_split"
-        },
-        "class_weight_multitile_s4_g8_pos1": {
-            "pos_weight": 4.627985648385444,
-            "counts": {
-                "0": 135438,
-                "1": 29265
-            },
-            "sig": "mt_s4_g8_pos1_eroded_inklabels"
-        },
-        "class_weight_multitile_s16_g2_pos1": {
-            "pos_weight": 3.3307055577453686,
-            "counts": {
-                "0": 8450,
-                "1": 2537
-            },
-            "sig": "mt_s16_g2_pos1_eroded_inklabels"
-        },
-        "class_weight_multitile_s8_g6_pos1": {
-            "pos_weight": 2.130429529390443,
-            "counts": {
-                "0": 35265,
-                "1": 16553
-            },
-            "sig": "mt_ringtargets_v2_s8_g6_pos1_eroded_inklabels_manual_split"
-        },
-        "class_weight_multitile_s8_g8_pos1": {
-            "pos_weight": 1.8958470937912815,
-            "counts": {
-                "0": 45925,
-                "1": 24224
-            },
-            "sig": "mt_ringtargets_v2_s8_g8_pos1_eroded_inklabels_manual_split"
-        },
-        "class_weight_multitile_s16_g4_pos1": {
-            "pos_weight": 1.2592359691872348,
-            "counts": {
-                "0": 8010,
-                "1": 6361
-            },
-            "sig": "mt_ringtargets_v2_s16_g4_pos1_eroded_inklabels_manual_split"
-        }
+        "max": 4.697653337619498
     },
     "20251111010954": {
         "mean": 150.76776864317415,
@@ -3608,16 +3528,16 @@
         "max": 5.0258333832484166
     },
     "20261012065818": {
-        "mean": 125.11852812674807,
-        "std": 25.139855634241407,
-        "min": -4.976899229140045,
-        "max": 5.1663571089226386
+        "mean": 125.11852735936121,
+        "std": 25.139855254091454,
+        "min": -4.976899273873045,
+        "max": 5.166357217569932
     },
     "20261012065820": {
-        "mean": 125.05862809146028,
-        "std": 25.493798216842954,
-        "min": -4.90545296655082,
-        "max": 5.096979696916701
+        "mean": 125.05862835019589,
+        "std": 25.493798060595992,
+        "min": -4.905453006764433,
+        "max": 5.096979718006222
     },
     "20261012065822": {
         "mean": 125.55775761808381,
@@ -3648,12 +3568,6 @@
         "std": 24.628865038717183,
         "min": -5.133888881115609,
         "max": 5.219815993190768
-    },
-    "20261012065813": {
-        "mean": 125.01090832945988,
-        "std": 26.307702531207507,
-        "min": -4.751874785765337,
-        "max": 4.941103903556025
     },
     "20261012065817": {
         "mean": 126.70712470359533,
@@ -3762,5 +3676,11 @@
         "std": 24.875345365077028,
         "min": -5.074327911981315,
         "max": 5.176786042721778
+    },
+    "20261012065813": {
+        "mean": 125.01090832945988,
+        "std": 26.307702531207507,
+        "min": -4.751874785765337,
+        "max": 4.941103903556025
     }
 }

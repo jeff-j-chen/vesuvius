@@ -303,13 +303,15 @@ def status(ids=None, derived: bool = True) -> list[str]:
     problems = []
     for alias in (ids or all_ids()):
         alias, render = str(alias), render_id(alias)
-        paths = [zarrs / f"{render}.zarr", REPO / "masks" / f"{render}.png", REPO / "dilated_inklabels" / f"{alias}.png"]
-        if int(alias) != HOLDOUT:
-            paths.append(REPO / "train_masks" / f"{alias}.png")
+        paths = [zarrs / f"{render}.zarr", REPO / "masks" / f"{render}.png"]
+        if int(alias) != HOLDOUT:  # the prize sheet has no label
+            paths += [REPO / "dilated_inklabels" / f"{alias}.png", REPO / "train_masks" / f"{alias}.png"]
         if derived:
             paths += [REPO / "surface_labels" / alias / "depth.npy", REPO / "surface_labels" / alias / "confidence.npy"]
             if int(alias) in SHEETS_0846A or int(alias) == HOLDOUT:
                 paths += [zarrs / f"{alias}.zarr", REPO / "masks" / f"{alias}.png"]
+            if int(alias) in SHEETS_0846A:
+                paths.append(REPO / "holdout_exclusion" / f"{alias}.png")
         problems += [f"{alias}: missing {path}" for path in paths if not path.exists()]
         if not derived:
             continue
@@ -348,6 +350,9 @@ def finalize(ids=None, workers: int = 4, rebuild_cues: bool = False) -> None:
             print("[mix6]", write_flat_surface(alias), flush=True)
     ensure_anchors(ids)
     ensure_cues(ids, workers, force=rebuild_cues)
+    from utils import holdout_exclusion
+
+    holdout_exclusion.build()
 
 
 def main() -> None:

@@ -1,0 +1,83 @@
+{
+ "version": 1,
+ "radius_vox": 14.0,
+ "sheets": {
+  "20260927134931": {
+   "name": "auto_grown_20260927134928530_abf",
+   "render": 20260927134928,
+   "papyrus_cm2": 7.697123086439761,
+   "discarded_cm2": 0.32658690947104,
+   "ink_cm2": 0.68130852006608,
+   "discarded_ink_cm2": 0.02711448953184,
+   "min_distance_vox": 0.1416408121585846,
+   "discarded_fraction": 0.04242973716327824,
+   "discarded_ink_fraction": 0.039797666891366885
+  },
+  "20261012073246": {
+   "name": "auto_grown_20261012073244544_abf",
+   "render": 20261012073244,
+   "papyrus_cm2": 7.94532812093204,
+   "discarded_cm2": 0.73667077540868,
+   "ink_cm2": 0.68188173173384,
+   "discarded_ink_cm2": 0.00516942265512,
+   "min_distance_vox": 0.11716420203447342,
+   "discarded_fraction": 0.09271747676070344,
+   "discarded_ink_fraction": 0.0075811132848148935
+  },
+  "20261012065813": {
+   "name": "auto_grown_20261012065803387_straight_abf_m28",
+   "render": 20261012065812,
+   "papyrus_cm2": 4.727550082794,
+   "discarded_cm2": 0.50996731375048,
+   "ink_cm2": 0.44037556081448,
+   "discarded_ink_cm2": 0.02152961988816,
+   "min_distance_vox": 0.0479961596429348,
+   "discarded_fraction": 0.10787137202554761,
+   "discarded_ink_fraction": 0.04888922502497801
+  },
+  "20261012065817": {
+   "name": "auto_grown_20261012065803387_straightened2_abf_in_1",
+   "render": 20261012065816,
+   "papyrus_cm2": 6.67897908804772,
+   "discarded_cm2": 5.13423587283576,
+   "ink_cm2": 0.7080145743728801,
+   "discarded_ink_cm2": 0.5812226075816,
+   "min_distance_vox": 0.04769163578748703,
+   "discarded_fraction": 0.768715668240924,
+   "discarded_ink_fraction": 0.8209189875736876
+  },
+  "20261012065819": {
+   "name": "auto_grown_20261012065803387_straightened2_abf_out_1",
+   "render": 20261012065818,
+   "papyrus_cm2": 6.200239539604,
+   "discarded_cm2": 3.70823424342368,
+   "ink_cm2": 0.38657254638464,
+   "discarded_ink_cm2": 0.23325858407896,
+   "min_distance_vox": 0.08392418175935745,
+   "discarded_fraction": 0.59807919028569,
+   "discarded_ink_fraction": 0.603401835594573
+  },
+  "20261012065821": {
+   "name": "auto_grown_20261012065803387_straightened2_abf_out_2",
+   "render": 20261012065820,
+   "papyrus_cm2": 5.92814893268084,
+   "discarded_cm2": 0.89069906112296,
+   "ink_cm2": 0.6097429556992,
+   "discarded_ink_cm2": 0.0793249571722,
+   "min_distance_vox": 0.174945667386055,
+   "discarded_fraction": 0.15024910325931473,
+   "discarded_ink_fraction": 0.1300957336706532
+  },
+  "20261012065823": {
+   "name": "auto_grown_20261012065803387_straightened2_abf_out_3",
+   "render": 20261012065822,
+   "papyrus_cm2": 5.63208160040104,
+   "discarded_cm2": 0.16802464217064,
+   "ink_cm2": 0.69280342988668,
+   "discarded_ink_cm2": 0.0046487992137600005,
+   "min_distance_vox": 0.4731104075908661,
+   "discarded_fraction": 0.02983348859126536,
+   "discarded_ink_fraction": 0.006710127307713231
+  }
+ }
+}

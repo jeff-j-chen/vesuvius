@@ -3253,6 +3253,9 @@ class DataManager:
             paths.append(os.path.join("./inklabels", f"{self.scroll_id}.png"))
         if not bool(getattr(self.c.data, "simple_split", True)):
             paths.append(os.path.join(train_mask_dir, f"{self.scroll_id}.png"))
+        exclusion_dir = str(getattr(self.c.data, "holdout_exclusion_dir", "") or "")
+        if exclusion_dir:
+            paths.append(os.path.join(exclusion_dir, f"{self.scroll_id}.png"))
         data_fields = (
             "zarr_path", "tile_size", "depth", "d_start", "d_end", "train_d_start",
             "train_d_end", "mask_memmap", "mask_bitpack", "preload_volumes",
@@ -3267,7 +3270,7 @@ class DataManager:
             "character_min_pixels", "max_samples_per_epoch",
             "far_negative_share", "far_negative_min_dist", "far_negative_forced_positive_dist",
             "line_prior_source", "line_gap_source", "edge_soft_sigma", "edge_soft_floor", "label_shift_frac", "norm_mode", "holdout_domains",
-            "zarr_suffix", "extra_inklabels", "depth_cue_dirs",
+            "zarr_suffix", "extra_inklabels", "depth_cue_dirs", "holdout_exclusion_dir",
         )
         # preparation only tests this scroll's membership, so swapping another scroll keeps this entry valid
         membership_fields = (
@@ -3492,6 +3495,19 @@ class DataManager:
             )
         mask = np.ascontiguousarray(mask[:common_h, :common_w])
         labels = np.ascontiguousarray(labels[:common_h, :common_w])
+        exclusion_dir = str(getattr(self.c.data, "holdout_exclusion_dir", "") or "")
+        exclusion = imread_gray(os.path.join(exclusion_dir, f"{self.scroll_id}.png")) if exclusion_dir else None
+        if exclusion is not None:
+            if exclusion.shape[:2] != (volume_h, volume_w):
+                raise ValueError(
+                    f"holdout exclusion {exclusion.shape} does not match volume {(volume_h, volume_w)} "
+                    f"for scroll {self.scroll_id} (python3 -m utils.holdout_exclusion --force)"
+                )
+            # no papyrus means no valid cell, ring or far negative there; no label means no positive draw
+            discard = exclusion[:common_h, :common_w] > 0
+            mask[discard] = 0
+            labels[discard] = 0.0
+            print(f"[holdout-exclusion] scroll {self.scroll_id}: {int(discard.sum()):,} px discarded", flush=True)
         self.extra_label_mask = (
             np.ascontiguousarray(extra_ink[:common_h, :common_w]).astype(np.uint8)
             if extra_ink.any() else None
