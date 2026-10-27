@@ -70,12 +70,19 @@ def gray_rgb(image):
 
 def red_overlay(rgb, label, alpha=0.4):
     """uint8 RGB with the boolean/uint8 `label` (any resolution) blended in red; edge pixels blend by label coverage."""
+    return color_overlay(rgb, [(label, RED)], alpha)
+
+
+def color_overlay(rgb, layers, alpha=0.4):
+    """uint8 RGB with each (boolean/uint8 mask at any resolution, RGB colour) of `layers` blended in, later layers on top."""
     height, width = rgb.shape[:2]
-    coverage = (np.asarray(label) > 0).astype(np.float32)
-    if coverage.shape != (height, width):
-        coverage = cv2.resize(coverage, (width, height), interpolation=cv2.INTER_AREA)
-    weight = (alpha * coverage)[..., None]
-    out = rgb.astype(np.float32) * (1 - weight) + np.asarray(RED, dtype=np.float32) * weight
+    out = rgb.astype(np.float32)
+    for label, color in layers:
+        coverage = (np.asarray(label) > 0).astype(np.float32)
+        if coverage.shape != (height, width):
+            coverage = cv2.resize(coverage, (width, height), interpolation=cv2.INTER_AREA)
+        weight = (alpha * coverage)[..., None]
+        out = out * (1 - weight) + np.asarray(color, dtype=np.float32) * weight
     return out.round().astype(np.uint8)
 
 

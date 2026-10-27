@@ -11,8 +11,11 @@
 from __future__ import annotations
 
 import glob
+import itertools
 import os
+import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +27,89 @@ READER_DIR = Path(os.environ.get("READER_V3_DIR", REPO / "reader-v3"))
 FORK_DIR = Path(os.environ.get("NADER_FORK_DIR", REPO / "nader-fork"))
 KINDS = ("cue_dropout", "reader_v3", "v8in")
 V8IN_DEPTH = 24
+# renders are thousands of 64 KB chunk files on the network drive: read serially, one sheet takes ~90 s
+LOCAL_ZARR_DIR = Path(os.environ.get("VES_LOCAL_ZARR_DIR", "/dev/shm/ves_zarr_cache"))
+READ_WORKERS = 32
+
+
+def read_volume(zarr_path) -> np.ndarray:
+    """the whole zarr array in memory, one thread per chunk block."""
+    import zarr
+
+    array = zarr.open(str(zarr_path), mode="r")
+    out = np.empty(array.shape, array.dtype)
+    origins = itertools.product(*[range(0, size, step) for size, step in zip(array.shape, array.chunks)])
+    blocks = [tuple(slice(start, start + step) for start, step in zip(origin, array.chunks)) for origin in origins]
+
+    def fill(block):
+        out[block] = array[block]
+
+    with ThreadPoolExecutor(READ_WORKERS) as pool:
+        list(pool.map(fill, blocks))
+    return out
+
+
+def local_zarr(zarr_path) -> Path:
+    """a copy of the render in RAM (/dev/shm) with 512 px chunks, rebuilt when the render is regenerated."""
+    import zarr
+
+    source = Path(zarr_path)
+    target = LOCAL_ZARR_DIR / source.name
+    if target.is_dir() and zarr_mtime(target) >= zarr_mtime(source):
+        return target
+    volume = read_volume(source)
+    partial = target.with_name(target.name + ".partial")
+    shutil.rmtree(partial, ignore_errors=True)
+    shutil.rmtree(target, ignore_errors=True)
+    zarr.save_array(str(partial), volume, chunks=(volume.shape[0], 512, 512), compressor=None)
+    partial.rename(target)
+    return target
+
+
+# importing torch & co. from a venv on the network drive opens ~30k small files at ~1 ms each (~1 min per subprocess start)
+# local disk, not /dev/shm: that is mounted noexec, so shared libraries could not be loaded from it
+LOCAL_VENV_DIR = Path(os.environ.get("VES_LOCAL_VENV_DIR", "/root/.cache/ves_venvs"))
+BIG_FILE = 1 << 20
+
+
+def venv_python(venv) -> str:
+    """python of a RAM mirror of the venv: small files copied, big ones (shared libraries, cached fine) symlinked back.
+    Rebuilt when packages are installed or removed (site-packages changes)."""
+    venv = Path(venv)
+    site = next((venv / "lib").glob("python3*/site-packages"))
+    stamp = f"{venv.resolve()} {site.stat().st_mtime} {(venv / 'pyvenv.cfg').stat().st_mtime}"
+    target = LOCAL_VENV_DIR / f"{venv.parent.name}{venv.name}"
+    if (target / ".mirror_stamp").is_file() and (target / ".mirror_stamp").read_text() == stamp:
+        return str(target / "bin" / "python")
+    partial = target.with_name(target.name + ".partial")
+    shutil.rmtree(partial, ignore_errors=True)
+    print(f"[predict_models] mirroring {venv} to {target} (once per venv change / pod restart)", flush=True)
+    jobs = []
+    for root, dirs, files in os.walk(venv):
+        local = partial / Path(root).relative_to(venv)
+        local.mkdir(parents=True, exist_ok=True)
+        for name in [*dirs, *files]:
+            source = Path(root) / name
+            if source.is_symlink():
+                (local / name).symlink_to(os.readlink(source))
+                if name in dirs:
+                    dirs.remove(name)
+            elif name in files:
+                jobs.append((source, local / name))
+
+    def place(job):
+        source, destination = job
+        if source.stat().st_size >= BIG_FILE:
+            destination.symlink_to(source)
+        else:
+            shutil.copy2(source, destination)
+
+    with ThreadPoolExecutor(READ_WORKERS) as pool:
+        list(pool.map(place, jobs))
+    (partial / ".mirror_stamp").write_text(stamp)
+    shutil.rmtree(target, ignore_errors=True)
+    partial.rename(target)
+    return str(target / "bin" / "python")
 
 V8IN_PREDICT = '''
 import sys
@@ -92,11 +178,11 @@ def drop_stale(cached, zarr_path, checkpoint) -> None:
 
 def predict_reader(zarr_path, checkpoint, tif_path, batch_size: int = 4) -> np.ndarray:
     """reader-v3 map in [0, 1] at the render's pixel grid (the CLI's uint8 tiff is kept next to the cached .npy)."""
-    tif, python = Path(tif_path), str(READER_DIR / ".venv" / "bin" / "python")
+    tif, python = Path(tif_path), venv_python(READER_DIR / ".venv")
     drop_stale([tif, tif.with_suffix(".npy")], zarr_path, checkpoint)
     if not tif.is_file():
         tif.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run([python, "-m", "koine_machines.inference.infer", str(zarr_path), str(checkpoint), str(tif), "--overlap", "0.5",
+        subprocess.run([python, "-m", "koine_machines.inference.infer", str(local_zarr(zarr_path)), str(checkpoint), str(tif), "--overlap", "0.5",
                         "--blend-mode", "hann", "--direction", "forward", "--no-compile", "--batch-size", str(batch_size)],
                        cwd=READER_DIR, check=True)
     npy = tif.with_suffix(".npy")
@@ -119,7 +205,7 @@ def v8in_model_dir(checkpoint, export_dir) -> Path:
     if exported.is_file() and exported.stat().st_mtime < Path(matches[-1]).stat().st_mtime:
         exported.unlink()  # the checkpoint was retrained since it was exported
     if not exported.is_file():
-        subprocess.run([str(FORK_DIR / ".venv" / "bin" / "python"), str(FORK_DIR / "training" / "export_checkpoint.py"), matches[-1],
+        subprocess.run([venv_python(FORK_DIR / ".venv"), str(FORK_DIR / "training" / "export_checkpoint.py"), matches[-1],
                         str(export_dir)], check=True)
     return export_dir
 
@@ -131,12 +217,13 @@ def v8in_layers(zarr_path, folder) -> Path:
 
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
-    volume = zarr.open(str(zarr_path), mode="r")
+    volume = zarr.open(str(local_zarr(zarr_path)), mode="r")
     start = (volume.shape[0] - V8IN_DEPTH) // 2
+    slab = np.asarray(volume[start:start + V8IN_DEPTH])
     for index in range(V8IN_DEPTH):
         path = folder / f"{index:02d}.tif"
         if not path.is_file():
-            tifffile.imwrite(path, np.clip(np.asarray(volume[start + index]), 0, 255).astype(np.uint8))
+            tifffile.imwrite(path, np.clip(slab[index], 0, 255).astype(np.uint8))
     return folder
 
 
@@ -152,10 +239,11 @@ def predict_v8in(zarr_path, checkpoint, cache_dir, batch_size: int = 16, layers=
     drop_stale([prediction_path], zarr_path, checkpoint)
     if not prediction_path.is_file():
         model_dir = v8in_model_dir(checkpoint, cache_dir / "v8in_model")
-        scratch = None if layers is not None else tempfile.mkdtemp(dir=cache_dir)
+        LOCAL_ZARR_DIR.mkdir(parents=True, exist_ok=True)
+        scratch = None if layers is not None else tempfile.mkdtemp(dir=LOCAL_ZARR_DIR)
         try:
             layers = Path(layers) if layers is not None else v8in_layers(zarr_path, Path(scratch) / "layers")
-            subprocess.run([str(FORK_DIR / ".venv" / "bin" / "python"), "-c", V8IN_PREDICT, str(FORK_DIR), str(model_dir), str(layers),
+            subprocess.run([venv_python(FORK_DIR / ".venv"), "-c", V8IN_PREDICT, str(FORK_DIR), str(model_dir), str(layers),
                             str(prediction_path), str(batch_size)], check=True)
         finally:
             if scratch is not None:

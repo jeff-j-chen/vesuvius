@@ -10,7 +10,9 @@ attrs depth_flipped=true; there is no post-hoc flip.
 
 The 8 PHerc0846A sheets of the mix6 corpus (MESHES_0846A: the 7 trained sheets + the straightened2 holdout) are
 rendered from their tifxyz meshes with assemble_test_segments.render_fragment and get their flat depth-13 alias
-(symlinked zarr/mask/label/train mask, flat surface, norm, surface anchors) instead of steps 2-5.
+(symlinked zarr/mask/label/train mask, flat surface, norm, surface anchors) instead of steps 2-5. The same goes for the
+5 held-out PHerc0846A evaluation segments (EVAL_0846A: straightened2 out_4/out_5 and 3 quick patches, the latter rendered
+like extras: uint8, mask under masks/extras, no alias).
 
 per fragment, in order (each step skips if its output already exists):
     1. download or assemble the surface volume -> ves_zarrs2/<id>.zarr + masks/<id>.png
@@ -37,6 +39,7 @@ usage:
 straightened2 holdout, PHerc0009B, PHerc1447 w058/w060, PHerc0841, PHerc0814, PHerc0172 w068/w087 and the PHerc0343 first letters.
 Per scroll that is the volume + mask, norm, surface detection (PHerc1447: the flat surface at its measured centre layer; PHerc0846A:
 the flat depth-13 alias), surface anchors and the 3 depths of asf cues (cue_asf_morph, _dm1, _dp1; the holdout only the first).
+It also renders the 5 held-out PHerc0846A evaluation segments (EVAL_0846A) for 0846A_eval.ipynb.
 Labels and train masks come from git. --check only reports what is missing (read-only). --only adds scrolls on top of the corpus
 (python assemble_training_segments.py --mix6 --only w058,w059).
 """
@@ -87,6 +90,15 @@ MESHES_0846A = {
 }
 FRAGMENTS_0846A = [(render, mesh, *VOL_0846A) for render, _alias, mesh in MESHES_0846A.values()]
 FLAT_ALIASES_0846A = {render: alias for render, alias, _mesh in MESHES_0846A.values()}
+# PHerc0846A held-out evaluation segments of 0846A_eval.ipynb (HOLDOUT_NAMES there), never trained on; assembled by default and with --mix6.
+# straightened2 out_4 / out_5: name -> (render zarr id, mesh under tifxyz/), flat alias from assemble_test_segments.FLAT_ALIASES
+EVAL_MESHES_0846A = {
+    f"auto_grown_20261012065803387_straightened2_abf_{suffix}": (render, f"auto_grown_20261012065803387_straightened2_abf_{suffix}")
+    for suffix, render in (("out_4", "20261012065824"), ("out_5", "20261012065826"))
+}
+# quick patches render like assemble_test_segments extras: zarr id = mesh folder name, uint8, mask under masks/extras
+EVAL_QUICK_0846A = ("auto_grown_20260926074031926_abf", "auto_grown_20260927143929299_abf", "auto_grown_20260927154033403_abf")
+EVAL_0846A = (*EVAL_MESHES_0846A, *EVAL_QUICK_0846A)
 
 # (name, segment_prefix, zarr_id)
 SEGMENTS = [
@@ -154,6 +166,8 @@ SEGMENTS = [
     # PHerc0343 First Letters segment (Nieuwlaar/pherc343-first-letters): tifxyz mesh rendered from the raw volume
     ("p343_letters", "", "20261007000000"),
     *((name, "", render) for name, (render, _alias, _mesh) in MESHES_0846A.items()),
+    *((name, "", render) for name, (render, _mesh) in EVAL_MESHES_0846A.items()),
+    *((name, "", name) for name in EVAL_QUICK_0846A),
 ]
 
 # per-fragment behaviour overrides. skip_labels=True skips the dilated label check
@@ -1612,10 +1626,41 @@ def _assemble_0846a(name, zid, workers, chunk_depth, chunk_y, chunk_x, force=Fal
     print(f"  [alias] {alias} -> {zid}: flat depth-13 surface, norm and anchors ready")
 
 
+def _eval_mask_dir(name):
+    return os.path.join("masks", "extras") if name in EVAL_QUICK_0846A else "masks"
+
+
+def _assemble_0846a_eval(name, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
+    """render a held-out PHerc0846A evaluation segment from its tifxyz mesh (+ its flat alias when it has one)."""
+    import assemble_test_segments as test_assembler
+
+    os.makedirs(ZARR_DIR, exist_ok=True)
+    if name in EVAL_QUICK_0846A:
+        mesh = f"quick_patches_from_D/PHerc0846A/{name}"
+        extra = {"mask_dir": test_assembler.EXTRAS_MASK_DIR, "output_dtype": test_assembler.EXTRAS_DTYPE, "drop_cache": True}
+    else:
+        mesh, extra = EVAL_MESHES_0846A[name][1], {}
+    _zid, status = test_assembler.render_fragment(
+        zid, mesh, *VOL_0846A, workers, ZARR_DIR, test_assembler.SCRIPT_DIR, chunk_depth, chunk_y, chunk_x,
+        force=force, **extra)
+    if not status.startswith("OK"):
+        raise RuntimeError(f"render {zid}: {status}")
+    alias = test_assembler.FLAT_ALIASES.get(zid)
+    if alias:
+        with _ALIAS_LOCK:
+            status = test_assembler.make_flat_alias(zid, alias, ZARR_DIR)
+        if status != "OK":
+            raise RuntimeError(f"flat alias {alias}: {status}")
+        print(f"  [alias] {alias} -> {zid}: flat depth-13 surface, norm and anchors ready")
+
+
 def step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=False):
     opts = FRAG_OPTS.get(name, {})
     if name in MESHES_0846A:
         _assemble_0846a(name, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
+        return
+    if name in EVAL_0846A:
+        _assemble_0846a_eval(name, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
         return
     if opts.get("hf_pherc1447"):
         _assemble_pherc1447_surface(name, zid, opts, chunk_depth, chunk_y, chunk_x, force=force)
@@ -1860,7 +1905,7 @@ def process_fragment(name, seg, zid, workers, skip_norm, skip_surface, chunk_dep
     tag = f"{prefix}{name} ({zid})"
     try:
         print(f"\n{'='*70}\n{tag}  id={zid}\n{'='*70}", flush=True)
-        if name in MESHES_0846A:
+        if name in MESHES_0846A or name in EVAL_0846A:
             # the flat alias carries the label, surface, norm and anchors; nothing below applies to the render
             step1_volume(name, seg, zid, workers, chunk_depth, chunk_y, chunk_x, force=force)
             print(f"[done] {tag}")
@@ -1991,7 +2036,7 @@ def main():
     segs = SEGMENTS
     if args.mix6:
         # the mix6 corpus plus any scrolls named with --only (those get the plain per-fragment pipeline)
-        want = set(mix6.ASSEMBLER_NAMES) | {o.strip() for o in (args.only or "").split(",") if o.strip()}
+        want = set(mix6.ASSEMBLER_NAMES) | set(EVAL_0846A) | {o.strip() for o in (args.only or "").split(",") if o.strip()}
         segs = [s for s in SEGMENTS if s[0] in want]
     elif args.only:
         # comma-separated list so several fragments can be forced in one run
@@ -2041,7 +2086,7 @@ def main():
     print(f"\n{'='*70}\n[assemble] INTEGRITY SWEEP ({len(swept)} scrolls)\n{'='*70}")
     broken = []
     for name, _seg, zid in swept:
-        ok, msg = _zarr_integrity(zid)
+        ok, msg = _zarr_integrity(zid, mask_dir=_eval_mask_dir(name))
         if ok:
             print(f"  OK   {name:<12} {zid}  {msg}")
         else:

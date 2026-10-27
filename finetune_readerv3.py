@@ -116,8 +116,9 @@ def _signature(alias: str) -> str:
     paths = [REPO / "masks" / f"{segment.render}.png", REPO / "dilated_inklabels" / f"{alias}.png"]
     if segment.split_masked:
         paths.append(REPO / "train_masks" / f"{alias}.png")
-    if holdout_exclusion.exclusion_path(alias).is_file():
-        paths.append(holdout_exclusion.exclusion_path(alias))
+    exclusion = holdout_exclusion.exclusion_path(alias)
+    if exclusion.is_file():
+        paths.append(exclusion)
     for path in paths:
         digest.update(path.read_bytes())
     return digest.hexdigest()
@@ -159,7 +160,7 @@ def prep() -> None:
             discard = discard[:rows, :cols]
             mask &= ~discard
             ink &= ~discard
-            print(f"[prep] {alias}: {int(discard.sum())} px within {holdout_exclusion.RADIUS_VOX:.0f} vox of the prize sheet discarded")
+            print(f"[prep] {alias}: {int(discard.sum())} px within {holdout_exclusion.RADIUS_VOX:g} vox of the prize sheet discarded")
         z0 = segment.layer - DEPTH // 2
         if z0 < 0 or z0 + DEPTH > source.shape[0]:
             raise ValueError(f"{alias}: surface layer {segment.layer} leaves the volume")

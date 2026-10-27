@@ -34,7 +34,7 @@ TRAIN_0846A = tuple(SHEETS_0846A)
 HOLDOUT = 20261012065815
 HOLDOUT_RENDER = 20261012065814
 HOLDOUT_NAME = "auto_grown_20261012065803387_straightened2_abf"
-# straightened2 out_4 / out_5: whole-patch validation entries of the training config only, never downloaded for mix6
+# straightened2 out_4 / out_5: whole-patch validation entries of the training config only (assembled by --mix6 as EVAL_0846A)
 OUT_VIS = (20261012065825, 20261012065827)
 FLAT_DEPTH_0846A = 13
 WINDOW_OFFSET_0846A = -1
@@ -352,7 +352,7 @@ def finalize(ids=None, workers: int = 4, rebuild_cues: bool = False) -> None:
     ensure_cues(ids, workers, force=rebuild_cues)
     from utils import holdout_exclusion
 
-    holdout_exclusion.build()
+    holdout_exclusion.build_all()
 
 
 def main() -> None:

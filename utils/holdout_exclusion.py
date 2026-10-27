@@ -22,6 +22,13 @@ REPO = Path(__file__).resolve().parent.parent
 EXCLUSION_DIR = REPO / "holdout_exclusion"
 FIGURE_DIR = REPO / "output" / "holdout_exclusion"
 RADIUS_VOX = 14.0
+# v8-in reads 24 layers (+-11.5 voxels along the normal), so every voxel it reads keeps RADIUS_VOX clearance
+V8IN_RADIUS_VOX = 11.5 + RADIUS_VOX
+V8IN_EXCLUSION_DIR = REPO / "holdout_exclusion_v8in"
+V8IN_FIGURE_DIR = REPO / "output" / "holdout_exclusion_v8in"
+READER_RADIUS_VOX = 17.0
+READER_EXCLUSION_DIR = REPO / "holdout_exclusion_reader"
+READER_FIGURE_DIR = REPO / "output" / "holdout_exclusion_reader"
 HOLDOUT_DENSE = 8   # prize-sheet mesh sampled every 20/8 = 2.5 voxels
 SHEET_DENSE = 4     # trained-sheet mesh sampled every 5 voxels (= render pixels)
 GRID_PX = 20        # render pixels per tifxyz grid cell (scale 0.05, 9.362 um volume)
@@ -62,14 +69,14 @@ def _mesh(name: str, factor: int):
     return points, dense_valid, shape
 
 
-def compute(name: str, holdout_tree) -> tuple[np.ndarray, np.ndarray]:
+def compute(name: str, holdout_tree, radius: float = RADIUS_VOX) -> tuple[np.ndarray, np.ndarray]:
     """(distance to the prize sheet in voxels on the render frame, exclusion mask on the render frame)."""
     points, valid, shape = _mesh(name, SHEET_DENSE)
     distance = np.full(valid.shape, np.inf)
     nearest, _ = holdout_tree.query(points[valid], distance_upper_bound=200.0)
     distance[valid] = nearest
     # nearest prize-sheet sample overestimates the surface distance by at most half its 2.5 voxel spacing
-    excluded = distance <= RADIUS_VOX + 0.5 * GRID_PX / HOLDOUT_DENSE
+    excluded = distance <= radius + 0.5 * GRID_PX / HOLDOUT_DENSE
     # one dense step of margin (5 px) covers the nearest-neighbour mapping to render pixels
     excluded = cv2.dilate(excluded.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
     step = GRID_PX // SHEET_DENSE
@@ -80,13 +87,13 @@ def compute(name: str, holdout_tree) -> tuple[np.ndarray, np.ndarray]:
     return distance_px, excluded_px
 
 
-def exclusion_path(alias) -> Path:
-    return EXCLUSION_DIR / f"{int(alias)}.png"
+def exclusion_path(alias, directory: Path = EXCLUSION_DIR) -> Path:
+    return Path(directory) / f"{int(alias)}.png"
 
 
-def load(alias, shape=None) -> np.ndarray | None:
+def load(alias, shape=None, directory: Path = EXCLUSION_DIR) -> np.ndarray | None:
     """bool discard mask of a trained alias, or None when it has none; checked against the frame shape."""
-    path = exclusion_path(alias)
+    path = exclusion_path(alias, directory)
     if not path.is_file():
         return None
     mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE) > 0
@@ -101,11 +108,12 @@ def expected_aliases() -> list[int]:
     return list(mix6.TRAIN_0846A)
 
 
-def missing() -> list[str]:
-    return [str(exclusion_path(alias)) for alias in expected_aliases() if not exclusion_path(alias).is_file()]
+def missing(directory: Path = EXCLUSION_DIR) -> list[str]:
+    return [str(exclusion_path(alias, directory)) for alias in expected_aliases()
+            if not exclusion_path(alias, directory).is_file()]
 
 
-def _figure(alias, name, render, distance, excluded, papyrus, ink, summary_row) -> None:
+def _figure(alias, name, render, distance, excluded, papyrus, ink, summary_row, radius, figure_dir) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -124,10 +132,10 @@ def _figure(alias, name, render, distance, excluded, papyrus, ink, summary_row) 
     fig, axes = plt.subplots(1, 2, figsize=(20, 9))
     axes[0].imshow(orient(rgb), interpolation="nearest")
     axes[0].set_title("kept papyrus (grey, ink black) / DISCARDED within "
-                      f"{RADIUS_VOX:.0f} vox of the prize sheet (red, ink dark red)")
+                      f"{radius:g} vox of the prize sheet (red, ink dark red)")
     image = axes[1].imshow(orient(near), cmap="magma", vmin=0, vmax=60, interpolation="nearest")
-    axes[1].contour(orient(np.nan_to_num(near, nan=999.0)), levels=[RADIUS_VOX], colors="cyan", linewidths=1.0)
-    axes[1].set_title(f"3D distance to the prize-sheet mesh (voxels, capped at 60); cyan = {RADIUS_VOX:.0f}")
+    axes[1].contour(orient(np.nan_to_num(near, nan=999.0)), levels=[radius], colors="cyan", linewidths=1.0)
+    axes[1].set_title(f"3D distance to the prize-sheet mesh (voxels, capped at 60); cyan = {radius:g}")
     fig.colorbar(image, ax=axes[1], shrink=0.7)
     for ax in axes:
         ax.axis("off")
@@ -135,11 +143,11 @@ def _figure(alias, name, render, distance, excluded, papyrus, ink, summary_row) 
         f"{name.replace('auto_grown_', '')} (alias {alias}): discarded {summary_row['discarded_cm2']:.2f} of "
         f"{summary_row['papyrus_cm2']:.2f} cm2 ({100 * summary_row['discarded_fraction']:.0f}%), ink "
         f"{summary_row['discarded_ink_cm2']:.3f} of {summary_row['ink_cm2']:.3f} cm2", fontsize=14)
-    fig.savefig(FIGURE_DIR / f"{alias}.png", dpi=80, bbox_inches="tight")
+    fig.savefig(Path(figure_dir) / f"{alias}.png", dpi=80, bbox_inches="tight")
     plt.close(fig)
 
 
-def _overview(summary: dict) -> None:
+def _overview(summary: dict, radius, figure_dir) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -147,7 +155,7 @@ def _overview(summary: dict) -> None:
     names = list(summary)
     fig, axes = plt.subplots(2, 4, figsize=(28, 13))
     for ax, alias in zip(axes.flat, names):
-        ax.imshow(cv2.cvtColor(cv2.imread(str(FIGURE_DIR / f"{alias}.png")), cv2.COLOR_BGR2RGB))
+        ax.imshow(cv2.cvtColor(cv2.imread(str(Path(figure_dir) / f"{alias}.png")), cv2.COLOR_BGR2RGB))
         ax.axis("off")
     table = axes.flat[-1]
     table.axis("off")
@@ -160,31 +168,34 @@ def _overview(summary: dict) -> None:
     cells.auto_set_font_size(False)
     cells.set_fontsize(10)
     cells.scale(1, 2.0)
-    fig.suptitle(f"trained PHerc0846A sheets: supervision discarded within {RADIUS_VOX:.0f} voxels of the straightened2 prize sheet",
+    fig.suptitle(f"trained PHerc0846A sheets: supervision discarded within {radius:g} voxels of the straightened2 prize sheet",
                  fontsize=16)
-    fig.savefig(FIGURE_DIR / "overview.png", dpi=70, bbox_inches="tight")
+    fig.savefig(Path(figure_dir) / "overview.png", dpi=70, bbox_inches="tight")
     plt.close(fig)
 
 
-def build(force: bool = False) -> dict:
+def build(force: bool = False, radius: float = RADIUS_VOX, directory: Path = EXCLUSION_DIR,
+          figure_dir: Path = FIGURE_DIR) -> dict:
     from scipy.spatial import cKDTree
 
     from utils import mix6
     from utils.dataloader import split_extra_labels
 
-    EXCLUSION_DIR.mkdir(parents=True, exist_ok=True)
-    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
-    summary_path = EXCLUSION_DIR / "summary.json"
-    if not force and not missing() and summary_path.is_file() \
-            and json.loads(summary_path.read_text()).get("version") == VERSION:
-        print(f"[exclusion] {EXCLUSION_DIR} is up to date")
+    directory, figure_dir = Path(directory), Path(figure_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = directory / "summary.json"
+    if not force and not missing(directory) and summary_path.is_file() \
+            and json.loads(summary_path.read_text()).get("version") == VERSION \
+            and json.loads(summary_path.read_text()).get("radius_vox") == radius:
+        print(f"[exclusion] {directory} is up to date")
         return json.loads(summary_path.read_text())["sheets"]
     holdout_points, holdout_valid, _ = _mesh(mix6.HOLDOUT_NAME, HOLDOUT_DENSE)
     tree = cKDTree(holdout_points[holdout_valid])
     pixel_cm2 = (9.362e-4) ** 2
     summary = {}
     for alias, (render, name) in mix6.SHEETS_0846A.items():
-        distance, excluded = compute(name, tree)
+        distance, excluded = compute(name, tree, radius)
         mask_path = REPO / "masks" / f"{render}.png"
         papyrus = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
         if papyrus is None:
@@ -194,7 +205,7 @@ def build(force: bool = False) -> dict:
         papyrus = papyrus > 0
         label = cv2.imread(str(REPO / "dilated_inklabels" / f"{alias}.png"), cv2.IMREAD_GRAYSCALE)
         ink = split_extra_labels(label)[0] if label is not None else np.zeros_like(papyrus)
-        cv2.imwrite(str(exclusion_path(alias)), (excluded & papyrus).astype(np.uint8) * 255)
+        cv2.imwrite(str(exclusion_path(alias, directory)), (excluded & papyrus).astype(np.uint8) * 255)
         row = {
             "name": name, "render": int(render),
             "papyrus_cm2": float(papyrus.sum() * pixel_cm2),
@@ -206,14 +217,21 @@ def build(force: bool = False) -> dict:
         row["discarded_fraction"] = row["discarded_cm2"] / max(row["papyrus_cm2"], 1e-9)
         row["discarded_ink_fraction"] = row["discarded_ink_cm2"] / max(row["ink_cm2"], 1e-9)
         summary[str(alias)] = row
-        _figure(alias, name, render, distance, excluded, papyrus, ink, row)
+        _figure(alias, name, render, distance, excluded, papyrus, ink, row, radius, figure_dir)
         print(f"[exclusion] {alias} {name}: discard {row['discarded_cm2']:.2f}/{row['papyrus_cm2']:.2f} cm2 "
               f"({100 * row['discarded_fraction']:.0f}%), ink {row['discarded_ink_cm2']:.3f}/{row['ink_cm2']:.3f} cm2, "
               f"min distance {row['min_distance_vox']:.1f} vox", flush=True)
-    _overview(summary)
-    summary_path.write_text(json.dumps({"version": VERSION, "radius_vox": RADIUS_VOX, "sheets": summary}, indent=1))
-    print(f"[exclusion] masks in {EXCLUSION_DIR}, figures in {FIGURE_DIR}")
+    _overview(summary, radius, figure_dir)
+    summary_path.write_text(json.dumps({"version": VERSION, "radius_vox": radius, "sheets": summary}, indent=1))
+    print(f"[exclusion] masks in {directory}, figures in {figure_dir}")
     return summary
+
+
+def build_all(force: bool = False) -> None:
+    """the 14-voxel masks (cue_dropout), the 17-voxel reader-v3 masks and the deeper v8-in masks."""
+    build(force=force)
+    build(force=force, radius=READER_RADIUS_VOX, directory=READER_EXCLUSION_DIR, figure_dir=READER_FIGURE_DIR)
+    build(force=force, radius=V8IN_RADIUS_VOX, directory=V8IN_EXCLUSION_DIR, figure_dir=V8IN_FIGURE_DIR)
 
 
 def main() -> None:
@@ -221,7 +239,7 @@ def main() -> None:
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     os.chdir(REPO)
-    build(force=args.force)
+    build_all(force=args.force)
 
 
 if __name__ == "__main__":

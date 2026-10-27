@@ -1,4 +1,4 @@
-"""Fine-tune v8-in on the mix6 corpus (utils/mix6.py) for 5 epochs, from the released checkpoint.
+"""Fine-tune v8-in on the mix6 corpus (utils/mix6.py) for 5 epochs ($V8IN_EPOCHS overrides), from the released checkpoint.
 
 one command does everything and can be re-run (finished steps are skipped):
 
@@ -14,7 +14,7 @@ stage  writes what v8-in reads, per segment, under nader-fork/runs/v8in_mix6_dat
        other scroll trains on its train_masks region only (255 trains, 119 = hard negative inside the papyrus mask, black =
        unused; half-brightness strokes unused). Ink specks under 8 px are dropped in the three validation segments (the
        stitched validation metrics crash on them).
-train  the PH1447 recipe of nader-fork (finetune_v8in_with_local_segment.py) on the staged corpus: 5 epochs, batch 4, NEG_WEIGHT 25,
+train  the PH1447 recipe of nader-fork (finetune_v8in_with_local_segment.py) on the staged corpus: 5 epochs, micro-batch 2 x accumulation 16 (= batch 4 x 8), NEG_WEIGHT 25,
        group-balanced sampling (0846A split into two groups, so it weighs 2 against 1 for every other scroll). The last epoch
        also scores the stitched validation sheets. The final checkpoint is exported to a model folder.
 
@@ -33,6 +33,56 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
+TRAINER_FLAG = "--trainer"  # internal: train() re-runs this file under nader-fork/.venv with this flag first
+
+
+def trainer_main() -> None:
+    """train_resnet3d.py (nader-fork/.venv) with cuDNN autotuning, channels-last conv weights (same maths, faster mixed-precision
+    convs) and a trained-epoch{N}.ckpt saved after each epoch's last optimizer step, so a crash in validation keeps the weights."""
+    import pytorch_lightning as pl
+    import torch
+
+    class ChannelsLast(pl.Callback):
+        def on_fit_start(self, trainer, pl_module):
+            converted = 0
+            for parameter in pl_module.parameters():
+                fmt = {5: torch.channels_last_3d, 4: torch.channels_last}.get(parameter.dim())
+                if fmt is not None:
+                    parameter.data = parameter.data.contiguous(memory_format=fmt)
+                    converted += 1
+            print(f"[trainer] {converted} conv weights in channels-last layout; cudnn.benchmark={torch.backends.cudnn.benchmark}",
+                  flush=True)
+
+    class PreValidationCheckpoint(pl.Callback):
+        def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+            if batch_idx + 1 != trainer.num_training_batches or trainer.checkpoint_callback is None:
+                return
+            path = os.path.join(trainer.checkpoint_callback.dirpath, f"trained-epoch{trainer.current_epoch}.ckpt")
+            trainer.save_checkpoint(path)
+            print(f"[trainer] saved {path}", flush=True)
+
+    init = pl.Trainer.__init__
+
+    def trainer_init(self, *args, **kwargs):
+        kwargs["benchmark"] = True
+        kwargs["callbacks"] = [*(kwargs.get("callbacks") or []), ChannelsLast(), PreValidationCheckpoint()]
+        init(self, *args, **kwargs)
+
+    pl.Trainer.__init__ = trainer_init
+    torch.backends.cudnn.benchmark = True
+    fork = Path(os.environ.get("NADER_FORK_DIR", REPO / "nader-fork"))
+    sys.path.insert(0, os.environ.get("V8IN_TRAIN_LIB", str(fork / "training" / "lib")))
+    sys.argv = [sys.argv[0], *sys.argv[2:]]
+    import train_resnet3d
+
+    train_resnet3d.main()
+
+
+# the trainer runs in nader-fork/.venv, which lacks this repo's dependencies: dispatch before importing utils
+if __name__ == "__main__" and sys.argv[1:2] == [TRAINER_FLAG]:
+    trainer_main()
+    sys.exit(0)
+
 sys.path.insert(0, str(REPO))
 from utils import holdout_exclusion, mix6  # noqa: E402
 
@@ -41,7 +91,7 @@ FORK_URL, FORK_COMMIT = "https://github.com/jeff-j-chen/nader-fork.git", "8a811a
 LFS_FILES = ("model.safetensors", "training/r3d50_KM_200ep.safetensors")
 PYTHON = FORK / ".venv" / "bin" / "python"
 DATA = FORK / "runs" / "v8in_mix6_data" / "data"
-EPOCHS = 5
+EPOCHS = int(os.environ.get("V8IN_EPOCHS", 5))
 DEPTH = 24
 NEG_WEIGHT = "25"
 # the recipe's batch 4 x accumulation 8 needs more than 20 GB; same effective batch of 32 in micro-batches of this size
@@ -131,6 +181,13 @@ def stage() -> None:
             rows, cols = min(label.shape[0], mask.shape[0]), min(label.shape[1], mask.shape[1])
             label, mask = label[:rows, :cols], mask[:rows, :cols]
         ink, extra = split_extra_labels(label)
+        discard = holdout_exclusion.load(alias, directory=holdout_exclusion.V8IN_EXCLUSION_DIR)
+        if discard is not None:
+            discard = discard[:mask.shape[0], :mask.shape[1]]
+            mask &= ~discard
+            ink &= ~discard
+            print(f"[stage] {alias}: {int(discard.sum())} px within {holdout_exclusion.V8IN_RADIUS_VOX:g} vox of the prize sheet discarded")
+        # after the exclusion cut, which leaves new slivers of ink at its edge
         if alias in VAL:
             _, components, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
             tiny = np.flatnonzero(stats[1:, cv2.CC_STAT_AREA] < 8) + 1
@@ -140,12 +197,6 @@ def stage() -> None:
         if segment.split_masked:
             split = cv2.imread(str(REPO / "train_masks" / f"{alias}.png"), cv2.IMREAD_GRAYSCALE)[:mask.shape[0], :mask.shape[1]]
             mask = mask & ((split >= 240) | ((split >= 100) & (split <= 143))) & ~extra
-        discard = holdout_exclusion.load(alias)
-        if discard is not None:
-            discard = discard[:mask.shape[0], :mask.shape[1]]
-            mask &= ~discard
-            ink &= ~discard
-            print(f"[stage] {alias}: {int(discard.sum())} px within {holdout_exclusion.RADIUS_VOX:.0f} vox of the prize sheet discarded")
         folder.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(folder / f"{alias}_inklabels.png"), ink.astype(np.uint8) * 255)
         cv2.imwrite(str(folder / f"{alias}_mask.png"), mask.astype(np.uint8) * 255)
@@ -183,6 +234,8 @@ def recipe(smoke: bool) -> dict:
     training["train_batch_size"] = MICRO_BATCH
     training["accumulate_grad_batches"] = effective // MICRO_BATCH
     training["valid_batch_size"] = min(int(training["valid_batch_size"]), 4)
+    # the stitched validation metrics crashed the last epoch on slivers of ink; they are diagnostics only
+    training["eval_stitch_metrics"] = False
     return config
 
 
@@ -194,12 +247,19 @@ def last_checkpoint(smoke: bool) -> Path | None:
     return candidates[-1] if candidates and int(candidates[-1].stem.split("=")[-1]) == final else None
 
 
-def train(smoke: bool) -> Path:
+def trained_checkpoint(smoke: bool) -> Path | None:
+    """the final epoch's weights saved before its validation (trainer_main), if that epoch finished training."""
+    final = (1 if smoke else EPOCHS) - 1
+    candidates = sorted((run_dir(smoke) / "runs").glob(f"{run_dir(smoke).name}*/**/trained-epoch{final}.ckpt"))
+    return candidates[-1] if candidates else None
+
+
+def train(smoke: bool, resume: str | None = None) -> Path:
     existing = last_checkpoint(smoke)
     if existing is not None:
         print(f"[train] {existing} exists already; delete {run_dir(smoke)} to train again", flush=True)
         return existing
-    if run_dir(smoke).exists():
+    if run_dir(smoke).exists() and not resume:
         if smoke:
             shutil.rmtree(run_dir(smoke))
         elif list((run_dir(smoke) / "runs").glob("*/**/*.ckpt")):
@@ -212,12 +272,19 @@ def train(smoke: bool) -> Path:
     env = dict(os.environ, INPUT_NORM_TYPE="instance", DECODER_TYPE="2d", NEG_WEIGHT=NEG_WEIGHT, VAL_STRIDE="64",
                SCHED_WORLD_SIZE="1", NO_ALBUMENTATIONS_UPDATE="1", WANDB_MODE="disabled",
                PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
-    command = [PYTHON, entry, "--metadata_json", config_path, "--outputs_path", run_dir(smoke), "--devices", "1",
-               "--accelerator", "gpu", "--precision", "16-mixed", "--run_name", run_dir(smoke).name]
+    command = [PYTHON, Path(__file__).resolve(), TRAINER_FLAG, "--metadata_json", config_path, "--outputs_path", run_dir(smoke),
+               "--devices", "1", "--accelerator", "gpu", "--precision", "16-mixed", "--run_name", run_dir(smoke).name]
+    if resume:
+        command += ["--resume_from_ckpt", resume]
     if smoke:
         command += ["--limit_train_batches", "6"]
-    run(command, cwd=entry.parent, env=env)
-    final = last_checkpoint(smoke)
+    try:
+        run(command, cwd=entry.parent, env=env)
+    except subprocess.CalledProcessError:
+        if trained_checkpoint(smoke) is None:
+            raise
+        print(f"[train] training finished but its last validation failed; using {trained_checkpoint(smoke)}", flush=True)
+    final = last_checkpoint(smoke) or trained_checkpoint(smoke)
     if final is None:
         raise SystemExit(f"[train] finished without the final-epoch checkpoint under {run_dir(smoke) / 'runs'}")
     return final
@@ -235,18 +302,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", default="all", choices=("all", "setup", "stage", "train"))
     parser.add_argument("--smoke", action="store_true", help="one epoch of 6 batches into runs/v8in_mix6_smoke")
+    parser.add_argument("--resume", default=None, help="train: continue from this Lightning .ckpt (epoch, optimizer, scheduler)")
     args = parser.parse_args()
     os.chdir(REPO)
     exported = None
     if args.command in ("all", "setup"):
         setup()
     if args.command in ("all", "stage"):
-        problems = mix6.status([int(alias) for alias in mix6.SEGMENTS], derived=False) + holdout_exclusion.missing()
+        problems = mix6.status([int(alias) for alias in mix6.SEGMENTS], derived=False) \
+            + holdout_exclusion.missing(holdout_exclusion.V8IN_EXCLUSION_DIR)
         if problems:
             raise SystemExit("mix6 data is incomplete (python3 assemble_training_segments.py --mix6):\n  " + "\n  ".join(problems[:10]))
         stage()
     if args.command in ("all", "train"):
-        checkpoint = train(args.smoke)
+        checkpoint = train(args.smoke, args.resume)
         exported = export(args.smoke, checkpoint)
         print(f"\n[done] v8-in mix6 fine-tune ({'smoke, 1 epoch of 6 batches' if args.smoke else f'{EPOCHS} epochs'}): "
               f"model {exported}\n       Lightning checkpoint {checkpoint}", flush=True)
