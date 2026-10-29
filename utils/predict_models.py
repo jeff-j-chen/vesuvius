@@ -238,7 +238,9 @@ def predict_v8in(zarr_path, checkpoint, cache_dir, batch_size: int = 16, layers=
     prediction_path = cache_dir / "v8in_prediction.npy"
     drop_stale([prediction_path], zarr_path, checkpoint)
     if not prediction_path.is_file():
-        model_dir = v8in_model_dir(checkpoint, cache_dir / "v8in_model")
+        # one export per checkpoint, shared by every sheet (re-exporting re-reads the 1 GB .ckpt from the network drive)
+        export_key = "".join(ch if ch.isalnum() else "_" for ch in str(Path(str(checkpoint)).resolve()))[-120:]
+        model_dir = v8in_model_dir(checkpoint, REPO / "_ves_tmp" / "v8in_exports" / export_key)
         LOCAL_ZARR_DIR.mkdir(parents=True, exist_ok=True)
         scratch = None if layers is not None else tempfile.mkdtemp(dir=LOCAL_ZARR_DIR)
         try:

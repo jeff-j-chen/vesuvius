@@ -33,7 +33,7 @@ usage:
 PHerc0846A
   the 7 trained PHerc0846A sheets and the straightened2 holdout (the mix6 corpus, utils/mix6.py) are assembled by
   assemble_training_segments.py (MESHES_0846A), which reuses render_fragment and make_flat_alias from here. the other
-  PHerc0846A renders (REDO set, out_4/out_5, p29, ...) stay in FRAGMENTS below.
+  PHerc0846A renders (REDO set, out_4/out_5, ...) stay in FRAGMENTS below.
 
 FLAT ALIASES (always)
   the PHerc0846A patches train and evaluate under flat depth-13 aliases (FLAT_ALIASES): <alias>.zarr and the
@@ -121,7 +121,24 @@ from utils.depth_flip import reversed_ids  # noqa: E402
 DEPTH_REVERSED = reversed_ids()
 # renders whose mesh is upside down in the flattened frame: the coordinate grids are rotated 180 degrees in-plane before
 # sampling (letters stay unmirrored; the normal and depth order are unchanged), so every stored array is upright
-ROTATE_180 = {"20261014084610", "20261012065814", "20261012065816", "20261012065818", "20261012065820", "20261012065822", "20261012065824", "20261012065826"}
+ROTATE_180 = {"20261014084610", "20261012065814", "20261012065816", "20261012065818", "20261012065820", "20261012065822", "20261012065824", "20261012065826",
+              "fiber_tps_20261028_flatboi"}
+# PHerc0846A quick patches whose mesh is turned in the flattened frame: counter-clockwise quarter turns that bring the scroll
+# axis (+z) up like the training sheets (measured from z.tif, 2026-10-28). Mirrored-looking and borderline patches are left alone.
+QUICK_PATCH_ROTATIONS = {
+    **{f"auto_grown_{stamp}_abf": 1 for stamp in (  # rotated 90 deg clockwise
+        "20260925213656950", "20260926100047057", "20260927104835405", "20260927154033403")},
+    **{f"auto_grown_{stamp}_abf": 2 for stamp in (  # upside down
+        "20260926143326538", "20260926155339746", "20260927113833323", "20260927163807488", "20260927210402707",
+        "20260930183227508", "20261002063613747", "20261002181952099", "20261002191002624", "20261014075402894")},
+}
+# render id -> counter-clockwise quarter turns applied to the coordinate grids before sampling
+ROTATE_CCW = {**{zid: 2 for zid in ROTATE_180}, **QUICK_PATCH_ROTATIONS}
+
+
+def applied_rotation(attrs):
+    """counter-clockwise quarter turns a render was assembled with (older renders only carry rotated_180)."""
+    return int(attrs.get("rotated_ccw", 2 if attrs.get("rotated_180") else 0)) % 4
 
 # free-disk floor for downloads/renders (set from --min-free-gb); tripping it stops all further rendering
 _MIN_FREE_BYTES = 0
@@ -215,7 +232,7 @@ def compute_normals(Xu, Yu, Zu):
 def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, normal_step,
                           upsample_factor, workers, out_zarr, out_id, chunk_depth, chunk_y, chunk_x,
                           crop_valid=True, crop_margin=8, mask_dir=MASK_DIR, output_dtype="<u2",
-                          reverse_depth=False, source_um=TARGET_VOXEL_UM, trilinear=None, rotate180=False):
+                          reverse_depth=False, source_um=TARGET_VOXEL_UM, trilinear=None, rotate180=False, rotate_ccw=0):
     """render a flattened surface volume from tifxyz mesh + raw volume on S3.
     
     the mesh gives, for each point on the FLATTENED sheet, its (x,y,z) voxel in the raw scan.
@@ -233,8 +250,9 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
     as fill_value 0."""
     os.makedirs(cache_dir, exist_ok=True)
     X, Y, Z, valid = load_mesh(mesh_dir)
-    if rotate180:
-        X, Y, Z, valid = (np.ascontiguousarray(grid[::-1, ::-1]) for grid in (X, Y, Z, valid))
+    turns = (int(rotate_ccw) or (2 if rotate180 else 0)) % 4
+    if turns:
+        X, Y, Z, valid = (np.ascontiguousarray(np.rot90(grid, turns)) for grid in (X, Y, Z, valid))
     
     # crop to the valid bounding box (+margin) FIRST. some meshes store a small compact
     # sheet inside a huge mostly-empty padded grid (e.g. a 344x455 blob in a 6203x6203 grid);
@@ -424,18 +442,31 @@ def render_surface_volume(mesh_dir, cache_dir, vol_base, vol_shape, layers, norm
                       dtype=output_dtype, compressor=None, zarr_format=2)
     _require_disk(os.path.dirname(os.path.abspath(out_zarr)))
     trilinear_volume = sample_trilinear() if interpolate else None
-    for li, off in enumerate(offsets):
+    block_depth = min(chunk_depth, D)
+    for d0 in range(0, D, block_depth):
         _require_disk(os.path.dirname(os.path.abspath(out_zarr)))
-        layer = trilinear_volume[li] if interpolate else sample_layer(off)
-        store[li] = layer.astype(store.dtype)
-        print(f"[zarr] layer {li+1}/{D}", flush=True)
+        d1 = min(d0 + block_depth, D)
+        if interpolate:
+            block = trilinear_volume[d0:d1].astype(store.dtype)
+        else:
+            block = np.stack([sample_layer(off) for off in offsets[d0:d1]]).astype(store.dtype)
+
+        # whole depth chunks in disjoint row strips: each chunk file is written once, concurrently
+        def write_rows(y0):
+            store[d0:d1, y0:y0 + chunk_y * 8] = block[:, y0:y0 + chunk_y * 8]
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            list(pool.map(write_rows, range(0, H, chunk_y * 8)))
+        print(f"[zarr] layers {d0 + 1}-{d1}/{D}", flush=True)
     del trilinear_volume
     if reverse_depth and normals is not None:
         store.attrs["depth_flipped"] = True
     store.attrs["voxel_um"] = TARGET_VOXEL_UM
     store.attrs["source_voxel_um"] = float(source_um)
     store.attrs["sampling"] = "trilinear" if interpolate else "nearest"
-    if rotate180:
+    if turns:
+        store.attrs["rotated_ccw"] = turns
+    if turns == 2:
         store.attrs["rotated_180"] = True
 
     # the rendered zarr is the source of truth for its usable footprint
@@ -525,11 +556,6 @@ FRAGMENTS = [
     ("20261012081237", "3_new/auto_grown_20261012081237255_abf",
      f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
      "14019,7726,7726"),
-    # Committed +29 mesh, restored with its original native grid and separate offset inklabels.
-    # Presentation only: base 90 CCW, offset 90 CW; do not rotate stored arrays during assembly.
-    ("20261012073249", "3_new_offset/auto_grown_20261012073244544_abf_p29",
-     f"{BUCKET}/PHerc0846A/volumes/20250728152254-9.362um-1.2m-113keV-masked.zarr/0",
-     "14019,7726,7726"),
     # a second straightened PHerc0846A sheet (2026-10-15); its mesh is upside down, so it is assembled rotated 180
     # degrees (ROTATE_180) and every mask, label and train mask is written upright
     ("20261014084610", "auto_grown_20261014084609861_straight_abf",
@@ -564,7 +590,6 @@ FRAGMENTS = [
 # source render -> flat depth-13 alias used by training and the 0846A notebook (see the docstring)
 # (the mix6 sheets' aliases are in assemble_training_segments.MESHES_0846A)
 FLAT_ALIASES = {
-    "20261012073249": "20261012073250",
     "20261012081237": "20261012081238",
     "20261012065810": "20261012065811",
     "20261014084610": "20261014084611",
@@ -648,7 +673,7 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
         import zarr
         attrs = zarr.open(out_zarr, mode="r").attrs
         if (attrs.get("sampling") == "trilinear" and attrs.get("voxel_um") == TARGET_VOXEL_UM
-                and bool(attrs.get("rotated_180", False)) == (zid in ROTATE_180)):
+                and applied_rotation(attrs) == ROTATE_CCW.get(zid, 0)):
             print(f"  zarr + mask exist -> skip")
             return (zid, "OK (cached)")
         print(f"  zarr predates trilinear 9.362um rendering -> re-rendering")
@@ -690,7 +715,7 @@ def render_fragment(zid, mesh_sub, vol_base, vol_shape, workers, out_dir, script
             mask_dir=mask_dir,
             output_dtype=output_dtype,
             reverse_depth=zid in DEPTH_REVERSED,
-            rotate180=zid in ROTATE_180,
+            rotate_ccw=ROTATE_CCW.get(zid, 0),
             source_um=source_um)
         drop_stale_derived(zid, old_mask, mask_path)
         # composites show the raw render, so they are rebuilt from the new one

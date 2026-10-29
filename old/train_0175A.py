@@ -77,7 +77,7 @@ def twists(arm: str) -> set[str]:
 def configure(config, arm: str, opts) -> None:
     """the default run config with the 0175A patches, rotation augmentation and the arm's twist."""
     from utils import pherc0175a
-    from utils.config import RUN_0846A_IDS, RUN_DOMAIN_WEIGHTS, RUN_LABEL_FREE_VIS_IDS, RUN_P29_ID, ScrollConfig
+    from utils.config import RUN_0846A_IDS, RUN_DOMAIN_WEIGHTS, RUN_LABEL_FREE_VIS_IDS, ScrollConfig
 
     ids = pherc0175a.alias_ids()
     vis = {"review": [i for i in REVIEW_IDS if i in ids], "all": ids, "none": []}[opts.vis]
@@ -92,7 +92,7 @@ def configure(config, arm: str, opts) -> None:
     config.dl.arbitrary_rotation_max_deg = 180.0
 
     # p29 and the two label-free 0846A sheets are not part of these runs
-    dropped = {RUN_P29_ID, *RUN_LABEL_FREE_VIS_IDS}
+    dropped = set(RUN_LABEL_FREE_VIS_IDS)
     config.data.whole_patch_valid_scroll_ids = [s for s in config.data.whole_patch_valid_scroll_ids if int(s) not in dropped]
     config.data.surface_window_offset_by_scroll = {
         **{s: o for s, o in config.data.surface_window_offset_by_scroll.items() if int(s) not in dropped},

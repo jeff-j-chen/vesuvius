@@ -68,7 +68,7 @@ Other runners:
 - `python3 train_iter2.py --arm <arm>`: iteration 2, the 192 px baseline on the PHerc0846A set and its single-change arms (logs in `runs_iter2/`). Its `asf_cue` arm became the base of the mix6 run
 - `python3 train_0175A.py`: rotation-augmented arms that try to read the unlabeled PHerc0175A quick patches more cleanly, starting from the 0175A MAE (`mae_pretrain_0175a.py`)
 - `python3 assemble_training_segments.py` without `--mix6`: every training fragment, including the 8 mix6 PHerc0846A sheets (7 trained + straightened2)
-- `python3 assemble_test_segments.py`: the test surfaces and the PHerc0846A renders outside mix6 (REDO set, out_4/out_5, p29, ...)
+- `python3 assemble_test_segments.py`: the test surfaces and the PHerc0846A renders outside mix6 (REDO set, out_4/out_5, ...)
 
 ## Evaluation notebooks
 
@@ -122,14 +122,27 @@ title names the method. The methods live in `utils/depth_ensemble.py`. Cells tha
 | `20231205222200` | Cr4 Fr8 | PHerc51 | 3.24µm / 88keV | **High-energy rescan** through the 53keV surface PPM (fitted affine) | |
 | `20230301213423` | Fr34 | PHercParis1 | 3.24µm / 88keV | **High-energy rescan** through the 54keV exposed-surface PPM (fitted affine) | |
 | `20250511003658` | tifxyz segment | PHerc0343P | 8.64µm / 116keV | 31-layer surface volume resampled in XYZ to 28 layers | |
-| `20261007000000` | w047-w048 letters | PHerc0343P | 8.64µm / 116keV | Community tifxyz mesh (`concat_w047-w048_R5B2_z9500-11000`) rendered and resampled in XYZ to 9.362µm | Hand-drawn letters |
+| `20261007000000` | w047-w048 letters | PHerc0343 | 8.64µm / 116keV | Community tifxyz mesh (`concat_w047-w048_R5B2_z9500-11000`) rendered and resampled in XYZ to 9.362µm | Hand-drawn letters |
 | `20260221022814` | auto-grown 405 | PHerc0841 | 9.366µm / 113keV | Native surface volume, upstream re-crop (2026-09-22) to 3760×4900; copied without resampling (0.04% off the 9.362µm grid) | |
 | `20260930144758` | w058 | PHerc1447 | 8.64µm / 116keV | Hugging Face 24-layer render; depth reversed, resampled in XYZ to 28 layers | Released `labels/inklabels.png`; fine-tune only |
 | `20260930144760` | w060 | PHerc1447 | 8.64µm / 116keV | Hugging Face 24-layer render; depth reversed, resampled in XYZ to 28 layers | Released `labels/inklabels.png`; fine-tune only |
 | `20260930144762` | w062 | PHerc1447 | 8.64µm / 116keV | Hugging Face 24-layer render; depth reversed, resampled in XYZ to 28 layers | Pseudo-label from held-out `loo_w062.png`; no train mask |
 | `20260927134931` | ABF patch | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20260927134928`), flat depth-13 alias | Hand-drawn labels; train-only |
 | `20261012073246` | 073244 patch | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20261012073244`), flat depth-13 alias | Hand-drawn labels; train-only |
-| `20261012073250` | 073244 +29 offset (p29) | PHerc0846A | 9.362µm / 113keV | 073244 mesh moved +29 voxels along its normal (`20261012073249`), flat depth-13 alias | Own hand-drawn labels; vis-only in the plain `Config()`, unused by the mix6 run |
+| `20261012065813` | straight -28 (m28) | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20261012065812`), flat depth-13 alias | Hand-drawn labels; train-only |
+| `20261012065817` | straightened2 in_1 | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20261012065816`), flat depth-13 alias | Hand-drawn labels; train-only |
+| `20261012065819` | straightened2 out_1 | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20261012065818`), flat depth-13 alias | Hand-drawn labels; train-only |
+| `20261012065821` | straightened2 out_2 | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20261012065820`), flat depth-13 alias | Hand-drawn labels; train-only |
+| `20261012065823` | straightened2 out_3 | PHerc0846A | 9.362µm / 113keV | tifxyz mesh render (`20261012065822`), flat depth-13 alias | Hand-drawn labels; train-only |
+| `20250825181859` | 500P2 -1 | PHerc0500P2 | 9.362µm / 113keV | Native surface volume, 28×5880×3300 (mesh traced on the 2.215µm / 111keV scan) | NEW (2026-10-28), not in `Config()`; starter label from the official 2.215µm ink-labels zarr; mask 60.1% valid, label 2.8% ink, reg. NCC 0.87 |
+| `20250825181917` | 500P2 -2 | PHerc0500P2 | 9.362µm / 113keV | Native surface volume, 28×5520×3240 (mesh traced on the 2.215µm / 111keV scan) | NEW (2026-10-28), not in `Config()`; starter label = thresholded 2.215µm ink detection; mask 59.5%, label 8.9%, NCC 0.87 |
+| `20250902170441` | -4_b2 | PHerc0343P | 8.64µm / 116keV | 31×3300×2520 surface volume resampled in XYZ to 28×3046×2326 | NEW (2026-10-28), not in `Config()`; starter label = thresholded 2.215µm ink detection; mask 62.7%, label 3.2%, NCC 0.80 |
+| `20250919132115` | patch 592 | PHerc0009B | 8.64µm / 116keV | 31×7240×6560 surface volume resampled in XYZ to 28×6682×6054 | NEW (2026-10-28), not in `Config()`; starter label = thresholded 2.401µm ink detection; mask 74.0%, label 9.2%, NCC 0.62 |
+| `20260220213127` | w00 | PHerc0841 | 9.366µm / 113keV | Native surface volume, 28×4220×4760, copied without resampling | NEW (2026-10-28), not in `Config()`; starter label from the official 2.403µm ink-labels zarr; mask 71.8%, label 2.0%, NCC 0.77 |
+| `20250925222237` | auto-grown 459 | PHerc0814 | 9.362µm / 113keV | Native surface volume, 28×3920×11900 | NEW (2026-10-28), not in `Config()`; starter label = thresholded 2.399µm ink detection; mask 40.0%, label 5.7%, NCC 0.87 |
+| `20260422000000` | title | PHerc0139 | 9.362µm / 113keV | Native surface volume, 28×1780×5360 | NEW (2026-10-28), not in `Config()`; starter label = thresholded 2.399µm ink detection; mask 84.9%, label 10.6%, NCC 0.63 |
+
+**PHerc0343 and PHerc0343P are NOT the same scroll.** They are physically unrelated scrolls that happen to have similar names. Never group, merge or treat them as one domain: the w047-w048 first letters (`20261007000000`) are PHerc0343; the tifxyz segment (`20250511003658`) and -4_b2 (`20250902170441`) are PHerc0343P.
 
 ### Special rendering
 
@@ -138,6 +151,8 @@ title names the method. The methods live in `utils/depth_ensemble.py`. Cells tha
 - **Pooled 2.4µm surfaces (w013, w018, Paris4).** Level 2 of the pyramid gives 9.596µm (w013, w018) or 9.6µm (Paris4) in XY, kept as is. 109 native depth samples are pooled to 28 layers (~9.34µm in Z). The meshes were traced on older scans (3.24µm for PHerc1667, 7.91µm for Paris4).
 - **Resampled scans (PHerc0172, PHerc0009B, PHerc0343P, PHerc1447, Cr1 Fr3).** Resampled from the native voxel size to 9.362µm: linear interpolation in depth, area averaging in XY (linear when upsampling).
 - **PHerc1447 windings.** These come from the Hugging Face dataset `YoussefMoNader/ink-8um-pherc1447-surfaces` and get synthetic IDs. Their mesh normal points the opposite way, so the 24 layers are written in reversed order (`depth_reversed.json`, `depth_flipped=true`). The labels are copied into both `inklabels/` and `dilated_inklabels/` after XY resampling. `campaign_finetune_96.py` uses w058 and w060 with manual splits from `train_masks/`.
+- **2026-10-28 additions (500P2 -1/-2, 343P -4_b2, 0009B 592, 0841 w00, 0814 459, 0139 title).** Assembled by `assemble_training_segments.py` (default download path; 343P and 0009B use the 8.64µm XYZ resample). Starter labels come from `old/new_segment_labels_20261028.py`: the official `ink-labels/` zarr (500P2 -1, 0841 w00) or the `ink-detection/` tif, registered from the fine-scan render onto our frame (SIFT affine + displacement field, tile NCC 0.62-0.87, registration stats in `output/new_segments_20261028/labels_manifest.json`), thresholded at 0.5 into `inklabels/` + `dilated_inklabels/`; the soft detection map is in `inklabels/2_4um/`. `train_masks/` are all zero. Not used by any training config or the correlation pipeline yet.
+- **Offset fragment surfaces (`offset_fragment_surfaces.py`).** The separated fragments (500P2 front/-1/-2, Fr143, Fr47, Cr4 Fr8, Fr34, Cr1 Fr3) re-rendered 29 layers (271µm) deeper, towards the denser side picked from a normal intensity profile. IDs `<zid>_in29`; reader-v3 maps in `output/offset29/<id>/`. Readability check only, not training segments.
 
 ### Legacy PHerc0139 windings
 
@@ -173,7 +188,7 @@ Hand-drawn labels are in `dilated_inklabels/`, named after the alias.
 Two scripts assemble these renders:
 
 - **the 8 mix6 sheets** (7 trained + straightened2): `assemble_training_segments.py` (`MESHES_0846A`). A plain run includes them and so does `--mix6`. The script renders each one with `assemble_test_segments.render_fragment` and builds its alias with `make_flat_alias`. These sheets skip label checks, surface detection and degradation
-- **every other PHerc0846A render** (out_4/out_5, p29, 081237, the straight sheets 065810 / 084610, the REDO set): `assemble_test_segments.py` (`FRAGMENTS` + `FLAT_ALIASES`). The script refuses to start if a `FLAT_ALIASES` source is missing from `FRAGMENTS`
+- **every other PHerc0846A render** (out_4/out_5, 081237, the straight sheets 065810 / 084610, the REDO set): `assemble_test_segments.py` (`FRAGMENTS` + `FLAT_ALIASES`). The script refuses to start if a `FLAT_ALIASES` source is missing from `FRAGMENTS`
 
 | Render | Alias | Mesh (`tifxyz/`) | Assembler | mix6 |
 |---|---|---|---|---|
@@ -189,7 +204,7 @@ Two scripts assemble these renders:
 | `20261012065826` | `20261012065827` | `auto_grown_20261012065803387_straightened2_abf_out_5` | test | not used (whole-patch validation entry only) |
 
 - the straightened2 sheets and `20261014084610` have upside-down meshes: their coordinate grids are rotated 180° in-plane before sampling (`ROTATE_180`, zarr attribute `rotated_180`), so every stored array is upright and letters are not mirrored
-- display only: the 073244 render/alias is shown rotated 90° CCW, p29 90° CW and the ABF patch 180° (`utils/fast_figure.display_rotation`); arrays and metrics stay in the native frame
+- display only: the 073244 render/alias is shown rotated 90° CCW and the ABF patch 180° (`utils/fast_figure.display_rotation`); arrays and metrics stay in the native frame
 
 ### The mix6 run (`cue_dropout_labelsv6_mix6`)
 

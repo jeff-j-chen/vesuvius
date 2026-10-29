@@ -54,7 +54,7 @@ def _smooth(profile: np.ndarray, sigma: float) -> np.ndarray:
 
 
 # raw arrays whose writing lines run along y (the display rotates them a quarter turn); every other patch has lines along x
-LINES_ALONG_Y = (20261012073246, 20261012073250)
+LINES_ALONG_Y = (20261012073246,)
 
 
 def line_axis(scroll_id: int) -> int:

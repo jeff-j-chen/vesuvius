@@ -1,0 +1,37 @@
+{
+    "area_cm2": 7.478128714573975,
+    "area_vx2": 8532094.607291006,
+    "bbox": [
+        [
+            2655.19287109375,
+            2525.144287109375,
+            11505.0078125
+        ],
+        [
+            6480.9541015625,
+            3567.17919921875,
+            13729.7958984375
+        ]
+    ],
+    "date_last_modified": "20261028163235000",
+    "elapsed_time_s": 102.1484817,
+    "format": "tifxyz",
+    "grid_offset": [
+        2,
+        2
+    ],
+    "max_gen": 268,
+    "scale": [
+        0.05000000074505806,
+        0.05000000074505806
+    ],
+    "seed": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "seed_surface_id": "fiber_tps_20261028",
+    "source": "fiber thin-plate spline from grid1_final2 over auto_grown_20261012065803387_straightened2_abf",
+    "type": "seg",
+    "uuid": "fiber_tps_20261028_flatboi"
+}

@@ -33,3 +33,4 @@ cue_*/
 eval_figs/
 # local run outputs, too large for GitHub
 runs_corr/
+models/ckpt_002000.pth

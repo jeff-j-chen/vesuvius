@@ -1,45 +1,52 @@
 pid,label,name,scroll,fine_scan,source_um,status,reason
-20250919125754,p9b_487,p9b_487,pherc0009b,0,8.64,skipped,missing /vesuvius/ves_zarrs2/20250919125754.zarr; missing surface_labels/20250919125754/depth.npy; missing surface_labels/20250919125754/confidence.npy
-20250108000005,w030,w030,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20250108000005.zarr; missing surface_labels/20250108000005/depth.npy; missing surface_labels/20250108000005/confidence.npy
-20260303000000,w034,w034,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260303000000.zarr; missing dilated_inklabels/20260303000000.png; missing surface_labels/20260303000000/depth.npy; missing surface_labels/20260303000000/confidence.npy
-20260317000000,w035,w035,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260317000000.zarr; missing surface_labels/20260317000000/depth.npy; missing surface_labels/20260317000000/confidence.npy
-20260310000000,w037,w037,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260310000000.zarr; missing dilated_inklabels/20260310000000.png; missing surface_labels/20260310000000/depth.npy; missing surface_labels/20260310000000/confidence.npy
-20260306000000,w038,w038,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260306000000.zarr; missing dilated_inklabels/20260306000000.png; missing surface_labels/20260306000000/depth.npy; missing surface_labels/20260306000000/confidence.npy
-20260302000000,w039,w039,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260302000000.zarr; missing surface_labels/20260302000000/depth.npy; missing surface_labels/20260302000000/confidence.npy
-20250831000000,w040,w040,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20250831000000.zarr; missing surface_labels/20250831000000/depth.npy; missing surface_labels/20250831000000/confidence.npy
-20260108000000,w041,w041,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260108000000.zarr; missing surface_labels/20260108000000/depth.npy; missing surface_labels/20260108000000/confidence.npy
-20260112000000,w043,w043,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260112000000.zarr; missing surface_labels/20260112000000/depth.npy; missing surface_labels/20260112000000/confidence.npy
-20260115000000,w044,w044,pherc0139,0,9.362,skipped,missing surface_labels/20260115000000/depth.npy; missing surface_labels/20260115000000/confidence.npy
-20260126000000,w045,w045,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260126000000.zarr; missing surface_labels/20260126000000/depth.npy; missing surface_labels/20260126000000/confidence.npy
-20260325000000,w046,w046,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260325000000.zarr; missing dilated_inklabels/20260325000000.png; missing surface_labels/20260325000000/depth.npy; missing surface_labels/20260325000000/confidence.npy
-20260206000001,w047,w047,pherc0139,0,9.362,skipped,missing dilated_inklabels/20260206000001.png; missing surface_labels/20260206000001/depth.npy; missing surface_labels/20260206000001/confidence.npy
-20260318000000,w049,w049,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260318000000.zarr; missing dilated_inklabels/20260318000000.png; missing surface_labels/20260318000000/depth.npy; missing surface_labels/20260318000000/confidence.npy
-20260227000000,w052,w052,pherc0139,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260227000000.zarr; missing dilated_inklabels/20260227000000.png; missing surface_labels/20260227000000/depth.npy; missing surface_labels/20260227000000/confidence.npy
-20260115000001,w056,w056,pherc0139,0,9.362,skipped,missing dilated_inklabels/20260115000001.png; missing surface_labels/20260115000001/depth.npy; missing surface_labels/20260115000001/confidence.npy
-20260210000000,w058,w058,pherc0139,0,9.362,skipped,missing dilated_inklabels/20260210000000.png; missing surface_labels/20260210000000/depth.npy; missing surface_labels/20260210000000/confidence.npy
-20250223000000,w059,w059,pherc0139,0,9.362,skipped,missing surface_labels/20250223000000/depth.npy; missing surface_labels/20250223000000/confidence.npy
-20251111010954,w068,w068,pherc0172,0,7.91,skipped,missing /vesuvius/ves_zarrs2/20251111010954.zarr; missing surface_labels/20251111010954/depth.npy; missing surface_labels/20251111010954/confidence.npy
-20251112000002,w087,w087,pherc0172,0,7.91,skipped,missing /vesuvius/ves_zarrs2/20251112000002.zarr; missing surface_labels/20251112000002/depth.npy; missing surface_labels/20251112000002/confidence.npy
-20250511003658,p343,p343,pherc0343p,0,8.64,skipped,missing /vesuvius/ves_zarrs2/20250511003658.zarr; missing surface_labels/20250511003658/depth.npy; missing surface_labels/20250511003658/confidence.npy
-20261007000000,p343_letters,p343_letters,pherc0343p,0,8.64,skipped,missing /vesuvius/ves_zarrs2/20261007000000.zarr; missing surface_labels/20261007000000/depth.npy; missing surface_labels/20261007000000/confidence.npy
-20250628074500,500P2_front,500P2_front,pherc0500p2,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20250628074500.zarr; missing surface_labels/20250628074500/depth.npy; missing surface_labels/20250628074500/confidence.npy
-20260226000000,seg46527,seg46527,pherc0814,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260226000000.zarr; missing surface_labels/20260226000000/depth.npy; missing surface_labels/20260226000000/confidence.npy
-20260221022814,p841,p841,pherc0841,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260221022814.zarr; missing surface_labels/20260221022814/depth.npy; missing surface_labels/20260221022814/confidence.npy
-20260927134931,0846a_20260927134928,auto_grown_20260927134928530_abf,pherc0846a,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20260927134931.zarr; missing surface_labels/20260927134931/depth.npy; missing surface_labels/20260927134931/confidence.npy
-20261012073246,0846a_20261012073244,auto_grown_20261012073244544_abf,pherc0846a,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20261012073246.zarr; missing surface_labels/20261012073246/depth.npy; missing surface_labels/20261012073246/confidence.npy
-20261012065817,0846a_in_1,auto_grown_20261012065803387_straightened2_abf_in_1,pherc0846a,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20261012065817.zarr; missing surface_labels/20261012065817/depth.npy; missing surface_labels/20261012065817/confidence.npy
-20261012065813,0846a_m28,auto_grown_20261012065803387_straight_abf_m28,pherc0846a,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20261012065813.zarr; missing surface_labels/20261012065813/depth.npy; missing surface_labels/20261012065813/confidence.npy
-20261012065819,0846a_out_1,auto_grown_20261012065803387_straightened2_abf_out_1,pherc0846a,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20261012065819.zarr; missing surface_labels/20261012065819/depth.npy; missing surface_labels/20261012065819/confidence.npy
-20261012065821,0846a_out_2,auto_grown_20261012065803387_straightened2_abf_out_2,pherc0846a,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20261012065821.zarr; missing surface_labels/20261012065821/depth.npy; missing surface_labels/20261012065821/confidence.npy
-20261012065823,0846a_out_3,auto_grown_20261012065803387_straightened2_abf_out_3,pherc0846a,0,9.362,skipped,missing /vesuvius/ves_zarrs2/20261012065823.zarr; missing surface_labels/20261012065823/depth.npy; missing surface_labels/20261012065823/confidence.npy
-20260930144758,ph1447_w058,ph1447_w058,pherc1447,0,8.64,skipped,missing /vesuvius/ves_zarrs2/20260930144758.zarr; missing surface_labels/20260930144758/depth.npy; missing surface_labels/20260930144758/confidence.npy
-20260930144760,ph1447_w060,ph1447_w060,pherc1447,0,8.64,skipped,missing /vesuvius/ves_zarrs2/20260930144760.zarr; missing surface_labels/20260930144760/depth.npy; missing surface_labels/20260930144760/confidence.npy
-20231201215900,cr1fr3,cr1fr3,pherc1667,1,3.24,skipped,missing /vesuvius/ves_zarrs2/20231201215900.matched.zarr; missing surface_labels/20231201215900/depth.npy; missing surface_labels/20231201215900/confidence.npy
-20240304141531,w013,w013,pherc1667,1,2.4,skipped,missing /vesuvius/ves_zarrs2/20240304141531.matched.zarr; missing surface_labels/20240304141531/depth.npy; missing surface_labels/20240304141531/confidence.npy
-20240304144031,w018,w018,pherc1667,1,2.4,skipped,missing /vesuvius/ves_zarrs2/20240304144031.matched.zarr; missing surface_labels/20240304144031/depth.npy; missing surface_labels/20240304144031/confidence.npy
-20231205222200,scroll6_fr8,scroll6_fr8,pherc51cr4_fr8,1,3.24,skipped,missing /vesuvius/ves_zarrs2/20231205222200.matched.zarr; missing surface_labels/20231205222200/depth.npy; missing surface_labels/20231205222200/confidence.npy
-20230301213423,paris1_fr34,paris1_fr34,phercparis1_fr34,1,3.24,skipped,missing /vesuvius/ves_zarrs2/20230301213423.matched.zarr; missing surface_labels/20230301213423/depth.npy; missing surface_labels/20230301213423/confidence.npy
-20230301213755,paris2_fr143,paris2_fr143,phercparis2_fr143,1,3.24,skipped,missing /vesuvius/ves_zarrs2/20230301213755.matched.zarr; missing surface_labels/20230301213755/depth.npy; missing surface_labels/20230301213755/confidence.npy
-20230205142449,paris2_fr47,paris2_fr47,phercparis2_fr143,1,3.24,skipped,missing /vesuvius/ves_zarrs2/20230205142449.matched.zarr; missing surface_labels/20230205142449/depth.npy; missing surface_labels/20230205142449/confidence.npy
-20231210121321,paris4,paris4,phercparis4,1,2.4,skipped,missing /vesuvius/ves_zarrs2/20231210121321.matched.zarr; missing surface_labels/20231210121321/depth.npy; missing surface_labels/20231210121321/confidence.npy
-20260930144762,ph1447_w062,ph1447_w062,unknown,0,8.64,skipped,missing /vesuvius/ves_zarrs2/20260930144762.zarr; missing train_masks/20260930144762.png; missing surface_labels/20260930144762/depth.npy; missing surface_labels/20260930144762/confidence.npy
+20250919125754,p9b_487,p9b_487,pherc0009b,0,8.64,eligible,
+20250108000005,w030,w030,pherc0139,0,9.362,eligible,
+20260303000000,w034,w034,pherc0139,0,9.362,skipped,missing dilated_inklabels/20260303000000.png
+20260317000000,w035,w035,pherc0139,0,9.362,eligible,
+20260310000000,w037,w037,pherc0139,0,9.362,skipped,missing dilated_inklabels/20260310000000.png
+20260306000000,w038,w038,pherc0139,0,9.362,skipped,missing dilated_inklabels/20260306000000.png
+20260302000000,w039,w039,pherc0139,0,9.362,eligible,
+20250831000000,w040,w040,pherc0139,0,9.362,eligible,
+20260108000000,w041,w041,pherc0139,0,9.362,eligible,
+20260112000000,w043,w043,pherc0139,0,9.362,eligible,
+20260115000000,w044,w044,pherc0139,0,9.362,eligible,
+20260126000000,w045,w045,pherc0139,0,9.362,eligible,
+20260325000000,w046,w046,pherc0139,0,9.362,skipped,missing dilated_inklabels/20260325000000.png
+20260206000001,w047,w047,pherc0139,0,9.362,skipped,missing dilated_inklabels/20260206000001.png
+20260318000000,w049,w049,pherc0139,0,9.362,skipped,missing dilated_inklabels/20260318000000.png
+20260227000000,w052,w052,pherc0139,0,9.362,skipped,missing dilated_inklabels/20260227000000.png
+20260115000001,w056,w056,pherc0139,0,9.362,skipped,missing dilated_inklabels/20260115000001.png
+20260210000000,w058,w058,pherc0139,0,9.362,skipped,missing dilated_inklabels/20260210000000.png; missing surface_labels/20260210000000/depth.npy; missing surface_labels/20260210000000/confidence.npy; missing surface_labels/20260210000000/metadata.json
+20250223000000,w059,w059,pherc0139,0,9.362,eligible,
+20251111010954,w068,w068,pherc0172,0,7.91,eligible,
+20251112000002,w087,w087,pherc0172,0,7.91,eligible,
+20250511003658,p343,p343,pherc0343p,0,8.64,eligible,
+20261007000000,p343_letters,p343_letters,pherc0343p,0,8.64,eligible,
+20250628074500,500P2_front,500P2_front,pherc0500p2,0,9.362,eligible,
+20250825181859,500P2_m1,500P2_m1,pherc0500p2,0,9.362,eligible,
+20260226000000,seg46527,seg46527,pherc0814,0,9.362,eligible,
+20260221022814,p841,p841,pherc0841,0,9.362,eligible,
+20260220213127,p841_w00,p841_w00,pherc0841,0,9.362,eligible,
+20260927134931,0846a_20260927134928,auto_grown_20260927134928530_abf,pherc0846a,0,9.362,eligible,
+20261012073246,0846a_20261012073244,auto_grown_20261012073244544_abf,pherc0846a,0,9.362,eligible,
+20261012065817,0846a_in_1,auto_grown_20261012065803387_straightened2_abf_in_1,pherc0846a,0,9.362,eligible,
+20261012065813,0846a_m28,auto_grown_20261012065803387_straight_abf_m28,pherc0846a,0,9.362,eligible,
+20261012065819,0846a_out_1,auto_grown_20261012065803387_straightened2_abf_out_1,pherc0846a,0,9.362,eligible,
+20261012065821,0846a_out_2,auto_grown_20261012065803387_straightened2_abf_out_2,pherc0846a,0,9.362,eligible,
+20261012065823,0846a_out_3,auto_grown_20261012065803387_straightened2_abf_out_3,pherc0846a,0,9.362,eligible,
+20260930144758,ph1447_w058,ph1447_w058,pherc1447,0,8.64,eligible,
+20260930144760,ph1447_w060,ph1447_w060,pherc1447,0,8.64,eligible,
+20231201215900,cr1fr3,cr1fr3,pherc1667,1,3.24,eligible,
+20231201215977,cr1fr3_flat,cr1fr3,pherc1667,1,3.24,eligible,
+20240304141531,w013,w013,pherc1667,1,2.4,eligible,
+20240304144031,w018,w018,pherc1667,1,2.4,skipped,missing /vesuvius/ves_zarrs2/20240304144031.matched.zarr
+20231205222200,scroll6_fr8,scroll6_fr8,pherc51cr4_fr8,1,3.24,eligible,
+20231205222277,scroll6_fr8_flat,scroll6_fr8,pherc51cr4_fr8,1,3.24,eligible,
+20230301213423,paris1_fr34,paris1_fr34,phercparis1_fr34,1,3.24,eligible,
+20230301213500,paris1_fr34_flat,paris1_fr34,phercparis1_fr34,1,3.24,eligible,
+20230301213755,paris2_fr143,paris2_fr143,phercparis2_fr143,1,3.24,eligible,
+20230301213832,paris2_fr143_flat,paris2_fr143,phercparis2_fr143,1,3.24,eligible,
+20230205142449,paris2_fr47,paris2_fr47,phercparis2_fr143,1,3.24,eligible,
+20230205142526,paris2_fr47_flat,paris2_fr47,phercparis2_fr143,1,3.24,eligible,
+20231210121321,paris4,paris4,phercparis4,1,2.4,eligible,
+20260930144762,ph1447_w062,ph1447_w062,unknown,0,8.64,skipped,missing train_masks/20260930144762.png

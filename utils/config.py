@@ -173,12 +173,10 @@ TRAIN_SCROLL_WEIGHT_BY_DOMAIN = {"pherc0139": 2, "pherc0343p": 4, "pherc0500p2":
 # training order (sets the domain ids): the campaign-40 set with PHerc0009B moved to the end, PHerc1447 x2, the p343
 # letters patch, two labeled PHerc0846A patches (flat depth-13 aliases, train-only), then PHerc0009B.
 RUN_0846A_IDS = (20260927134931, 20261012073246)
-# PHerc0846A p29 (auto_grown_20261012073244544_abf_p29, flat alias of the +29 offset sheet): not trained, vis-only
-RUN_P29_ID = 20261012073250
 
 
 def add_0846a_train_patch(config, scroll_id: int) -> None:
-    """train one more train-only 0846A patch in the slot right after the default ones (p29's former slot)."""
+    """train one more train-only 0846A patch in the slot right after the default ones."""
     scroll_id = int(scroll_id)
     index = 1 + max(i for i, scroll in enumerate(config.data.scrolls) if int(scroll.scroll_id) in RUN_0846A_IDS)
     config.data.scrolls = [
@@ -300,7 +298,7 @@ class DataConfig:
     coordinate_hash_seed: int = 29
     train_mask_dir: str = "./train_masks"
     # vis scrolls scored on the whole patch: their train mask is ignored and every cell is validation
-    whole_patch_valid_scroll_ids: List[int] = field(default_factory=lambda: [RUN_P29_ID])
+    whole_patch_valid_scroll_ids: List[int] = field(default_factory=list)
     # scrolls trained on everywhere (no validation split); a train mask only adds its painted explicit labels
     train_only_scroll_ids: List[int] = field(default_factory=lambda: list(RUN_0846A_IDS))
     # scrolls whose validation cells count toward validation metrics and checkpoints (None = all)
@@ -314,7 +312,7 @@ class DataConfig:
     tta_mode: str = "light"  # eval TTA view set: "light"=id+hflip (2x), "flips"=id+h+v+180 (4x), "dihedral"=+/-90 too (6x)
     probe_rois: Dict[int, List[ProbeROI]] = field(default_factory=_load_probe_rois)
     vis_scroll_ids: Optional[List[int]] = field(
-        default_factory=lambda: [*RUN_0846A_IDS, RUN_P29_ID, *RUN_LABEL_FREE_VIS_IDS]
+        default_factory=lambda: [*RUN_0846A_IDS, *RUN_LABEL_FREE_VIS_IDS]
     )
     vis_preload_persistent: bool = True  # keep each visualized scroll volume in RAM for the whole run
     # vis-only scrolls without ink labels or train masks: zero labels, no train region (never mined or trained)
@@ -331,7 +329,7 @@ class DataConfig:
     surface_window_offset: int = 0  # constant slice shift of the surface-centered window (train and eval)
     surface_window_offset_by_scroll: dict = field(  # scroll id -> offset; overrides the constant
         default_factory=lambda: {
-            scroll_id: -1 for scroll_id in (*RUN_0846A_IDS, RUN_P29_ID, *RUN_LABEL_FREE_VIS_IDS)
+            scroll_id: -1 for scroll_id in (*RUN_0846A_IDS, *RUN_LABEL_FREE_VIS_IDS)
         }
     )
     holdout_domains: List[str] = field(default_factory=list)  # train_scroll_dict names excluded from training only

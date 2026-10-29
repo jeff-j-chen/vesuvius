@@ -165,6 +165,14 @@ SEGMENTS = [
     ("p841", "PHerc0841/segments/20260221022814-auto_grown_20260220174252405", "20260221022814"),
     # PHerc0343 First Letters segment (Nieuwlaar/pherc343-first-letters): tifxyz mesh rendered from the raw volume
     ("p343_letters", "", "20261007000000"),
+    # 2026-10-28 additions: labels pending manual correction, not in any training config yet
+    ("500P2_m1", "PHerc0500P2/segments/20250825181859--1", "20250825181859"),
+    ("500P2_m2", "PHerc0500P2/segments/20250825181917--2", "20250825181917"),
+    ("p343_4b2", "PHerc0343P/segments/20250902170441--4_b2", "20250902170441"),
+    ("p9b_592", "PHerc0009B/segments/20250919132115-auto_grown_20250919062115592_inp_hr", "20250919132115"),
+    ("p841_w00", "PHerc0841/segments/20260220213127-w00", "20260220213127"),
+    ("seg0814_459", "PHerc0814/segments/20250925222237-auto_grown_20250925222237459", "20250925222237"),
+    ("title", "PHerc0139/segments/20260422000000-title_2026042222_zmid_flatboi", "20260422000000"),
     *((name, "", render) for name, (render, _alias, _mesh) in MESHES_0846A.items()),
     *((name, "", render) for name, (render, _mesh) in EVAL_MESHES_0846A.items()),
     *((name, "", name) for name in EVAL_QUICK_0846A),
@@ -282,6 +290,21 @@ FRAG_OPTS = {
         "surface_crop": (0, 3760, 0, 4900),
         "force_norm": True,
     },
+    "500P2_m1": {"vol9_name": "9.362um-1.2m-113keV-volume-20250820143440.zarr"},
+    "500P2_m2": {"vol9_name": "9.362um-1.2m-113keV-volume-20250820143440.zarr"},
+    "p343_4b2": {
+        "vol9_name": "8.64um-1.2m-116keV-volume-20250521134555.zarr",
+        "resample_um": 8.64,
+        "force_norm": True,
+    },
+    "p9b_592": {
+        "vol9_name": "8.64um-1.2m-116keV-volume-20250521125136.zarr",
+        "resample_um": 8.64,
+        "force_norm": True,
+    },
+    # 9.366um, copied without resampling like p841
+    "p841_w00": {"vol9_name": "9.366um-1.2m-113keV-volume-20250821151531.zarr"},
+    "seg0814_459": {"vol9_name": "9.362um-1.2m-113keV-volume-20250804134230.zarr"},
     "p343_letters": {
         "tifxyz_mesh": {
             "base_url": "https://raw.githubusercontent.com/Nieuwlaar/pherc343-first-letters/"

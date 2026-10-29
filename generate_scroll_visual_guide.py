@@ -50,7 +50,8 @@ class Patch:
 MASK_OVERLAY_IDS = {
     "20231201215900", "20230301213755", "20230205142449", "20231205222200", "20230301213423",
     "20260930144758", "20260930144760", "20260930144762",
-    "20261007000000", "20260927134931", "20261012073246", "20261012073250",
+    "20261007000000", "20260927134931", "20261012073246",
+    "20261012065813", "20261012065817", "20261012065819", "20261012065821", "20261012065823",
 }
 
 
@@ -516,19 +517,18 @@ def generate_guide(output_path: Path) -> Path:
         for index, item in enumerate(bands)
         for band in ((divider, item) if index else (item,))
     ])
-    target_height = CANVAS_WIDTH * 9 // 16
-    if canvas.shape[0] > target_height:
-        raise RuntimeError(
-            f"guide content is too tall for 16:9: {canvas.shape[1]}x{canvas.shape[0]}"
-        )
+    # keep 16:9: pad height, or pad width when the content is taller than 9/16 of the canvas
+    target_height = max(CANVAS_WIDTH * 9 // 16, canvas.shape[0])
+    target_width = target_height * 16 // 9
     pad_top = (target_height - canvas.shape[0]) // 2
     pad_bottom = target_height - canvas.shape[0] - pad_top
+    pad_left = (target_width - canvas.shape[1]) // 2
     canvas = cv2.copyMakeBorder(
         canvas,
         pad_top,
         pad_bottom,
-        0,
-        0,
+        pad_left,
+        target_width - canvas.shape[1] - pad_left,
         cv2.BORDER_CONSTANT,
         value=BACKGROUND,
     )

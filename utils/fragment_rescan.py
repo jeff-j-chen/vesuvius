@@ -289,10 +289,10 @@ def field_at(field, grid_step, r0, r1, c0, c1):
                                borderMode=cv2.BORDER_REPLICATE) for i in range(3)], -1)
 
 
-def needed_keys(xyz, valid, normal, transform=None, shape=None, margin=4, step=4, offset=None):
+def needed_keys(xyz, valid, normal, transform=None, shape=None, margin=4, step=4, offset=None, depth_shift=0.0):
     """chunk keys touched by the 28-layer sample points of all valid pixels (subsampled)."""
     sub = valid[::step, ::step]
-    pts = layer_points_zyx(xyz[::step, ::step], normal[::step, ::step], transform=transform)
+    pts = layer_points_zyx(xyz[::step, ::step], normal[::step, ::step], transform=transform, depth_shift=depth_shift)
     if offset is not None:
         pts = pts + offset[::step, ::step, ::-1][None]
     pts = pts[:, sub].reshape(-1, 3)
@@ -341,10 +341,11 @@ def extend_grid(xyz, normal, valid, margin):
 
 def render(out_zarr, ppm_url, volume_url, affine, cache_dir, footprint=None, empty_layers=(),
            tif_url=None, tif_digits=4, chunks=(8, 64, 64), offset_field=None, field_step=64,
-           margin=48, render_threads=8, fetch_threads=32):
+           margin=48, render_threads=8, fetch_threads=32, depth_shift=0.0):
     """render the fragment into a new uint16 (28, H, W) zarr at out_zarr; returns the bool footprint
     (valid PPM & optional footprint & inside the scan & nonzero at every rendered layer).
     offset_field: optional coarse (gh, gw, 3) xyz residual in target voxels added after the affine.
+    depth_shift: moves the 28-layer stack this many output layers along the PPM normal (a new, offset surface).
     margin: px of extrapolated surface rendered beyond the mesh (context only, never in the footprint)."""
     import zarr
 
@@ -360,7 +361,7 @@ def render(out_zarr, ppm_url, volume_url, affine, cache_dir, footprint=None, emp
     # eviction is band-based (see below), not LRU
     vol = RemoteZarr(volume_url, os.path.join(cache_dir, "chunks"), cap=None)
     offset = None if offset_field is None else field_at(offset_field, field_step, 0, H, 0, W)
-    keys = needed_keys(xyz, ok, nrm, transform=aff, shape=vol.shape, offset=offset)
+    keys = needed_keys(xyz, ok, nrm, transform=aff, shape=vol.shape, offset=offset, depth_shift=depth_shift)
     missing = vol.missing(keys)
     print(f"  [rescan] {len(keys)} chunks under the surface, {len(missing)} missing from the published zarr", flush=True)
     if missing:
@@ -377,7 +378,7 @@ def render(out_zarr, ppm_url, volume_url, affine, cache_dir, footprint=None, emp
         sub = ok[r0:r1, c0:c1]
         if not sub.any():
             return
-        pts = layer_points_zyx(xyz[r0:r1, c0:c1], nrm[r0:r1, c0:c1], transform=aff)
+        pts = layer_points_zyx(xyz[r0:r1, c0:c1], nrm[r0:r1, c0:c1], transform=aff, depth_shift=depth_shift)
         if offset_field is not None:
             pts = pts + field_at(offset_field, field_step, r0, r1, c0, c1)[None, ..., ::-1]
         valid_pts = pts[:, sub].reshape(-1, 3)
@@ -406,7 +407,7 @@ def render(out_zarr, ppm_url, volume_url, affine, cache_dir, footprint=None, emp
         if not ok[r0:r1].any():
             return []
         return needed_keys(xyz[r0:r1], ok[r0:r1], nrm[r0:r1], transform=aff, shape=vol.shape, margin=6,
-                           offset=None if offset is None else offset[r0:r1])
+                           offset=None if offset is None else offset[r0:r1], depth_shift=depth_shift)
 
     t0 = time.time()
     done = 0

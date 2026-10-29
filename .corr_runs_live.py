@@ -127,9 +127,10 @@ def all_patches() -> list[Patch]:
     from utils.config import RUN_FINE_SCAN_IDS
 
     patches = []
+    holdouts = set(getattr(ats, "EVAL_0846A", ()))  # held-out 0846A evaluation segments, never trained
     for name, segment, zid in ats.SEGMENTS:
         opts = ats.FRAG_OPTS.get(name, {})
-        if opts.get("holdout") or name == mix6.HOLDOUT_NAME:
+        if opts.get("holdout") or name == mix6.HOLDOUT_NAME or name in holdouts:
             continue
         pid = int(ats.MESHES_0846A[name][1]) if name in ats.MESHES_0846A else int(zid)
         if opts.get("hf_pherc1447"):
@@ -139,7 +140,120 @@ def all_patches() -> list[Patch]:
         else:
             source_um = float(opts.get("resample_um") or opts.get("source_um") or ats.TARGET_VOXEL_UM)
         patches.append(Patch(pid, name, _label(name), _scroll_of(pid, segment), pid in RUN_FINE_SCAN_IDS, source_um))
+    for patch in list(patches):
+        if patch.name in FLAT_FRAGMENTS:
+            patches.append(dataclasses.replace(patch, pid=FLAT_FRAGMENTS[patch.name], label=f"{patch.label}_flat"))
+    patches = [p for p in patches if p.label not in EXCLUDED]
     return sorted(patches, key=lambda p: (p.scroll, p.label))
+
+
+# CORR_EXCLUDE=label,label keeps patches out of the study (inherited by every child job)
+EXCLUDED = {name.strip() for name in os.environ.get("CORR_EXCLUDE", "").split(",") if name.strip()}
+
+
+# detached fragments re-run on a flat surface at their intensity-peak layer (like the 0846A depth-13 aliases):
+# segment name -> alias id; the alias symlinks the fragment's zarrs / mask / labels
+FLAT_FRAGMENTS = {"cr1fr3": 20231201215977, "scroll6_fr8": 20231205222277, "paris1_fr34": 20230301213500,
+                  "paris2_fr143": 20230301213832, "paris2_fr47": 20230205142526}
+FLAT_LINK_DIRS = ("masks", "inklabels", "dilated_inklabels", "train_masks")
+
+
+def _intensity_peak_layer(volume_path: str, mask_path: str) -> int:
+    """smoothed argmax of the mean intensity per layer under the mask (strided), first and last valid layer skipped."""
+    import cv2
+    import zarr
+
+    volume = zarr.open(volume_path, mode="r")
+    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)[::16, ::16] > 0
+    stack = np.asarray(volume[:, ::16, ::16]).astype(np.float32)
+    rows, cols = min(mask.shape[0], stack.shape[1]), min(mask.shape[1], stack.shape[2])
+    profile = stack[:, :rows, :cols][:, mask[:rows, :cols]].mean(axis=1)
+    valid = np.flatnonzero(profile > 0)[1:-1]
+    smooth = np.convolve(profile, np.ones(3) / 3, mode="same")
+    return int(valid[smooth[valid].argmax()])
+
+
+def _merge_norm_entries(entries: dict) -> None:
+    from utils.norm import UNIFIED_CACHE_PATH
+
+    for attempt in range(10):
+        try:
+            cache = json.loads(Path(UNIFIED_CACHE_PATH).read_text())
+            break
+        except ValueError:
+            if attempt == 9:
+                raise
+            time.sleep(1.0)
+    cache.update(entries)
+    _atomic_json(cache, Path(UNIFIED_CACHE_PATH))
+
+
+def ensure_flat_fragments(patches) -> None:
+    """set up every flat fragment alias whose source fragment is complete (idempotent)."""
+    from utils.norm import UNIFIED_CACHE_PATH, load_cached_norm
+
+    config = base_config()
+    zarrs = Path(config.data.zarr_path)
+    sources = {p.name: p for p in patches if not p.label.endswith("_flat")}
+    for name, alias in FLAT_FRAGMENTS.items():
+        source = sources.get(name)
+        if source is None or basic_problems(source, config) or norm_problems(source, config):
+            continue
+        src, alias = str(source.pid), str(alias)
+        try:
+            for suffix in ("", ".matched"):
+                link = zarrs / f"{alias}{suffix}.zarr"
+                if not link.exists():
+                    link.symlink_to(f"{src}{suffix}.zarr")
+            for folder in FLAT_LINK_DIRS:
+                target = REPO / folder / f"{src}.png"
+                link = REPO / folder / f"{alias}.png"
+                if target.is_file() and not link.exists():
+                    link.symlink_to(f"{src}.png")
+            surface = REPO / config.data.surface_label_dir / alias
+            if not (surface / "metadata.json").is_file():
+                import cv2
+
+                mask_path = str(REPO / "masks" / f"{src}.png")
+                depth = _intensity_peak_layer(str(zarrs / f"{src}.matched.zarr"), mask_path)
+                detected = np.load(REPO / config.data.surface_label_dir / src / "depth.npy", mmap_mode="r")[::16, ::16]
+                detected = detected[detected != 255]
+                mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) > 0
+                surface.mkdir(parents=True, exist_ok=True)
+                np.save(surface / "depth.npy", np.where(mask, depth, 255).astype(np.uint8))
+                np.save(surface / "confidence.npy", np.where(mask, 255, 0).astype(np.uint8))
+                _atomic_json({"scroll_id": int(alias), "flat_from": int(src), "flat_depth": depth,
+                              "flat_rule": "smoothed argmax of the mean layer intensity (matched volume)",
+                              "detected_median": int(np.median(detected)) if detected.size else None,
+                              "detected_p10_p90": [int(np.percentile(detected, q)) for q in (10, 90)] if detected.size else None,
+                              "invalid_depth_value": 255}, surface / "metadata.json")
+                print(f"[corr] flat alias {alias} of {name}: layer {depth} (detected median "
+                      f"{int(np.median(detected)) if detected.size else '?'})", flush=True)
+            entries = {}
+            for suffix in ("", ".matched"):
+                if load_cached_norm(f"{alias}{suffix}", UNIFIED_CACHE_PATH) is None:
+                    stats = load_cached_norm(f"{src}{suffix}", UNIFIED_CACHE_PATH)
+                    if stats is not None:  # same voxels, same global statistics
+                        entries[f"{alias}{suffix}"] = dict(zip(("mean", "std", "min", "max"), stats))
+            if entries:
+                _merge_norm_entries(entries)
+        except Exception as exc:
+            print(f"[corr] flat alias of {name} failed: {exc}", flush=True)
+
+
+def _build_alias_cue(job) -> str:
+    """asf cue of a flat alias, read from its matched volume around its flat surface."""
+    alias, delta, force = job
+    os.chdir(REPO)
+    for path in (str(REPO), str(REPO / "old")):  # nonml_ink.py lives in old/
+        if path not in sys.path:
+            sys.path.insert(0, path)
+    from utils import mix6, precomputed_asf
+
+    config = base_config()
+    config.data.cue_dir = f"./{mix6.CUE_DIRS[delta]}"
+    config.data.surface_window_offset_by_scroll = {int(alias): delta}
+    return f"{alias} shift {delta:+d}: " + precomputed_asf.build(alias, force=force, config=config)
 
 
 def base_config():
@@ -148,7 +262,15 @@ def base_config():
 
     config = Config()
     apply_mix6_run(config)
+    for alias in FLAT_FRAGMENTS.values():
+        config.data.zarr_suffix[str(alias)] = ".matched"
+        config.data.native_noise_ids = [*config.data.native_noise_ids, alias]
+    config.data.train_only_scroll_ids = [*config.data.train_only_scroll_ids, *TRAIN_ONLY_EXTRA]
     return config
+
+
+# labelled segments whose train mask is empty: the whole patch is training data (eval uses unaugmented train windows)
+TRAIN_ONLY_EXTRA = (20250825181859, 20260220213127)  # 500P2_m1, p841_w00
 
 
 def _scroll_entry(pid: int):
@@ -158,7 +280,7 @@ def _scroll_entry(pid: int):
     known = {int(s.scroll_id): s for s in (*DEFAULT_SCROLLS, *TRAIN_SCROLLS, *RUN_SCROLLS)}
     if pid in known:
         return dataclasses.replace(known[pid])
-    return ScrollConfig(pid, split_axis="x", train_split_frac=1.0 if pid in mix6.SHEETS_0846A else 0.75)
+    return ScrollConfig(pid, split_axis="x", train_split_frac=1.0 if pid in mix6.SHEETS_0846A or pid in TRAIN_ONLY_EXTRA else 0.75)
 
 
 def single_patch_config(patch: Patch, run_dir: Path | None = None, epochs: int = 3, lr: float = 1e-4):
@@ -171,6 +293,7 @@ def single_patch_config(patch: Patch, run_dir: Path | None = None, epochs: int =
     data.equalize_domain = ""
     data.vis_scroll_ids = []
     data.validation_scroll_ids = None
+    data.holdout_exclusion_dir = ""  # pure per-patch diagnostics: no prize-sheet discard on the 0846A sheets
     tra.eval_int_scrolls = 0
     tra.dann_n_domains = 1
     tra.n_epochs = int(epochs)
@@ -249,6 +372,7 @@ def prepare(patches, workers: int) -> int:
     from utils.norm import UNIFIED_CACHE_PATH, compute_norm, ensure_surface_anchors, load_cached_norm
 
     config = base_config()
+    ensure_flat_fragments(patches)
     ready = [p for p in patches if not basic_problems(p, config)]
     suffixes = config.data.zarr_suffix or {}
     ids = [str(p.pid) for p in ready]
@@ -263,9 +387,10 @@ def prepare(patches, workers: int) -> int:
     print(f"[corr] {len(ready)}/{len(patches)} patches have their inputs; {len(jobs)} asf cue map(s) to build", flush=True)
     if not jobs:
         return 0
+    aliases = set(FLAT_FRAGMENTS.values())
     with ProcessPoolExecutor(max_workers=max(1, min(workers, len(jobs))),
                              mp_context=multiprocessing.get_context("spawn")) as pool:
-        futures = {pool.submit(mix6._build_cue, job): job for job in jobs}
+        futures = {pool.submit(_build_alias_cue if job[0] in aliases else mix6._build_cue, job): job for job in jobs}
         for future, job in futures.items():
             try:
                 print("[corr] asf cue", future.result(), flush=True)
@@ -1804,7 +1929,9 @@ def daemon(args) -> None:
             prep_todo = sorted({str(job[0]) for job in _missing_cues(ready, config)}
                                | {str(p.pid) for p in ready if norm_problems(p, config)})
             prep_key = ",".join(prep_todo)
-            if prep_todo and prep is None and state["prep_attempts"].get(prep_key, 0) < 3 \
+            # a frozen plan needs no new inputs; leave newly downloaded segments to their assembler
+            if prep_todo and prep is None and not state.get("plan_frozen") \
+                    and state["prep_attempts"].get(prep_key, 0) < 3 \
                     and not _external("corr_runs.*py .*--prepare-once"):
                 state["prep_attempts"][prep_key] = state["prep_attempts"].get(prep_key, 0) + 1
                 save_state()
